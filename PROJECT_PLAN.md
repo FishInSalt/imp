@@ -108,6 +108,9 @@ imp/
   - [x] 验收 #2：read 工具 — 读取并准确解释 AgentMessage 类型 ✓
   - [x] 验收 #3：涌现能力 — 无 edit 工具时自主用 read 定位 bug + sed 修复 + node 验证（NaN→2.5）✓
 
+**M1 发现的问题及处置**：
+- **AGENTS.md 上下文从未发给模型**（cli.ts 拼好 system 变量但 runAgentLoop 仍内联重建）—— Biome noUnusedVariables 首日抓到的真 bug；已修复并实机验证（system prompt 暗号测试，1 turn 零工具答对）。验收时被模型自己 `cat AGENTS.md` 掩盖，教训：**上下文注入类功能必须用"模型不读文件也能知道"的方式验收**
+
 **M0 发现的问题及处置**：
 - ~~Z.ai 端点不上报 input_tokens~~ **误判已修正**：Z.ai 在 `message_delta` 中上报真实 usage（含 input/cache），与 Anthropic（在 `message_start` 报 input）不同。provider 已兼容两种约定（取 max），token 显示已正确
 - edit/write 工具缺失，模型靠 sed 改文件能用但易错 → M1 优先项

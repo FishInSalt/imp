@@ -9,7 +9,7 @@ import type { Tool } from "./core/tools/types.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 
 const VERSION = "0.1.0";
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = process.env.IMP_MODEL ?? "claude-sonnet-4-5";
 
 interface CliOptions {
 	prompt: string | undefined;
@@ -35,13 +35,21 @@ Options:
   -v, --version            Show version
 
 Environment:
-  ANTHROPIC_API_KEY        Required (for the anthropic provider)
+  ANTHROPIC_API_KEY          Anthropic API key
+  ANTHROPIC_AUTH_TOKEN       Bearer token for Anthropic-compatible services
+  ANTHROPIC_BASE_URL         Endpoint override (Anthropic-compatible services)
+  IMP_MODEL                  Default model id
+
+  Z.ai GLM Coding Plan example:
+    export ANTHROPIC_AUTH_TOKEN=<your z.ai key>
+    export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
+    export IMP_MODEL=glm-4.6
 
 Examples:
   imp -p "List the .ts files here and count their total lines"
   imp -p "Read src/cli.ts and fix the bug in argument parsing"
+  imp -p "..." -m glm-4.6
 `;
-
 function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,

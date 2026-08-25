@@ -19,6 +19,14 @@ npm run build
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+### Using Z.ai GLM Coding Plan (or any Anthropic-compatible service)
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=<your z.ai api key>
+export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
+export IMP_MODEL=glm-4.6   # or glm-4.5, glm-4.7, ... per your plan
+```
+
 ## Usage
 
 ```bash

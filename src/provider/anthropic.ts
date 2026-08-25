@@ -6,6 +6,8 @@ const API_VERSION = "2023-06-01";
 
 export interface AnthropicProviderOptions {
 	apiKey?: string;
+	/** Authorization style: "bearer" (Authorization: Bearer, e.g. Z.ai ANTHROPIC_AUTH_TOKEN) or "x-api-key". */
+	auth?: "bearer" | "x-api-key";
 	baseUrl?: string;
 }
 
@@ -105,14 +107,25 @@ function safeParseJson(raw: string): unknown {
 }
 
 export function createAnthropicProvider(options: AnthropicProviderOptions = {}): LLMProvider {
-	const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
-	const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+	// Key resolution mirrors Claude Code conventions so Anthropic-compatible
+	// services (e.g. Z.ai GLM Coding Plan) work via env vars alone:
+	//   ANTHROPIC_AUTH_TOKEN  -> Authorization: Bearer (checked first)
+	//   ANTHROPIC_API_KEY    -> x-api-key
+	//   ANTHROPIC_BASE_URL   -> endpoint override
+	const envToken = process.env.ANTHROPIC_AUTH_TOKEN;
+	const apiKey = options.apiKey ?? envToken ?? process.env.ANTHROPIC_API_KEY;
+	const auth: "bearer" | "x-api-key" = options.auth ?? (envToken ? "bearer" : "x-api-key");
+	const baseUrl = (options.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {
 		name: "anthropic",
 		async *stream(request: LLMRequest): AsyncIterable<LLMEvent> {
 			if (!apiKey) {
-				throw new Error("ANTHROPIC_API_KEY is not set. Export it first:\n  export ANTHROPIC_API_KEY=sk-ant-...");
+				throw new Error(
+					"No API key found. Set one of:\n" +
+						"  export ANTHROPIC_API_KEY=sk-ant-...    (Anthropic)\n" +
+						"  export ANTHROPIC_AUTH_TOKEN=... ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic  (Z.ai GLM Coding Plan)",
+				);
 			}
 
 			const body = {
@@ -134,7 +147,9 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
-						"x-api-key": apiKey,
+						...(auth === "bearer"
+							? { authorization: `Bearer ${apiKey}` }
+							: { "x-api-key": apiKey }),
 						"anthropic-version": API_VERSION,
 					},
 					body: JSON.stringify(body),
@@ -149,7 +164,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				const text = await response.text().catch(() => "");
 				const hint =
 					response.status === 401
-						? " — check your ANTHROPIC_API_KEY"
+						? " — check ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN"
 						: response.status === 404
 							? " — check the model id"
 							: "";

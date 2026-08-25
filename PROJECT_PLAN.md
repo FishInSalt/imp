@@ -103,7 +103,14 @@ imp/
 - [x] `cli/`：`imp -p "..."` print 模式，流式打印 + 工具过程展示 + token 汇总
 - [x] 系统提示词 v1：角色、工具规范、安全边界
 - [x] 测试：20 个（工具真行为 + loop 全路径 mock 测试）
-- [ ] **真实模型端到端验证**（需要 ANTHROPIC_API_KEY，见下方验收标准）
+- [x] **真实模型端到端验证**（2025-12-06，GLM-5.3 via Z.ai，commit 待补）
+  - [x] 验收 #1：bash 工具 — 自主 find+xargs 统计 12 个 .ts 文件/1431 行 ✓
+  - [x] 验收 #2：read 工具 — 读取并准确解释 AgentMessage 类型 ✓
+  - [x] 验收 #3：涌现能力 — 无 edit 工具时自主用 read 定位 bug + sed 修复 + node 验证（NaN→2.5）✓
+
+**M0 发现的问题（转入后续里程碑）**：
+- Z.ai 端点不上报 input_tokens（显示 in 0）→ M2 token 计量时处理（兼容 message_delta.usage 或估算）
+- edit/write 工具缺失，模型靠 sed 改文件能用但易错 → M1 优先项
 
 **验收标准**
 ```bash

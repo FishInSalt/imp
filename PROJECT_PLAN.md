@@ -87,25 +87,23 @@ imp/
 
 **目标**：一个能通过 LLM 驱动、能执行工具、完成简单任务的命令行程序。
 
-**任务清单**
-- [ ] 脚手架：`package.json`（ESM + TypeScript）、`vitest`、`tsup`/`tsx`、ESLint
-- [ ] `provider/`：选定 provider 的流式 API 封装
-  - 统一事件模型：`text_delta` / `tool_call_start` / `tool_call_delta` / `message_start` / `message_end` / `usage`
-  - 请求组装：messages + tools(JSON Schema) + system
-  - 工具调用参数的流式累积与最终解析
-- [ ] `core/messages.ts`：定义 `AgentMessage` 联合类型
-- [ ] `core/loop.ts`：agent 主循环
-  ```
-  用户消息入栈 → 调 LLM(流式) → 若含 tool_use：
-    逐个执行工具 → 把 tool_result 追加为 user 消息 → 再调 LLM
-    → 直到 assistant 不再产生工具调用 → 本轮结束
-  ```
-  - 支持 AbortSignal（Ctrl+C 可中断）
-  - 工具参数校验（JSON Schema validate，失败要返回错误给模型而不是崩溃）
-  - 工具执行异常捕获，转为 `tool_result(isError: true)` 喂回模型
-- [ ] 工具 ×2：`bash`（超时 + 输出截断）、`read`（行范围 + 大文件截断）
-- [ ] `cli/`：`imp -p "..."` print 模式，流式打印到 stdout
-- [ ] 系统提示词 v1：角色、工具使用规范、安全边界（workspace 内读写）
+**任务清单**（✅ = 已完成于 commit 46a7548）
+- [x] 脚手架：`package.json`（ESM + TypeScript）、`vitest`、`tsx`、typebox（ESLint 推迟到 M1 质量周）
+- [x] `provider/`：Anthropic 流式 API 封装
+  - [x] 统一事件模型：`text_delta` / `tool_call_start` / `tool_call_delta` / `message_end`（含 usage）
+  - [x] 请求组装：messages + tools(JSON Schema) + system
+  - [x] 工具调用参数的流式累积（wire index → block 映射）与最终解析
+- [x] `core/messages.ts`：定义 `AgentMessage` 联合类型（与 LLM wire 格式分离）
+- [x] `core/loop.ts`：agent 主循环
+  - [x] AbortSignal 贯穿（Ctrl+C 可中断，二次 Ctrl+C 强退）
+  - [x] 工具参数校验（typebox，失败返回错误给模型）
+  - [x] 工具异常捕获 → `isError` 结果喂回模型
+  - [x] maxIterations 防失控（默认 40）
+- [x] 工具 ×2：`bash`（超时 + 尾部截断 + 滚动缓冲防内存爆）、`read`（offset/limit + 截断提示引导续读）
+- [x] `cli/`：`imp -p "..."` print 模式，流式打印 + 工具过程展示 + token 汇总
+- [x] 系统提示词 v1：角色、工具规范、安全边界
+- [x] 测试：20 个（工具真行为 + loop 全路径 mock 测试）
+- [ ] **真实模型端到端验证**（需要 ANTHROPIC_API_KEY，见下方验收标准）
 
 **验收标准**
 ```bash

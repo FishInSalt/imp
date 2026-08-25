@@ -7,9 +7,11 @@ import { createBashTool } from "./core/tools/bash.js";
 import { createReadTool } from "./core/tools/read.js";
 import type { Tool } from "./core/tools/types.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
+import { loadDotEnv } from "./env.js";
 
 const VERSION = "0.1.0";
-const DEFAULT_MODEL = process.env.IMP_MODEL ?? "claude-sonnet-4-5";
+// Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
+const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
 
 interface CliOptions {
 	prompt: string | undefined;
@@ -28,7 +30,7 @@ Usage:
 
 Options:
   -p, --print <prompt>     Prompt to run
-  -m, --model <id>         Model id (default: ${DEFAULT_MODEL})
+  -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
       --max-tokens <n>     Max output tokens per turn (default: 16384)
       --max-turns <n>      Max agent turns per run (default: 40)
   -h, --help               Show this help
@@ -53,7 +55,7 @@ Examples:
 function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
-		model: DEFAULT_MODEL,
+		model: defaultModel(),
 		maxTokens: 16384,
 		maxTurns: 40,
 		help: false,
@@ -151,6 +153,7 @@ function formatTokens(n: number): string {
 }
 
 async function main(): Promise<void> {
+	await loadDotEnv(); // loads .env from the imp installation root; real env wins
 	const opts = parseArgs(process.argv.slice(2));
 	if (opts.help || opts.prompt === undefined) {
 		process.stdout.write(HELP);

@@ -1,0 +1,30 @@
+{
+  "name": "imp",
+  "version": "0.1.0",
+  "description": "imp — a small coding agent that runs in your terminal",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "imp": "bin/imp.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "npm run build && node bin/imp.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

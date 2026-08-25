@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Type } from "typebox";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
@@ -6,6 +9,8 @@ const MAX_LINES = 500;
 const MAX_BYTES = 50 * 1024; // 50KB
 /** Rolling tail cap per stream so runaway output (`yes`, fork bombs) can't eat memory. */
 const TAIL_KEEP_BYTES = 256 * 1024;
+/** Hard cap on the full-output buffer written to the truncation temp file. */
+const FULL_KEEP_BYTES = 10 * 1024 * 1024;
 /** Grace period after SIGTERM before SIGKILL. */
 const KILL_GRACE_MS = 2_000;
 
@@ -23,6 +28,13 @@ export interface BashToolOptions {
 interface StreamState {
 	data: string;
 	totalBytes: number;
+	/** Full output (up to FULL_KEEP_BYTES) kept for the truncation temp file. */
+	full: string;
+	fullCapped: boolean;
+}
+
+function newState(): StreamState {
+	return { data: "", totalBytes: 0, full: "", fullCapped: false };
 }
 
 function appendChunk(state: StreamState, chunk: string): void {
@@ -30,6 +42,13 @@ function appendChunk(state: StreamState, chunk: string): void {
 	state.data += chunk;
 	if (state.data.length > TAIL_KEEP_BYTES) {
 		state.data = state.data.slice(-TAIL_KEEP_BYTES);
+	}
+	if (state.full.length < FULL_KEEP_BYTES) {
+		state.full += chunk;
+		if (state.full.length > FULL_KEEP_BYTES) {
+			state.full = state.full.slice(0, FULL_KEEP_BYTES);
+			state.fullCapped = true;
+		}
 	}
 }
 
@@ -76,8 +95,8 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 					env: { ...process.env, IMP: "1" },
 				});
 
-				const stdout: StreamState = { data: "", totalBytes: 0 };
-				const stderr: StreamState = { data: "", totalBytes: 0 };
+				const stdout = newState();
+				const stderr = newState();
 				let timedOut = false;
 				let aborted = false;
 				let settled = false;
@@ -95,7 +114,7 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 				};
 				signal.addEventListener("abort", onAbort, { once: true });
 
-				const finish = (result: ToolExecuteResult) => {
+				const finish = async (result: ToolExecuteResult): Promise<void> => {
 					if (settled) return;
 					settled = true;
 					if (timer !== undefined) clearTimeout(timer);
@@ -108,22 +127,22 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 				child.on("error", (err) => {
 					finish({ output: `Error: failed to spawn command: ${err.message}`, isError: true });
 				});
-				child.on("close", (code) => {
+				child.on("close", async (code) => {
 					if (timedOut) {
 						finish({
-							output: `Error: command timed out after ${timeoutSec}s and was killed. Partial output:\n${formatOutput(stdout, stderr)}`,
+							output: `Error: command timed out after ${timeoutSec}s and was killed. Partial output:\n${await formatOutput(stdout, stderr, command)}`,
 							isError: true,
 						});
 						return;
 					}
 					if (aborted) {
 						finish({
-							output: `Error: command aborted by user. Partial output:\n${formatOutput(stdout, stderr)}`,
+							output: `Error: command aborted by user. Partial output:\n${await formatOutput(stdout, stderr, command)}`,
 							isError: true,
 						});
 						return;
 					}
-					const output = formatOutput(stdout, stderr, code ?? undefined);
+					const output = await formatOutput(stdout, stderr, command, code ?? undefined);
 					finish({ output, isError: false });
 				});
 			});
@@ -131,7 +150,7 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 	};
 }
 
-function formatOutput(stdout: StreamState, stderr: StreamState, exitCode?: number): string {
+async function formatOutput(stdout: StreamState, stderr: StreamState, command: string, exitCode?: number): Promise<string> {
 	const sections: string[] = [];
 	const out = truncateOutput(stdout.data);
 	if (out.text.trim() !== "") {
@@ -147,10 +166,19 @@ function formatOutput(stdout: StreamState, stderr: StreamState, exitCode?: numbe
 	if (exitCode !== undefined && exitCode !== 0) {
 		sections.push(`Exit code: ${exitCode}`);
 	}
-	const droppedTotal = stdout.totalBytes - Math.min(stdout.totalBytes, TAIL_KEEP_BYTES) +
-		(stderr.totalBytes - Math.min(stderr.totalBytes, TAIL_KEEP_BYTES));
-	if (out.truncated || err.truncated || droppedTotal > 0) {
-		sections.push("[output truncated: only the tail is shown]");
+	if (out.truncated || err.truncated || stdout.totalBytes > TAIL_KEEP_BYTES || stderr.totalBytes > TAIL_KEEP_BYTES) {
+		// Park the full output in a temp file so the model can read what was cut.
+		try {
+			const full =
+				`$ ${command}\n` +
+				`[stdout]\n${stdout.full}\n[stderr]\n${stderr.full}\n` +
+				(stdout.fullCapped || stderr.fullCapped ? "[full output itself capped at 10MB]\n" : "");
+			const file = path.join(tmpdir(), `imp-output-${Date.now()}-${process.pid}.log`);
+			await writeFile(file, full, "utf8");
+			sections.push(`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more]`);
+		} catch {
+			sections.push("[output truncated: only the tail is shown; saving the full output failed]");
+		}
 	}
 	return sections.join("\n\n");
 }

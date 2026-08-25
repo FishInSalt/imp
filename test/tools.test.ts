@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -48,6 +48,16 @@ describe("bash tool", () => {
 		expect(result.output).not.toMatch(/^\s*1\n/);
 		const lineCount = result.output.split("\n").length;
 		expect(lineCount).toBeLessThan(560);
+	});
+
+	it("saves truncated full output to a temp file and names it", async () => {
+		const tool = createBashTool();
+		const result = await tool.execute({ command: "seq 1 5000" }, noSignal);
+		expect(result.output).toMatch(/Full output saved to \/.*imp-output-.*\.log/);
+		// the temp file actually contains the beginning that was cut from the tail
+		const match = result.output.match(/Full output saved to (\S+)/);
+		const full = await readFile(match![1]!, "utf8");
+		expect(full).toContain("1\n2\n");
 	});
 
 	it("rejects an empty command", async () => {

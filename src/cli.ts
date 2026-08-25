@@ -5,8 +5,14 @@ import type { AgentEvent } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createReadTool } from "./core/tools/read.js";
+import { createEditTool } from "./core/tools/edit.js";
+import { createWriteTool } from "./core/tools/write.js";
 import type { Tool } from "./core/tools/types.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
+import { loadContextFiles } from "./core/context-files.js";
+import { createRunLogger, type RunLogger } from "./core/logger.js";
+import { withLogging } from "./provider/logging.js";
+import path from "node:path";
 import { loadDotEnv } from "./env.js";
 
 const VERSION = "0.1.0";
@@ -18,6 +24,7 @@ interface CliOptions {
 	model: string;
 	maxTokens: number;
 	maxTurns: number;
+	noContextFiles: boolean;
 	help: boolean;
 	version: boolean;
 }
@@ -33,6 +40,7 @@ Options:
   -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
       --max-tokens <n>     Max output tokens per turn (default: 16384)
       --max-turns <n>      Max agent turns per run (default: 40)
+  -nc, --no-context-files  Skip AGENTS.md discovery
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -58,6 +66,7 @@ function parseArgs(argv: string[]): CliOptions {
 		model: defaultModel(),
 		maxTokens: 16384,
 		maxTurns: 40,
+		noContextFiles: false,
 		help: false,
 		version: false,
 	};
@@ -87,6 +96,10 @@ function parseArgs(argv: string[]): CliOptions {
 				break;
 			case "--max-turns":
 				opts.maxTurns = Number.parseInt(next(), 10);
+				break;
+			case "-nc":
+			case "--no-context-files":
+				opts.noContextFiles = true;
 				break;
 			case "-h":
 			case "--help":
@@ -165,8 +178,19 @@ async function main(): Promise<void> {
 	}
 
 	const provider: LLMProvider = createAnthropicProvider();
-	const tools: Tool[] = [createBashTool(), createReadTool()];
+	const logger: RunLogger = await createRunLogger({ cwd: process.cwd(), argv: process.argv.slice(2) });
+	const tools: Tool[] = [createBashTool(), createReadTool(), createEditTool(), createWriteTool()];
 	const history: AgentMessage[] = [];
+
+	let system = buildSystemPrompt(defaultSystemPromptContext());
+	if (!opts.noContextFiles) {
+		const context = loadContextFiles(process.cwd());
+		if (context) {
+			system += `\n\n# Project context (AGENTS.md)\n\n${context.text}`;
+			const display = context.files.map((f) => path.relative(process.cwd(), f) || f).join(", ");
+			process.stdout.write(dim(`▪ context: ${display}\n`));
+		}
+	}
 
 	const controller = new AbortController();
 	let sigintCount = 0;
@@ -183,7 +207,7 @@ async function main(): Promise<void> {
 
 	try {
 		const result = await runAgentLoop({
-			provider,
+			provider: withLogging(provider, logger),
 			model: opts.model,
 			system: buildSystemPrompt(defaultSystemPromptContext()),
 			tools,
@@ -212,12 +236,15 @@ async function main(): Promise<void> {
 		process.stdout.write(
 			dim(`— ${opts.model} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}\n`),
 		);
+		logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
 	} catch (err) {
 		process.stdout.write("\n");
 		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+		logger.log("run_error", { message: err instanceof Error ? err.message : String(err) });
 		process.exitCode = 1;
 	} finally {
 		process.off("SIGINT", onSigint);
+		logger.close();
 	}
 }
 

@@ -169,7 +169,7 @@ export async function runSearch(
 			if (truncatedByLines || truncatedByBytes || bufferCapped) {
 				const reasons = [
 					truncatedByLines
-						? `showing first ${lines.length} of ${bufferCapped ? totalLines + "+" : totalLines} lines`
+						? `showing first ${lines.length} of ${bufferCapped ? `${totalLines}+` : totalLines} lines`
 						: null,
 					truncatedByBytes ? "50KB limit" : null,
 				].filter(Boolean);

@@ -61,7 +61,7 @@ export async function createRunLogger(options: {
 	return {
 		enabled: true,
 		log(type, data = {}) {
-			write(JSON.stringify({ t: new Date().toISOString(), type, ...data }) + "\n");
+			write(`${JSON.stringify({ t: new Date().toISOString(), type, ...data })}\n`);
 		},
 		close() {
 			// appendFile is already queued; nothing to flush explicitly.

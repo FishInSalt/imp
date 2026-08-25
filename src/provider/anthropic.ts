@@ -1,4 +1,4 @@
-import type { AgentMessage, AssistantBlock, AssistantMessage, StopReason, Usage } from "../core/messages.js";
+import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -71,12 +71,13 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEv
 			const { done, value } = await reader.read();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
-			let sep: number;
-			while ((sep = buffer.indexOf("\n\n")) !== -1) {
+			let sep = buffer.indexOf("\n\n");
+			while (sep !== -1) {
 				const frame = buffer.slice(0, sep);
 				buffer = buffer.slice(sep + 2);
 				const parsed = parseFrame(frame);
 				if (parsed) yield parsed;
+				sep = buffer.indexOf("\n\n");
 			}
 		}
 	} finally {

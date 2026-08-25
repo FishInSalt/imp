@@ -151,9 +151,9 @@ function renderEvent(event: AgentEvent): void {
 			break;
 		case "tool_end":
 			if (event.result.isError) {
-				process.stdout.write(red(`  ✗ ${firstLine(event.result.content)}`) + "\n");
+				process.stdout.write(`${red(`  ✗ ${firstLine(event.result.content)}`)}\n`);
 			} else {
-				process.stdout.write(dim(`  → ${firstLine(event.result.content)}`) + "\n");
+				process.stdout.write(`${dim(`  → ${firstLine(event.result.content)}`)}\n`);
 			}
 			break;
 		default:

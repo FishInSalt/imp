@@ -37,7 +37,7 @@ export function countOccurrences(haystack: string, needle: string): number {
 }
 
 /** Teach, don't just fail: errors explain what to do next. */
-function describeFailure(index: number, edit: Edit, count: number): string {
+function describeFailure(index: number, count: number): string {
 	if (count === 0) {
 		return `edits[${index}].oldText was not found in the file. The match is exact — whitespace, indentation, and line breaks all matter. Read the file again, copy the text exactly (including leading whitespace), and make sure it is unique. If the file uses CRLF line endings, match them or keep oldText to a single line.`;
 	}
@@ -59,7 +59,7 @@ export function applyEdits(original: string, edits: Edit[]): ApplyResult {
 		}
 		const count = countOccurrences(original, oldText);
 		if (count !== 1) {
-			return { ok: false, error: describeFailure(i, edit, count) };
+			return { ok: false, error: describeFailure(i, count) };
 		}
 		const start = original.indexOf(oldText);
 		const line = original.slice(0, start).split("\n").length;
@@ -101,10 +101,13 @@ export function diffLines(before: string, after: string): string {
 	if (a.length * b.length > 1_000_000) {
 		return `- ${a.length} lines\n+ ${b.length} lines (diff elided)`;
 	}
-	const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+	const table: number[][] = Array.from({ length: a.length + 1 }, () =>
+		new Array<number>(b.length + 1).fill(0),
+	);
 	for (let i = a.length - 1; i >= 0; i--) {
 		for (let j = b.length - 1; j >= 0; j--) {
-			table[i]![j] = a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
+			table[i]![j] =
+				a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
 		}
 	}
 	const lines: string[] = [];

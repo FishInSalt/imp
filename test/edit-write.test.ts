@@ -2,10 +2,10 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyEdits, countOccurrences, diffLines } from "../src/core/tools/edit-diff.js";
 import { createEditTool } from "../src/core/tools/edit.js";
-import { createWriteTool } from "../src/core/tools/write.js";
+import { applyEdits, countOccurrences, diffLines } from "../src/core/tools/edit-diff.js";
 import { withFileLock } from "../src/core/tools/file-lock.js";
+import { createWriteTool } from "../src/core/tools/write.js";
 
 const signal = new AbortController().signal;
 
@@ -146,10 +146,7 @@ describe("edit tool", () => {
 		const file = path.join(dir, "crlf.txt");
 		await writeFile(file, "\uFEFFalpha\r\nbeta\r\n");
 		const tool = createEditTool({ cwd: dir });
-		const result = await tool.execute(
-			{ path: file, edits: [{ oldText: "beta", newText: "gamma" }] },
-			signal,
-		);
+		const result = await tool.execute({ path: file, edits: [{ oldText: "beta", newText: "gamma" }] }, signal);
 		expect(result.isError).toBeFalsy();
 		const content = await readFile(file, "utf8");
 		expect(content).toBe("\uFEFFalpha\r\ngamma\r\n");

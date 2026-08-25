@@ -12,10 +12,14 @@ const KILL_GRACE_MS = 2_000;
 
 const grepSchema = Type.Object({
 	pattern: Type.String({ description: "Search pattern (regex, or literal with literal: true)" }),
-	path: Type.Optional(Type.String({ description: "File or directory to search (default: current directory)" })),
+	path: Type.Optional(
+		Type.String({ description: "File or directory to search (default: current directory)" }),
+	),
 	glob: Type.Optional(Type.String({ description: "Filter files by glob, e.g. '*.ts'" })),
 	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive match (default: false)" })),
-	literal: Type.Optional(Type.Boolean({ description: "Treat pattern as a literal string, not regex (default: false)" })),
+	literal: Type.Optional(
+		Type.Boolean({ description: "Treat pattern as a literal string, not regex (default: false)" }),
+	),
 	context: Type.Optional(Type.Number({ description: "Lines of context around each match (default: 0)" })),
 	limit: Type.Optional(Type.Number({ description: `Max output lines (default: ${DEFAULT_LIMIT})` })),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
@@ -39,7 +43,8 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 		async execute(args, signal) {
 			if (!(await detectBinary("rg"))) {
 				return {
-					output: "Error: ripgrep (rg) is not installed. Install it first: brew install ripgrep (or apt install ripgrep).",
+					output:
+						"Error: ripgrep (rg) is not installed. Install it first: brew install ripgrep (or apt install ripgrep).",
 					isError: true,
 				};
 			}
@@ -163,7 +168,9 @@ export async function runSearch(
 			}
 			if (truncatedByLines || truncatedByBytes || bufferCapped) {
 				const reasons = [
-					truncatedByLines ? `showing first ${lines.length} of ${bufferCapped ? totalLines + "+" : totalLines} lines` : null,
+					truncatedByLines
+						? `showing first ${lines.length} of ${bufferCapped ? totalLines + "+" : totalLines} lines`
+						: null,
 					truncatedByBytes ? "50KB limit" : null,
 				].filter(Boolean);
 				text += `\n\n[Truncated: ${reasons.join(", ")}. Narrow the search (subdirectory path, glob, or more specific pattern) instead of raising the limit.]`;

@@ -7,11 +7,11 @@ const DEFAULT_LIMIT = 200;
 const DEFAULT_TIMEOUT_MS = 30;
 
 const findSchema = Type.Object({
-	pattern: Type.String({ description: "Glob pattern for file/dir names, e.g. '*.ts' or 'test*'. Use '*' to list everything." }),
+	pattern: Type.String({
+		description: "Glob pattern for file/dir names, e.g. '*.ts' or 'test*'. Use '*' to list everything.",
+	}),
 	path: Type.Optional(Type.String({ description: "Directory to search (default: current directory)" })),
-	type: Type.Optional(
-		Type.String({ description: "Restrict to 'file' or 'directory' (default: both)" }),
-	),
+	type: Type.Optional(Type.String({ description: "Restrict to 'file' or 'directory' (default: both)" })),
 	limit: Type.Optional(Type.Number({ description: `Max results (default: ${DEFAULT_LIMIT})` })),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
 });

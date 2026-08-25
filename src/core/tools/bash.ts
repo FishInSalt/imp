@@ -54,7 +54,6 @@ function appendChunk(state: StreamState, chunk: string): void {
 
 /** Keep the tail (errors usually live at the end) and note what was dropped. */
 function truncateOutput(text: string): { text: string; truncated: boolean } {
-	const bytes = Buffer.byteLength(text);
 	let lines = text.split("\n");
 	let truncated = false;
 	if (lines.length > MAX_LINES) {
@@ -86,7 +85,10 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 			}
 			const timeoutSec = args.timeout as number | undefined;
 			if (timeoutSec !== undefined && (!Number.isFinite(timeoutSec) || timeoutSec <= 0)) {
-				return { output: `Error: invalid timeout ${timeoutSec}; must be a positive number of seconds`, isError: true };
+				return {
+					output: `Error: invalid timeout ${timeoutSec}; must be a positive number of seconds`,
+					isError: true,
+				};
 			}
 
 			return new Promise<ToolExecuteResult>((resolve) => {
@@ -101,11 +103,14 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 				let aborted = false;
 				let settled = false;
 
-				const timer = timeoutSec !== undefined ? setTimeout(() => {
-					timedOut = true;
-					child.kill("SIGTERM");
-					setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
-				}, timeoutSec * 1000) : undefined;
+				const timer =
+					timeoutSec !== undefined
+						? setTimeout(() => {
+								timedOut = true;
+								child.kill("SIGTERM");
+								setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+							}, timeoutSec * 1000)
+						: undefined;
 
 				const onAbort = () => {
 					aborted = true;
@@ -150,7 +155,12 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 	};
 }
 
-async function formatOutput(stdout: StreamState, stderr: StreamState, command: string, exitCode?: number): Promise<string> {
+async function formatOutput(
+	stdout: StreamState,
+	stderr: StreamState,
+	command: string,
+	exitCode?: number,
+): Promise<string> {
 	const sections: string[] = [];
 	const out = truncateOutput(stdout.data);
 	if (out.text.trim() !== "") {
@@ -166,7 +176,12 @@ async function formatOutput(stdout: StreamState, stderr: StreamState, command: s
 	if (exitCode !== undefined && exitCode !== 0) {
 		sections.push(`Exit code: ${exitCode}`);
 	}
-	if (out.truncated || err.truncated || stdout.totalBytes > TAIL_KEEP_BYTES || stderr.totalBytes > TAIL_KEEP_BYTES) {
+	if (
+		out.truncated ||
+		err.truncated ||
+		stdout.totalBytes > TAIL_KEEP_BYTES ||
+		stderr.totalBytes > TAIL_KEEP_BYTES
+	) {
 		// Park the full output in a temp file so the model can read what was cut.
 		try {
 			const full =
@@ -175,7 +190,9 @@ async function formatOutput(stdout: StreamState, stderr: StreamState, command: s
 				(stdout.fullCapped || stderr.fullCapped ? "[full output itself capped at 10MB]\n" : "");
 			const file = path.join(tmpdir(), `imp-output-${Date.now()}-${process.pid}.log`);
 			await writeFile(file, full, "utf8");
-			sections.push(`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more]`);
+			sections.push(
+				`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more]`,
+			);
 		} catch {
 			sections.push("[output truncated: only the tail is shown; saving the full output failed]");
 		}

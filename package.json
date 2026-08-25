@@ -12,6 +12,8 @@
     "dev": "tsx src/cli.ts",
     "start": "npm run build && node bin/imp.js",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -19,6 +21,7 @@
     "typebox": "^1.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
     "@types/node": "^24.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

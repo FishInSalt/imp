@@ -48,6 +48,10 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 						is_error: r.isError,
 					})),
 				};
+			default: {
+				const exhaustive: never = msg;
+				throw new Error(`unreachable message role: ${JSON.stringify(exhaustive)}`);
+			}
 		}
 	});
 }
@@ -147,9 +151,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
-						...(auth === "bearer"
-							? { authorization: `Bearer ${apiKey}` }
-							: { "x-api-key": apiKey }),
+						...(auth === "bearer" ? { authorization: `Bearer ${apiKey}` } : { "x-api-key": apiKey }),
 						"anthropic-version": API_VERSION,
 					},
 					body: JSON.stringify(body),

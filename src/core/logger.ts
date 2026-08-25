@@ -54,7 +54,8 @@ export async function createRunLogger(options: {
 	};
 
 	write(
-		JSON.stringify({ t: new Date().toISOString(), type: "run_start", cwd: options.cwd, argv: options.argv }) + "\n",
+		JSON.stringify({ t: new Date().toISOString(), type: "run_start", cwd: options.cwd, argv: options.argv }) +
+			"\n",
 	);
 
 	return {

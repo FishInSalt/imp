@@ -43,7 +43,9 @@ imp -p "..." -m claude-sonnet-4-5 --max-turns 20
 ## Development
 
 ```bash
-npm test          # vitest (no API key needed)
+npm test          # vitest (no API key needed; search-tool tests skip if rg/fd missing)
+npm run lint      # biome check (lint + format)
+npm run lint:fix  # biome check --write
 npm run typecheck # tsc --noEmit
 npm run dev       # run CLI from source via tsx
 ```

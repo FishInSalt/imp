@@ -1,12 +1,15 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentEvent } from "../src/core/loop.js";
+import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
-import type { LLMProvider } from "../src/provider/types.js";
 import type { Tool } from "../src/core/tools/types.js";
+import type { LLMProvider } from "../src/provider/types.js";
 
-function assistant(blocks: AssistantMessage["blocks"], stopReason: AssistantMessage["stopReason"] = "end_turn"): AssistantMessage {
+function assistant(
+	blocks: AssistantMessage["blocks"],
+	stopReason: AssistantMessage["stopReason"] = "end_turn",
+): AssistantMessage {
 	return { role: "assistant", blocks, usage: { inputTokens: 10, outputTokens: 5 }, stopReason };
 }
 
@@ -43,7 +46,10 @@ describe("agent loop", () => {
 	it("runs a tool call then completes", async () => {
 		const seen: unknown[] = [];
 		const provider = scriptedProvider([
-			assistant([{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "hi from imp" } }], "tool_use"),
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "hi from imp" } }],
+				"tool_use",
+			),
 			assistant([{ type: "text", text: "all done" }]),
 		]);
 		const history: AgentMessage[] = [];
@@ -133,7 +139,10 @@ describe("agent loop", () => {
 
 	it("stops at max iterations", async () => {
 		const provider = scriptedProvider([
-			assistant([{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "again" } }], "tool_use"),
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "again" } }],
+				"tool_use",
+			),
 		]);
 		const history: AgentMessage[] = [];
 		const result = await runAgentLoop({

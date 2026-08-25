@@ -80,8 +80,8 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			let truncatedByBytes = false;
 			if (Buffer.byteLength(selected) > MAX_BYTES) {
 				selected = Buffer.from(selected).subarray(0, MAX_BYTES).toString("utf8");
-			truncatedByBytes = true;
-		}
+				truncatedByBytes = true;
+			}
 
 			const shownLines = selected.split("\n").length;
 			const endDisplay = startDisplay + shownLines - 1;

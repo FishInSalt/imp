@@ -1,5 +1,5 @@
-import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 import type { RunLogger } from "../core/logger.js";
+import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 /**
  * Wrap a provider so every request and final message lands in the run log.

@@ -11,7 +11,7 @@ describe("parseDotEnv", () => {
 	});
 
 	it("trims matching quotes", () => {
-		expect(parseDotEnv('A="x y"\nB=\'z\'')).toEqual({ A: "x y", B: "z" });
+		expect(parseDotEnv("A=\"x y\"\nB='z'")).toEqual({ A: "x y", B: "z" });
 	});
 
 	it("ignores comments and blank lines", () => {

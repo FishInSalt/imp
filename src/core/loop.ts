@@ -1,14 +1,14 @@
 import { Value } from "typebox/value";
+import type { LLMEvent, LLMProvider } from "../provider/types.js";
 import {
-	addUsage,
-	emptyUsage,
 	type AgentMessage,
 	type AssistantMessage,
+	addUsage,
+	emptyUsage,
 	type ToolResult,
 	type Usage,
 } from "./messages.js";
 import type { Tool } from "./tools/types.js";
-import type { LLMEvent, LLMProvider } from "../provider/types.js";
 
 export type AgentEvent =
 	| LLMEvent

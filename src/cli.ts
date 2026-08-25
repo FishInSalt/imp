@@ -1,21 +1,21 @@
-import { createAnthropicProvider } from "./provider/anthropic.js";
-import type { LLMProvider } from "./provider/types.js";
-import { runAgentLoop } from "./core/loop.js";
-import type { AgentEvent } from "./core/loop.js";
-import type { AgentMessage } from "./core/messages.js";
-import { createBashTool } from "./core/tools/bash.js";
-import { createReadTool } from "./core/tools/read.js";
-import { createEditTool } from "./core/tools/edit.js";
-import { createWriteTool } from "./core/tools/write.js";
-import { createGrepTool } from "./core/tools/grep.js";
-import { createFindTool } from "./core/tools/find.js";
-import type { Tool } from "./core/tools/types.js";
-import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
+import path from "node:path";
 import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
-import { withLogging } from "./provider/logging.js";
-import path from "node:path";
+import type { AgentEvent } from "./core/loop.js";
+import { runAgentLoop } from "./core/loop.js";
+import type { AgentMessage } from "./core/messages.js";
+import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
+import { createBashTool } from "./core/tools/bash.js";
+import { createEditTool } from "./core/tools/edit.js";
+import { createFindTool } from "./core/tools/find.js";
+import { createGrepTool } from "./core/tools/grep.js";
+import { createReadTool } from "./core/tools/read.js";
+import type { Tool } from "./core/tools/types.js";
+import { createWriteTool } from "./core/tools/write.js";
 import { loadDotEnv } from "./env.js";
+import { createAnthropicProvider } from "./provider/anthropic.js";
+import { withLogging } from "./provider/logging.js";
+import type { LLMProvider } from "./provider/types.js";
 
 const VERSION = "0.1.0";
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
@@ -218,7 +218,7 @@ async function main(): Promise<void> {
 		const result = await runAgentLoop({
 			provider: withLogging(provider, logger),
 			model: opts.model,
-			system: buildSystemPrompt(defaultSystemPromptContext()),
+			system,
 			tools,
 			history,
 			userMessage: opts.prompt,
@@ -243,7 +243,9 @@ async function main(): Promise<void> {
 			? ` · cache↓${formatTokens(result.usage.cacheReadTokens)}`
 			: "";
 		process.stdout.write(
-			dim(`— ${opts.model} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}\n`),
+			dim(
+				`— ${opts.model} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}\n`,
+			),
 		);
 		logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
 	} catch (err) {

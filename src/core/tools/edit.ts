@@ -5,9 +5,9 @@ import {
 	applyEdits,
 	detectLineEnding,
 	diffLines,
+	type Edit,
 	replaceLineEndings,
 	stripBom,
-	type Edit,
 } from "./edit-diff.js";
 import { withFileLock } from "./file-lock.js";
 import type { Tool } from "./types.js";

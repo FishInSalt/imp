@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# imp launcher: loads .env (if present) and runs the built CLI.
+# Works from any directory — the agent runs in YOUR current cwd.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+[ -f "$DIR/.env" ] && source "$DIR/.env"
+exec node "$DIR/bin/imp.js" "$@"

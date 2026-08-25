@@ -246,7 +246,17 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 						if (typeof delta.stop_reason === "string") {
 							stopReason = delta.stop_reason as StopReason;
 						}
-						usage.outputTokens = u.output_tokens ?? usage.outputTokens;
+						// Anthropic reports input tokens at message_start; some compatible
+						// services (e.g. Z.ai) report them only here, cumulatively. Take the
+						// max so both conventions are handled correctly.
+						usage.inputTokens = Math.max(usage.inputTokens, u.input_tokens ?? 0);
+						usage.outputTokens = Math.max(usage.outputTokens, u.output_tokens ?? 0);
+						if (u.cache_read_input_tokens !== undefined) {
+							usage.cacheReadTokens = Math.max(usage.cacheReadTokens ?? 0, u.cache_read_input_tokens);
+						}
+						if (u.cache_creation_input_tokens !== undefined) {
+							usage.cacheWriteTokens = Math.max(usage.cacheWriteTokens ?? 0, u.cache_creation_input_tokens);
+						}
 						break;
 					}
 					case "error": {

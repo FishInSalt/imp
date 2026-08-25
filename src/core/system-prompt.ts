@@ -25,6 +25,8 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
 # Tools
 - bash: run shell commands in the working directory. Output is truncated to its tail; the note tells you when content was dropped. Set a timeout for slow commands. Never run interactive commands.
 - read: read a text file. For large files it truncates and tells you which offset to use next — follow the hints until you have what you need.
+- grep: search file contents for a pattern (respects .gitignore). Returns 'path:line:text'. Prefer this over bash grep for finding where things are defined or used.
+- find: find files/directories by name glob (respects .gitignore). Prefer this over bash find/ls pipelines.
 - edit: change part of a file with exact text replacement. Each oldText must match the original file exactly (whitespace included) and be unique. All edits in one call apply atomically; any mismatch aborts with a message telling you how to fix it.
 - write: create a new file (parents auto-created) or replace one wholesale. Never rewrite an entire file just to change a few lines — use edit.
 

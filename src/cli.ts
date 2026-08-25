@@ -7,6 +7,8 @@ import { createBashTool } from "./core/tools/bash.js";
 import { createReadTool } from "./core/tools/read.js";
 import { createEditTool } from "./core/tools/edit.js";
 import { createWriteTool } from "./core/tools/write.js";
+import { createGrepTool } from "./core/tools/grep.js";
+import { createFindTool } from "./core/tools/find.js";
 import type { Tool } from "./core/tools/types.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { loadContextFiles } from "./core/context-files.js";
@@ -179,7 +181,14 @@ async function main(): Promise<void> {
 
 	const provider: LLMProvider = createAnthropicProvider();
 	const logger: RunLogger = await createRunLogger({ cwd: process.cwd(), argv: process.argv.slice(2) });
-	const tools: Tool[] = [createBashTool(), createReadTool(), createEditTool(), createWriteTool()];
+	const tools: Tool[] = [
+		createBashTool(),
+		createReadTool(),
+		createEditTool(),
+		createWriteTool(),
+		createGrepTool(),
+		createFindTool(),
+	];
 	const history: AgentMessage[] = [];
 
 	let system = buildSystemPrompt(defaultSystemPromptContext());

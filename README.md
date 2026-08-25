@@ -7,7 +7,7 @@ A small coding agent that runs in your terminal. Built from scratch, inspired by
 ## Status: M0 (minimal viable agent)
 
 - Agent loop: streaming LLM calls + tool execution, with abort, validation, and error feedback to the model
-- Tools: `bash` (timeout, output truncation), `read` (offset/limit, truncation hints)
+- Tools: `bash` (timeout, truncation), `read` (offset/limit), `edit` (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd) — search tools respect .gitignore
 - Provider: Anthropic (streaming)
 - CLI: print mode (`imp -p "..."`)
 

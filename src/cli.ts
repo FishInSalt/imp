@@ -1,9 +1,17 @@
 import path from "node:path";
+import {
+	compactSession,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateContextTokens,
+	shouldCompact,
+} from "./core/compaction.js";
 import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent } from "./core/loop.js";
 import { runAgentLoop } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
+import { createSession, listSessions, resolveSession } from "./core/session/manager.js";
+import type { SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -27,6 +35,9 @@ interface CliOptions {
 	maxTokens: number;
 	maxTurns: number;
 	noContextFiles: boolean;
+	continueRecent: boolean;
+	resume: string | undefined;
+	noSession: boolean;
 	help: boolean;
 	version: boolean;
 }
@@ -36,6 +47,7 @@ const HELP = `imp ${VERSION} — a small coding agent
 Usage:
   imp -p "<prompt>"        Run a task in print mode (streams the response, then exits)
   imp "<prompt>"           Same as -p
+  imp sessions             List saved sessions for this directory
 
 Options:
   -p, --print <prompt>     Prompt to run
@@ -43,6 +55,9 @@ Options:
       --max-tokens <n>     Max output tokens per turn (default: 16384)
       --max-turns <n>      Max agent turns per run (default: 40)
   -nc, --no-context-files  Skip AGENTS.md discovery
+  -c, --continue           Continue the most recent session in this directory
+  -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
+      --no-session         Do not persist this run as a session
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -51,6 +66,8 @@ Environment:
   ANTHROPIC_AUTH_TOKEN       Bearer token for Anthropic-compatible services
   ANTHROPIC_BASE_URL         Endpoint override (Anthropic-compatible services)
   IMP_MODEL                  Default model id
+  IMP_CONTEXT_WINDOW         Model context window for auto-compaction (default: 131072)
+  IMP_AUTOCOMPACT=0          Disable auto-compaction
 
   Z.ai GLM Coding Plan example:
     export ANTHROPIC_AUTH_TOKEN=<your z.ai key>
@@ -69,6 +86,9 @@ function parseArgs(argv: string[]): CliOptions {
 		maxTokens: 16384,
 		maxTurns: 40,
 		noContextFiles: false,
+		continueRecent: false,
+		resume: undefined,
+		noSession: false,
 		help: false,
 		version: false,
 	};
@@ -102,6 +122,17 @@ function parseArgs(argv: string[]): CliOptions {
 			case "-nc":
 			case "--no-context-files":
 				opts.noContextFiles = true;
+				break;
+			case "-c":
+			case "--continue":
+				opts.continueRecent = true;
+				break;
+			case "-r":
+			case "--resume":
+				opts.resume = next();
+				break;
+			case "--no-session":
+				opts.noSession = true;
 				break;
 			case "-h":
 			case "--help":
@@ -167,9 +198,32 @@ function formatTokens(n: number): string {
 	return String(n);
 }
 
+/** `imp sessions` — list saved sessions for this directory. */
+function printSessionList(): void {
+	const sessions = listSessions(process.cwd());
+	if (sessions.length === 0) {
+		process.stdout.write(dim("No saved sessions for this directory yet.\n"));
+		return;
+	}
+	for (const s of sessions) {
+		const date = s.modified.toISOString().slice(0, 16).replace("T", " ");
+		process.stdout.write(
+			`${dim(date)}  ${s.id.slice(0, 8)}  ${dim(`${s.messageCount} msgs · ${s.turnCount} turns`)}  ${s.title}\n`,
+		);
+	}
+	process.stdout.write(
+		dim(`\nResume with: imp -c            (most recent)\n             imp -r <id>       (specific)\n`),
+	);
+}
+
 async function main(): Promise<void> {
 	await loadDotEnv(); // loads .env from the imp installation root; real env wins
-	const opts = parseArgs(process.argv.slice(2));
+	const argv = process.argv.slice(2);
+	if (argv[0] === "sessions") {
+		printSessionList();
+		return;
+	}
+	const opts = parseArgs(argv);
 	if (opts.help || opts.prompt === undefined) {
 		process.stdout.write(HELP);
 		process.exit(opts.help ? 0 : 1);
@@ -190,6 +244,32 @@ async function main(): Promise<void> {
 		createFindTool(),
 	];
 	const history: AgentMessage[] = [];
+
+	// --- session: create, resume, or skip ---
+	let session: SessionStore | null = null;
+	if (opts.noSession) {
+		// --no-session: stateless run
+	} else if (opts.resume !== undefined || opts.continueRecent) {
+		session = resolveSession(process.cwd(), { resume: opts.resume, continueRecent: opts.continueRecent });
+		if (session) {
+			const loaded = session.buildContext();
+			history.push(...loaded.messages);
+			const stats = session.stats();
+			const est = estimateContextTokens(history);
+			process.stdout.write(
+				dim(
+					`▪ resumed ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}\n`,
+				),
+			);
+		} else {
+			process.stdout.write(dim("▪ no previous session, starting fresh\n"));
+		}
+	}
+	if (!session && !opts.noSession) {
+		session = createSession(process.cwd());
+	}
+	// const capture: narrowing survives into the closures below
+	const activeSession = session;
 
 	let system = buildSystemPrompt(defaultSystemPromptContext());
 	if (!opts.noContextFiles) {
@@ -215,6 +295,8 @@ async function main(): Promise<void> {
 	process.on("SIGINT", onSigint);
 
 	try {
+		const autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+		const settings = DEFAULT_COMPACTION_SETTINGS;
 		const result = await runAgentLoop({
 			provider: withLogging(provider, logger),
 			model: opts.model,
@@ -224,6 +306,29 @@ async function main(): Promise<void> {
 			userMessage: opts.prompt,
 			maxTokens: opts.maxTokens,
 			maxIterations: opts.maxTurns,
+			onMessage: (message) => activeSession?.appendMessage(message),
+			onBeforeTurn: activeSession
+				? async (h) => {
+						if (!autoCompact) return;
+						const est = estimateContextTokens(h);
+						if (!shouldCompact(est.tokens, settings)) return;
+						process.stdout.write(dim(`\n▪ context ~${formatTokens(est.tokens)} tokens — compacting…\n`));
+						const compacted = await compactSession({
+							session: activeSession,
+							provider,
+							model: opts.model,
+							settings,
+						});
+						if (compacted) {
+							h.splice(0, h.length, ...activeSession.buildContext().messages);
+							process.stdout.write(
+								dim(
+									`▪ compacted: ~${formatTokens(compacted.tokensBefore)} → ${formatTokens(estimateContextTokens(h).tokens)} tokens (${compacted.retainedCount} msgs kept verbatim)\n`,
+								),
+							);
+						}
+					}
+				: undefined,
 			onEvent: renderEvent,
 			signal: controller.signal,
 		});
@@ -248,6 +353,14 @@ async function main(): Promise<void> {
 			),
 		);
 		logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
+		if (activeSession) {
+			const stats = activeSession.stats();
+			process.stdout.write(
+				dim(
+					`— session ${activeSession.header.id.slice(0, 8)} · ${stats.messageCount} msgs total · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative\n`,
+				),
+			);
+		}
 	} catch (err) {
 		process.stdout.write("\n");
 		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));

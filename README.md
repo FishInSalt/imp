@@ -6,7 +6,9 @@ A small coding agent that runs in your terminal. Built from scratch, inspired by
 
 ## Status: M0 (minimal viable agent)
 
-- Agent loop: streaming LLM calls + tool execution, with abort, validation, and error feedback to the model
+- Agent loop: streaming LLM calls + tool execution, with abort, validation, error feedback, steering hooks, and a compaction hook
+- Sessions: append-only JSONL message trees (`~/.imp/sessions/`), `--continue` / `--resume <id>` / `imp sessions`
+- Auto-compaction: near the context window, older turns are LLM-summarized into a checkpoint; recent turns and the full history on disk are preserved
 - Tools: `bash` (timeout, truncation), `read` (offset/limit), `edit` (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd) — search tools respect .gitignore
 - Provider: Anthropic (streaming)
 - CLI: print mode (`imp -p "..."`)

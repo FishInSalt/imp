@@ -133,18 +133,21 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				);
 			}
 
-			const body = {
+			const body: Record<string, unknown> = {
 				model: request.model,
 				max_tokens: request.maxTokens,
 				system: request.system,
 				stream: true,
 				messages: toWireMessages(request.messages),
-				tools: request.tools.map((t) => ({
+			};
+			// Anthropic-compatible APIs reject an empty tools array; only send it when set.
+			if (request.tools.length > 0) {
+				body.tools = request.tools.map((t) => ({
 					name: t.name,
 					description: t.description,
 					input_schema: t.parameters,
-				})),
-			};
+				}));
+			}
 
 			let response: Response;
 			try {

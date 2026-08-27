@@ -27,6 +27,12 @@ export interface RunAgentLoopOptions {
 	maxTokens?: number;
 	/** Safety valve against runaway tool loops. Default 40. */
 	maxIterations?: number;
+	/** Fires for every message that enters history (user, steering, assistant, tool results). */
+	onMessage?: (message: AgentMessage) => void;
+	/** Called between turns; may replace history contents in place (e.g. compaction). */
+	onBeforeTurn?: (history: AgentMessage[]) => void | Promise<void>;
+	/** Polls for steering messages: queued user input injected at turn boundaries. */
+	getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
 	onEvent?: (event: AgentEvent) => void;
 	signal?: AbortSignal;
 }
@@ -59,12 +65,17 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		userMessage,
 		maxTokens = 8192,
 		maxIterations = 40,
+		onMessage,
+		onBeforeTurn,
+		getSteeringMessages,
 		onEvent,
 		signal,
 	} = options;
 
 	if (userMessage !== undefined && userMessage !== "") {
-		history.push({ role: "user", content: userMessage });
+		const user: AgentMessage = { role: "user", content: userMessage };
+		history.push(user);
+		onMessage?.(user);
 	}
 
 	const usage = emptyUsage();
@@ -73,6 +84,17 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 
 	while (true) {
 		if (signal?.aborted) return { stopReason: "aborted", turns, usage };
+
+		// Steering: messages queued while the model was working enter before the
+		// next assistant response, so the model sees them without a new user turn.
+		const steering = (await getSteeringMessages?.()) ?? [];
+		for (const message of steering) {
+			history.push(message);
+			onMessage?.(message);
+		}
+
+		// Compaction hook: may rewrite history in place (older messages -> summary).
+		await onBeforeTurn?.(history);
 
 		const assistant = await streamAssistant({
 			provider,
@@ -84,6 +106,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 
 		history.push(assistant);
 		turns++;
+		onMessage?.(assistant);
 
 		const toolCalls = assistant.blocks.filter(
 			(b): b is Extract<typeof b, { type: "toolCall" }> => b.type === "toolCall",
@@ -110,7 +133,9 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			// Aborted before any tool produced a result.
 			return { stopReason: "aborted", turns, usage };
 		}
-		history.push({ role: "toolResult", results });
+		const toolResults: AgentMessage = { role: "toolResult", results };
+		history.push(toolResults);
+		onMessage?.(toolResults);
 	}
 }
 

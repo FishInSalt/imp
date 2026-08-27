@@ -153,16 +153,18 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 ### M2 — 会话管理 + 上下文工程（2 周）
 
 **任务清单**
-- [ ] JSONL 会话文件：每行一条消息（`id`、`parentId`、时间戳、usage）
-  - 存储位置：`~/.imp/sessions/<project-hash>/<uuid>.jsonl`
-  - 树结构：消息追加只认 `parentId` 链，天然支持分支
-- [ ] `--continue` / `--resume <id>`：恢复最近/指定会话
-- [ ] Token 计量与成本显示（input/output/cache 分开）
-- [ ] **Compaction（压缩）**：上下文快满时，用 LLM 把旧消息总结成一条 summary 消息替换
-  - 保留最近 N 条 + 全部活跃文件路径等关键信息
-  - 触发策略：先手动命令，后自动（剩余 <15% 时）
-  - 原始历史不删，仍在 JSONL 里
-- [ ] steering：流式执行中允许用户插话（M0 可先做简单版：新消息排队到本轮工具执行间隙注入）
+- [x] JSONL 会话文件：每行一条消息（`id`、`parentId`、时间戳、usage）
+  - 存储位置：`~/.imp/sessions/<cwd-横杠化>/<timestamp>-<uuid>.jsonl`（同 pi）
+  - 树结构：消息追加只认 `parentId` 链，天然支持分支（分支 UI 属 M5）
+- [x] `--continue` / `--resume <id>`（id 前缀/文件名均可）：恢复最近/指定会话；`imp sessions` 列表
+- [x] Token 计量：run 级 + 会话累计（input/output/cacheRead/cacheWrite 分开，cli 尾行显示）；成本 $ 待多 provider 价格表（M5）
+- [x] **Compaction（压缩）**：上下文快满时自动触发（`IMP_CONTEXT_WINDOW - 16384`，默认窗 131072）
+  - 切点：保留尾部 ~20k tokens，回退到轮次边界（user 消息处）——toolResult 永不成为 retainedTail 开头
+  - 摘要提示词沿用 pi 的结构化模板（Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context）
+  - 估算：最后一次 assistant usage 锚定 + 尾部 chars/4 估算（pi 的洞察：最后一次调用的 usage 即实测上下文大小）
+  - 原始历史不删，仍在 JSONL 里；compaction entry 自带 retainedTail，是自包含检查点
+  - `IMP_AUTOCOMPACT=0` 可关；手动命令待 M3 REPL 斜杠命令
+- [x] steering：loop 增加 `getSteeringMessages` 轮询（每轮开始前注入，含 run 开始时），与 pi 同构；REPL 接线在 M3
 
 **验收标准**：单会话连续工作 50+ 轮不爆上下文；kill 进程后 resume 能无缝继续。
 

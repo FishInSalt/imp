@@ -21,7 +21,7 @@ export interface CompactionSettings {
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	reserveTokens: 16384,
-	keepRecentTokens: 20000,
+	keepRecentTokens: Number(process.env.IMP_KEEP_RECENT ?? 20000),
 	contextWindow: Number(process.env.IMP_CONTEXT_WINDOW ?? 131072),
 };
 

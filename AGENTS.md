@@ -24,11 +24,3 @@ Skip for: docs-only, test-only, formatting, config tweaks, renames.
 Triage honestly: major → fix before proceeding; minors → fix or record in
 PROJECT_PLAN as known issues. Convert every accepted finding into a regression
 test when feasible — that is how the review pays rent.
-
-## Conventions
-
-- Code, comments, and AGENTS.md itself: English. Conversation with the user: Chinese.
-- Every tool execute() must remain abortable (AbortSignal passed through).
-- Errors feed back to the model as isError tool results; never crash the process
-  on tool failures. Session file I/O errors may fail fast.
-- On-disk formats are append-only; compaction never deletes history.

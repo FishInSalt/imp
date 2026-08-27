@@ -12,7 +12,12 @@ import { SessionError, type SessionHeader, SessionStore } from "./store.js";
 
 export function sessionsDirFor(cwd: string, baseDir?: string): string {
 	const base = baseDir ?? path.join(homedir(), ".imp", "sessions");
-	const safe = cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
+	// Double existing dashes so "-" is an unambiguous path separator: /w/a-b and
+	// /w/a/b must not map to the same directory.
+	const safe = cwd
+		.replace(/^[/\\]/, "")
+		.replace(/-/g, "--")
+		.replace(/[/\\:]/g, "-");
 	return path.join(base, safe);
 }
 

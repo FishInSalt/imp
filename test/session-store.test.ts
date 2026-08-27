@@ -61,17 +61,29 @@ describe("SessionStore", () => {
 		expect(context.messages[0]).toEqual(user("hello"));
 	});
 
-	it("open() rejects invalid files with useful errors", async () => {
+	it("open() rejects interior corruption but drops a torn final line", async () => {
 		const dir = await mkpath();
 		const badHeader = path.join(dir, "bad1.jsonl");
-		await import("node:fs").then((f) => f.writeFileSync(badHeader, "not json\n"));
+		const fsp = await import("node:fs");
+		fsp.writeFileSync(badHeader, "not json\n");
 		expect(() => SessionStore.open(badHeader)).toThrow(/first line/);
 
+		// interior corruption: a valid line AFTER the bad one proves it is not a torn tail
 		const badEntry = path.join(dir, "bad2.jsonl");
 		const ok = SessionStore.create(badEntry, "/p");
 		ok.appendMessage(user("a"));
-		await import("node:fs").then((f) => f.appendFileSync(badEntry, '{"type":"message","id":"x"}\n'));
+		fsp.appendFileSync(badEntry, '{"type":"message","id":"x"}\n');
+		ok.appendMessage(user("b")); // appends a valid line after the corrupt one
 		expect(() => SessionStore.open(badEntry)).toThrow(/line 3/);
+
+		// torn final line (crash mid-append): dropped, session still loads
+		const torn = path.join(dir, "torn.jsonl");
+		const t = SessionStore.create(torn, "/p");
+		t.appendMessage(user("kept"));
+		fsp.appendFileSync(torn, '{"type":"message","id":"partial');
+		const reopened = SessionStore.open(torn);
+		expect(reopened.getEntries().length).toBe(1);
+		expect(reopened.buildContext().messages[0]).toEqual(user("kept"));
 	});
 
 	it("stats() aggregates assistant usage and turns", async () => {

@@ -32,6 +32,20 @@ const toolResult: AgentMessage = {
 	results: [{ toolCallId: "t1", toolName: "bash", content: "file-a\nfile-b", isError: false }],
 };
 
+describe("settings env parsing", () => {
+	it("invalid env values fall back with a warning instead of NaN-disabling compaction", async () => {
+		const { vi } = await import("vitest");
+		vi.stubEnv("IMP_KEEP_RECENT", "20k");
+		vi.stubEnv("IMP_CONTEXT_WINDOW", "128k");
+		vi.resetModules();
+		const mod = await import("../src/core/compaction.js");
+		expect(mod.DEFAULT_COMPACTION_SETTINGS.keepRecentTokens).toBe(20000);
+		expect(mod.DEFAULT_COMPACTION_SETTINGS.contextWindow).toBe(131072);
+		vi.unstubAllEnvs();
+		vi.resetModules();
+	});
+});
+
 describe("token estimation", () => {
 	it("estimates by chars/4 per message kind", () => {
 		expect(estimateTokens(user("abcd"))).toBe(1); // 4 chars = 1 token

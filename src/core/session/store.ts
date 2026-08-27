@@ -161,7 +161,17 @@ export class SessionStore {
 
 		const entries: SessionEntry[] = [];
 		for (let i = 1; i < lines.length; i++) {
-			entries.push(parseEntryLine(lines[i] as string, i + 1));
+			try {
+				entries.push(parseEntryLine(lines[i] as string, i + 1));
+			} catch (err) {
+				// A torn FINAL line (crash mid-append) must not hide the whole session;
+				// interior corruption is still fatal — something is structurally wrong.
+				if (i === lines.length - 1 && err instanceof SessionError) {
+					process.stderr.write(`imp: dropping torn final line in ${filePath}\n`);
+					break;
+				}
+				throw err;
+			}
 		}
 		return new SessionStore(filePath, header, entries);
 	}
@@ -270,6 +280,11 @@ export class SessionStore {
 		return { messages, compacted };
 	}
 
+	/**
+	 * Aggregates over ALL entries in the file, not just the current branch.
+	 * Linear sessions (imp today) are exact; once branching UI exists (M5)
+	 * this should walk getBranch() instead.
+	 */
 	stats(): SessionStats {
 		const stats: SessionStats = {
 			messageCount: 0,

@@ -19,10 +19,22 @@ export interface CompactionSettings {
 	contextWindow: number;
 }
 
+/** Parse a positive int env var; fall back (with a warning) instead of going NaN. */
+function envInt(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n <= 0) {
+		process.stderr.write(`imp: ignoring invalid ${name}=${JSON.stringify(raw)}, using ${fallback}\n`);
+		return fallback;
+	}
+	return n;
+}
+
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	reserveTokens: 16384,
-	keepRecentTokens: Number(process.env.IMP_KEEP_RECENT ?? 20000),
-	contextWindow: Number(process.env.IMP_CONTEXT_WINDOW ?? 131072),
+	keepRecentTokens: envInt("IMP_KEEP_RECENT", 20000),
+	contextWindow: envInt("IMP_CONTEXT_WINDOW", 131072),
 };
 
 // ============================================================================
@@ -65,6 +77,19 @@ export interface ContextEstimate {
 	measured: boolean;
 }
 
+/**
+ * Estimate context size from messages. Anchors on the last assistant
+ * message's usage — that call's input+output IS the measured context size —
+ * and only estimates the messages after it (chars/4).
+ *
+ * Known skew (accepted): right after a compaction the retained tail still
+ * carries pre-compaction usage, so the estimate reads ~window-sized for one
+ * turn. Consequence: one extra compaction attempt on resume. That attempt
+ * hits the `cut <= 0` bail-out BEFORE any provider call when there is
+ * nothing left to summarize, so the cost is a local estimate, not an LLM
+ * call — no cascade, no loop. The anchor corrects itself on the first
+ * post-compaction assistant message.
+ */
 export function estimateContextTokens(messages: AgentMessage[]): ContextEstimate {
 	// Find the last assistant message with real usage.
 	let usageIndex = -1;
@@ -206,7 +231,10 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 export interface CompactResult {
 	summary: string;
 	retainedCount: number;
+	/** Estimated context right before compaction. */
 	tokensBefore: number;
+	/** Estimated context right after (summary + retained tail, char-based). */
+	tokensAfter: number;
 	usage: Usage;
 }
 
@@ -260,5 +288,11 @@ export async function compactSession(args: {
 	if (summary.trim() === "") throw new Error("compaction: summarizer returned an empty summary");
 
 	args.session.appendCompaction(summary, retainedTail, tokensBefore, usage);
-	return { summary, retainedCount: retainedTail.length, tokensBefore, usage };
+	const summaryMessage: AgentMessage = {
+		role: "user",
+		content: `${summary}`,
+	};
+	const tokensAfter =
+		estimateTokens(summaryMessage) + retainedTail.reduce((sum, m) => sum + estimateTokens(m), 0);
+	return { summary, retainedCount: retainedTail.length, tokensBefore, tokensAfter, usage };
 }

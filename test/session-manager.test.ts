@@ -10,7 +10,7 @@ import {
 	SessionNotFoundError,
 	sessionsDirFor,
 } from "../src/core/session/manager.js";
-import type { SessionStore } from "../src/core/session/store.js";
+import { SessionStore } from "../src/core/session/store.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string): AgentMessage => ({
@@ -36,6 +36,14 @@ describe("session manager", () => {
 	it("sessions dir sanitizes the cwd path (pi-style dashes)", async () => {
 		const dir = sessionsDirFor("/Users/z/proj", "/base");
 		expect(dir).toBe(path.join("/base", "Users-z-proj"));
+	});
+
+	it("paths that differ only by dash-vs-slash map to different dirs (no collision)", async () => {
+		const a = sessionsDirFor("/w/a/b", "/base");
+		const b = sessionsDirFor("/w/a-b", "/base");
+		expect(a).not.toBe(b);
+		expect(a.endsWith("w-a-b")).toBe(true);
+		expect(b.endsWith("w-a--b")).toBe(true);
 	});
 
 	it("creates session files under the project dir and lists them newest first", async () => {
@@ -78,11 +86,16 @@ describe("session manager", () => {
 
 	it("ambiguous prefix across two sessions throws with candidates listed", async () => {
 		const { baseDir, cwd } = await setup();
-		const a = seed(baseDir, cwd, [user("a")]);
-		seed(baseDir, cwd, [user("b")]);
-		// resume by the unique full id works even with several sessions present
-		const resumed = resolveSession(cwd, { resume: a.header.id, baseDir });
-		expect(resumed?.header.id).toBe(a.header.id);
+		const dir = sessionsDirFor(cwd, baseDir);
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(dir, { recursive: true });
+		// two sessions whose ids share the first 8 chars
+		SessionStore.create(path.join(dir, "a.jsonl"), cwd, "deadbeef-0001");
+		SessionStore.create(path.join(dir, "b.jsonl"), cwd, "deadbeef-0002");
+		expect(() => resolveSession(cwd, { resume: "deadbeef", baseDir })).toThrow(/matches 2 sessions/);
+		// a longer prefix disambiguates
+		const resumed = resolveSession(cwd, { resume: "deadbeef-0001", baseDir });
+		expect(resumed?.header.id).toBe("deadbeef-0001");
 	});
 
 	it("corrupt session files are skipped, not fatal", async () => {

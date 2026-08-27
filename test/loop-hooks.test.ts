@@ -109,6 +109,80 @@ describe("loop hooks (M2)", () => {
 		expect(seen.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
 	});
 
+	it("max_iterations closes dangling tool_use ids so the session stays resumable", async () => {
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream() {
+				const message = assistant(
+					[
+						{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "x" } },
+						{ type: "toolCall", id: "t2", name: "echo_tool", arguments: { message: "y" } },
+					],
+					"tool_use",
+				);
+				yield { type: "message_end", message };
+			},
+		};
+		const history: AgentMessage[] = [];
+		const result = await runAgentLoop({
+			provider,
+			model: "m",
+			system: "s",
+			tools: [echoTool],
+			history,
+			userMessage: "go",
+			maxIterations: 1,
+		});
+		expect(result.stopReason).toBe("max_iterations");
+		// history must end with a toolResult covering BOTH ids — otherwise resume 400s
+		const last = history[history.length - 1];
+		if (last?.role !== "toolResult") throw new Error("expected toolResult tail");
+		expect(last.results.map((r) => r.toolCallId).sort()).toEqual(["t1", "t2"]);
+		expect(last.results.every((r) => r.isError)).toBe(true);
+	});
+
+	it("abort mid-batch synthesizes results for tools that never ran", async () => {
+		const controller = new AbortController();
+		const twoCallProvider: LLMProvider = {
+			name: "mock",
+			async *stream() {
+				const message = assistant(
+					[
+						{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "first" } },
+						{ type: "toolCall", id: "t2", name: "echo_tool", arguments: { message: "second" } },
+					],
+					"tool_use",
+				);
+				yield { type: "message_end", message };
+			},
+		};
+		const abortingTool: Tool = {
+			...echoTool,
+			async execute(args) {
+				// first tool completes, then the user interrupts before tool 2 runs
+				controller.abort();
+				return { output: `echo: ${String(args.message)}` };
+			},
+		};
+		const history: AgentMessage[] = [];
+		const result = await runAgentLoop({
+			provider: twoCallProvider,
+			model: "m",
+			system: "s",
+			tools: [abortingTool],
+			history,
+			userMessage: "go",
+			signal: controller.signal,
+		});
+		expect(result.stopReason).toBe("aborted");
+		const last = history[history.length - 1];
+		if (last?.role !== "toolResult") throw new Error("expected toolResult tail");
+		const byId = new Map(last.results.map((r) => [r.toolCallId, r]));
+		expect(byId.get("t1")?.content).toBe("echo: first"); // real result kept
+		expect(byId.get("t2")?.isError).toBe(true); // synthesized for the unrun tool
+		expect(byId.get("t2")?.content).toContain("interrupted");
+	});
+
 	it("onBeforeTurn may rewrite history (compaction shim)", async () => {
 		const provider: LLMProvider = {
 			name: "mock",

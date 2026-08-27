@@ -57,7 +57,7 @@ Options:
   -nc, --no-context-files  Skip AGENTS.md discovery
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
-      --no-session         Do not persist this run as a session
+      --no-session         Do not persist this run (also disables auto-compaction)
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -248,25 +248,34 @@ async function main(): Promise<void> {
 	// --- session: create, resume, or skip ---
 	let session: SessionStore | null = null;
 	if (opts.noSession) {
-		// --no-session: stateless run
-	} else if (opts.resume !== undefined || opts.continueRecent) {
-		session = resolveSession(process.cwd(), { resume: opts.resume, continueRecent: opts.continueRecent });
-		if (session) {
-			const loaded = session.buildContext();
-			history.push(...loaded.messages);
-			const stats = session.stats();
-			const est = estimateContextTokens(history);
-			process.stdout.write(
-				dim(
-					`▪ resumed ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}\n`,
-				),
-			);
-		} else {
-			process.stdout.write(dim("▪ no previous session, starting fresh\n"));
+		// --no-session: stateless run (also no compaction — there is no session to compact)
+	} else {
+		try {
+			if (opts.resume !== undefined || opts.continueRecent) {
+				session = resolveSession(process.cwd(), {
+					resume: opts.resume,
+					continueRecent: opts.continueRecent,
+				});
+				if (session) {
+					const loaded = session.buildContext();
+					history.push(...loaded.messages);
+					const stats = session.stats();
+					const est = estimateContextTokens(history);
+					process.stdout.write(
+						dim(
+							`▪ resumed ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}\n`,
+						),
+					);
+				} else {
+					process.stdout.write(dim("▪ no previous session, starting fresh\n"));
+				}
+			}
+			if (!session) session = createSession(process.cwd());
+		} catch (err) {
+			process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+			process.exitCode = 1;
+			return;
 		}
-	}
-	if (!session && !opts.noSession) {
-		session = createSession(process.cwd());
 	}
 	// const capture: narrowing survives into the closures below
 	const activeSession = session;
@@ -315,7 +324,7 @@ async function main(): Promise<void> {
 						process.stdout.write(dim(`\n▪ context ~${formatTokens(est.tokens)} tokens — compacting…\n`));
 						const compacted = await compactSession({
 							session: activeSession,
-							provider,
+							provider: withLogging(provider, logger),
 							model: opts.model,
 							settings,
 						});
@@ -323,9 +332,13 @@ async function main(): Promise<void> {
 							h.splice(0, h.length, ...activeSession.buildContext().messages);
 							process.stdout.write(
 								dim(
-									`▪ compacted: ~${formatTokens(compacted.tokensBefore)} → ${formatTokens(estimateContextTokens(h).tokens)} tokens (${compacted.retainedCount} msgs kept verbatim)\n`,
+									`▪ compacted: ~${formatTokens(compacted.tokensBefore)} → ~${formatTokens(compacted.tokensAfter)} tokens (${compacted.retainedCount} msgs kept verbatim)\n`,
 								),
 							);
+						} else {
+							// Estimate said full, but the retained-tail window already covers everything
+							// (typical right after resume — the usage anchor is still pre-compaction).
+							process.stdout.write(dim("▪ nothing safe to compact yet — continuing\n"));
 						}
 					}
 				: undefined,

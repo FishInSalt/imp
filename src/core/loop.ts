@@ -117,6 +117,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		}
 
 		if (turns >= maxIterations) {
+			// Never executed: close the dangling tool_use ids so the session can be
+			// resumed — an unanswered tool_call makes the next API request a 400.
+			const results: ToolResult[] = [];
+			fillMissingToolResults(toolCalls, results, "(not executed: reached max turns)");
+			if (results.length > 0) {
+				const toolResults: AgentMessage = { role: "toolResult", results };
+				history.push(toolResults);
+				onMessage?.(toolResults);
+			}
 			return { stopReason: "max_iterations", turns, usage };
 		}
 
@@ -129,13 +138,34 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			onEvent?.({ type: "tool_end", result });
 		}
 
+		// Abort can stop mid-batch: synthesize results for tools that never ran,
+		// so history (and the persisted session) always has complete tool_use →
+		// tool_result pairs. Without this, a killed run becomes unresumable.
+		fillMissingToolResults(toolCalls, results, "(interrupted before this tool ran)");
+
 		if (results.length === 0) {
-			// Aborted before any tool produced a result.
+			// Aborted before any tool produced a result (unreachable with toolCalls > 0; guard kept).
 			return { stopReason: "aborted", turns, usage };
 		}
 		const toolResults: AgentMessage = { role: "toolResult", results };
 		history.push(toolResults);
 		onMessage?.(toolResults);
+	}
+}
+
+/**
+ * Fill `results` with synthesized error results for tool calls that never
+ * executed (abort mid-batch, max turns). Pure mutation — callers own the push.
+ */
+function fillMissingToolResults(
+	toolCalls: Array<{ type: "toolCall"; id: string; name: string }>,
+	results: ToolResult[],
+	reason: string,
+): void {
+	const answered = new Set(results.map((r) => r.toolCallId));
+	for (const call of toolCalls) {
+		if (answered.has(call.id)) continue;
+		results.push({ toolCallId: call.id, toolName: call.name, content: reason, isError: true });
 	}
 }
 

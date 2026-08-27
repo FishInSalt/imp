@@ -108,6 +108,9 @@ imp/
   - [x] 验收 #2：read 工具 — 读取并准确解释 AgentMessage 类型 ✓
   - [x] 验收 #3：涌现能力 — 无 edit 工具时自主用 read 定位 bug + sed 修复 + node 验证（NaN→2.5）✓
 
+**M2 发现的问题及处置**：
+- **合并后补审抓出 1 major + 5 minor**（commit 9b432c6 修复）：major 为悬空 tool_use——loop 在 max_iterations/中止路径持久化 assistant(tool_use) 却无完整 toolResult，导致 kill 后会话永久无法 resume（违反本里程碑验收标准）。根因：83 个测试全绿但 abort 时序/resume 重放路径无覆盖。教训已固化为 imp/AGENTS.md 的"代码审查纪律"条目：行为变更收尾前评估独立审查（触发条件见 AGENTS.md）
+
 **M1 发现的问题及处置**：
 - **AGENTS.md 上下文从未发给模型**（cli.ts 拼好 system 变量但 runAgentLoop 仍内联重建）—— Biome noUnusedVariables 首日抓到的真 bug；已修复并实机验证（system prompt 暗号测试，1 turn 零工具答对）。验收时被模型自己 `cat AGENTS.md` 掩盖，教训：**上下文注入类功能必须用"模型不读文件也能知道"的方式验收**
 

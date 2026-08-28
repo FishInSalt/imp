@@ -102,6 +102,19 @@ describe("cut point", () => {
 		expect(withTools[cut2]?.role).not.toBe("toolResult");
 	});
 
+	it("cuts at an assistant boundary in tool-heavy runs (single user message)", () => {
+		// one user prompt, then four tool turns — no interior user message exists;
+		// the cut must land on an assistant (valid tail head: it carries its toolCalls)
+		const messages = [user("do the task"), assistantToolCall, toolResult, assistantToolCall, toolResult, assistantToolCall, toolResult];
+		const cut = findCutIndex(messages, 5); // threshold met early → retain recent units
+		expect(messages[cut]?.role).toBe("assistant");
+		const tail = messages.slice(cut);
+		expect(tail[0]?.role).not.toBe("toolResult"); // pair-safety still holds
+		// the summarized prefix ends with a complete pair too
+		const head = messages.slice(0, cut);
+		if (head.length > 0) expect(head[head.length - 1]?.role).toBe("toolResult");
+	});
+
 	it("returns 0 when everything fits in the recent window", () => {
 		expect(findCutIndex([user("hi"), assistantText("ok")], 20_000)).toBe(0);
 	});
@@ -182,8 +195,15 @@ describe("compactSession", () => {
 		expect(context.compacted).toBe(true);
 		expect(context.messages.length).toBeLessThan(6);
 		expect(context.messages[0]?.role).toBe("user"); // framed summary
-		expect(context.messages.some((m) => m.role === "user" && m.content === "recent question")).toBe(true);
+		// the old turns collapsed into the summary; the recent tail starts at a
+		// valid boundary (assistant carries its own toolCalls) and keeps pairs intact
 		expect(context.messages.some((m) => m.role === "user" && m.content === "old question one")).toBe(false);
+		expect(context.messages.some((m) => m.role === "user" && m.content === "old question two")).toBe(false);
+		for (const m of context.messages.slice(1)) {
+			expect(m.role).not.toBe("toolResult");
+		}
+		const tail = context.messages.slice(1);
+		if (tail.length > 0) expect(["user", "assistant"]).toContain(tail[0]?.role);
 	});
 
 	it("sends only the pre-cut messages to the summarizer", async () => {

@@ -128,11 +128,14 @@ export function findCutIndex(messages: AgentMessage[], keepRecentTokens: number)
 	for (let i = messages.length - 1; i >= 0; i--) {
 		kept += estimateTokens(messages[i] as AgentMessage);
 		if (kept >= keepRecentTokens) {
-			// Threshold met inside message i: retain from the START of the turn
-			// containing i (the nearest user message at or before it). Retaining a
-			// few extra messages is safe; a toolResult can never lead the tail.
+			// Threshold met inside message i: retain from the START of the unit
+			// containing i. Valid tail heads are user and assistant messages — an
+			// assistant carries its own toolCalls, so [assistant, toolResult, …] is a
+			// valid sequence. Tool-heavy runs (one user message, many tool turns)
+			// have no interior user boundary, so assistant heads are required.
 			for (let j = i; j >= 0; j--) {
-				if ((messages[j] as AgentMessage).role === "user") return j;
+				const role = (messages[j] as AgentMessage).role;
+				if (role === "user" || role === "assistant") return j;
 			}
 			return 0;
 		}

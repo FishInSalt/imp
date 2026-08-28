@@ -224,13 +224,13 @@ async function main(): Promise<void> {
 		return;
 	}
 	const opts = parseArgs(argv);
-	if (opts.help || opts.prompt === undefined) {
-		process.stdout.write(HELP);
-		process.exit(opts.help ? 0 : 1);
-	}
 	if (opts.version) {
 		process.stdout.write(`imp ${VERSION}\n`);
 		return;
+	}
+	if (opts.help || opts.prompt === undefined) {
+		process.stdout.write(HELP);
+		process.exit(opts.help ? 0 : 1);
 	}
 
 	const provider: LLMProvider = createAnthropicProvider();

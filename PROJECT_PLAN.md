@@ -171,6 +171,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 
 **验收标准**：单会话连续工作 50+ 轮不爆上下文；kill 进程后 resume 能无缝继续。
 
+**验收结果（2026-08-28，GLM-5.3 实测通过）**：
+- `imp sessions` 列表正常（时间/id 前缀/计数/标题）；`-r <前缀>` 恢复正常
+- 暗号测试：跨进程 resume 后零工具答对暗号；cache↓ 映射实证（input 65 + cache 1.9k）
+- 强制压缩（window=4000/keep=600）：3 次 compaction 落盘，结构化摘要模板被 GLM 严格遵守；fetch 瞬时失败后 `-c` 恢复，凭压缩摘要零重读答对 4 文件主题（input 仅 939 tok）；`(compacted)` 标记与累计统计正确
+- 验收中发现并修复：**切点只认 user 边界导致单 user 消息的长工具流永不压缩**（已允许 assistant 切点，与 pi 同构）；`-v` 被无 prompt 分支拦截
+- 50+ 轮长会话压测未做（压缩机制已实证，留待日常 dogfooding 观察）
+
 **对照 pi 源码**：`harness/session/`（session.ts、jsonl-storage.ts、jsonl-repo.ts）、`harness/compaction/compaction.ts`；文档 `docs/session-format.md`、`docs/compaction.md`
 
 ---

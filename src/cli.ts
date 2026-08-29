@@ -194,7 +194,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	});
 	let runner: Runner;
 	try {
-		runner = await createRunner(runnerOptions(opts, argv, renderer));
+		runner = await createRunner({ ...runnerOptions(opts, argv, renderer), deferInit: !interactive });
 	} catch (err) {
 		reportStartupError(err);
 		return;

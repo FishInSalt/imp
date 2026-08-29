@@ -140,6 +140,7 @@ class ReplMachine {
 	}
 
 	private async runCommand(line: string, name: string): Promise<void> {
+		this.runner.warmup(); // scripted mode defers session/banners to first input
 		// Manual /compact runs in its own state so Ctrl+C gets the right hint
 		// and /new / /compact can refuse while it is in flight.
 		const manualCompact = name === "compact" && this.state === "idle" && this.runner.session !== null;
@@ -161,6 +162,7 @@ class ReplMachine {
 
 	private async submitTurn(line: string): Promise<void> {
 		if (this.state === "exited") return;
+		this.runner.warmup(); // scripted mode defers session/banners to first input
 		this.state = "running";
 		this.input.setActive(true);
 		const controller = new AbortController();
@@ -207,6 +209,15 @@ class ReplMachine {
 		this.interruptCount = 0;
 		if (this.state === "exited") return;
 		this.renderer.endRun();
+		// Defensive: an AbortError racing the settle path is a user interrupt,
+		// not a provider failure (the provider should already have ended the
+		// stream cleanly — see abortSafe in anthropic.ts).
+		if (err instanceof Error && err.name === "AbortError") {
+			this.renderer.note("(aborted)");
+			this.discardQueue();
+			this.returnToIdle();
+			return;
+		}
 		this.reportError(err);
 		this.discardQueue();
 		this.returnToIdle();
@@ -274,6 +285,9 @@ class ReplMachine {
 	private forceExit(code: number): void {
 		if (this.state === "exited") return;
 		this.state = "exited";
+		// Close dangling tool_use in the session so a force-quit run stays
+		// resumable (single Ctrl+C is handled by the loop; this is the 130 path).
+		this.runner.persistMissingToolResults("(force quit before this tool ran)");
 		try {
 			this.exit(code); // process.exit in production
 		} catch {

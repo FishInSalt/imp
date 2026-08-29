@@ -121,6 +121,12 @@ describe("slash commands", () => {
 		expect(result.stopReason).toBe("completed");
 	});
 
+	it("regression m3: /model rejects extra text after the id instead of setting a broken id", async () => {
+		const env = await makeEnv();
+		await expect(dispatchCommand("/model glm-4.6 extra", env.ctx)).rejects.toThrow(/takes one id/);
+		expect(env.runner.model).toBe("claude-sonnet-4-5"); // unchanged — no delayed 404 next turn
+	});
+
 	it("/new swaps the session, empties history, keeps the old file, prints the banner", async () => {
 		const env = await makeEnv({ seed: [userMsg("q"), assistantText("a")] });
 		const oldId8 = env.runner.session?.header.id.slice(0, 8);

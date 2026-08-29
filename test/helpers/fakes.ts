@@ -128,6 +128,30 @@ export function scriptedProvider(scripts: ScriptStep[], sink?: LLMRequest[]): LL
 	};
 }
 
+/**
+ * Streams text deltas and then holds mid-response on `hold`, so a test can
+ * abort DURING text streaming (no tool in flight). Faithful to the fixed
+ * provider contract (see abortSafe in anthropic.ts): when the request aborts
+ * while held, the generator ends WITHOUT a message_end event — the agent
+ * loop must turn that into a clean abort, not a provider failure.
+ */
+export function streamingProvider(hold: Gate, text: string, sink?: LLMRequest[]): LLMProvider {
+	return {
+		name: "mock-stream",
+		async *stream(request) {
+			if (sink) sink.push({ ...request, messages: [...request.messages] });
+			const aborted = () => request.signal?.aborted ?? false;
+			for (const chunk of [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))]) {
+				if (aborted()) return;
+				yield { type: "text_delta", text: chunk };
+			}
+			await hold.promise; // more content would arrive here on a real stream
+			if (aborted()) return; // clean end, no message_end
+			yield { type: "message_end", message: assistant([{ type: "text", text }]) };
+		},
+	};
+}
+
 /** Test-controlled latch for gating tool execution (steering/interrupt timing). */
 export interface Gate {
 	promise: Promise<void>;

@@ -16,6 +16,7 @@ import {
 	makeConsole,
 	type ScriptStep,
 	scriptedProvider,
+	streamingProvider,
 	ticks,
 	waitUntil,
 } from "./helpers/fakes.js";
@@ -38,13 +39,16 @@ interface StartArgs {
 	tty?: boolean;
 	model?: string;
 	noSession?: boolean;
+	provider?: LLMProvider;
+	deferInit?: boolean;
 }
 
 async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
-	const provider: LLMProvider = scriptedProvider(args.scripts ?? [reply("ok")], requests);
+	const provider: LLMProvider =
+		args.provider ?? scriptedProvider(args.scripts ?? [reply("ok")], requests);
 	const fake = makeConsole({ tty: args.tty ?? true });
 	const renderer = new Renderer({
 		write: (text) => fake.stdout.write(text),
@@ -64,6 +68,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		renderer,
 		provider,
 		tools: args.tools,
+		deferInit: args.deferInit ?? false,
 	});
 	const exitCodes: number[] = [];
 	const repl = runRepl({
@@ -257,6 +262,153 @@ describe("runRepl", () => {
 		expect(answered).toEqual(used);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
+	});
+
+	it("regression M1: Ctrl+C during TEXT streaming aborts cleanly — (aborted), no error, REPL reusable", async () => {
+		const g = gate();
+		const env = await startRepl({
+			provider: streamingProvider(g, "streaming a long answer word by word"),
+		});
+		env.send("hi\n");
+		// first deltas are already on screen — we are mid-stream with no tool in flight
+		await waitUntil(() => env.output().includes("streaming"));
+		env.fake.interrupt();
+		g.resolve(); // held stream learns of the abort and ends without message_end
+		await waitUntil(() => env.output().includes("(aborted)"));
+		expect(env.output()).not.toContain("imp:");
+		expect(env.output()).not.toContain("This operation was aborted"); // no DOMException leak
+		// prompt restored — a command still works after the abort
+		env.send("/help\n");
+		await waitUntil(() => env.output().includes("/exit"));
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("regression m2: double Ctrl+C (force exit) closes dangling tool_use in the session file", async () => {
+		const g = gate();
+		let startedFlag = false;
+		const tools: Tool[] = [
+			{
+				name: "slow_tool",
+				description: "waits for the test gate",
+				parameters: { properties: { message: { type: "string" } }, required: ["message"] },
+				async execute() {
+					startedFlag = true;
+					await g.promise;
+					return { output: "never" };
+				},
+			},
+		];
+		const env = await startRepl({
+			scripts: [
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "a" } }],
+					"tool_use",
+				),
+			],
+			tools,
+		});
+		env.send("go\n");
+		await waitUntil(() => startedFlag);
+		env.fake.send("\x03\x03");
+		expect(await env.repl).toBe(130);
+		const file = env.runner.session?.filePath;
+		expect(file).toBeDefined();
+		const lines = readFileSync(file as string, "utf8")
+			.split("\n")
+			.filter((l) => l.trim() !== "")
+			.map((l) => JSON.parse(l));
+		const roles = lines.filter((e) => e.type === "message").map((e) => e.message.role);
+		expect(roles).toEqual(["user", "assistant", "toolResult"]);
+		const closer = lines[lines.length - 1];
+		expect(closer.message.results[0].content).toBe("(force quit before this tool ran)");
+		expect(closer.message.results[0].isError).toBe(true);
+		g.resolve();
+		await ticks();
+	});
+
+	it("regression m4: steering user message is persisted to the session exactly once", async () => {
+		const g = gate();
+		let startedFlag = false;
+		const tools: Tool[] = [
+			{
+				name: "slow_tool",
+				description: "waits for the test gate",
+				parameters: { properties: { message: { type: "string" } }, required: ["message"] },
+				async execute() {
+					startedFlag = true;
+					await g.promise;
+					return { output: "done" };
+				},
+			},
+		];
+		const env = await startRepl({
+			scripts: [
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "x" } }],
+					"tool_use",
+				),
+				reply("acknowledged"),
+			],
+			tools,
+		});
+		env.send("go\n");
+		await waitUntil(() => startedFlag);
+		env.send("wait — use a different approach\n");
+		await waitUntil(() => env.output().includes("▪ queued:"));
+		g.resolve();
+		await waitUntil(() => env.output().includes("acknowledged"));
+		const file = env.runner.session?.filePath as string;
+		const entries = readFileSync(file, "utf8")
+			.split("\n")
+			.filter((l) => l.trim() !== "")
+			.map((l) => JSON.parse(l));
+		const steering = entries.filter(
+				(e) => e.type === "message" && e.message.role === "user" && e.message.content === "wait — use a different approach",
+		);
+		expect(steering.length).toBe(1);
+		expect(steering[0].parentId).not.toBeNull();
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("regression m1: zero-line piped stdin (deferInit) creates no session and prints no banners", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
+		const fake = makeConsole({ tty: false });
+		const renderer = new Renderer({
+			write: (text) => fake.stdout.write(text),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		const runner = await createRunner({
+			cwd: path.join(baseDir, "proj"),
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider: scriptedProvider([reply("ok")]),
+			deferInit: true,
+		});
+		const repl = runRepl({
+			runner,
+			input: fake.stdin,
+			output: fake.stdout,
+			interactive: false,
+			exit: (code) => {
+				throw new Error(`force-exit:${code}`);
+			},
+		});
+		await ticks(2);
+		fake.eof(); // zero lines piped
+		expect(await repl).toBe(1); // HELP + exit 1 is cli's job
+		expect(runner.session).toBeNull(); // no empty session file was created
+		expect(fake.output()).toBe(""); // no banners before HELP
+		runner.close();
 	});
 
 	it("abort discards the queue with a note; the REPL stays usable", async () => {

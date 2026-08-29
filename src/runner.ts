@@ -10,6 +10,7 @@ import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
+import { synthesizeMissingToolResults } from "./core/loop.js";
 import { createSession, resolveSession } from "./core/session/manager.js";
 import type { SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
@@ -51,6 +52,11 @@ export interface RunnerOptions {
 	resume?: string;
 	continueRecent?: boolean;
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
+	/** Defer session creation and startup banners until the first warmup()
+	 *  call. Scripted (piped) mode uses this so a zero-line pipe — the "forgot
+	 *  -p" case — exits with HELP and no side effects (no banners, no empty
+	 *  session file). Interactive/print modes init eagerly as before. */
+	deferInit?: boolean;
 	renderer: Renderer; // ALL status output flows through this
 	/** Test seam: scripted provider instead of the real Anthropic one. */
 	provider?: LLMProvider;
@@ -83,6 +89,13 @@ export interface Runner {
 	newSession(): void;
 	printRunStats(result: RunAgentLoopResult): void;
 	printSessionStats(): void;
+	/** Idempotent one-time init (session wiring + banners + system prompt).
+	 *  Eager unless deferInit was set; the scripted REPL calls it on the first
+	 *  accepted line. */
+	warmup(): void;
+	/** Before a force quit: close dangling tool_use in the persisted session so
+	 *  it stays resumable. Returns the number of synthesized results. */
+	persistMissingToolResults(reason: string): number;
 	close(): void; // logger.close()
 }
 
@@ -109,6 +122,7 @@ class RunnerImpl implements Runner {
 	private readonly settings = DEFAULT_COMPACTION_SETTINGS;
 	private system: string;
 	private sessionStore: SessionStore | null = null;
+	private initialized = false;
 	private lastRunModel: string;
 
 	constructor(options: RunnerOptions, logger: RunLogger, provider: LLMProvider) {
@@ -126,7 +140,14 @@ class RunnerImpl implements Runner {
 			createFindTool(),
 		];
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+		this.system = "";
+		if (!options.deferInit) this.warmup();
+	}
 
+	warmup(): void {
+		if (this.initialized) return;
+		this.initialized = true;
+		const options = this.options;
 		if (!options.noSession) {
 			if (options.resume !== undefined || options.continueRecent === true) {
 				const resumed = resolveSession(options.cwd, {
@@ -284,6 +305,21 @@ class RunnerImpl implements Runner {
 		this.options.renderer.note(
 			`— session ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs total · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
 		);
+	}
+
+	persistMissingToolResults(reason: string): number {
+		if (this.sessionStore === null) return 0;
+		// The persisted branch mirrors the live history (onMessage appends every
+		// message); synthesize against it and append the closers. Store appends
+		// are synchronous, so this is safe inside a SIGINT force-exit path.
+		const messages = this.sessionStore.buildContext().messages;
+		const extra = synthesizeMissingToolResults(messages, reason);
+		let count = 0;
+		for (const message of extra) {
+			this.sessionStore.appendMessage(message);
+			if (message.role === "toolResult") count += message.results.length;
+		}
+		return count;
 	}
 
 	close(): void {

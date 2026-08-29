@@ -21,11 +21,12 @@ import { createReadTool } from "./core/tools/read.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import { loadDotEnv } from "./env.js";
+import { dim, firstLine, formatTokens, red, summarizeArgs, VERSION } from "./format.js";
 import { createAnthropicProvider } from "./provider/anthropic.js";
 import { withLogging } from "./provider/logging.js";
 import type { LLMProvider } from "./provider/types.js";
 
-const VERSION = "0.1.0";
+// The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
 const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
 
@@ -152,25 +153,7 @@ function parseArgs(argv: string[]): CliOptions {
 	return opts;
 }
 
-// --- minimal ANSI helpers (no dependency) ---
-
-const isTty = process.stdout.isTTY === true;
-const dim = (s: string): string => (isTty ? `\x1b[2m${s}\x1b[0m` : s);
-const red = (s: string): string => (isTty ? `\x1b[31m${s}\x1b[0m` : s);
-
-function firstLine(text: string, max = 160): string {
-	const line = text.split("\n").find((l) => l.trim() !== "") ?? "";
-	return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
-function summarizeArgs(name: string, args: unknown): string {
-	if (name === "bash") {
-		const cmd = (args as { command?: string })?.command;
-		return cmd !== undefined ? `$ ${cmd}` : JSON.stringify(args);
-	}
-	const json = JSON.stringify(args) ?? "";
-	return json.length > 120 ? `${json.slice(0, 120)}…` : json;
-}
+// --- shared formatting lives in format.ts (dim/red/firstLine/summarizeArgs/formatTokens) ---
 
 function renderEvent(event: AgentEvent): void {
 	switch (event.type) {
@@ -191,11 +174,6 @@ function renderEvent(event: AgentEvent): void {
 			// text/tool deltas are folded into the final message; nothing to print
 			break;
 	}
-}
-
-function formatTokens(n: number): string {
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
 }
 
 /** `imp sessions` — list saved sessions for this directory. */

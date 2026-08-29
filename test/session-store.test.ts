@@ -86,6 +86,30 @@ describe("SessionStore", () => {
 		expect(reopened.buildContext().messages[0]).toEqual(user("kept"));
 	});
 
+	it("getBranch() throws on a broken parentId chain (truncated walk)", async () => {
+		// open() tolerates a dangling parentId (it only validates structure),
+		// so getBranch is the last line of defense: a walk that never reaches a
+		// root must throw, not silently return a truncated branch whose head
+		// could be a toolResult (orphaned on resume — the exact 400 that 9b432c6
+		// prevents).
+		const dir = await mkpath();
+		const file = path.join(dir, "chain.jsonl");
+		const store = SessionStore.create(file, "/p");
+		store.appendMessage(user("q"));
+		store.appendMessage(assistantText("a"));
+		const entries = store.getEntries();
+		const leaf = entries[entries.length - 1];
+		const fsp = await import("node:fs");
+		const lines = fsp.readFileSync(file, "utf8").trimEnd().split("\n");
+		const leafObj = JSON.parse(lines[lines.length - 1] as string);
+		leafObj.parentId = "deadbeef"; // simulate a dangling parentId
+		lines[lines.length - 1] = JSON.stringify(leafObj);
+		fsp.writeFileSync(file, `${lines.join("\n")}\n`);
+
+		const reopened = SessionStore.open(file); // structural checks pass
+		expect(() => reopened.getBranch()).toThrow(/broken parentId chain/);
+	});
+
 	it("stats() aggregates assistant usage and turns", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");

@@ -133,8 +133,7 @@ export class Renderer {
 		if (this.options.liveTools) this.write("\r\x1b[2K");
 		let line: string;
 		if (result.isError) {
-			line =
-				dim(`${base} ✗ `, this.options.ansi) + red(firstLine(result.content, 120), this.options.ansi);
+			line = dim(`${base} ✗ `, this.options.ansi) + red(firstLine(result.content, 120), this.options.ansi);
 		} else {
 			const seconds = pending ? (this.clock() - pending.startedAt) / 1000 : 0;
 			const duration = seconds >= 1 ? ` ${seconds.toFixed(1)}s` : "";

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolResult } from "../src/core/messages.js";
 import { Renderer } from "../src/repl/render.js";
-import type { AgentEvent } from "../src/core/loop.js";
 
 function collector(): { chunks: string[]; write(s: string): void; output(): string } {
 	const chunks: string[] = [];
@@ -68,9 +67,11 @@ describe("Renderer", () => {
 		const long = "x".repeat(130);
 		r.event({ type: "tool_start", toolCallId: "t3", name: "bash", args: { command: "cat nope" } });
 		r.event({ type: "tool_end", result: errResult(long) });
-		expect(out.output().endsWith(
-			`\r\x1b[2K\x1b[2m● bash $ cat nope ✗ \x1b[0m\x1b[31m${"x".repeat(120)}…\x1b[0m\n`,
-		)).toBe(true);
+		expect(
+			out
+				.output()
+				.endsWith(`\r\x1b[2K\x1b[2m● bash $ cat nope ✗ \x1b[0m\x1b[31m${"x".repeat(120)}…\x1b[0m\n`),
+		).toBe(true);
 	});
 
 	it("two-line style is byte-identical to the legacy renderEvent output", () => {
@@ -86,7 +87,7 @@ describe("Renderer", () => {
 			"Let me check" +
 				"\n\x1b[2m● bash $ ls\x1b[0m\n" +
 				"\x1b[2m  → a.ts\x1b[0m\n" +
-				"\n\x1b[2m● read {\"path\":\"x.ts\"}\x1b[0m\n" +
+				'\n\x1b[2m● read {"path":"x.ts"}\x1b[0m\n' +
 				"\x1b[31m  ✗ boom\x1b[0m\n" +
 				"\n",
 		);

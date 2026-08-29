@@ -53,7 +53,12 @@ export function makeConsole(options?: { tty?: boolean }): FakeConsole {
 
 /** A plain renderer with a collector — ansi-free output for exact assertions. */
 export function makeRenderer(
-	options?: Partial<{ ansi: boolean; liveTools: boolean; toolStyle: "one-line" | "two-line"; clock: () => number }>,
+	options?: Partial<{
+		ansi: boolean;
+		liveTools: boolean;
+		toolStyle: "one-line" | "two-line";
+		clock: () => number;
+	}>,
 ): { renderer: Renderer; output(): string } {
 	const chunks: string[] = [];
 	const renderer = new Renderer({

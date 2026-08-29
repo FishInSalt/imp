@@ -243,7 +243,14 @@ export class SessionStore {
 			path.unshift(current);
 			current = current.parentId === null ? undefined : this.byId.get(current.parentId);
 		}
-		if (path.length === 0 || path[path.length - 1]?.id !== target) {
+		// The walk must terminate at a root (parentId === null). A parentId that
+		// is not in the file exits the loop early with a truncated path — its
+		// head could be any role (e.g. a toolResult), which would break resume.
+		// NOTE: the old guard `path[path.length - 1]?.id !== target` was dead code
+		// — target is always the last element after unshifting.
+		const head = path[0];
+		if (!head) throw new SessionError(`entry ${target} not found`);
+		if (head.parentId !== null) {
 			throw new SessionError(`broken parentId chain at entry ${target}`);
 		}
 		return path;

@@ -42,6 +42,29 @@ npm run dev -- -p "List the .ts files here and count their total lines"
 imp -p "..." -m claude-sonnet-4-5 --max-turns 20
 ```
 
+## Interactive mode
+
+Run `imp` with no arguments to start an interactive session (REPL) over one
+shared conversation and session:
+
+```bash
+imp            # interactive REPL (streaming, one-line tool status)
+```
+
+- Plain lines are sent to the model. Lines typed while imp is working are
+  queued and injected when the current turn ends ("steering") — the prompt
+  shows `+ ` while a run is active.
+- `Ctrl+C` aborts the running turn (press twice to force quit; at an empty
+  prompt, press twice to exit). `Ctrl+D` exits. The exit line shows how to
+  resume: `imp -r <id>`.
+- Slash commands: `/help`, `/exit`, `/new` (fresh session, old one stays on
+  disk), `/model [id]` (applies from the next turn), `/compact` (summarize
+  older context now). Unknown commands get a hint instead of reaching the
+  model; prefix a line with a space to send a literal leading `/`.
+- `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
+- Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
+  exits at EOF (a zero-line pipe still prints help and exits 1).
+
 ## Development
 
 ```bash

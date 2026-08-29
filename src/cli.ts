@@ -2,6 +2,7 @@ import { listSessions } from "./core/session/manager.js";
 import { loadDotEnv } from "./env.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./repl/render.js";
+import { runRepl } from "./repl/repl.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
@@ -26,6 +27,7 @@ const HELP = `imp ${VERSION} — a small coding agent
 Usage:
   imp -p "<prompt>"        Run a task in print mode (streams the response, then exits)
   imp "<prompt>"           Same as -p
+  imp                     Start an interactive session (REPL)
   imp sessions             List saved sessions for this directory
 
 Options:
@@ -161,9 +163,9 @@ async function main(): Promise<void> {
 		process.stdout.write(`imp ${VERSION}\n`);
 		return;
 	}
-	if (opts.help || opts.prompt === undefined) {
+	if (opts.help) {
 		process.stdout.write(HELP);
-		process.exit(opts.help ? 0 : 1);
+		process.exit(0);
 	}
 
 	const mode = resolveRunMode({
@@ -172,7 +174,45 @@ async function main(): Promise<void> {
 	});
 	if (mode === "print") {
 		await runPrint(opts, argv);
+		return;
 	}
+	await runInteractive(opts, argv);
+}
+
+/**
+ * Interactive/scripted REPL over one shared Runner. Graceful exits resolve a
+ * code; the zero-line-pipe guard (forgot -p) resolves 1 and prints HELP here —
+ * the REPL itself never imports this module's HELP.
+ */
+async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
+	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+	const renderer = new Renderer({
+		write: (text) => process.stdout.write(text),
+		ansi: process.stdout.isTTY === true,
+		liveTools: interactive, // no in-place pending tool lines on a pipe
+		toolStyle: "one-line",
+	});
+	let runner: Runner;
+	try {
+		runner = await createRunner(runnerOptions(opts, argv, renderer));
+	} catch (err) {
+		reportStartupError(err);
+		return;
+	}
+	let code: number;
+	try {
+		code = await runRepl({ runner });
+	} catch (err) {
+		reportStartupError(err);
+		runner.close();
+		return;
+	}
+	runner.close();
+	if (code === 1) {
+		// zero-line piped stdin — preserves the old "forgot -p" HELP guard
+		process.stdout.write(HELP);
+	}
+	process.exit(code);
 }
 
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {

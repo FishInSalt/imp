@@ -154,7 +154,7 @@ class ReplMachine {
 		} finally {
 			if (manualCompact && this.state === "compacting") {
 				this.interruptCount = 0;
-				this.returnToIdle();
+				await this.flushQueue(); // queued lines drain as after a run (§5.2)
 			}
 		}
 	}

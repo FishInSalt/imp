@@ -99,6 +99,7 @@ describe("SessionStore", () => {
 		store.appendMessage(assistantText("a"));
 		const entries = store.getEntries();
 		const leaf = entries[entries.length - 1];
+		void leaf;
 		const fsp = await import("node:fs");
 		const lines = fsp.readFileSync(file, "utf8").trimEnd().split("\n");
 		const leafObj = JSON.parse(lines[lines.length - 1] as string);

@@ -62,6 +62,20 @@ interface SseEvent {
 }
 
 /** Parse an SSE byte stream into events. Frames are separated by a blank line. */
+/**
+ * Undici rejects the fetch body reader when its request is aborted; without
+ * this wrapper that rejection escapes the provider as a thrown DOMException
+ * and the agent loop mistakes a user abort for a provider failure.
+ */
+async function* abortSafe<T>(source: AsyncIterable<T>, signal?: AbortSignal): AsyncGenerator<T> {
+	try {
+		for await (const item of source) yield item;
+	} catch (err) {
+		if (signal?.aborted) return;
+		throw err;
+	}
+}
+
 async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -183,8 +197,11 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			const toolRawByIndex = new Map<number, string>();
 			const usage: Usage = { inputTokens: 0, outputTokens: 0 };
 			let stopReason: StopReason = null;
+			let sawMessageStop = false;
 
-			for await (const sse of parseSse(response.body)) {
+			// undici rejects the body reader mid-iteration when the request is
+			// aborted; abortSafe turns that rejection into a clean generator end.
+			for await (const sse of abortSafe(parseSse(response.body), request.signal)) {
 				if (request.signal?.aborted) return;
 				const data = sse.data as Record<string, unknown>;
 
@@ -269,8 +286,11 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 						const error = (data.error ?? {}) as Record<string, unknown>;
 						throw new Error(`Anthropic stream error: ${String(error.message ?? JSON.stringify(data))}`);
 					}
+					case "message_stop":
+						sawMessageStop = true;
+						break;
 					default:
-						// ping / message_stop / unknown: nothing to do
+						// ping / unknown: nothing to do
 						break;
 				}
 			}
@@ -284,6 +304,12 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			}
 
 			if (request.signal?.aborted) return;
+			// A stream that ends without message_stop was truncated (proxy/LB
+			// cut the connection). Synthesizing a message_end would persist a
+			// partial assistant message as a completed turn — fail loudly instead.
+			if (!sawMessageStop) {
+				throw new Error("Anthropic stream ended without message_stop — response may be truncated");
+			}
 			yield {
 				type: "message_end",
 				message: { role: "assistant", blocks, usage, stopReason },

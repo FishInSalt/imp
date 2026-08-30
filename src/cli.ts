@@ -1,31 +1,11 @@
-import path from "node:path";
-import {
-	compactSession,
-	DEFAULT_COMPACTION_SETTINGS,
-	estimateContextTokens,
-	shouldCompact,
-} from "./core/compaction.js";
-import { loadContextFiles } from "./core/context-files.js";
-import { createRunLogger, type RunLogger } from "./core/logger.js";
-import type { AgentEvent } from "./core/loop.js";
-import { runAgentLoop } from "./core/loop.js";
-import type { AgentMessage } from "./core/messages.js";
-import { createSession, listSessions, resolveSession } from "./core/session/manager.js";
-import type { SessionStore } from "./core/session/store.js";
-import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
-import { createBashTool } from "./core/tools/bash.js";
-import { createEditTool } from "./core/tools/edit.js";
-import { createFindTool } from "./core/tools/find.js";
-import { createGrepTool } from "./core/tools/grep.js";
-import { createReadTool } from "./core/tools/read.js";
-import type { Tool } from "./core/tools/types.js";
-import { createWriteTool } from "./core/tools/write.js";
+import { listSessions } from "./core/session/manager.js";
 import { loadDotEnv } from "./env.js";
-import { createAnthropicProvider } from "./provider/anthropic.js";
-import { withLogging } from "./provider/logging.js";
-import type { LLMProvider } from "./provider/types.js";
+import { dim, red, VERSION } from "./format.js";
+import { Renderer } from "./repl/render.js";
+import { runRepl } from "./repl/repl.js";
+import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
 
-const VERSION = "0.1.0";
+// The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
 const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
 
@@ -47,6 +27,7 @@ const HELP = `imp ${VERSION} — a small coding agent
 Usage:
   imp -p "<prompt>"        Run a task in print mode (streams the response, then exits)
   imp "<prompt>"           Same as -p
+  imp                     Start an interactive session (REPL)
   imp sessions             List saved sessions for this directory
 
 Options:
@@ -152,52 +133,6 @@ function parseArgs(argv: string[]): CliOptions {
 	return opts;
 }
 
-// --- minimal ANSI helpers (no dependency) ---
-
-const isTty = process.stdout.isTTY === true;
-const dim = (s: string): string => (isTty ? `\x1b[2m${s}\x1b[0m` : s);
-const red = (s: string): string => (isTty ? `\x1b[31m${s}\x1b[0m` : s);
-
-function firstLine(text: string, max = 160): string {
-	const line = text.split("\n").find((l) => l.trim() !== "") ?? "";
-	return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
-function summarizeArgs(name: string, args: unknown): string {
-	if (name === "bash") {
-		const cmd = (args as { command?: string })?.command;
-		return cmd !== undefined ? `$ ${cmd}` : JSON.stringify(args);
-	}
-	const json = JSON.stringify(args) ?? "";
-	return json.length > 120 ? `${json.slice(0, 120)}…` : json;
-}
-
-function renderEvent(event: AgentEvent): void {
-	switch (event.type) {
-		case "text_delta":
-			process.stdout.write(event.text);
-			break;
-		case "tool_start":
-			process.stdout.write(`\n${dim(`● ${event.name} ${summarizeArgs(event.name, event.args)}`)}\n`);
-			break;
-		case "tool_end":
-			if (event.result.isError) {
-				process.stdout.write(`${red(`  ✗ ${firstLine(event.result.content)}`)}\n`);
-			} else {
-				process.stdout.write(`${dim(`  → ${firstLine(event.result.content)}`)}\n`);
-			}
-			break;
-		default:
-			// text/tool deltas are folded into the final message; nothing to print
-			break;
-	}
-}
-
-function formatTokens(n: number): string {
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
-}
-
 /** `imp sessions` — list saved sessions for this directory. */
 function printSessionList(): void {
 	const sessions = listSessions(process.cwd());
@@ -228,66 +163,92 @@ async function main(): Promise<void> {
 		process.stdout.write(`imp ${VERSION}\n`);
 		return;
 	}
-	if (opts.help || opts.prompt === undefined) {
+	if (opts.help) {
 		process.stdout.write(HELP);
-		process.exit(opts.help ? 0 : 1);
+		process.exit(0);
 	}
 
-	const provider: LLMProvider = createAnthropicProvider();
-	const logger: RunLogger = await createRunLogger({ cwd: process.cwd(), argv: process.argv.slice(2) });
-	const tools: Tool[] = [
-		createBashTool(),
-		createReadTool(),
-		createEditTool(),
-		createWriteTool(),
-		createGrepTool(),
-		createFindTool(),
-	];
-	const history: AgentMessage[] = [];
-
-	// --- session: create, resume, or skip ---
-	let session: SessionStore | null = null;
-	if (opts.noSession) {
-		// --no-session: stateless run (also no compaction — there is no session to compact)
-	} else {
-		try {
-			if (opts.resume !== undefined || opts.continueRecent) {
-				session = resolveSession(process.cwd(), {
-					resume: opts.resume,
-					continueRecent: opts.continueRecent,
-				});
-				if (session) {
-					const loaded = session.buildContext();
-					history.push(...loaded.messages);
-					const stats = session.stats();
-					const est = estimateContextTokens(history);
-					process.stdout.write(
-						dim(
-							`▪ resumed ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}\n`,
-						),
-					);
-				} else {
-					process.stdout.write(dim("▪ no previous session, starting fresh\n"));
-				}
-			}
-			if (!session) session = createSession(process.cwd());
-		} catch (err) {
-			process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
-			process.exitCode = 1;
-			return;
-		}
+	const mode = resolveRunMode({
+		promptDefined: opts.prompt !== undefined,
+		stdinIsTty: process.stdin.isTTY === true,
+	});
+	if (mode === "print") {
+		await runPrint(opts, argv);
+		return;
 	}
-	// const capture: narrowing survives into the closures below
-	const activeSession = session;
+	await runInteractive(opts, argv);
+}
 
-	let system = buildSystemPrompt(defaultSystemPromptContext());
-	if (!opts.noContextFiles) {
-		const context = loadContextFiles(process.cwd());
-		if (context) {
-			system += `\n\n# Project context (AGENTS.md)\n\n${context.text}`;
-			const display = context.files.map((f) => path.relative(process.cwd(), f) || f).join(", ");
-			process.stdout.write(dim(`▪ context: ${display}\n`));
-		}
+/**
+ * Interactive/scripted REPL over one shared Runner. Graceful exits resolve a
+ * code; the zero-line-pipe guard (forgot -p) resolves 1 and prints HELP here —
+ * the REPL itself never imports this module's HELP.
+ */
+async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
+	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+	const renderer = new Renderer({
+		write: (text) => process.stdout.write(text),
+		ansi: process.stdout.isTTY === true,
+		liveTools: interactive, // no in-place pending tool lines on a pipe
+		toolStyle: "one-line",
+	});
+	let runner: Runner;
+	try {
+		runner = await createRunner({ ...runnerOptions(opts, argv, renderer), deferInit: !interactive });
+	} catch (err) {
+		reportStartupError(err);
+		return;
+	}
+	let code: number;
+	try {
+		code = await runRepl({ runner });
+	} catch (err) {
+		reportStartupError(err);
+		runner.close();
+		return;
+	}
+	runner.close();
+	if (code === 1) {
+		// zero-line piped stdin — preserves the old "forgot -p" HELP guard
+		process.stdout.write(HELP);
+	}
+	process.exit(code);
+}
+
+function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {
+	return {
+		cwd: process.cwd(),
+		argv,
+		model: opts.model,
+		maxTokens: opts.maxTokens,
+		maxTurns: opts.maxTurns,
+		noContextFiles: opts.noContextFiles,
+		noSession: opts.noSession,
+		resume: opts.resume,
+		continueRecent: opts.continueRecent,
+		renderer,
+	};
+}
+
+function reportStartupError(err: unknown): void {
+	process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+	process.exitCode = 1;
+}
+
+/** Print mode: one runTurn over a fresh Runner, byte-identical to the pre-runner output. */
+async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
+	const renderer = new Renderer({
+		write: (text) => process.stdout.write(text),
+		ansi: process.stdout.isTTY === true,
+		liveTools: false,
+		toolStyle: "two-line",
+	});
+	let runner: Runner;
+	try {
+		runner = await createRunner(runnerOptions(opts, argv, renderer));
+	} catch (err) {
+		reportStartupError(err);
+		return;
 	}
 
 	const controller = new AbortController();
@@ -298,90 +259,28 @@ async function main(): Promise<void> {
 			process.stdout.write(dim("\n(interrupt — press Ctrl+C again to force quit)\n"));
 			controller.abort();
 		} else {
+			// Keep the session resumable: close any dangling tool_use before dying.
+			runner.persistMissingToolResults("(force quit before this tool ran)");
 			process.exit(130);
 		}
 	};
 	process.on("SIGINT", onSigint);
 
 	try {
-		const autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
-		const settings = DEFAULT_COMPACTION_SETTINGS;
-		const result = await runAgentLoop({
-			provider: withLogging(provider, logger),
-			model: opts.model,
-			system,
-			tools,
-			history,
+		const result = await runner.runTurn({
 			userMessage: opts.prompt,
-			maxTokens: opts.maxTokens,
-			maxIterations: opts.maxTurns,
-			onMessage: (message) => activeSession?.appendMessage(message),
-			onBeforeTurn: activeSession
-				? async (h) => {
-						if (!autoCompact) return;
-						const est = estimateContextTokens(h);
-						if (!shouldCompact(est.tokens, settings)) return;
-						process.stdout.write(dim(`\n▪ context ~${formatTokens(est.tokens)} tokens — compacting…\n`));
-						const compacted = await compactSession({
-							session: activeSession,
-							provider: withLogging(provider, logger),
-							model: opts.model,
-							settings,
-						});
-						if (compacted) {
-							h.splice(0, h.length, ...activeSession.buildContext().messages);
-							process.stdout.write(
-								dim(
-									`▪ compacted: ~${formatTokens(compacted.tokensBefore)} → ~${formatTokens(compacted.tokensAfter)} tokens (${compacted.retainedCount} msgs kept verbatim)\n`,
-								),
-							);
-						} else {
-							// Estimate said full, but the retained-tail window already covers everything
-							// (typical right after resume — the usage anchor is still pre-compaction).
-							process.stdout.write(dim("▪ nothing safe to compact yet — continuing\n"));
-						}
-					}
-				: undefined,
-			onEvent: renderEvent,
 			signal: controller.signal,
+			onEvent: (event) => renderer.event(event),
 		});
-
-		process.stdout.write("\n");
-		switch (result.stopReason) {
-			case "aborted":
-				process.stdout.write(dim("(aborted)\n"));
-				break;
-			case "max_iterations":
-				process.stdout.write(red(`(stopped: reached max turns (${opts.maxTurns}))\n`));
-				break;
-			case "completed":
-				break;
-		}
-		const cacheNote = result.usage.cacheReadTokens
-			? ` · cache↓${formatTokens(result.usage.cacheReadTokens)}`
-			: "";
-		process.stdout.write(
-			dim(
-				`— ${opts.model} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}\n`,
-			),
-		);
-		logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
-		if (activeSession) {
-			const stats = activeSession.stats();
-			process.stdout.write(
-				dim(
-					`— session ${activeSession.header.id.slice(0, 8)} · ${stats.messageCount} msgs total · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative\n`,
-				),
-			);
-		}
+		renderer.endRun(true);
+		runner.printRunStats(result);
+		runner.printSessionStats();
 	} catch (err) {
-		process.stdout.write("\n");
-		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
-		logger.log("run_error", { message: err instanceof Error ? err.message : String(err) });
-		process.exitCode = 1;
+		renderer.endRun(true);
+		reportStartupError(err);
 	} finally {
 		process.off("SIGINT", onSigint);
-		logger.close();
+		runner.close();
 	}
 }
 

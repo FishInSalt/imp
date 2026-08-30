@@ -169,6 +169,41 @@ function fillMissingToolResults(
 	}
 }
 
+/**
+ * Scan a persisted message list for tool_use blocks with no matching
+ * toolResult and return ONE toolResult message that closes them all.
+ * Used when the process is about to die (force quit) so the session stays
+ * resumable — an unanswered tool_call makes the next API request a 400.
+ */
+export function synthesizeMissingToolResults(
+	messages: AgentMessage[],
+	reason: string,
+): AgentMessage[] {
+	const answered = new Set<string>();
+	for (const message of messages) {
+		if (message.role === "toolResult") {
+			for (const result of message.results) answered.add(result.toolCallId);
+		}
+	}
+	const dangling: Array<{ id: string; name: string }> = [];
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const block of message.blocks) {
+			if (block.type === "toolCall" && !answered.has(block.id)) {
+				dangling.push({ id: block.id, name: block.name });
+			}
+		}
+	}
+	if (dangling.length === 0) return [];
+	const results = dangling.map((call) => ({
+		toolCallId: call.id,
+		toolName: call.name,
+		content: reason,
+		isError: true,
+	}));
+	return [{ role: "toolResult", results }];
+}
+
 async function streamAssistant(args: {
 	provider: LLMProvider;
 	request: Parameters<LLMProvider["stream"]>[0];
@@ -184,7 +219,9 @@ async function streamAssistant(args: {
 			return event.message;
 		}
 	}
-	// Stream ended without a message_end event — treat as abort/protocol error.
+	// Stream ended without a message_end event: an abort ends the generator
+	// early (abortSafe) — report that as a clean abort, not a protocol error.
+	if (request.signal?.aborted) return null;
 	throw new Error("Provider stream ended without a message_end event");
 }
 

@@ -105,7 +105,15 @@ describe("cut point", () => {
 	it("cuts at an assistant boundary in tool-heavy runs (single user message)", () => {
 		// one user prompt, then four tool turns — no interior user message exists;
 		// the cut must land on an assistant (valid tail head: it carries its toolCalls)
-		const messages = [user("do the task"), assistantToolCall, toolResult, assistantToolCall, toolResult, assistantToolCall, toolResult];
+		const messages = [
+			user("do the task"),
+			assistantToolCall,
+			toolResult,
+			assistantToolCall,
+			toolResult,
+			assistantToolCall,
+			toolResult,
+		];
 		const cut = findCutIndex(messages, 5); // threshold met early → retain recent units
 		expect(messages[cut]?.role).toBe("assistant");
 		const tail = messages.slice(cut);

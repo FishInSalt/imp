@@ -191,7 +191,19 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - [ ] 流式渲染 assistant 输出、工具调用过程展示（工具名+参数摘要+结果状态）
 - [ ] Ctrl+C 中断当前轮（恢复到可输入状态）
 
-**3b. 真 TUI（可选，量大）**
+****3a 结果（2026-08-30，已合并 `4f136e7` + `a912164`）**：
+- 工作流四阶段产出：2 份并行研究报告 → 906 行设计文档 → 10 提交实现（+3955/−202，零新依赖，core/provider 语义不变）→ 对抗评审
+- 评审闭环 ×2：首轮 1 major（流式中止显示为 provider 错误：undici 中止 DOMException 逃逸，三层修复 abortSafe/loop null-on-abort/settleFailure 兜底）+ 4 minor；复审抓出我引入的 P1 回归（坏 `-r` id 崩溃）+ P1（批量编辑原子失败致 print 模式修复未落地）+ 截断掩盖（message_stop 追踪）
+- dogfood 实测再抓 1 个 P1：**/compact 状态前置自我拒绝**——组件各自正确、接缝断裂的又一例
+- 测试 89 → 142；全局限量全局 `imp` 已是 REPL 版本
+
+**3a 经验教训**：
+- **关键路径必须有从入口到输出的集成测试**：本轮两个 P1 都活在"单元测试直调内部函数、自控前置条件"的缝隙里（dispatchCommand 直调绕过状态机交互）。已用 handleLine 全路径测试堵住
+- **脚本化管道探测全生命周期**是高性价比验收手法：echo 逐行喂数 + 等 stats 落定再发下一条，可确定性复现时序问题
+- 中止类测试要**信号忠实**：不响应 signal 的假 provider 测不出流式中止（本轮 major 的盲区根源）；真 undici + 本地 SSE 服务器测试补齐
+- 批量 edit 失败是原子的：失败后必须逐条验证落地，否则 commit message 会宣称不存在的修复
+
+3b. 真 TUI（可选，量大）**
 - [ ] 选型：自研（参考 pi-tui 的组件思路）vs [ink](https://github.com/vadimdemedes/ink)（React 式终端 UI）
 - [ ] 编辑器组件：多行输入、历史、`@` 文件模糊补全
 - [ ] 消息区：markdown 渲染、工具输出折叠/展开

@@ -259,6 +259,8 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 			process.stdout.write(dim("\n(interrupt — press Ctrl+C again to force quit)\n"));
 			controller.abort();
 		} else {
+			// Keep the session resumable: close any dangling tool_use before dying.
+			runner.persistMissingToolResults("(force quit before this tool ran)");
 			process.exit(130);
 		}
 	};

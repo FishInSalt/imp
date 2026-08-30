@@ -140,7 +140,15 @@ class ReplMachine {
 	}
 
 	private async runCommand(line: string, name: string): Promise<void> {
-		this.runner.warmup(); // scripted mode defers session/banners to first input
+		// Scripted mode defers session/banners to the first accepted line; a
+		// failed warmup (bad -r id) must surface as a clean error, never an
+		// unhandled rejection — so it runs inside the guarded region.
+		try {
+			this.runner.warmup();
+		} catch (err) {
+			this.reportError(err);
+			return;
+		}
 		// Manual /compact runs in its own state so Ctrl+C gets the right hint
 		// and /new / /compact can refuse while it is in flight.
 		const manualCompact = name === "compact" && this.state === "idle" && this.runner.session !== null;
@@ -162,12 +170,12 @@ class ReplMachine {
 
 	private async submitTurn(line: string): Promise<void> {
 		if (this.state === "exited") return;
-		this.runner.warmup(); // scripted mode defers session/banners to first input
 		this.state = "running";
 		this.input.setActive(true);
 		const controller = new AbortController();
 		this.controller = controller;
 		try {
+			this.runner.warmup(); // deferred init for scripted mode; guarded like the rest
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,

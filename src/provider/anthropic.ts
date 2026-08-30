@@ -197,6 +197,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			const toolRawByIndex = new Map<number, string>();
 			const usage: Usage = { inputTokens: 0, outputTokens: 0 };
 			let stopReason: StopReason = null;
+			let sawMessageStop = false;
 
 			// undici rejects the body reader mid-iteration when the request is
 			// aborted; abortSafe turns that rejection into a clean generator end.
@@ -285,8 +286,11 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 						const error = (data.error ?? {}) as Record<string, unknown>;
 						throw new Error(`Anthropic stream error: ${String(error.message ?? JSON.stringify(data))}`);
 					}
+					case "message_stop":
+						sawMessageStop = true;
+						break;
 					default:
-						// ping / message_stop / unknown: nothing to do
+						// ping / unknown: nothing to do
 						break;
 				}
 			}
@@ -300,6 +304,12 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			}
 
 			if (request.signal?.aborted) return;
+			// A stream that ends without message_stop was truncated (proxy/LB
+			// cut the connection). Synthesizing a message_end would persist a
+			// partial assistant message as a completed turn — fail loudly instead.
+			if (!sawMessageStop) {
+				throw new Error("Anthropic stream ended without message_stop — response may be truncated");
+			}
 			yield {
 				type: "message_end",
 				message: { role: "assistant", blocks, usage, stopReason },

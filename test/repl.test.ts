@@ -372,6 +372,62 @@ describe("runRepl", () => {
 		expect(await env.repl).toBe(0);
 	});
 
+	it("regression P1: scripted mode with a bad -r id reports a clean error, no unhandled rejection", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
+		const fake = makeConsole({ tty: false });
+		const renderer = new Renderer({
+			write: (text) => fake.stdout.write(text),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		const runner = await createRunner({
+			cwd: path.join(baseDir, "proj"),
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			resume: "deadbeef", // no such session anywhere under baseDir
+			sessionBaseDir: baseDir,
+			renderer,
+			provider: scriptedProvider([reply("unreachable")]),
+			deferInit: true, // piped stdin defers warmup to the first line
+		});
+		const repl = runRepl({
+			runner,
+			input: fake.stdin,
+			output: fake.stdout,
+			interactive: false,
+			exit: (code) => {
+				throw new Error(`force-exit:${code}`);
+			},
+		});
+		await ticks(2);
+		fake.send("hi\n"); // triggers warmup -> resolveSession throws
+		await waitUntil(() => fake.output().includes("imp:"));
+		expect(fake.output()).toMatch(/deadbeef/);
+		expect(fake.output()).not.toContain("unreachable"); // the turn never ran
+		fake.eof();
+		expect(await repl).toBe(0); // resolved cleanly — no unhandled rejection
+		runner.close();
+	});
+
+	it("regression (layer-3): a provider AbortError escaping to settleFailure prints (aborted), not an error", async () => {
+		const abortError = () => {
+			const err = new Error("This operation was aborted");
+			err.name = "AbortError";
+			throw err;
+		};
+		const env = await startRepl({ scripts: [abortError as unknown as ScriptStep] });
+		env.send("hi\n");
+		await waitUntil(() => env.output().includes("(aborted)"));
+		expect(env.output()).not.toContain("imp:");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
 	it("regression m1: zero-line piped stdin (deferInit) creates no session and prints no banners", async () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
 		const fake = makeConsole({ tty: false });

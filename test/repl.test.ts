@@ -414,6 +414,24 @@ describe("runRepl", () => {
 		runner.close();
 	});
 
+	it("regression P1: /compact typed at an idle prompt actually runs (state pre-set must not reject itself)", async () => {
+		// Full path through handleLine — unit tests called dispatchCommand
+		// directly with a controlled isActive(), which is exactly why this
+		// self-rejection slipped through 141 green tests.
+		const env = await startRepl({ scripts: [reply("first turn done")] });
+		env.send("hi\n");
+		await waitUntil(() => env.output().includes("— test-model · 1 turns")); // settled ⇒ idle
+		env.send("/compact\n");
+		await waitUntil(() => env.output().includes("▪ compacting…"));
+		expect(env.output()).not.toContain("waits for the running turn");
+		// machine returns to idle afterwards — prompt redrawn after the banner
+		await waitUntil(
+				() => env.output().lastIndexOf("> ") > env.output().indexOf("▪ compacting…"),
+		);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
 	it("regression (layer-3): a provider AbortError escaping to settleFailure prints (aborted), not an error", async () => {
 		const abortError = () => {
 			const err = new Error("This operation was aborted");

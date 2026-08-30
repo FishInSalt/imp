@@ -157,7 +157,11 @@ class ReplMachine {
 			this.input.setActive(true);
 		}
 		try {
-			await dispatchCommand(line, this.commandContext());
+			// authorizedCompact: this dispatch IS the authorized compact — the
+			// state was pre-set to "compacting" for Ctrl+C hints and /new refusal,
+			// which must not make dispatchCommand's isActive() guard reject it.
+			// Any OTHER line arriving while compacting still sees isActive() true.
+			await dispatchCommand(line, this.commandContext(manualCompact));
 		} catch (err) {
 			this.reportError(err);
 		} finally {
@@ -308,11 +312,12 @@ class ReplMachine {
 		this.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	private commandContext(): CommandContext {
+	private commandContext(authorizedCompact = false): CommandContext {
 		return {
 			runner: this.runner,
 			renderer: this.renderer,
-			isActive: () => this.state === "running" || this.state === "compacting",
+			isActive: () =>
+				!authorizedCompact && (this.state === "running" || this.state === "compacting"),
 			requestExit: (code: number) => this.requestExit(code),
 			abortActive: () => {
 				if (this.controller !== null) {

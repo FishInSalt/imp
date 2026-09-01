@@ -234,6 +234,79 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		expect(await env.repl).toBe(0);
 	});
 
+	it("filters + full: days/topic, include_domains, include_raw_content pass through and render", async () => {
+		const raw = "R".repeat(4000); // exceeds the 3KB per-result cap
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					results: [{ title: "Fresh doc", url: "https://docs.example.com/x", content: "c", raw_content: raw }],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const env = await startRepl({
+			scripts: [
+				toolCall("t1", "web_search", {
+					query: "recent release",
+					days: 7,
+					include_domains: ["docs.example.com"],
+					full: true,
+				}),
+				reply("done"),
+			],
+			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
+			env: () => ({ IMP_TAVILY_KEY: "test-key" }),
+		});
+		env.send("search\n");
+		await waitUntil(() => env.output().includes("done"));
+		const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+		const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+		expect(body).toEqual({
+			query: "recent release",
+			max_results: 5,
+			topic: "news",
+			days: 7,
+			include_domains: ["docs.example.com"],
+			include_raw_content: true,
+		});
+		const session = env.sessionText();
+		expect(session).toContain("<content>"); // full mode renders the raw block
+		expect(session).toContain("Fresh doc");
+		// per-result cap: 4000 chars of raw → at most 3000 rendered
+		expect(session).not.toContain("R".repeat(3001));
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("session cache: identical repeated queries hit the network once", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({ results: [{ title: "Cached hit", url: "https://example.com/c", content: "cc" }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const env = await startRepl({
+			scripts: [
+				toolCall("t1", "web_search", { query: "same question" }),
+				reply("first"),
+				toolCall("t2", "web_search", { query: "same question" }),
+				reply("second"),
+			],
+			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
+			env: () => ({ IMP_TAVILY_KEY: "test-key" }),
+		});
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("first"));
+		env.send("go again\n");
+		await waitUntil(() => env.output().includes("second"));
+		expect(fetchMock).toHaveBeenCalledTimes(1); // second turn served from cache
+		expect(env.sessionText().match(/Cached hit/g)?.length).toBe(2); // both turns got the result
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
 	it("HTTP 401 → teaching hint to check the key", async () => {
 		vi.stubGlobal(
 			"fetch",

@@ -250,7 +250,8 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - **P1 教训（本里程碑最有价值的一课）**：评审者的"灭门变异"（把 gate 判定改成 `if (false)`）让测试套件真的执行了脚本里的 `rm -rf src/`，删掉 `src/` 下 31 个文件（`git restore` 救回）——guardian 测试自身 fail-dangerous。修复：牺牲树放进临时 cwd，fail-open 现在只会红不会毁
 - **P2 是潜伏生产 bug**：默认内置工具忽略 `RunnerOptions.cwd` 回落 `process.cwd()`（生产中两者恰好一致所以没炸）——现已转发，红-绿全路径测试钉死
 - 测试 177 → 190；评测确认 M4a/M4b 全部精确串零漂移；变异验证 7→3 处红
-- M4 汇总：三个子里程碑共 12 次真 API 预算内验收（M4a 已过 3 次；M4c 待 ≤4 次 Guardian 拦截 + 上下文注入验证）
+- **M4c 真机验收（2026-09-01，通过；3 次调用 ≤ 预算 4）**：①guardian 拦截——模型把 rm -rf 藏进组合命令仍被抓住，精确教学串回灌，模型承认被拦且照教学提示行事（主动列文件请确认），牺牲目录幸存，`~/.imp/guardian.log` 审计落盘（首次跑遇 fetch 瞬断，重试补全回合）②上下文注入——模型零工具准确引用 notes 扩展注入的 context 并确认无多余注入
+- **M4 正式关闭**：a/b/c 三子里程碑全部落地、评审闭环、真机验收通过；扩展系统 = 7 成员 API + 三层隔离 + 工具/命令/钩子/上下文四类贡献点 + guardian 案例
 - [ ] `core/loop.ts` 唯一改动：`RunAgentLoopOptions.onToolCall`（校验后、执行前；`{block, reason}` → isError 工具结果回模型，~18 行）
 - [ ] `runner.ts` 发射接线：`onMessage`(assistant)→`message_end`、`onEvent`(tool_end)→`tool_end`、runTurn 返回→`run_end`（fire-and-forget，隔离）；`assembleSystem` 追加 `# Extension context:` 段（`registerContext` 注入点，runner.ts:184-196）
 - [ ] 事件集仅 4 个：`tool_call`（可拦截）/`tool_end`/`message_end`/`run_end`；无 per-call ctx（M5+ 加法式扩展）

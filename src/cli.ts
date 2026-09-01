@@ -1,6 +1,7 @@
 import { listSessions } from "./core/session/manager.js";
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
+import type { RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./repl/render.js";
 import { runRepl } from "./repl/repl.js";
@@ -225,8 +226,10 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		toolStyle: "one-line",
 	});
 	let runner: Runner;
+	let commands: readonly RegisteredExtensionCommand[] = [];
 	try {
 		const extensions = await loadExtensionSetup(opts, renderer);
+		commands = extensions.runtime.commands;
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,
@@ -239,7 +242,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	let code: number;
 	try {
-		code = await runRepl({ runner });
+		code = await runRepl({ runner, commands });
 	} catch (err) {
 		reportStartupError(err);
 		runner.close();

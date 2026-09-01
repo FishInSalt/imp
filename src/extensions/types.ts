@@ -59,9 +59,11 @@ export interface ToolCallEvent {
 	args: Record<string, unknown>;
 }
 
-// biome-ignore lint/complexity/noConfusingVoidType: design §6.1 verbatim — handler may return a decision, nothing (void), or undefined
+// The union with void is the design §6.1 contract, verbatim: a handler may
+// return a decision, nothing (void), or undefined — sync or async.
 export type ToolCallHandler = (
 	event: ToolCallEvent,
+	// biome-ignore lint/suspicious/noConfusingVoidType: design §6.1 verbatim
 ) => ToolCallDecision | void | undefined | Promise<ToolCallDecision | void | undefined>;
 
 export interface ToolEndEvent {

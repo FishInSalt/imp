@@ -1,3 +1,4 @@
+import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Runner } from "../runner.js";
 import type { Renderer } from "./render.js";
 
@@ -37,12 +38,37 @@ Keys:
   Ctrl+D             exit
 `;
 
-/** Generated from COMMANDS so the list cannot drift. */
-function helpText(): string {
+/** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */
+function entryName(entry: SlashCommand | RegisteredExtensionCommand): string {
+	return "command" in entry ? entry.command.name : entry.name;
+}
+
+/** Column where the dim [source] tag starts in /help extension rows. */
+const SOURCE_TAG_COLUMN = 66;
+
+/**
+ * Generated from COMMANDS + the extension commands so the listing cannot
+ * drift (design §8.2). Without extras the output is byte-identical to the
+ * pre-M4b help; extension rows carry a dim [source] suffix via `dimTag`
+ * (plain in tests — renderers decide ANSI, never this module).
+ */
+// Long summaries (>~62 chars) exceed SOURCE_TAG_COLUMN and degrade to a
+// 2-space gap instead of an aligned tag — acceptable; revisit if M5
+// redesigns help rendering (review P3-2).
+export function helpText(
+	extraCommands: readonly RegisteredExtensionCommand[] = [],
+	dimTag: (tag: string) => string = (tag) => tag,
+): string {
 	const lines = ["Commands:"];
 	for (const command of COMMANDS) {
 		const label = command.usage ?? `/${command.name}`;
 		lines.push(`  ${label.padEnd(19)}${command.summary}`);
+	}
+	for (const entry of extraCommands) {
+		const label = entry.command.usage ?? `/${entry.command.name}`;
+		const row = `  ${label.padEnd(19)}${entry.command.summary}`;
+		const pad = row.length >= SOURCE_TAG_COLUMN ? "  " : " ".repeat(SOURCE_TAG_COLUMN - row.length);
+		lines.push(`${row}${pad}${dimTag(`[${entry.source}]`)}`);
 	}
 	lines.push("");
 	lines.push(HELP_KEYS.trimEnd());
@@ -118,16 +144,36 @@ export const COMMANDS: readonly SlashCommand[] = [
 	},
 ];
 
-export async function dispatchCommand(line: string, ctx: CommandContext): Promise<CommandOutcome> {
+export async function dispatchCommand(
+	line: string,
+	ctx: CommandContext,
+	extraCommands?: readonly RegisteredExtensionCommand[],
+): Promise<CommandOutcome> {
 	const parsed = parseCommand(line);
 	if (parsed === null) return "handled"; // not a command — caller never sends these
-	const command = COMMANDS.find((c) => c.name === parsed.name);
+	const extras = extraCommands ?? [];
+	// Built-ins resolve first; built-in names are reserved (design §9), so the
+	// order only fixes which listing wins a collision — first registration does.
+	const command =
+		COMMANDS.find((c) => c.name === parsed.name) ??
+		extras.find((e) => e.command.name === parsed.name)?.command;
 	if (command === undefined) {
 		// Teaching-style error (project convention); never sent to the model.
 		ctx.renderer.error(`imp: unknown command "/${parsed.name}"`);
-		ctx.renderer.writeLine(
-			`known: ${COMMANDS.map((c) => `/${c.name}`).join(" ")} — /help shows what they do`,
-		);
+		const known = [...COMMANDS, ...extras]
+			.map(entryName)
+			.map((name) => `/${name}`)
+			.join(" ");
+		ctx.renderer.writeLine(`known: ${known} — /help shows what they do`);
+		return "handled";
+	}
+	if (command.name === "help") {
+		// Built-in /help renders through helpText so extension commands are
+		// listed (design §8.2): run() has no path to the extras and
+		// CommandContext stays unchanged — the COMMANDS entry remains the
+		// built-in listing source of record; help is allowedDuringRun, so
+		// intercepting right after resolution is behavior-identical.
+		ctx.renderer.writeLine(helpText(extras, (tag) => ctx.renderer.dim(tag)));
 		return "handled";
 	}
 	if (!command.allowedDuringRun && ctx.isActive()) {

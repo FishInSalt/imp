@@ -244,6 +244,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - 验收：`fake.send("/notes save hi\n")` 全路径断言（M3 教训：不直调 dispatchCommand）；保留名 fixture 被拒（E7）；GLM 0 次（命令不碰模型，可选 REPL 冒烟 1 次）
 
 **M4c — 循环/回合事件钩子 + 上下文注入 + 案例（1~2 晚 + 1 晚打磨）**
+
+**M4c 结果（2026-09-01，已合并 `7719ae1`；M4 代码全部落地，待真机验收）**：
+- 工作流三阶段：单写手实现（6 commits，+771/−32；core 唯一改动 = `onToolCall` 否决门：校验后/执行前，block 变 isError 回灌模型；runner 接线 `message_end`/`tool_end`/`run_end` 发射与 `# Extension context:` 注入（AGENTS.md 之后、装载序稳定、`/new` 重注入）；`guardian.mjs` 规则式权限门案例 105 行）→ 对抗评审（1 P1 / 1 P2 / 2 P3，NEEDS-FIXES）→ 全部修复（`a305481`/`d3be569`/`3cd5b97`）
+- **P1 教训（本里程碑最有价值的一课）**：评审者的"灭门变异"（把 gate 判定改成 `if (false)`）让测试套件真的执行了脚本里的 `rm -rf src/`，删掉 `src/` 下 31 个文件（`git restore` 救回）——guardian 测试自身 fail-dangerous。修复：牺牲树放进临时 cwd，fail-open 现在只会红不会毁
+- **P2 是潜伏生产 bug**：默认内置工具忽略 `RunnerOptions.cwd` 回落 `process.cwd()`（生产中两者恰好一致所以没炸）——现已转发，红-绿全路径测试钉死
+- 测试 177 → 190；评测确认 M4a/M4b 全部精确串零漂移；变异验证 7→3 处红
+- M4 汇总：三个子里程碑共 12 次真 API 预算内验收（M4a 已过 3 次；M4c 待 ≤4 次 Guardian 拦截 + 上下文注入验证）
 - [ ] `core/loop.ts` 唯一改动：`RunAgentLoopOptions.onToolCall`（校验后、执行前；`{block, reason}` → isError 工具结果回模型，~18 行）
 - [ ] `runner.ts` 发射接线：`onMessage`(assistant)→`message_end`、`onEvent`(tool_end)→`tool_end`、runTurn 返回→`run_end`（fire-and-forget，隔离）；`assembleSystem` 追加 `# Extension context:` 段（`registerContext` 注入点，runner.ts:184-196）
 - [ ] 事件集仅 4 个：`tool_call`（可拦截）/`tool_end`/`message_end`/`run_end`；无 per-call ctx（M5+ 加法式扩展）

@@ -10,14 +10,16 @@ import {
 	loadExtensions,
 	printExtensionDiagnostics,
 } from "../src/extensions/loader.js";
+import { VERSION } from "../src/format.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/repl/render.js";
 import { runRepl } from "../src/repl/repl.js";
-import { VERSION } from "../src/format.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import {
 	assistant,
 	type FakeConsole,
+	gate,
+	gatedTool,
 	makeConsole,
 	type ScriptStep,
 	scriptedProvider,
@@ -75,7 +77,8 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		toolStyle: "one-line",
 	});
 
-	// the exact cli wiring (design §10): load → banner → createRunner
+	// the exact cli wiring (design §10): load → banner → createRunner → runRepl
+	// with the registered commands (M4b §8.2)
 	const loaded: LoadedExtensions = await loadExtensions({
 		cwd,
 		cliPaths: args.extensionPaths ?? [],
@@ -103,6 +106,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	});
 	const repl = runRepl({
 		runner,
+		commands: loaded.runtime.commands,
 		input: fake.stdin,
 		output: fake.stdout,
 		interactive: args.tty ?? true,
@@ -197,9 +201,7 @@ export default function (api) {
 		expect(env.output()).toContain("▪ extension good [project] — 1 tool");
 		// P3-6: scripted/deferInit mode still prints extensions BEFORE the
 		// deferred context banner (structurally guaranteed — now asserted)
-		expect(env.output().indexOf("▪ extension good")).toBeLessThan(
-			env.output().indexOf("▪ context:"),
-		);
+		expect(env.output().indexOf("▪ extension good")).toBeLessThan(env.output().indexOf("▪ context:"));
 		// P3-4: the factory's facts carried the host version
 		expect(readFileSync(path.join(env.cwd, "ver.txt"), "utf8")).toBe(VERSION);
 		// the good extension's tool executed through the scripted round-trip
@@ -209,7 +211,7 @@ export default function (api) {
 		expect(await env.repl).toBe(0); // the exit path is unaffected by the failure
 	});
 
-	it("M4a stored-unconsumed: registerCommand/registerContext/on are banner-counted but not dispatched, injected, or fired", async () => {
+	it("M4b split: extension commands dispatch through the real line path; registerContext/on stay stored-unconsumed until M4c", async () => {
 		const env = await startRepl({
 			scripts: [toolCall("t1", "tour_tool", { text: "x" }), reply("round trip done")],
 			extensionFiles: {
@@ -218,7 +220,7 @@ import path from "node:path";
 export default function (api) {
 	api.registerTool({
 		name: "tour_tool",
-		description: "the only live contribution in M4a",
+		description: "the tool contribution",
 		parameters: { type: "object", properties: { text: { type: "string" } } },
 		async execute(args) {
 			return { output: "tour:" + String(args.text) };
@@ -226,10 +228,10 @@ export default function (api) {
 	});
 	api.registerCommand({
 		name: "tourcmd",
-		summary: "stored until M4b",
+		summary: "dispatched since M4b",
 		allowedDuringRun: true,
-		run(_args, ctx) {
-			ctx.renderer.note("should not dispatch in M4a");
+		async run(_args, ctx) {
+			ctx.renderer.note("tourcmd dispatched");
 			return "handled";
 		},
 	});
@@ -245,13 +247,12 @@ export default function (api) {
 		await waitUntil(() => env.output().includes("round trip done"));
 		// stored + banner-counted: all four categories
 		expect(env.output()).toContain("▪ extension tour [project] — 1 tool, 1 command, 1 context, 1 hook");
-		// the stored command is NOT dispatched: unknown-command lists built-ins only
+		// M4b: the stored command IS dispatched now — via the real line path
 		env.send("/tourcmd hello\n");
-		await waitUntil(() => env.output().includes('imp: unknown command "/tourcmd"'));
-		expect(env.output()).toContain("known: /help /exit /new /model /compact — /help shows what they do");
-		// the stored context is NOT injected into the system prompt
+		await waitUntil(() => env.output().includes("tourcmd dispatched"));
+		// M4c pending: the stored context is NOT injected into the system prompt
 		expect(env.requests[0]?.system).not.toContain("# Extension context:");
-		// the stored on() handler never fired (no emitter exists in M4a)
+		// M4c pending: the stored on() handler never fired (no emitter exists yet)
 		expect(existsSync(path.join(env.cwd, "observer-fired.txt"))).toBe(false);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
@@ -335,6 +336,165 @@ export default function (api) {
 		const toolNames = env.requests[0]?.tools.map((t) => t.name) ?? [];
 		expect(toolNames).toContain("explicit_tool");
 		expect(toolNames).not.toContain("disc_tool");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+});
+
+describe("extension commands through the REPL line path (M4b, design §8.2/§14)", () => {
+	it("case 10: /notes <text> dispatches via fake.send, spends no model turn, persists, and /help lists it with [notes]", async () => {
+		const env = await startRepl({
+			extensionFiles: {
+				"notes.mjs": readFileSync(path.resolve("examples/extensions/notes.mjs"), "utf8"),
+			},
+		});
+		env.send("/notes save hi\n");
+		await waitUntil(() => env.output().includes("▪ note saved (1 total)"));
+		// the command really executed against the fixture's file
+		const saved = JSON.parse(readFileSync(path.join(env.cwd, ".imp", "notes.json"), "utf8")) as {
+			notes: string[];
+		};
+		expect(saved.notes).toEqual(["save hi"]);
+		// "without spending a model turn" — the provider was never called
+		expect(env.requests).toHaveLength(0);
+		// /help lists the extension command with its dim source suffix (design §8.2)
+		env.send("/help\n");
+		await waitUntil(() => env.output().includes("Commands:"));
+		expect(env.output()).toContain(
+			"  /notes             save a note without spending a model turn    [notes]",
+		);
+		// built-ins are still listed and byte-stable above the extension row
+		expect(env.output()).toContain("  /compact           summarize older context now");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("case 11: the unknown-command teaching line lists extension commands too (generated, cannot drift)", async () => {
+		const env = await startRepl({
+			extensionFiles: {
+				"extcmd.mjs": `export default function (api) {
+	api.registerCommand({
+		name: "extcmd",
+		summary: "fixture command",
+		allowedDuringRun: true,
+		run(_args, ctx) {
+			ctx.renderer.note("▪ extcmd ran");
+			return "handled";
+		},
+	});
+}
+`,
+			},
+		});
+		env.send("/nope\n");
+		await waitUntil(() => env.output().includes('imp: unknown command "/nope"'));
+		expect(env.output()).toContain(
+			"known: /help /exit /new /model /compact /extcmd — /help shows what they do",
+		);
+		// the provider was never called — teaching errors never reach the model
+		expect(env.requests).toHaveLength(0);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("case 12: an allowedDuringRun:false extension command is rejected mid-run with the standard teaching line, dispatches once idle", async () => {
+		const toolGate = gate();
+		const env = await startRepl({
+			tools: [gatedTool(toolGate, "slow")],
+			scripts: [toolCall("t1", "slow", { message: "hold" }), reply("done")],
+			extensionFiles: {
+				"slowcmd.mjs": `export default function (api) {
+	api.registerCommand({
+		name: "slowcmd",
+		summary: "fixture that must wait",
+		allowedDuringRun: false,
+		run(_args, ctx) {
+			ctx.renderer.note("▪ slowcmd ran");
+			return "handled";
+		},
+	});
+}
+`,
+			},
+		});
+		env.send("go\n");
+		// the gated tool holds the turn open — the run is definitively active
+		await waitUntil(() => env.requests.length === 1);
+		await ticks(2);
+		env.send("/slowcmd\n");
+		await waitUntil(() => env.output().includes("waits for the running turn"));
+		expect(env.output()).toContain(
+			"imp: /slowcmd waits for the running turn — press Ctrl+C to abort it first, then /slowcmd",
+		);
+		expect(env.output()).not.toContain("▪ slowcmd ran");
+		// once idle, the same command dispatches normally
+		toolGate.resolve();
+		await waitUntil(() => env.output().includes("done"));
+		env.send("/slowcmd\n");
+		await waitUntil(() => env.output().includes("▪ slowcmd ran"));
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("conflict: extension-vs-extension first-wins with named rejection; only the winner dispatches and gets the [source] tag", async () => {
+		const env = await startRepl({
+			extensionFiles: {
+				// load order is code-point sort: first.mjs loads before second.mjs
+				"first.mjs": `export default function (api) {
+	api.registerCommand({
+		name: "shared",
+		summary: "the first one",
+		allowedDuringRun: true,
+		run(_args, ctx) {
+			ctx.renderer.note("▪ shared ran: first");
+			return "handled";
+		},
+	});
+}
+`,
+				"second.mjs": `export default function (api) {
+	api.registerCommand({
+		name: "shared",
+		summary: "the second one",
+		allowedDuringRun: true,
+		run(_args, ctx) {
+			ctx.renderer.note("▪ shared ran: second");
+			return "handled";
+		},
+	});
+	api.registerCommand({
+		name: "only_second",
+		summary: "survives the conflict",
+		allowedDuringRun: true,
+		run(_args, ctx) {
+			ctx.renderer.note("▪ only_second ran");
+			return "handled";
+		},
+	});
+}
+`,
+			},
+		});
+		// named rejection at load time (design §9/E6) — the loser's registration is skipped
+		expect(env.output()).toContain(
+			'imp: extension second could not register command "shared" — already registered by first',
+		);
+		// first wins at dispatch time
+		env.send("/shared\n");
+		await waitUntil(() => env.output().includes("▪ shared ran: first"));
+		expect(env.output()).not.toContain("▪ shared ran: second");
+		// the losing extension's OTHER registration still stands (errors as data)
+		env.send("/only_second\n");
+		await waitUntil(() => env.output().includes("▪ only_second ran"));
+		// /help tags the winner; the loser's "shared" registration never lists
+		// (its summary is absent) while its surviving command keeps its own tag
+		env.send("/help\n");
+		await waitUntil(() => env.output().includes("Commands:"));
+		expect(env.output()).toContain("the first one");
+		expect(env.output()).toContain("[first]");
+		expect(env.output()).not.toContain("the second one");
+		expect(env.output()).toContain("survives the conflict");
+		expect(env.output()).toContain("[second]");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

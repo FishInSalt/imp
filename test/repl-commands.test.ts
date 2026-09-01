@@ -6,7 +6,7 @@ import type { AgentMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
-import { dispatchCommand, parseCommand } from "../src/repl/commands.js";
+import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
@@ -104,6 +104,29 @@ describe("slash commands", () => {
 		}
 		expect(text).toContain("Ctrl+C");
 		expect(text).toContain("Lines typed while imp is working are queued");
+	});
+
+	it("no-extras /help body is byte-pinned (review P3-1): M4b's extras plumbing cannot drift the built-in rendering", () => {
+		// Golden literal — update CONSCIOUSLY if help content ever changes;
+		// this is the drift lock the M4b review asked for.
+		expect(helpText()).toBe(
+				[
+					"Commands:",
+					"  /help              show this help",
+					"  /exit              exit (Ctrl+D works too)",
+					"  /new               start a fresh session (the old one stays on disk)",
+					"  /model [id]        show the current model, or switch (applies next turn)",
+					"  /compact           summarize older context now",
+					"",
+					"",
+					"Keys:",
+					"  Ctrl+C             abort the running turn (press twice to force quit);",
+					"                     at an empty prompt: press twice to exit",
+					"  Ctrl+D             exit",
+					"",
+					"Lines typed while imp is working are queued and injected when the current turn ends.",
+				].join("\n"),
+			);
 	});
 
 	it("/model without args prints current model + usage; with an id it switches (next run)", async () => {

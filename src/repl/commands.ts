@@ -52,7 +52,10 @@ const SOURCE_TAG_COLUMN = 66;
  * pre-M4b help; extension rows carry a dim [source] suffix via `dimTag`
  * (plain in tests — renderers decide ANSI, never this module).
  */
-function helpText(
+// Long summaries (>~62 chars) exceed SOURCE_TAG_COLUMN and degrade to a
+// 2-space gap instead of an aligned tag — acceptable; revisit if M5
+// redesigns help rendering (review P3-2).
+export function helpText(
 	extraCommands: readonly RegisteredExtensionCommand[] = [],
 	dimTag: (tag: string) => string = (tag) => tag,
 ): string {

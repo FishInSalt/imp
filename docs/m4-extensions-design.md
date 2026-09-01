@@ -147,7 +147,7 @@ src/
     types.ts       extension contract: factory, api, events, registry types (~120 lines)
     registry.ts    ExtensionRegistry: the data record + validation + isolated emits (~150)
     loader.ts      discovery + dynamic import + factory invocation + diagnostics (~170)
-  core/loop.ts     +1 option (onToolCall), +6 lines in executeToolCall            (+~18)
+  core/loop.ts     +ToolCallDecision type, +1 option (onToolCall), +6 lines in executeToolCall (+~24)
   runner.ts        RunnerOptions.extensions; tool merge; system append; emit wiring (+~28)
   repl/
     commands.ts    dispatchCommand extra-commands param; /help extension listing  (+~30)
@@ -164,12 +164,19 @@ knowledge — the loop gains one generic hook (`onToolCall`) that is a peer of `
 `src/extensions/`, and only `cli.ts` (the composition root) and `runner.ts` (the engine that
 owns tools/system/history) touch it. `runRepl` receives already-registered commands as data.
 
-Import graph (all edges `.js`-suffixed, no cycles): `cli.ts → extensions/loader.ts →
-extensions/registry.ts → extensions/types.ts`; `cli.ts → runner.ts` (which consumes
+Import graph (all edges `.js`-suffixed, no runtime cycles): `cli.ts → extensions/loader.ts →
+extensions/registry.ts → extensions/types.ts`; `extensions/types.ts →
+core/{loop,tools/types,messages}.js` — all **type-only** edges (`ToolCallDecision` re-export
+from `core/loop.js`, §6.1/§8.3; `Tool`; `AssistantMessage`/`Usage`), i.e. the
+extensions→core direction the layering permits; `cli.ts → runner.ts` (which consumes
 `extensions/registry.js` as a type and passes `core/loop.js` its `onToolCall`); `cli.ts →
 repl/repl.ts → repl/commands.js`. Notably `repl/commands.ts` imports only **types** from
 `extensions/types.js` (`RegisteredExtensionCommand`) — no runtime edge from `src/repl/`
-into `src/extensions/`.
+into `src/extensions/`. The two type-only imports (`SlashCommand` vs
+`RegisteredExtensionCommand`) form one cycle `extensions/types.ts ⇄ repl/commands.ts`;
+it is erased at compile time (`import type`) and invisible to Node, but it bounds future
+changes: neither side may grow a **runtime** import of the other without breaking the
+layering above.
 
 ---
 
@@ -271,13 +278,13 @@ export interface ToolCallEvent {
 	args: Record<string, unknown>;
 }
 
-/** Returned (sync or async) by a "tool_call" handler. */
-export interface ToolCallDecision {
-	/** Block execution. true is the only meaningful value; omit/void = allow. */
-	block: boolean;
-	/** Fed back to the model as the (isError) tool result — make it teaching-style. */
-	reason?: string;
-}
+/** Returned (sync or async) by a "tool_call" handler — NOT declared in this file:
+ * it is the return type of core's onToolCall option, so it lives in core/loop.ts
+ * (declared there, §8.3) and src/core/ imports nothing from src/extensions/.
+ * Imported and re-exported for extension authors (type-only, extensions→core edge;
+ * the local import also feeds ToolCallHandler below): */
+import type { ToolCallDecision } from "../core/loop.js";
+export type { ToolCallDecision };
 
 export type ToolCallHandler = (
 	event: ToolCallEvent,
@@ -395,7 +402,14 @@ writes it down as the contract.
 
 ### 7.3 Startup diagnostics — exact formats
 
-Printed once at startup, after the `▪ context:` banner (if any), before the REPL banner.
+Printed once at startup, immediately after `loadExtensions` returns and **before**
+`createRunner` (§10) — which places them **before** the `▪ context:` banner whenever one
+prints. That line comes from inside `createRunner` → constructor → `warmup()` →
+`assembleSystem` (the `renderer.note` at runner.ts:191, reached via runner.ts:144): eagerly
+in interactive/print mode, and in scripted mode only at the first accepted line
+(repl.ts:142-147) — always after extension output either way. Failure lines stream through
+`onDiagnostic` during the same load window. This is the order §10's wiring produces and the
+order tests assert. Extension banner lines precede the REPL banner (repl.ts:378) as well.
 Loaded extensions print one dim `▪` line each (counts omit zero categories, pluralized):
 
 ```
@@ -435,10 +449,16 @@ Wiring (the seam REPORT-B identified, verified):
 - The loop already validates (`Value.Check`, loop.ts:255), executes with the signal, and
   converts throws to `isError` results (loop.ts:262-276). **Zero loop changes for M4a.**
 - Registration-time sanity (in `registry.ts`, cheap, teaching-style): name matches
-  `/^[a-z][a-z0-9_-]{0,63}$/`, `description` is a non-empty string, `parameters` passes a
-  smoke `Value.Check(parameters, {})` inside try/catch (a malformed schema throws in Value —
-  better to reject at registration than mid-run; this closes the one validation gap the loop
-  does not guard).
+  `/^[a-z][a-z0-9_-]{0,63}$/`, `description` is a non-empty string, and `parameters`
+  survives `try { Value.Check(parameters, {}) } catch` — **"passes" means "does not throw",
+  and the boolean return is ignored by contract.** Two verified typebox-v1 facts motivate
+  this: `Value.Check(Type.Object({ path: Type.String() }), {})` returns `false` — every
+  schema with required properties "fails" against `{}`, so a returns-true reading would
+  reject virtually all real tools; and garbage can return `true` (`{ type: 42 }`, malformed
+  inner nodes — no throw). The smoke check is a **crash-guard** — it rejects schemas broken
+  enough to make Value throw mid-run (`undefined`/`null` schemas throw immediately), better
+  at registration than inside the loop — not schema validation. The loop's `Value.Check`
+  at call time (loop.ts:255) remains the only authority on arguments.
 - Extension tools are full peers: model-visible, abortable, error-isolated. There is no
   sandbox and no permission model at the tool layer — same posture as built-ins (pi docs:
   extensions "run with your full system permissions"). Gating is an extension's job
@@ -459,9 +479,11 @@ export async function dispatchCommand(
 ```
 
 - Lookup order: built-in `COMMANDS` first, then `extraCommands` (commands.ts:123). Built-in
-  names are reserved anyway (§10), so the order is cosmetic — but it keeps the diff inside
-  the existing guard structure (unknown-command and allowedDuringRun branches,
-  commands.ts:126-141, untouched).
+  names are reserved anyway (§10), so the order is cosmetic — and it keeps the guard
+  structure (lookup + unknown-command + allowedDuringRun branches, commands.ts:126-141)
+  intact except for **one interpolation**: the unknown-command branch's known-list line
+  (commands.ts:130-132) now iterates `[...COMMANDS, ...extraCommands]` — same template,
+  longer list, still generated (no drift by construction).
 - `RegisteredExtensionCommand = { command: SlashCommand; source: string }` (the extension
   name) lives in `extensions/types.ts`; `src/repl/` imports it as a type only.
 - `repl.ts` passes the list at its single dispatch call site (repl.ts:164) — the commands come
@@ -475,8 +497,16 @@ export interface ReplOptions {
 }
 ```
 
-- `/help` is generated from the table it is handed (commands.ts:38-48) so extension commands
-  appear automatically and cannot drift. Extension rows get a dim source suffix:
+- `/help` plumbing, specified: `helpText()` (commands.ts:41-52, module-private over
+  `COMMANDS`) gains a parameter — `helpText(extraCommands?: readonly
+  RegisteredExtensionCommand[])`, absent → byte-identical output today — and
+  `dispatchCommand` special-cases the resolved built-in `help` entry, rendering
+  `helpText(extraCommands)` instead of deferring to its `run(args, ctx)` (whose signature
+  has no path to the extras; `CommandContext` (commands.ts:4-11) stays unchanged).
+  `help` is `allowedDuringRun: true`, so intercepting right after resolution is
+  behavior-identical; the `COMMANDS` entry remains the listing source of record. One
+  generator fed one merged table — extension commands appear automatically and cannot
+  drift. Extension rows get a dim source suffix:
 
 ```
 Commands:
@@ -499,10 +529,23 @@ Commands:
 
 ### 8.3 M4c — loop/turn event hooks + per-extension context injection
 
-**The one loop change** (this is the whole of `src/core/`'s involvement in M4):
+**The one loop change** (this is the whole of `src/core/`'s involvement in M4). The
+decision type is declared **in core**: `ToolCallDecision` lives in `core/loop.ts` next to
+the option that consumes it, and `extensions/types.ts` re-exports it (§6.1) — the import
+edge runs extensions → core only, so §4's "core has zero extension knowledge" holds
+literally (core never imports from `src/extensions/`):
 
 ```ts
-// src/core/loop.ts — RunAgentLoopOptions gains a peer of onMessage/onBeforeTurn:
+// src/core/loop.ts
+/** Returned (sync or async) by an onToolCall gate / "tool_call" handler. */
+export interface ToolCallDecision {
+	/** Block execution. true is the only meaningful value; omit/void = allow. */
+	block: boolean;
+	/** Fed back to the model as the (isError) tool result — make it teaching-style. */
+	reason?: string;
+}
+
+// RunAgentLoopOptions gains a peer of onMessage/onBeforeTurn:
 	/**
 	 * Permission/observation gate: called after argument validation, before
 	 * tool execution. Return { block: true, reason } to veto — the model
@@ -594,8 +637,9 @@ typed for delegation — rather than reopening name shadowing.
 
 Startup sequence (both modes): `cli.main()` → `parseArgs` (`-e` collect, `-ne` flag) → create
 `Renderer` (exists today, cli.ts:190-196/240-246) → **`loadExtensions({cwd, cliPaths,
-onDiagnostic: renderer.error})`** → **print `▪` banner lines** (via the shared helper, §14) →
-`createRunner({…, extensions: runtime})` → print mode runs `runTurn` (extensions active,
+onDiagnostic: renderer.error})`** → **print `▪` banner lines** (via the shared helper, §14 —
+still before `createRunner`, hence before any `▪ context:` line `warmup()` prints later, §7.3)
+→ `createRunner({…, extensions: runtime})` → print mode runs `runTurn` (extensions active,
 commands inert); repl mode runs `runRepl({runner, commands: runtime.commands})`.
 
 - Factories ran **before** `createRunner`: registered tools exist when the tool array is
@@ -761,7 +805,16 @@ All hermetic criteria are `npm test` cases (§14 mapping). Real-GLM budgets are 
 each is a scripted dogfood run recorded in the PR description, in the spirit of M2/M3
 acceptance (PROJECT_PLAN M2/M3 验收结果 style).
 
-### M4a — loader + api + registerTool (est. 1-2 evenings)
+### M4a — loader + **full api** + registerTool (est. 1-2 evenings)
+
+M4a ships the **entire 7-member api of §6**, not a tool-only subset: `registerCommand`,
+`registerContext`, and `on` are live from day one, and their registrations are stored (and
+banner-counted, §7.3) but **unconsumed** — command dispatch lands in M4b, event emission
+and context append land in M4c (`on()` handlers registered during M4a simply never fire:
+no emitter exists yet). This is load-bearing for M4a's own acceptance: `notes.mjs` (§13.2)
+registers tool + command + context, so a tool-only api kills it with E4 (factory throw on
+`api.registerCommand is not a function`), and case 4 (E5–E8) exercises command/context
+conflicts in M4a's test set.
 
 - [ ] Cases 1-5, 9, 16 green; `typecheck` + `lint` clean; existing 142 tests untouched-green.
 - [ ] `examples/notes.mjs` loads from a dogfood repo's `.imp/extensions/`, banner line exact.
@@ -842,7 +895,8 @@ performed (this design is the input to that review).
    schema check), conflict policy (§9), isolated emits with fast-path no-op (§7.2).
 3. `src/extensions/loader.ts` — discovery (§3), realpath dedup, `import()` + factory with
    atomic discard (§7.1), diagnostics E1-E8 (§12), `printExtensionDiagnostics` shared helper.
-4. `src/core/loop.ts` — `onToolCall` option + block branch in `executeToolCall` (§8.3).
+4. `src/core/loop.ts` — `ToolCallDecision` type declaration (§8.3) + `onToolCall` option +
+   block branch in `executeToolCall` (§8.3).
 5. `src/runner.ts` — `RunnerOptions.extensions`, tool merge (§8.1), system append (§8.3),
    emit wiring in `runTurnInner` (§8.3).
 6. `src/repl/commands.ts` — `dispatchCommand` third param, `/help` + unknown-command merged

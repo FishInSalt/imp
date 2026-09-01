@@ -251,6 +251,11 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - **P2 是潜伏生产 bug**：默认内置工具忽略 `RunnerOptions.cwd` 回落 `process.cwd()`（生产中两者恰好一致所以没炸）——现已转发，红-绿全路径测试钉死
 - 测试 177 → 190；评测确认 M4a/M4b 全部精确串零漂移；变异验证 7→3 处红
 - **M4c 真机验收（2026-09-01，通过；3 次调用 ≤ 预算 4）**：①guardian 拦截——模型把 rm -rf 藏进组合命令仍被抓住，精确教学串回灌，模型承认被拦且照教学提示行事（主动列文件请确认），牺牲目录幸存，`~/.imp/guardian.log` 审计落盘（首次跑遇 fetch 瞬断，重试补全回合）②上下文注入——模型零工具准确引用 notes 扩展注入的 context 并确认无多余注入
+- **M4 后续实战扩展（2026-09-01~02，用户提案）**：①`notify.mjs`——`run_end` 钩子 → Glass 音 + osascript 弹窗，`IMP_NOTIFY_MIN_SEC`（默认 5s）防瞬时噪音，`IMP_NOTIFY_DRY` 测试钩子；②`web_search.mjs`——`web_search`（Tavily）+ `url_read`（HTML→文本），零依赖。两者 symlink 进 `~/.imp/extensions/` 全局挂载，`[global]` 来源标签验证了真实发现路径
+- **keyless → key 演进**：tavily 官方 SKILL.md 揭示 Search 支持 `X-Tavily-Access-Mode: keyless`（限流、免注册）；tvly CLI 的 OAuth 只给会话令牌不吐原始 key，故 keyless 先行（真机全链路过：GLM→工具→带引用综合），后配 `IMP_TAVILY_KEY` 进 .env 走 Bearer 全配额；三层稳健：有 key→Bearer / 无 key→keyless / 故障→教学错误回灌。tvly CLI 留装（map/crawl/research 需认证会话）
+- **实战教训**：`.mjs` 是纯 JS，混入 TS 语法 import 即炸（E1/E4 隔离路径的价值实证）；JSONL 断言里带引号的子串会被转义导致误判；验收脚本失误提醒——诊断类检查用零行管道即零成本
+- **遗留观察**：url_read 遇慢页面可拖长整轮（>180s，单调用有 15/20s 超时但多轮累计）→ M5"运行中工具进度显示"候选
+
 - **M4 正式关闭**：a/b/c 三子里程碑全部落地、评审闭环、真机验收通过；扩展系统 = 7 成员 API + 三层隔离 + 工具/命令/钩子/上下文四类贡献点 + guardian 案例
 - [ ] `core/loop.ts` 唯一改动：`RunAgentLoopOptions.onToolCall`（校验后、执行前；`{block, reason}` → isError 工具结果回模型，~18 行）
 - [ ] `runner.ts` 发射接线：`onMessage`(assistant)→`message_end`、`onEvent`(tool_end)→`tool_end`、runTurn 返回→`run_end`（fire-and-forget，隔离）；`assembleSystem` 追加 `# Extension context:` 段（`registerContext` 注入点，runner.ts:184-196）

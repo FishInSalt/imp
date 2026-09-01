@@ -64,8 +64,8 @@ export interface RunnerOptions {
 	/** Test seam: tool set (defaults to the fixed six tools). */
 	tools?: Tool[];
 	/** Extension runtime: its tools append after the base set (M4a); commands
-	 *  dispatch from the REPL (M4b, via ReplOptions.commands); context and
-	 *  event emission are stored and wire up in M4c. */
+	 *  dispatch from the REPL (M4b, via ReplOptions.commands); context sections
+	 *  inject into the system prompt and loop/turn events emit (M4c). */
 	extensions?: ExtensionRegistry;
 	/** Extension load failures — logged once the run logger exists (run_error,
 	 *  source "extension"), so one line on screen stays debuggable on disk. */
@@ -149,15 +149,17 @@ class RunnerImpl implements Runner {
 		this.model = options.model;
 		this.lastRunModel = options.model;
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
-		// keep their hermetic set, extension tools append after the base six.
+		// keep their hermetic set, extension tools append after the base six. The
+		// default six run under options.cwd — never process.cwd() — so the
+		// runner's cwd is the one contract everywhere (and hermetic cwds stay hermetic).
 		this.tools = [
 			...(options.tools ?? [
-				createBashTool(),
-				createReadTool(),
-				createEditTool(),
-				createWriteTool(),
-				createGrepTool(),
-				createFindTool(),
+				createBashTool({ cwd: options.cwd }),
+				createReadTool({ cwd: options.cwd }),
+				createEditTool({ cwd: options.cwd }),
+				createWriteTool({ cwd: options.cwd }),
+				createGrepTool({ cwd: options.cwd }),
+				createFindTool({ cwd: options.cwd }),
 			]),
 			...(options.extensions?.tools ?? []),
 		];
@@ -213,6 +215,12 @@ class RunnerImpl implements Runner {
 				this.options.renderer.note(`▪ context: ${display}`);
 			}
 		}
+		// Extension sections sit after the AGENTS.md block, in registration
+		// (load) order — stable across runs (M4c design §8.3). /new re-runs
+		// assembleSystem, so sections outlive sessions without re-registration.
+		for (const section of this.options.extensions?.contextSections ?? []) {
+			system += `\n\n# Extension context: ${section.id}\n\n${section.text}`;
+		}
 		return system;
 	}
 
@@ -243,7 +251,7 @@ class RunnerImpl implements Runner {
 		options: RunTurnOptions,
 	): Promise<RunAgentLoopResult> {
 		try {
-			return await runAgentLoop({
+			const result = await runAgentLoop({
 				provider: this.provider,
 				model,
 				system: this.system,
@@ -252,7 +260,19 @@ class RunnerImpl implements Runner {
 				userMessage: options.userMessage,
 				maxTokens: this.options.maxTokens,
 				maxIterations: this.options.maxTurns,
-				onMessage: (message) => this.sessionStore?.appendMessage(message),
+				// Assistant messages entering history also reach "message_end"
+				// observers (M4c design §8.3) — after persistence, like everything
+				// else the wrapper does.
+				onMessage: (message) => {
+					this.sessionStore?.appendMessage(message);
+					if (message.role === "assistant") {
+						this.options.extensions?.emitMessageEnd({ type: "message_end", message });
+					}
+				},
+				// The gate seam: the registry chains "tool_call" handlers in load
+				// order and fails safe on a throwing handler (E9) — the loop only
+				// knows the generic { block, reason } decision.
+				onToolCall: (call) => this.options.extensions?.emitToolCall({ type: "tool_call", ...call }),
 				onBeforeTurn: session
 					? async (history) => {
 							if (!this.autoCompact) return;
@@ -263,9 +283,34 @@ class RunnerImpl implements Runner {
 						}
 					: undefined,
 				getSteeringMessages: options.getSteeringMessages,
-				onEvent: options.onEvent,
+				// Wrapped once (M4c design §8.3): forward to the renderer as before,
+				// and tap tool_end for observers — fire-and-forget, isolated by the
+				// registry (E10), never blocking the loop.
+				onEvent: (event) => {
+					options.onEvent?.(event);
+					if (event.type === "tool_end") {
+						const { result } = event;
+						this.options.extensions?.emitToolEnd({
+							type: "tool_end",
+							toolCallId: result.toolCallId,
+							name: result.toolName,
+							output: result.content,
+							isError: result.isError,
+						});
+					}
+				},
 				signal: options.signal,
 			});
+			// run_end means a run that ended — including an aborted one — not one
+			// that crashed: a provider throw skips this emit entirely (its error
+			// path already reports).
+			this.options.extensions?.emitRunEnd({
+				type: "run_end",
+				stopReason: result.stopReason,
+				turns: result.turns,
+				usage: result.usage,
+			});
+			return result;
 		} catch (err) {
 			this.logger.log("run_error", { message: err instanceof Error ? err.message : String(err) });
 			throw err;

@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
+import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { createSession, SessionNotFoundError } from "../src/core/session/manager.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
@@ -137,6 +137,36 @@ describe("Runner.runTurn", () => {
 		expect(roles).toEqual(["user", "assistant", "user", "assistant"]);
 		// second request contains the first exchange
 		expect(requests[1]?.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+	});
+
+	it("default builtins run under RunnerOptions.cwd — bash pwd and relative reads resolve there, never process.cwd()", async () => {
+		const { baseDir, cwd } = await setup();
+		await mkdir(cwd, { recursive: true });
+		await writeFile(path.join(cwd, "marker.txt"), "hermetic marker\n", "utf8");
+		const provider = scriptedProvider([
+			assistant([{ type: "toolCall", id: "p1", name: "bash", arguments: { command: "pwd" } }], "tool_use"),
+			assistant(
+				[{ type: "toolCall", id: "p2", name: "read", arguments: { path: "marker.txt" } }],
+				"tool_use",
+			),
+			assistant([{ type: "text", text: "done" }]),
+		]);
+		const runner = await makeRunner({ provider, cwd, baseDir });
+
+		await runner.runTurn({ userMessage: "where are we?" });
+
+		const results = runner.history
+			.filter((m): m is ToolResultMessage => m.role === "toolResult")
+			.flatMap((m) => m.results);
+		const bash = results.find((r) => r.toolCallId === "p1");
+		const read = results.find((r) => r.toolCallId === "p2");
+		// bash spawned in the runner's cwd (the temp project), not the repo root
+		expect(bash?.isError).toBe(false);
+		expect(bash?.content).toContain(cwd);
+		expect(bash?.content).not.toContain(process.cwd());
+		// the relative read resolved against that same cwd
+		expect(read?.isError).toBe(false);
+		expect(read?.content).toContain("hermetic marker");
 	});
 
 	it("runner.model = x → next provider request carries x; stats line shows the run-time model", async () => {

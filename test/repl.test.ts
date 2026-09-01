@@ -442,6 +442,7 @@ describe("runRepl", () => {
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("(aborted)"));
 		expect(env.output()).not.toContain("imp:");
+		expect(env.output()).not.toContain("resume from the break"); // aborts are not failures
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -645,6 +646,8 @@ describe("runRepl", () => {
 		await waitUntil(() => env.requests.length >= 1);
 		env.send("again\n");
 		await waitUntil(() => env.output().includes("imp: boom"));
+		// mid-run failure note: work is saved, next message resumes (dogfood fix)
+		expect(env.output()).toContain("resume from the break");
 		env.send("third\n");
 		await waitUntil(() => env.requests.length >= 3);
 		expect(env.output()).toContain("fine again");

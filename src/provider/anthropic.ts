@@ -4,6 +4,23 @@ import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const API_VERSION = "2023-06-01";
 
+/** Transient, idempotent-to-retry failures (nothing yielded yet). */
+const RETRY_DELAYS_MS = [600, 1500];
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+const delay = (ms: number, signal?: AbortSignal) =>
+	new Promise<void>((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+
 export interface AnthropicProviderOptions {
 	apiKey?: string;
 	/** Authorization style: "bearer" (Authorization: Bearer, e.g. Z.ai ANTHROPIC_AUTH_TOKEN) or "x-api-key". */
@@ -163,21 +180,41 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				}));
 			}
 
-			let response: Response;
-			try {
-				response = await fetch(`${baseUrl}/v1/messages`, {
-					method: "POST",
-					headers: {
-						"content-type": "application/json",
-						...(auth === "bearer" ? { authorization: `Bearer ${apiKey}` } : { "x-api-key": apiKey }),
-						"anthropic-version": API_VERSION,
-					},
-					body: JSON.stringify(body),
-					signal: request.signal,
-				});
-			} catch (err) {
-				if (request.signal?.aborted) return;
-				throw new Error(`Anthropic request failed: ${err instanceof Error ? err.message : String(err)}`);
+			// Connection-level drops and 429/5xx are safe to retry: nothing has
+			// been yielded and the request body is unchanged. Real usage shows the
+			// Z.ai endpoint drops connections occasionally (three live incidents
+			// during M4 acceptance alone) — one quiet retry saves whole turns.
+			// Mid-stream failures after events started flowing are NOT retried
+			// (see abortSafe / message_stop truncation handling below).
+			let response: Response | null = null;
+			let networkError: Error | null = null;
+			for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+				if (attempt > 0) await delay(RETRY_DELAYS_MS[attempt - 1] ?? 0, request.signal);
+				try {
+					const r = await fetch(`${baseUrl}/v1/messages`, {
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							...(auth === "bearer" ? { authorization: `Bearer ${apiKey}` } : { "x-api-key": apiKey }),
+							"anthropic-version": API_VERSION,
+						},
+						body: JSON.stringify(body),
+						signal: request.signal,
+					});
+					if (!RETRYABLE_STATUS.has(r.status) || attempt === RETRY_DELAYS_MS.length) {
+						response = r;
+						break;
+					}
+					await r.text().catch(() => ""); // drain so the socket is released before retrying
+				} catch (err) {
+					if (request.signal?.aborted) return;
+					networkError = err instanceof Error ? err : new Error(String(err));
+				}
+			}
+			if (response === null) {
+				throw new Error(
+					`Anthropic request failed: ${networkError?.message ?? "retries exhausted"}`,
+				);
 			}
 
 			if (!response.ok || !response.body) {

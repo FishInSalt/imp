@@ -734,17 +734,29 @@ describe("guardian case study (design §13.1)", () => {
 	it("the real examples/extensions/guardian.mjs blocks rm -rf and outside-cwd writes with teaching reasons, and audits both", async () => {
 		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
 		vi.stubEnv("HOME", fakeHome); // guardian audits to ~/.imp/guardian.log — keep it hermetic
+		// The hazards are armed hermetically: the delete targets a sacrificial
+		// tree inside the temp project, the write targets a sibling temp dir — a
+		// fail-open gate reds the survival assertions below without touching
+		// anything real (review P1: the gate must not be the only containment).
+		const outsideDir = await mkdtemp(path.join(tmpdir(), "imp-guardout-"));
 		const env = await startRepl({
 			scripts: [
-				toolCall("g1", "bash", { command: "rm -rf src/" }),
+				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
 				reply("adapted after the bash block"),
-				toolCall("g2", "write", { path: "/tmp/imp-guardian-must-not-exist.txt", content: "nope" }),
+				toolCall("g2", "write", {
+					path: path.join(outsideDir, "imp-guardian-must-not-exist.txt"),
+					content: "nope",
+				}),
 				reply("adapted after the write block"),
 			],
 			extensionFiles: {
 				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
 			},
 		});
+		// what the blocked rm would have deleted — a bare relative name can only
+		// ever resolve under the runner's cwd, never above it
+		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
+		await mkdir(sacrifice, { recursive: true });
 		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
 		env.send("clean up\n");
 		await waitUntil(() => env.output().includes("adapted after the bash block"));
@@ -760,8 +772,9 @@ describe("guardian case study (design §13.1)", () => {
 		expect(refusal2?.content).toMatch(
 			/^Tool "write" blocked by an extension: writing outside the project directory \(.*\) — /,
 		);
-		// the gated write never happened
-		expect(existsSync("/tmp/imp-guardian-must-not-exist.txt")).toBe(false);
+		// both hazards were vetoed: the sacrificial tree still stands and the outside file never appeared
+		expect(existsSync(sacrifice)).toBe(true);
+		expect(existsSync(path.join(outsideDir, "imp-guardian-must-not-exist.txt"))).toBe(false);
 		// audit: one line per blocked result in ~/.imp/guardian.log
 		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8")
 			.trim()

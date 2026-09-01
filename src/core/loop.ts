@@ -33,6 +33,15 @@ export interface RunAgentLoopOptions {
 	onBeforeTurn?: (history: AgentMessage[]) => void | Promise<void>;
 	/** Polls for steering messages: queued user input injected at turn boundaries. */
 	getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
+	/**
+	 * Permission/observation gate: called after argument validation, before
+	 * tool execution (M4c design §8.3). Return { block: true, reason } to
+	 * veto — the model receives an isError tool result carrying the reason.
+	 */
+	onToolCall?: (
+		call: { toolCallId: string; name: string; args: Record<string, unknown> },
+		// biome-ignore lint/suspicious/noConfusingVoidType: a gate may return a decision, nothing (void), or undefined — sync or async (design §8.3)
+	) => ToolCallDecision | void | undefined | Promise<ToolCallDecision | void | undefined>;
 	onEvent?: (event: AgentEvent) => void;
 	signal?: AbortSignal;
 }
@@ -49,7 +58,7 @@ export interface RunAgentLoopResult {
  * Returned (sync or async) by an onToolCall gate / "tool_call" extension
  * handler. Declared here in core — next to the option that will consume it —
  * so src/extensions/ can import it type-only and core keeps zero extension
- * knowledge (M4 design §6.1/§8.3). The consuming loop option lands in M4c.
+ * knowledge (M4 design §6.1/§8.3).
  */
 export interface ToolCallDecision {
 	/** Block execution. true is the only meaningful value; omit/void = allow. */
@@ -81,6 +90,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		onMessage,
 		onBeforeTurn,
 		getSteeringMessages,
+		onToolCall,
 		onEvent,
 		signal,
 	} = options;
@@ -146,7 +156,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		for (const call of toolCalls) {
 			if (signal?.aborted) break;
 			onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
-			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal);
+			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal, onToolCall);
 			results.push(result);
 			onEvent?.({ type: "tool_end", result });
 		}
@@ -241,6 +251,7 @@ async function executeToolCall(
 	args: unknown,
 	toolMap: Map<string, Tool>,
 	signal: AbortSignal | undefined,
+	onToolCall: RunAgentLoopOptions["onToolCall"],
 ): Promise<ToolResult> {
 	const tool = toolMap.get(name);
 	if (!tool) {
@@ -271,6 +282,20 @@ async function executeToolCall(
 			toolCallId: id,
 			toolName: name,
 			content: `Error: invalid arguments for ${name} — ${issues}. Fix the arguments and retry.`,
+			isError: true,
+		};
+	}
+
+	// The gate (M4c design §8.3): post-validation, pre-execute, so handlers see
+	// exactly what the tool will see. A block is a normal error result — it flows
+	// through results.push → onMessage → session persistence, so the refusal is
+	// resumable history and the run continues.
+	const decision = await onToolCall?.({ toolCallId: id, name, args: record });
+	if (decision?.block) {
+		return {
+			toolCallId: id,
+			toolName: name,
+			content: `Tool "${name}" blocked by an extension: ${decision.reason ?? "no reason given"}`,
 			isError: true,
 		};
 	}

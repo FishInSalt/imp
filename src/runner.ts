@@ -149,15 +149,17 @@ class RunnerImpl implements Runner {
 		this.model = options.model;
 		this.lastRunModel = options.model;
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
-		// keep their hermetic set, extension tools append after the base six.
+		// keep their hermetic set, extension tools append after the base six. The
+		// default six run under options.cwd — never process.cwd() — so the
+		// runner's cwd is the one contract everywhere (and hermetic cwds stay hermetic).
 		this.tools = [
 			...(options.tools ?? [
-				createBashTool(),
-				createReadTool(),
-				createEditTool(),
-				createWriteTool(),
-				createGrepTool(),
-				createFindTool(),
+				createBashTool({ cwd: options.cwd }),
+				createReadTool({ cwd: options.cwd }),
+				createEditTool({ cwd: options.cwd }),
+				createWriteTool({ cwd: options.cwd }),
+				createGrepTool({ cwd: options.cwd }),
+				createFindTool({ cwd: options.cwd }),
 			]),
 			...(options.extensions?.tools ?? []),
 		];

@@ -110,23 +110,23 @@ describe("slash commands", () => {
 		// Golden literal — update CONSCIOUSLY if help content ever changes;
 		// this is the drift lock the M4b review asked for.
 		expect(helpText()).toBe(
-				[
-					"Commands:",
-					"  /help              show this help",
-					"  /exit              exit (Ctrl+D works too)",
-					"  /new               start a fresh session (the old one stays on disk)",
-					"  /model [id]        show the current model, or switch (applies next turn)",
-					"  /compact           summarize older context now",
-					"",
-					"",
-					"Keys:",
-					"  Ctrl+C             abort the running turn (press twice to force quit);",
-					"                     at an empty prompt: press twice to exit",
-					"  Ctrl+D             exit",
-					"",
-					"Lines typed while imp is working are queued and injected when the current turn ends.",
-				].join("\n"),
-			);
+			[
+				"Commands:",
+				"  /help              show this help",
+				"  /exit              exit (Ctrl+D works too)",
+				"  /new               start a fresh session (the old one stays on disk)",
+				"  /model [id]        show the current model, or switch (applies next turn)",
+				"  /compact           summarize older context now",
+				"",
+				"",
+				"Keys:",
+				"  Ctrl+C             abort the running turn (press twice to force quit);",
+				"                     at an empty prompt: press twice to exit",
+				"  Ctrl+D             exit",
+				"",
+				"Lines typed while imp is working are queued and injected when the current turn ends.",
+			].join("\n"),
+		);
 	});
 
 	it("/model without args prints current model + usage; with an id it switches (next run)", async () => {

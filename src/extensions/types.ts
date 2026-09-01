@@ -59,6 +59,7 @@ export interface ToolCallEvent {
 	args: Record<string, unknown>;
 }
 
+// biome-ignore lint/complexity/noConfusingVoidType: design §6.1 verbatim — handler may return a decision, nothing (void), or undefined
 export type ToolCallHandler = (
 	event: ToolCallEvent,
 ) => ToolCallDecision | void | undefined | Promise<ToolCallDecision | void | undefined>;

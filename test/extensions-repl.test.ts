@@ -13,6 +13,7 @@ import {
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/repl/render.js";
 import { runRepl } from "../src/repl/repl.js";
+import { VERSION } from "../src/format.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import {
 	assistant,
@@ -168,10 +169,14 @@ describe("full-path extension wiring through the REPL (design §14)", () => {
 	it("case 16: a broken extension beside a good one — E1 line + banner, good tool works, scripted pipe still exits 0", async () => {
 		const env = await startRepl({
 			tty: false, // echo-pipe probe (M3 lesson): drive the scripted path end to end
+			agentsMd: true, // P3-6: gives the deferred context banner something to print
+			noContextFiles: false,
 			scripts: [toolCall("t1", "good_tool", {}), reply("done")],
 			extensionFiles: {
 				"broken.mjs": "export default function (api) {\n\tthis is not valid js\n",
-				"good.mjs": `export default function (api) {
+				"good.mjs": `import { writeFileSync } from "node:fs";
+import path from "node:path";
+export default function (api) {
 	api.registerTool({
 		name: "good_tool",
 		description: "the one that works",
@@ -180,6 +185,8 @@ describe("full-path extension wiring through the REPL (design §14)", () => {
 			return { output: "good output" };
 		},
 	});
+	// P3-4: pin api.version (cwd and origin already asserted elsewhere)
+	writeFileSync(path.join(api.cwd, "ver.txt"), api.version);
 }
 `,
 			},
@@ -188,6 +195,13 @@ describe("full-path extension wiring through the REPL (design §14)", () => {
 		await waitUntil(() => env.output().includes("done"));
 		expect(env.output()).toMatch(/imp: extension broken failed to load — /);
 		expect(env.output()).toContain("▪ extension good [project] — 1 tool");
+		// P3-6: scripted/deferInit mode still prints extensions BEFORE the
+		// deferred context banner (structurally guaranteed — now asserted)
+		expect(env.output().indexOf("▪ extension good")).toBeLessThan(
+			env.output().indexOf("▪ context:"),
+		);
+		// P3-4: the factory's facts carried the host version
+		expect(readFileSync(path.join(env.cwd, "ver.txt"), "utf8")).toBe(VERSION);
 		// the good extension's tool executed through the scripted round-trip
 		const sessionText = readFileSync(env.runner.session?.filePath as string, "utf8");
 		expect(sessionText).toContain("good output");

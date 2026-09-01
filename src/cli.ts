@@ -42,8 +42,8 @@ Options:
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
       --no-session         Do not persist this run (also disables auto-compaction)
-  -e, --extension <path>  Load an extension (.mjs file, or a dir with index.mjs; repeatable)
-  -ne, --no-extensions    Skip extension discovery — explicit -e paths still load
+  -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable)
+  -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
   -h, --help               Show this help
   -v, --version            Show version
 

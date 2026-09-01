@@ -8,9 +8,8 @@ import {
 import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
-import { runAgentLoop } from "./core/loop.js";
+import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
-import { synthesizeMissingToolResults } from "./core/loop.js";
 import { createSession, resolveSession } from "./core/session/manager.js";
 import type { SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
@@ -21,6 +20,8 @@ import { createGrepTool } from "./core/tools/grep.js";
 import { createReadTool } from "./core/tools/read.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
+import type { ExtensionRegistry } from "./extensions/registry.js";
+import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens } from "./format.js";
 import { createAnthropicProvider } from "./provider/anthropic.js";
 import { withLogging } from "./provider/logging.js";
@@ -62,6 +63,12 @@ export interface RunnerOptions {
 	provider?: LLMProvider;
 	/** Test seam: tool set (defaults to the fixed six tools). */
 	tools?: Tool[];
+	/** Extension runtime: its tools append after the base set (M4a); commands,
+	 *  context, and event emission are stored and wire up in M4b/M4c. */
+	extensions?: ExtensionRegistry;
+	/** Extension load failures — logged once the run logger exists (run_error,
+	 *  source "extension"), so one line on screen stays debuggable on disk. */
+	extensionFailures?: readonly ExtensionFailure[];
 }
 
 export interface RunTurnOptions {
@@ -107,6 +114,15 @@ export interface Runner {
  */
 export async function createRunner(options: RunnerOptions): Promise<Runner> {
 	const logger = await createRunLogger({ cwd: options.cwd, argv: options.argv });
+	for (const failure of options.extensionFailures ?? []) {
+		// Already shown on screen by cli.ts at load time; this persists the full
+		// error (design §7.3: one line on screen, debuggable on disk).
+		logger.log("run_error", {
+			source: "extension",
+			path: failure.path,
+			message: failure.detail,
+		});
+	}
 	const provider = withLogging(options.provider ?? createAnthropicProvider(), logger);
 	return new RunnerImpl(options, logger, provider);
 }
@@ -131,13 +147,18 @@ class RunnerImpl implements Runner {
 		this.provider = provider;
 		this.model = options.model;
 		this.lastRunModel = options.model;
-		this.tools = options.tools ?? [
-			createBashTool(),
-			createReadTool(),
-			createEditTool(),
-			createWriteTool(),
-			createGrepTool(),
-			createFindTool(),
+		// The "test seam" tools option generalizes (design §8.1): explicit tools
+		// keep their hermetic set, extension tools append after the base six.
+		this.tools = [
+			...(options.tools ?? [
+				createBashTool(),
+				createReadTool(),
+				createEditTool(),
+				createWriteTool(),
+				createGrepTool(),
+				createFindTool(),
+			]),
+			...(options.extensions?.tools ?? []),
 		];
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
 		this.system = "";

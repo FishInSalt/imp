@@ -35,10 +35,10 @@ export interface ExtensionApi {
 	registerTool(tool: Tool): void;
 	/** Register a REPL slash command. Reuses SlashCommand verbatim (M4b dispatch). */
 	registerCommand(command: SlashCommand): void;
-	/** Append a titled section to the system prompt, after AGENTS.md context (M4c injection). */
+	/** Append a titled section to the system prompt, after AGENTS.md context (M4c). */
 	registerContext(id: string, text: string): void;
 
-	/** Subscribe to a loop/turn event. "tool_call" handlers may block (M4c emission). */
+	/** Subscribe to a loop/turn event. "tool_call" handlers may block (M4c). */
 	on(event: "tool_call", handler: ToolCallHandler): void;
 	on(event: "tool_end", handler: (event: ToolEndEvent) => void): void;
 	on(event: "message_end", handler: (event: MessageEndEvent) => void): void;

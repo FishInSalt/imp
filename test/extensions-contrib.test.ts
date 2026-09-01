@@ -174,19 +174,30 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 });
 
 describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
-	it("missing key → teaching error, fetch never called", async () => {
-		const fetchMock = vi.fn();
+	it("no key → keyless mode: x-tavily-access-mode header, no bearer, results still returned", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					results: [{ title: "Keyless hit", url: "https://example.com/k", content: "kc" }],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		const env = await startRepl({
-			scripts: [toolCall("t1", "web_search", { query: "imp agent" }), reply("no key")],
+			scripts: [toolCall("t1", "web_search", { query: "imp agent" }), reply("got it")],
 			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
 			env: () => ({ IMP_TAVILY_KEY: "" }),
 		});
 		expect(env.output()).toContain("▪ extension web_search [project] — 2 tools");
 		env.send("search something\n");
-		await waitUntil(() => env.output().includes("no key"));
-		expect(env.sessionText()).toContain("IMP_TAVILY_KEY");
-		expect(fetchMock).not.toHaveBeenCalled();
+		await waitUntil(() => env.output().includes("got it"));
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.tavily.com/search");
+		const headers = init.headers as Record<string, string>;
+		expect(headers["x-tavily-access-mode"]).toBe("keyless");
+		expect(headers.authorization).toBeUndefined();
+		expect(env.sessionText()).toContain("[1] Keyless hit");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

@@ -4,9 +4,11 @@
 // Install: copy into <project>/.imp/extensions/ (or ~/.imp/extensions/).
 //
 // Env:
-//   IMP_TAVILY_KEY   Tavily API key — required by web_search only
-//                    (free tier ~1k calls/month at https://tavily.com,
-//                    Settings → API Keys). url_read needs no key.
+//   IMP_TAVILY_KEY   Tavily API key (free tier ~1k calls/month at
+//                    https://tavily.com — Settings → API Keys). Optional:
+//                    without a key, search runs in Tavily's keyless mode
+//                    (rate-limited, no account needed). url_read never
+//                    needs a key.
 //
 // web_search returns an AI-composed answer plus cited results; the model
 // reads those and synthesizes — no extra LLM call, no server-side summary
@@ -35,20 +37,20 @@ export default function (api) {
 			required: ["query"],
 		},
 		async execute(args, signal) {
-			const key = process.env.IMP_TAVILY_KEY;
-			if (!key) {
-				return {
-					output:
-						"web_search needs an API key: set IMP_TAVILY_KEY (free tier at https://tavily.com — Settings → API Keys). url_read works without one.",
-					isError: true,
-				};
+			// Key if we have one; otherwise Tavily's keyless mode (rate-limited,
+			// no account) — search works out of the box either way.
+			const headers = { "content-type": "application/json" };
+			if (process.env.IMP_TAVILY_KEY) {
+				headers.authorization = `Bearer ${process.env.IMP_TAVILY_KEY}`;
+			} else {
+				headers["x-tavily-access-mode"] = "keyless";
 			}
 			const max = Math.min(10, Math.max(1, Number(args.max_results ?? 5) || 5));
 			let res;
 			try {
 				res = await fetch(TAVILY_URL, {
 					method: "POST",
-					headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+					headers,
 					body: JSON.stringify({ query: String(args.query), max_results: max }),
 					signal: AbortSignal.any([signal, AbortSignal.timeout(SEARCH_TIMEOUT_MS)]),
 				});

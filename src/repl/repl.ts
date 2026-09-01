@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
+import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { VERSION } from "../format.js";
 import type { Runner } from "../runner.js";
 import type { CommandContext } from "./commands.js";
@@ -11,6 +12,9 @@ import type { Renderer } from "./render.js";
 
 export interface ReplOptions {
 	runner: Runner;
+	/** Extension slash commands, already registered as data (M4b design §8.2):
+	 *  cli.ts passes loadExtensions' runtime.commands here. */
+	commands?: readonly RegisteredExtensionCommand[];
 	input?: Readable; // default process.stdin
 	output?: ReplOutput; // default process.stdout
 	interactive?: boolean; // default: stdin && stdout TTY
@@ -26,6 +30,8 @@ function shorten(text: string): string {
 
 interface ReplMachineOptions {
 	runner: Runner;
+	/** Extension commands (M4b): forwarded to dispatchCommand at the single dispatch site. */
+	commands: readonly RegisteredExtensionCommand[];
 	renderer: Renderer;
 	input: ReplInput;
 	interactive: boolean;
@@ -50,6 +56,7 @@ class ReplMachine {
 	private eofPending = false;
 	private receivedLine = false;
 	private readonly runner: Runner;
+	private readonly commands: readonly RegisteredExtensionCommand[];
 	private readonly renderer: Renderer;
 	private readonly input: ReplInput;
 	private readonly interactive: boolean;
@@ -58,6 +65,7 @@ class ReplMachine {
 
 	constructor(options: ReplMachineOptions) {
 		this.runner = options.runner;
+		this.commands = options.commands;
 		this.renderer = options.renderer;
 		this.input = options.input;
 		this.interactive = options.interactive;
@@ -161,7 +169,8 @@ class ReplMachine {
 			// state was pre-set to "compacting" for Ctrl+C hints and /new refusal,
 			// which must not make dispatchCommand's isActive() guard reject it.
 			// Any OTHER line arriving while compacting still sees isActive() true.
-			await dispatchCommand(line, this.commandContext(manualCompact));
+			// Extension commands ride the same path with identical semantics (M4b).
+			await dispatchCommand(line, this.commandContext(manualCompact), this.commands);
 		} catch (err) {
 			this.reportError(err);
 		} finally {
@@ -365,6 +374,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	});
 	machine = new ReplMachine({
 		runner,
+		commands: options.commands ?? [],
 		renderer,
 		input,
 		interactive,

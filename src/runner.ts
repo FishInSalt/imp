@@ -63,8 +63,9 @@ export interface RunnerOptions {
 	provider?: LLMProvider;
 	/** Test seam: tool set (defaults to the fixed six tools). */
 	tools?: Tool[];
-	/** Extension runtime: its tools append after the base set (M4a); commands,
-	 *  context, and event emission are stored and wire up in M4b/M4c. */
+	/** Extension runtime: its tools append after the base set (M4a); commands
+	 *  dispatch from the REPL (M4b, via ReplOptions.commands); context and
+	 *  event emission are stored and wire up in M4c. */
 	extensions?: ExtensionRegistry;
 	/** Extension load failures — logged once the run logger exists (run_error,
 	 *  source "extension"), so one line on screen stays debuggable on disk. */

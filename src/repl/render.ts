@@ -74,6 +74,11 @@ export class Renderer {
 		this.write(`${text}\n`);
 	}
 
+	/** Dim `text` per this renderer's ANSI setting (e.g. /help [source] tags). */
+	dim(text: string): string {
+		return dim(text, this.options.ansi);
+	}
+
 	/** Streaming text. Updates the newline state. */
 	raw(text: string): void {
 		this.write(text);

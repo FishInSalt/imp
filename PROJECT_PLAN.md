@@ -216,17 +216,38 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 
 ---
 
-### M4 — 扩展系统（2~3 周，可选）
+### M4 — 扩展系统（1~1.5 周，三个子里程碑）
 
-- [ ] 扩展 = 一个 TS/JS 模块，默认导出 `function(api)`，`api` 提供：
-  - `registerTool()` / `registerCommand()` / `on(event, handler)`
-  - 事件：`tool_call`（可拦截/改写/否决）、`message_start`、`session_end`…
-- [ ] 热加载：改扩展文件不重启（watch + 重新 import）
-- [ ] 基于扩展实现 2 个实战案例验证 API 设计：
-  1. 权限门：`bash`/`write` 前弹确认（pi 刻意不内置，我们用扩展补）
-  2. 简易 sub-agent：注册一个"派生任务"工具，内部再起一个 agent loop
+> 完整设计契约见 `docs/m4-extensions-design.md`（900 行，已对照 pi 源码逐条核验引用）。
+> 范围对原计划的调整：热加载与 sub-agent 案例移入 M5（理由见设计文档 §16）；
+> 权限门改为规则式（M4 无 UI API，交互式确认是 M5 UI 贡献点的首个用例）。
 
-**对照 pi 源码**：`coding-agent/src/core/extensions/`；文档 `docs/extensions.md` + `examples/extensions/`
+**公共契约**：扩展 = 一个 ESM 模块（`.mjs`），默认导出 `function(api)`；`api` 是 7 个成员的薄对象（`cwd`/`version`/`origin` + `registerTool`/`registerCommand`/`registerContext` + `on`），工具与命令直接复用 core 的 `Tool`（tools/types.ts:13-19）与 `SlashCommand`（repl/commands.ts:14-21）。发现顺序：`-e` 显式路径 → `<cwd>/.imp/extensions/` → `~/.imp/extensions/`（realpath 去重）；`-ne`/`--no-extensions` 跳过两个目录但保留 `-e`。加载 = 裸 `await import()`，零新依赖（pi 需 jiti 做别名，imp 扩展不 import 宿主，别名层整体不需要）。三层错误隔离：import/工厂抛出 → 该扩展整体作废、其余照常；注册冲突（内置名保留、扩展间先到先得）→ 跳过该注册并致教学式诊断；handler 抛出 → `tool_call` 失效保护拦截（回错给模型）、其余事件打诊断行继续。信任模型：M4 不做首用确认（与 bash/AGENTS.md 现状一致，见设计 §11），启动横幅公示每个扩展来源，M5 发布时重审。
+
+**M4a — 加载器 + API + 自定义工具（1~2 晚）**
+- [ ] `src/extensions/{types,registry,loader}.ts`（共 ~440 行）：契约类型 / 数据登记表+冲突策略+隔离 emit / 发现+动态 import+原子丢弃
+- [ ] `runner.ts`：`RunnerOptions.extensions`，工具集 = `[...(options.tools ?? 内置六件), ...(扩展工具)]`（runner.ts:61-64 的测试缝就地升级）
+- [ ] `cli.ts`：`-e`/`--extension`（可重复）、`-ne`、HELP 两行、loadExtensions + 诊断打印
+- [ ] `examples/extensions/notes.mjs`（API 巡礼：tool+command+context，~70 行）
+- 验收：加载器单测（发现/去重/排序/E1-E8 诊断串）+ 全路径集成（fixture 写入临时 `.imp/extensions/`，走真实 import 与真实 cli 接线）；GLM ≤2 次：`imp -p "用 notes 工具保存 'ship it' 再告诉我存了什么"` 模型自主调用；坏扩展在旁边时 imp 照常完成任务且诊断可见
+
+**M4b — 斜杠命令（0.5~1 晚）**
+- [ ] `repl/commands.ts`：`dispatchCommand(line, ctx, extraCommands?)` 第三参；`/help` 与未知命令教学列表合并生成（不可漂移），扩展命令带 `[来源]` 后缀
+- [ ] `repl/repl.ts`：`ReplOptions.commands` 透传（repl.ts:164 单点）；扩展命令 run 抛错沿用 `runCommand` 的 try/catch → `imp:` 行，零新代码
+- 验收：`fake.send("/notes save hi\n")` 全路径断言（M3 教训：不直调 dispatchCommand）；保留名 fixture 被拒（E7）；GLM 0 次（命令不碰模型，可选 REPL 冒烟 1 次）
+
+**M4c — 循环/回合事件钩子 + 上下文注入 + 案例（1~2 晚 + 1 晚打磨）**
+- [ ] `core/loop.ts` 唯一改动：`RunAgentLoopOptions.onToolCall`（校验后、执行前；`{block, reason}` → isError 工具结果回模型，~18 行）
+- [ ] `runner.ts` 发射接线：`onMessage`(assistant)→`message_end`、`onEvent`(tool_end)→`tool_end`、runTurn 返回→`run_end`（fire-and-forget，隔离）；`assembleSystem` 追加 `# Extension context:` 段（`registerContext` 注入点，runner.ts:184-196）
+- [ ] 事件集仅 4 个：`tool_call`（可拦截）/`tool_end`/`message_end`/`run_end`；无 per-call ctx（M5+ 加法式扩展）
+- [ ] `examples/extensions/guardian.mjs`（规则式权限门，~90 行，`IMP_GUARDIAN_BLOCK` 可配；偿还 M0 §6.6 的 bash 安全债）+ README "Extensions" 节
+- 验收：拦截短路链/失败保护拦截/事件载荷单测；GLM ≤4 次：诱惑 `rm -rf` 的任务收到教学式拦截结果后自主改道；`imp -p "你有哪些扩展上下文？"` 凭注入段答对（M1 暗号式验收）
+
+**完成定义**：零新依赖（package.json 零 diff）、`src/provider/` 零改动、loop 差异限 `onToolCall`、现有 142 测试全绿、AGENTS.md 审查纪律评估执行。
+
+**明确延后到 M5+**（理由见设计文档 §16）：MCP、自定义 provider、sub-agent（需经 api 暴露引擎，且纠缠 D1/D2 决策）、UI 贡献点（`ui.confirm` 交互门）、热加载/`/reload`、npm/git 扩展包与 manifest、消息改写类事件、handler ctx/超时。
+
+**对照 pi 源码**：`coding-agent/src/core/extensions/`（loader.ts 发现与隔离、runner.ts emit 隔离、types.ts API 形状）；文档 `docs/extensions.md`；分歧清单见设计文档附录 A（内置名保留 vs pi 覆盖、注册冲突跳过 vs pi 整体作废、4 事件 vs ~26 事件、无信任门等）
 
 ---
 
@@ -236,7 +257,7 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - `--mode json` 事件流输出 / RPC 模式（进程集成）
 - Skills 机制（按需加载的 SKILL.md 能力包）
 - 提示词模板、主题
-- GitHub 发布 + `npm install -g`（npm 上 `imp` 短名大概率被占，发 scope 包 `@<user>/imp`，bin 名仍设为 `imp`）
+- GitHub 发布 + `npm install -g`（npm 上 `imp` 短名大概率被占，发 scope 包 `@<user>/imp`，bin 名仍设为 `imp`）；**同里程碑重审扩展信任模型**（pi 的 trust.json + 最近祖先 + `project_trust` 是移植参照）并承接 M4 延后项：sub-agent（经 api 暴露引擎，含 D1 共享 cwd/worktree 决策落地）、交互式权限门（`ui.confirm`）、热加载、npm/git 扩展包
 
 ---
 

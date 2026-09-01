@@ -240,6 +240,13 @@ class ReplMachine {
 			return;
 		}
 		this.reportError(err);
+		// Mid-run failures keep every completed tool result in the session — the
+		// next message resumes from the break. Users assume the whole turn was
+		// lost otherwise (dogfood report 2026-09-01: 6 tool results survived,
+		// the user just wasn't told they could type 继续).
+		this.renderer.note(
+			"completed work from this turn is saved in the session — send another message (e.g. \"继续\") to resume from the break",
+		);
 		this.discardQueue();
 		this.returnToIdle();
 	}

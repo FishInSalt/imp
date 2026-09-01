@@ -47,8 +47,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
-	const provider: LLMProvider =
-		args.provider ?? scriptedProvider(args.scripts ?? [reply("ok")], requests);
+	const provider: LLMProvider = args.provider ?? scriptedProvider(args.scripts ?? [reply("ok")], requests);
 	const fake = makeConsole({ tty: args.tty ?? true });
 	const renderer = new Renderer({
 		write: (text) => fake.stdout.write(text),
@@ -364,7 +363,10 @@ describe("runRepl", () => {
 			.filter((l) => l.trim() !== "")
 			.map((l) => JSON.parse(l));
 		const steering = entries.filter(
-				(e) => e.type === "message" && e.message.role === "user" && e.message.content === "wait — use a different approach",
+			(e) =>
+				e.type === "message" &&
+				e.message.role === "user" &&
+				e.message.content === "wait — use a different approach",
 		);
 		expect(steering.length).toBe(1);
 		expect(steering[0].parentId).not.toBeNull();
@@ -425,9 +427,7 @@ describe("runRepl", () => {
 		await waitUntil(() => env.output().includes("▪ compacting…"));
 		expect(env.output()).not.toContain("waits for the running turn");
 		// machine returns to idle afterwards — prompt redrawn after the banner
-		await waitUntil(
-				() => env.output().lastIndexOf("> ") > env.output().indexOf("▪ compacting…"),
-		);
+		await waitUntil(() => env.output().lastIndexOf("> ") > env.output().indexOf("▪ compacting…"));
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

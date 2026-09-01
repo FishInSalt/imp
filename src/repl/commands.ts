@@ -95,9 +95,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const previous = ctx.runner.model;
 			const id = args.trim();
 			if (/\s/.test(id)) {
-				throw new Error(
-					`/model takes one id — got extra text. Usage: /model <id>, e.g. /model glm-4.6`,
-				);
+				throw new Error(`/model takes one id — got extra text. Usage: /model <id>, e.g. /model glm-4.6`);
 			}
 			ctx.runner.model = id;
 			ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);

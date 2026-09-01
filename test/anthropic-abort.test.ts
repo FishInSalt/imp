@@ -16,9 +16,15 @@ describe("anthropic provider abort mid-stream", () => {
 	beforeAll(async () => {
 		server = createServer((req, res) => {
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n');
-			res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n');
-			res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n');
+			res.write(
+				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n',
+			);
+			res.write(
+				'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n',
+			);
+			res.write(
+				'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+			);
 			// then the stream just holds — the client aborts while we hang
 			req.on("close", () => res.destroy());
 		});
@@ -61,8 +67,12 @@ describe("anthropic provider abort mid-stream", () => {
 		// would keep every other test green — this is the pin.
 		const truncating = createServer((req, res) => {
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n');
-			res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n');
+			res.write(
+				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n',
+			);
+			res.write(
+				'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+			);
 			// connection cut mid-response, no message_stop — the proxy/LB case
 			setTimeout(() => res.destroy(), 20);
 			req.on("close", () => res.destroy());

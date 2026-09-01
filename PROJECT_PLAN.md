@@ -225,6 +225,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 **公共契约**：扩展 = 一个 ESM 模块（`.mjs`），默认导出 `function(api)`；`api` 是 7 个成员的薄对象（`cwd`/`version`/`origin` + `registerTool`/`registerCommand`/`registerContext` + `on`），工具与命令直接复用 core 的 `Tool`（tools/types.ts:13-19）与 `SlashCommand`（repl/commands.ts:14-21）。发现顺序：`-e` 显式路径 → `<cwd>/.imp/extensions/` → `~/.imp/extensions/`（realpath 去重）；`-ne`/`--no-extensions` 跳过两个目录但保留 `-e`。加载 = 裸 `await import()`，零新依赖（pi 需 jiti 做别名，imp 扩展不 import 宿主，别名层整体不需要）。三层错误隔离：import/工厂抛出 → 该扩展整体作废、其余照常；注册冲突（内置名保留、扩展间先到先得）→ 跳过该注册并致教学式诊断；handler 抛出 → `tool_call` 失效保护拦截（回错给模型）、其余事件打诊断行继续。信任模型：M4 不做首用确认（与 bash/AGENTS.md 现状一致，见设计 §11），启动横幅公示每个扩展来源，M5 发布时重审。
 
 **M4a — 加载器 + 完整 API + 自定义工具（1~2 晚）**
+
+**M4a 结果（2026-09-01，已合并 `a558bae`，真机验收通过）**：
+- 工作流三阶段：单写手实现（9 commits，+1868/−32，零新依赖）→ 对抗评审（0 P1/0 P2/7 P3，APPROVE；自跑门禁 + 5 组变异验证证明测试承重）→ P3 顺手修 4 条（`3a58bc3`）
+- 交付：`src/extensions/{types,registry,loader}.ts`（7 成员 API、三层隔离、发现链与去重）、runner 工具合并（print/REPL 共用 seam）、cli `-e`/`-ne`、`examples/extensions/notes.mjs` 巡礼
+- 测试 142 → 172；关键测试：case 9 真动态 import 穿真接线、case 16 echo 管道探测、stored-unconsumed 三重断言（计数但确实未消费）
+- 真机验收（GLM-5.3，3 次调用；1 次是脚本失误多耗的 46 out——教训：诊断类检查用零行管道即可零成本）：①E4 教学诊断 + 进程存活 + 后续轮正常 ②notes 工具 set→get 两连调、`.imp/notes.json` 落盘、cache↓5.3k ③`-ne` 对照：无 banner、模型可见工具恰为 6 内置 ④零成本项：`IMP_LOG=1` 零行管道下 `run_error {source:"extension"}` 全栈落盘（评审 P3-3 的验收侧覆盖）
+- 已接受残余：P3-5 排序锁依赖 APFS readdir 恰好有序（平台运气）；P3-7 cli 两处 `loadExtensionSetup` 调用点的固有缝隙（共享 banner helper 防漂移，GLM 验收兜底）
 - [ ] `src/extensions/{types,registry,loader}.ts`（共 ~440 行）：契约类型（完整 7 成员 API，见下条）/ 数据登记表+冲突策略+隔离 emit / 发现+动态 import+原子丢弃
 - [ ] `runner.ts`：`RunnerOptions.extensions`，工具集 = `[...(options.tools ?? 内置六件), ...(扩展工具)]`（runner.ts:61-64 的测试缝就地升级）
 - [ ] `cli.ts`：`-e`/`--extension`（可重复）、`-ne`、HELP 两行、loadExtensions + 诊断打印

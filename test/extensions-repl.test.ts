@@ -809,3 +809,47 @@ describe("guardian case study (design §13.1)", () => {
 		expect(await env.repl).toBe(0);
 	});
 });
+
+describe("handler isolation through the full path (design §6.1, E10)", () => {
+	it("a throwing observer (sync tool_end, rejected message_end) reports E10 lines and never breaks the run or the host", async () => {
+		const executed: string[] = [];
+		const probe: Tool = {
+			name: "probe_tool",
+			description: "records execution",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute(args) {
+				executed.push(String(args.message));
+				return { output: "ran fine" };
+			},
+		};
+		const env = await startRepl({
+			tools: [probe],
+			scripts: [toolCall("t1", "probe_tool", { message: "audit me" }), reply("run continued")],
+			extensionFiles: {
+				"crashy.mjs": `export default function (api) {
+	api.on("tool_end", () => {
+		throw new Error("observer exploded");
+	});
+	api.on("message_end", () => Promise.reject(new Error("async observer exploded")));
+}
+`,
+			},
+		});
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("run continued"));
+		// the tool ran and its result reached the model — the observer throw
+		// neither vetoed the call nor broke the turn
+		expect(executed).toEqual(["audit me"]);
+		const result = env.requests[1]?.messages.find((m) => m.role === "toolResult")?.results[0];
+		expect(result).toMatchObject({ toolCallId: "t1", content: "ran fine", isError: false });
+		// both handler failures surfaced as E10 diagnostics, exactly once each
+		expect(
+			env.output().match(/imp: extension crashy handler error \(tool_end\) — observer exploded/g),
+		).toHaveLength(1);
+		expect(
+			env.output().match(/imp: extension crashy handler error \(message_end\) — async observer exploded/g),
+		).toHaveLength(2); // one per assistant message: the tool_use turn and the closing reply
+		env.fake.eof();
+		expect(await env.repl).toBe(0); // the host process is still standing
+	});
+});

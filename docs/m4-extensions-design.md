@@ -584,6 +584,10 @@ the registry's emit is a no-op fast path and the loop pays one function call.
 - `onEvent` wrapper (currently passed straight through, runner.ts:237): wrap once —
   forward to `options.onEvent` (renderer), and on `tool_end` also
   `extensions?.emitToolEnd(event.result)` (fire-and-forget).
+- `tool_end` fires only for results a tool actually produced: calls interrupted
+  before execution get a synthesized closer with **no** `tool_end` — §6.1's
+  "completed tool results" means exactly that (observers never audit a call that
+  never ran).
 - After `runAgentLoop` resolves: `extensions?.emitRunEnd(result)` before returning. A loop
   throw (provider failure) emits nothing — `run_end` means a run that ended, not one that
   crashed; the error path already has its own reporting.

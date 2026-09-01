@@ -316,8 +316,7 @@ class ReplMachine {
 		return {
 			runner: this.runner,
 			renderer: this.renderer,
-			isActive: () =>
-				!authorizedCompact && (this.state === "running" || this.state === "compacting"),
+			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
 			requestExit: (code: number) => this.requestExit(code),
 			abortActive: () => {
 				if (this.controller !== null) {

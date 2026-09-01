@@ -1,5 +1,6 @@
 import { listSessions } from "./core/session/manager.js";
 import { loadDotEnv } from "./env.js";
+import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./repl/render.js";
 import { runRepl } from "./repl/repl.js";
@@ -18,6 +19,8 @@ interface CliOptions {
 	continueRecent: boolean;
 	resume: string | undefined;
 	noSession: boolean;
+	extensionPaths: string[];
+	noExtensions: boolean;
 	help: boolean;
 	version: boolean;
 }
@@ -39,6 +42,8 @@ Options:
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
       --no-session         Do not persist this run (also disables auto-compaction)
+  -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable)
+  -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -70,6 +75,8 @@ function parseArgs(argv: string[]): CliOptions {
 		continueRecent: false,
 		resume: undefined,
 		noSession: false,
+		extensionPaths: [],
+		noExtensions: false,
 		help: false,
 		version: false,
 	};
@@ -114,6 +121,14 @@ function parseArgs(argv: string[]): CliOptions {
 				break;
 			case "--no-session":
 				opts.noSession = true;
+				break;
+			case "-e":
+			case "--extension":
+				opts.extensionPaths.push(next());
+				break;
+			case "-ne":
+			case "--no-extensions":
+				opts.noExtensions = true;
 				break;
 			case "-h":
 			case "--help":
@@ -180,6 +195,23 @@ async function main(): Promise<void> {
 }
 
 /**
+ * Shared startup step for both modes (design §10): load extensions right
+ * after the renderer exists and before createRunner, streaming failure
+ * lines through renderer.error and then the dim `▪` banner — so extension
+ * output always precedes the runner's own banners (incl. `▪ context:`).
+ */
+async function loadExtensionSetup(opts: CliOptions, renderer: Renderer): Promise<LoadedExtensions> {
+	const loaded = await loadExtensions({
+		cwd: process.cwd(),
+		cliPaths: opts.extensionPaths,
+		noDiscovery: opts.noExtensions,
+		onDiagnostic: (line) => renderer.error(line),
+	});
+	printExtensionDiagnostics(loaded.summaries, (line) => renderer.note(line));
+	return loaded;
+}
+
+/**
  * Interactive/scripted REPL over one shared Runner. Graceful exits resolve a
  * code; the zero-line-pipe guard (forgot -p) resolves 1 and prints HELP here —
  * the REPL itself never imports this module's HELP.
@@ -194,7 +226,13 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	});
 	let runner: Runner;
 	try {
-		runner = await createRunner({ ...runnerOptions(opts, argv, renderer), deferInit: !interactive });
+		const extensions = await loadExtensionSetup(opts, renderer);
+		runner = await createRunner({
+			...runnerOptions(opts, argv, renderer),
+			deferInit: !interactive,
+			extensions: extensions.runtime,
+			extensionFailures: extensions.failures,
+		});
 	} catch (err) {
 		reportStartupError(err);
 		return;
@@ -245,7 +283,12 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	});
 	let runner: Runner;
 	try {
-		runner = await createRunner(runnerOptions(opts, argv, renderer));
+		const extensions = await loadExtensionSetup(opts, renderer);
+		runner = await createRunner({
+			...runnerOptions(opts, argv, renderer),
+			extensions: extensions.runtime,
+			extensionFailures: extensions.failures,
+		});
 	} catch (err) {
 		reportStartupError(err);
 		return;

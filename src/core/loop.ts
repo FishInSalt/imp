@@ -46,6 +46,19 @@ export interface RunAgentLoopResult {
 }
 
 /**
+ * Returned (sync or async) by an onToolCall gate / "tool_call" extension
+ * handler. Declared here in core — next to the option that will consume it —
+ * so src/extensions/ can import it type-only and core keeps zero extension
+ * knowledge (M4 design §6.1/§8.3). The consuming loop option lands in M4c.
+ */
+export interface ToolCallDecision {
+	/** Block execution. true is the only meaningful value; omit/void = allow. */
+	block: boolean;
+	/** Fed back to the model as the (isError) tool result — make it teaching-style. */
+	reason?: string;
+}
+
+/**
  * The agent loop:
  *
  *   user message -> LLM (stream) -> assistant message
@@ -175,10 +188,7 @@ function fillMissingToolResults(
  * Used when the process is about to die (force quit) so the session stays
  * resumable — an unanswered tool_call makes the next API request a 400.
  */
-export function synthesizeMissingToolResults(
-	messages: AgentMessage[],
-	reason: string,
-): AgentMessage[] {
+export function synthesizeMissingToolResults(messages: AgentMessage[], reason: string): AgentMessage[] {
 	const answered = new Set<string>();
 	for (const message of messages) {
 		if (message.role === "toolResult") {

@@ -58,7 +58,9 @@ imp            # interactive REPL (streaming, one-line tool status)
   prompt, press twice to exit). `Ctrl+D` exits. The exit line shows how to
   resume: `imp -r <id>`.
 - Slash commands: `/help`, `/exit`, `/new` (fresh session, old one stays on
-  disk), `/model [id]` (applies from the next turn), `/compact` (summarize
+  disk), `/sessions` (list saved sessions for this directory),
+  `/resume <id>` (switch to one — history replays on screen),
+  `/model [id]` (applies from the next turn), `/compact` (summarize
   older context now). Unknown commands get a hint instead of reaching the
   model; prefix a line with a space to send a literal leading `/`.
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.

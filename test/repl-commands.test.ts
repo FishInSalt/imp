@@ -27,6 +27,10 @@ const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
 });
 
 interface TestEnv {
+	replayed: string[];
+	/** Hermetic test paths (create extra sessions with these). */
+	cwd: string;
+	baseDir: string;
 	runner: Runner;
 	ctx: CommandContext;
 	output(): string;
@@ -62,9 +66,12 @@ async function makeEnv(args?: {
 		renderer,
 		provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
 	});
+	const replayed: string[] = [];
 	const exitCodes: number[] = [];
 	const banner = output(); // ▪ resumed … line from seeding, if any
 	const env: TestEnv = {
+		cwd,
+		baseDir,
 		runner,
 		output: () => output().slice(banner.length),
 		requests,
@@ -79,8 +86,13 @@ async function makeEnv(args?: {
 				env.aborted = true;
 				return true;
 			},
+			replay: (session) => {
+				replayed.push(session.header.id);
+				return session.stats().messageCount;
+			},
 		},
 	};
+	(env as { replayed: string[] }).replayed = replayed;
 	return env;
 }
 
@@ -95,11 +107,11 @@ describe("parseCommand", () => {
 });
 
 describe("slash commands", () => {
-	it("/help lists all five (generated, cannot drift)", async () => {
+	it("/help lists all seven (generated, cannot drift)", async () => {
 		const env = await makeEnv();
 		await dispatchCommand("/help", env.ctx);
 		const text = env.output();
-		for (const label of ["/help", "/exit", "/new", "/model [id]", "/compact"]) {
+		for (const label of ["/help", "/exit", "/new", "/sessions", "/resume <id>", "/model [id]", "/compact"]) {
 			expect(text).toContain(label);
 		}
 		expect(text).toContain("Ctrl+C");
@@ -115,6 +127,8 @@ describe("slash commands", () => {
 				"  /help              show this help",
 				"  /exit              exit (Ctrl+D works too)",
 				"  /new               start a fresh session (the old one stays on disk)",
+				"  /sessions          list saved sessions for this directory",
+				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
 				"  /compact           summarize older context now",
 				"",
@@ -216,7 +230,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /model /compact — /help shows what they do\n",
+				"known: /help /exit /new /sessions /resume /model /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -224,5 +238,61 @@ describe("slash commands", () => {
 		await dispatchCommand("/", bare.ctx);
 		expect(bare.output()).toContain('imp: unknown command "/"\n');
 		expect(bare.requests).toHaveLength(0);
+	});
+});
+
+describe("/sessions + /resume", () => {
+	it("/sessions with no saved sessions → teaching note", async () => {
+		const env = await makeEnv({ noSession: true });
+		await dispatchCommand("/sessions", env.ctx);
+		expect(env.output()).toContain("no saved sessions for this directory yet");
+	});
+
+	it("/sessions lists ids, titles, counts; marks the current session ▸", async () => {
+		const env = await makeEnv({ seed: [{ role: "user", content: "current session work" }] });
+		// a second, older session in the same directory
+		const other = createSession(env.cwd, env.baseDir);
+		other.appendMessage({ role: "user", content: "older session title line" });
+		await dispatchCommand("/sessions", env.ctx);
+		const out = env.output();
+		const current8 = env.runner.session?.header.id.slice(0, 8) ?? "";
+		const other8 = other.header.id.slice(0, 8);
+		expect(out).toContain(`▸ ${current8}`);
+		expect(out).toContain(other8);
+		expect(out).toContain("older session title line");
+		expect(out).toContain("1 msg");
+		expect(out).toContain("switch with /resume <id>");
+	});
+
+	it("/resume <id> swaps the live session and replays its history", async () => {
+		const env = await makeEnv({ seed: [{ role: "user", content: "current" }] });
+		const target = createSession(env.cwd, env.baseDir);
+		target.appendMessage({ role: "user", content: "target session" });
+		target.appendMessage({
+			role: "assistant",
+			blocks: [{ type: "text", text: "answer" }],
+			usage: { inputTokens: 1, outputTokens: 1 },
+			stopReason: "end_turn",
+		});
+		await dispatchCommand(`/resume ${target.header.id.slice(0, 8)}`, env.ctx);
+		expect(env.runner.session?.header.id).toBe(target.header.id);
+		expect(env.replayed).toEqual([target.header.id]); // history hit the screen
+		expect(env.output()).toContain("resumed");
+		expect(env.output()).toContain("2 messages restored");
+	});
+
+	it("/resume with a bad id → teaching error, session unchanged", async () => {
+		const env = await makeEnv({ seed: [{ role: "user", content: "current" }] });
+		const before = env.runner.session?.header.id;
+		await dispatchCommand("/resume nonexistent", env.ctx);
+		expect(env.output()).toContain("no session matching");
+		expect(env.runner.session?.header.id).toBe(before);
+		expect(env.replayed).toEqual([]);
+	});
+
+	it("/resume without an id → hint line", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/resume", env.ctx);
+		expect(env.output()).toContain("/resume <id> — pick an id from /sessions");
 	});
 });

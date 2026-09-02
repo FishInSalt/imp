@@ -224,6 +224,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		ansi: process.stdout.isTTY === true,
 		liveTools: interactive, // no in-place pending tool lines on a pipe
 		toolStyle: "one-line",
+		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text
 	});
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];

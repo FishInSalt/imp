@@ -185,6 +185,7 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "running";
 		this.input.setActive(true);
+		this.renderer.think(); // live spinner until the first event arrives
 		const controller = new AbortController();
 		this.controller = controller;
 		try {

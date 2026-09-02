@@ -8,6 +8,7 @@ import type { CommandContext } from "./commands.js";
 import { dispatchCommand, parseCommand } from "./commands.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
+import { replaySession } from "./replay.js";
 import type { Renderer } from "./render.js";
 
 export interface ReplOptions {
@@ -394,7 +395,16 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	if (interactive) {
 		renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
 		const session = runner.session;
-		if (session) renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
+		if (session) {
+			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
+			// Replay the resumed history so the user sees what the model sees
+			// (the crash-recovery loop's missing half).
+			const replayed = replaySession(
+				{ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true },
+				session,
+			);
+			if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
+		}
 		input.refresh(); // banner block ends with a fresh idle prompt
 	}
 	return done;

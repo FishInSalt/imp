@@ -9,6 +9,7 @@ import { dispatchCommand, parseCommand } from "./commands.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import { replaySession } from "./replay.js";
+import type { SessionStore } from "../core/session/store.js";
 import type { Renderer } from "./render.js";
 
 export interface ReplOptions {
@@ -36,6 +37,8 @@ interface ReplMachineOptions {
 	renderer: Renderer;
 	input: ReplInput;
 	interactive: boolean;
+	/** Replay a session on screen (shared by the startup banner and /resume). */
+	replay: (session: SessionStore) => number;
 	exit: (code: number) => never;
 	finish: (code: number) => void;
 }
@@ -61,6 +64,7 @@ class ReplMachine {
 	private readonly renderer: Renderer;
 	private readonly input: ReplInput;
 	private readonly interactive: boolean;
+	private readonly replay: (session: SessionStore) => number;
 	private readonly exit: (code: number) => never;
 	private readonly finish: (code: number) => void;
 
@@ -70,6 +74,7 @@ class ReplMachine {
 		this.renderer = options.renderer;
 		this.input = options.input;
 		this.interactive = options.interactive;
+		this.replay = options.replay;
 		this.exit = options.exit;
 		this.finish = options.finish;
 	}
@@ -335,6 +340,7 @@ class ReplMachine {
 			runner: this.runner,
 			renderer: this.renderer,
 			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
+			replay: this.replay,
 			requestExit: (code: number) => this.requestExit(code),
 			abortActive: () => {
 				if (this.controller !== null) {
@@ -359,6 +365,8 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		options.interactive ?? ((stdin as { isTTY?: boolean }).isTTY === true && output.isTTY === true);
 	const runner = options.runner;
 	const renderer = runner.renderer; // one renderer, one newline state, shared with the runner
+	const replay = (session: SessionStore): number =>
+		replaySession({ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true }, session);
 
 	let resolveDone!: (code: number) => void;
 	const done = new Promise<number>((resolve) => {
@@ -389,6 +397,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		interactive,
 		exit: options.exit ?? ((code: number) => process.exit(code)),
 		finish,
+		replay,
 	});
 
 	input.start();
@@ -399,10 +408,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
 			// Replay the resumed history so the user sees what the model sees
 			// (the crash-recovery loop's missing half).
-			const replayed = replaySession(
-				{ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true },
-				session,
-			);
+			const replayed = replay(session);
 			if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
 		}
 		input.refresh(); // banner block ends with a fresh idle prompt

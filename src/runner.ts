@@ -10,8 +10,10 @@ import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
-import { createSession, resolveSession } from "./core/session/manager.js";
+import { createSession, listSessions, resolveSession } from "./core/session/manager.js";
+import type { SessionInfo } from "./core/session/manager.js";
 import type { SessionStore } from "./core/session/store.js";
+import { SessionNotFoundError } from "./core/session/manager.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -95,6 +97,11 @@ export interface Runner {
 	compactNow(signal?: AbortSignal): Promise<CompactOutcome>;
 	/** `/new`: fresh session store, empty history, re-assembled system prompt. */
 	newSession(): void;
+	/** `/sessions`: sessions saved for this cwd, newest first. */
+	listSessions(): SessionInfo[];
+	/** `/resume <id>`: swap the live session to a saved one (history reloads;
+	 *  the old session stays on disk untouched). Throws SessionNotFoundError. */
+	resumeSession(id: string): { id8: string; messages: number };
 	printRunStats(result: RunAgentLoopResult): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
@@ -236,6 +243,26 @@ class RunnerImpl implements Runner {
 		}
 		this.history.length = 0;
 		this.system = this.assembleSystem();
+	}
+
+	listSessions(): SessionInfo[] {
+		return listSessions(this.options.cwd, this.options.sessionBaseDir);
+	}
+
+	resumeSession(id: string): { id8: string; messages: number } {
+		// Same matching as --resume: UUID, unique prefix, or file name.
+		const store = resolveSession(this.options.cwd, {
+			resume: id,
+			baseDir: this.options.sessionBaseDir,
+		});
+		if (store === null) {
+			throw new SessionNotFoundError(`no session matching "${id}" — run /sessions to list them`);
+		}
+		this.sessionStore = store;
+		this.history.length = 0;
+		this.history.push(...store.buildContext().messages); // same wiring as warmup()
+		this.system = this.assembleSystem();
+		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
 	}
 
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult> {

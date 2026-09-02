@@ -1,4 +1,5 @@
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
+import type { SessionStore } from "../core/session/store.js";
 import type { Runner } from "../runner.js";
 import type { Renderer } from "./render.js";
 
@@ -8,6 +9,8 @@ export interface CommandContext {
 	isActive: () => boolean; // running || compacting
 	requestExit(code: number): void; // graceful path
 	abortActive(): boolean; // abort controller if active
+	/** Replay a session's history on screen (wired in repl.ts; records in tests). */
+	replay(session: SessionStore): number;
 }
 
 export type CommandOutcome = "handled" | "exit-requested";
@@ -77,6 +80,12 @@ export function helpText(
 	return lines.join("\n");
 }
 
+/** Local time `YYYY-MM-DD HH:MM` for /sessions rows. */
+function formatWhen(date: Date): string {
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
 export const COMMANDS: readonly SlashCommand[] = [
 	{
 		name: "help",
@@ -102,6 +111,52 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: false,
 		run: (_args, ctx) => {
 			ctx.runner.newSession();
+			return "handled";
+		},
+	},
+	{
+		name: "sessions",
+		summary: "list saved sessions for this directory",
+		allowedDuringRun: false,
+		run: (_args, ctx) => {
+			const sessions = ctx.runner.listSessions();
+			if (sessions.length === 0) {
+				ctx.renderer.note("▪ no saved sessions for this directory yet");
+				return "handled";
+			}
+			const currentId = ctx.runner.session?.header.id;
+			const shown = sessions.slice(0, 20);
+			for (const info of shown) {
+				const mark = info.id === currentId ? "▸" : " ";
+				const meta = ctx.renderer.dim(
+					`${formatWhen(info.modified)} · ${info.messageCount} msg · ${info.turnCount} turn${info.turnCount === 1 ? "" : "s"}`,
+				);
+				ctx.renderer.writeLine(`${mark} ${info.id.slice(0, 8)}  ${meta}  ${info.title}`);
+			}
+			const hidden = sessions.length - shown.length;
+			const extra = hidden > 0 ? ` (${hidden} older hidden)` : "";
+			ctx.renderer.note(`▪ switch with /resume <id> — or restart: imp -r <id>${extra}`);
+			return "handled";
+		},
+	},
+	{
+		name: "resume",
+		usage: "/resume <id>",
+		summary: "switch to a saved session (history replays on screen)",
+		allowedDuringRun: false,
+		run: (args, ctx) => {
+			if (args === "") {
+				ctx.renderer.writeLine("/resume <id> — pick an id from /sessions");
+				return "handled";
+			}
+			try {
+				const { id8, messages } = ctx.runner.resumeSession(args);
+				const session = ctx.runner.session;
+				if (session !== null && messages > 0) ctx.replay(session);
+				ctx.renderer.note(`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored`);
+			} catch (err) {
+				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+			}
 			return "handled";
 		},
 	},

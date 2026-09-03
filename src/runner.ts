@@ -21,6 +21,7 @@ import { createFindTool } from "./core/tools/find.js";
 import { createGrepTool } from "./core/tools/grep.js";
 import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
+import { loadAgentDefinitions, type AgentRegistry } from "./core/agents/registry.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
@@ -56,6 +57,8 @@ export interface RunnerOptions {
 	resume?: string;
 	continueRecent?: boolean;
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
+	/** Hermetic tests: overrides ~/.imp/agents for the agent registry (M5c). */
+	agentsHomeDir?: string;
 	/** Defer session creation and startup banners until the first warmup()
 	 *  call. Scripted (piped) mode uses this so a zero-line pipe — the "forgot
 	 *  -p" case — exits with HELP and no side effects (no banners, no empty
@@ -147,6 +150,7 @@ class RunnerImpl implements Runner {
 	private readonly settings = DEFAULT_COMPACTION_SETTINGS;
 	private system: string;
 	private sessionStore: SessionStore | null = null;
+	private readonly agents: AgentRegistry;
 	private initialized = false;
 	private lastRunModel: string;
 
@@ -174,7 +178,9 @@ class RunnerImpl implements Runner {
 		// The task tool (M5): delegates to in-process subagents. Getters keep the
 		// spawn-time reads live — /model, /new, /resume all change what children
 		// should see. It references this.tools (name-filtered at spawn), so push
-		// after the array is built.
+		// after the array is built. Agents load once from disk (M5c) — new agent
+		// files need a restart, like extension changes.
+		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir);
 		this.tools.push(
 			createTaskTool({
 				provider: this.provider,
@@ -183,6 +189,7 @@ class RunnerImpl implements Runner {
 				getTools: () => this.tools,
 				getSession: () => this.sessionStore,
 				sessionBaseDir: options.sessionBaseDir,
+				agents: this.agents.agents,
 			}),
 		);
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
@@ -215,6 +222,9 @@ class RunnerImpl implements Runner {
 				}
 			}
 			this.sessionStore ??= createSession(options.cwd, options.sessionBaseDir);
+		}
+		for (const warning of this.agents.warnings) {
+			options.renderer.error(`imp: ${warning}`);
 		}
 		this.system = this.assembleSystem();
 	}

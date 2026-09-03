@@ -211,6 +211,24 @@ describe("runSubagent", () => {
 	});
 });
 
+	it("extraSystem (M5c) lands after CHILD_SUFFIX, append-only", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], sink);
+		await runSubagent({
+			provider,
+			model: "m",
+			system: "PARENT",
+			tools: [echo],
+			prompt: "go",
+			extraSystem: "AGENT-BODY",
+		});
+		const system = (sink[0] as LLMRequest).system;
+		expect(system.startsWith("PARENT")).toBe(true);
+		expect(system.indexOf("Subagent mode")).toBeGreaterThan("PARENT".length - 1);
+		expect(system.indexOf("# Agent profile")).toBeGreaterThan(system.indexOf("Subagent mode"));
+		expect(system.indexOf("AGENT-BODY")).toBeGreaterThan(system.indexOf("# Agent profile"));
+	});
+
 describe("childUsageTrailer", () => {
 	it("formats turns and tokens; cache segment only when cache read > 0", () => {
 		expect(childUsageTrailer(7, { inputTokens: 12345, outputTokens: 1400, cacheReadTokens: 9800 })).toBe(

@@ -32,6 +32,8 @@ export interface SubagentOptions {
 	tools: Tool[];
 	/** Self-contained task; becomes the child's first (and only) user message. */
 	prompt: string;
+	/** Agent profile body (M5c): appended AFTER CHILD_SUFFIX — append-only mode. */
+	extraSystem?: string;
 	signal?: AbortSignal;
 	/** Wall-clock budget. Default CHILD_TIMEOUT_MS; injectable for tests. */
 	timeoutMs?: number;
@@ -106,7 +108,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		const result: RunAgentLoopResult = await runAgentLoop({
 			provider: options.provider,
 			model: options.model,
-			system: options.system + CHILD_SUFFIX,
+			system:
+				options.system + CHILD_SUFFIX + (options.extraSystem ? `\n\n# Agent profile\n\n${options.extraSystem}` : ""),
 			tools: options.tools,
 			history,
 			userMessage: options.prompt,

@@ -60,6 +60,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 
 	return {
 		name: "task",
+		concurrencySafe: true,
 		description:
 			"Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here.",
 		parameters: taskSchema,

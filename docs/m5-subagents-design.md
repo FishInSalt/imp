@@ -91,7 +91,7 @@ tool-call blocks in one turn ([D] prompt.ts:271); chaining ([A] `{previous}`) is
   `task aborted before completion (N turns ran). Partial transcript: <child-session-id or "not persisted">.`
   — `isError: true`.
 - Timeout:
-  `task timed out after 600s (N turns ran). Partial transcript: <child-session-id or "not persisted">.`
+  `task timed out after 1800s (N turns ran). Partial transcript: <child-session-id or "not persisted">.`
   — `isError: true`; same partial-recovery path as abort (§6).
 - Child crash (provider/protocol error): partial recovery ([D] AgentTool.tsx:1225-1240) — return any
   assistant text with a trailer
@@ -101,7 +101,7 @@ tool-call blocks in one turn ([D] prompt.ts:271); chaining ([A] `{previous}`) is
   `unknown agent "X". Available agents: a, b, c (defined in .imp/agents/ and ~/.imp/agents/).` —
   mirrors [D]'s list-the-agents error (AgentTool.tsx:353).
 - `max_iterations`: return last assistant text as a success-shaped result plus trailer
-  `[task] hit the 25-turn cap; result may be incomplete.` — the cap is a valve, not an error.
+  `[task] hit the 40-turn cap; result may be incomplete.` — the cap is a valve, not an error.
 
 ## 4. Child agent + context semantics
 
@@ -114,7 +114,7 @@ runSubagent({ provider, model, system, tools, prompt, signal, timeoutMs }) => {
   const result = await runAgentLoop({ provider, model,
     system: system + CHILD_SUFFIX, tools, history,
     userMessage: prompt,                   // verbatim, no wrapper
-    maxIterations: 25, signal: childSignal });
+    maxIterations: 40, signal: childSignal });
   // → extract final text / map errors per §3
 }
 ```
@@ -135,8 +135,11 @@ runSubagent({ provider, model, system, tools, prompt, signal, timeoutMs }) => {
 - **Model** = parent's current model (read at spawn via a getter closure; `runner.model` is
   mutable). M5c: optional frontmatter `model` override — same precedence idea as [D]
   model/agent.ts:37-92, minus the env-var layer.
-- **maxIterations = 25** (parent default 40): scoped jobs, tighter runaway valve. **`timeoutMs` =
-  `CHILD_TIMEOUT_MS` = 10 min** default (§6), injectable for tests. Child messages never enter
+- **maxIterations = 40** (parent parity — the valve guards runaway spin, not honest work; the real
+  ceiling for heavy tool jobs is child **context exhaustion** (no child compaction in M5), which
+  degrades through the §3 crash path). **`timeoutMs` = `CHILD_TIMEOUT_MS` = 30 min** default (§6),
+  injectable for tests. **Invariant: the clock must scale with the turn budget** — at ~45s/turn
+  average with slow tools, 40 turns need ~30 min; raise one, re-derive the other. Child messages never enter
   parent history or fire parent `onMessage` / extension events ([C] §4's contamination rule) —
   deliberate and documented.
 
@@ -157,7 +160,7 @@ via `onMessage` → its own store — one store per file is the supported shape 
 
 **Defended against the alternatives:**
 - *In-memory only* (pi, [A] §4 — `--no-session`): rejected as default. imp's identity is inspectable
-  append-only sessions; a failed 25-turn delegation with no trace is un-teachable (~30 lines to
+  append-only sessions; a failed 40-turn delegation with no trace is un-teachable (~30 lines to
   reuse existing machinery).
 - *Child entries inside the parent file* (Claude's sidechain shape, [D] runAgent.ts:733-743):
   rejected — two writers on one file corrupt the leaf/parentId tree walk (store.ts:115-118,
@@ -171,9 +174,12 @@ via `onMessage` → its own store — one store per file is the supported shape 
 **Concurrency (M5b).** Today the loop executes tool calls strictly in order (awaited one by one,
 loop.ts:148-158). Change: `Tool` gains an optional `concurrencySafe?: boolean` (types.ts); `task`
 sets it. The loop groups **maximal runs of consecutive** concurrency-safe calls and runs each group
-with `Promise.all` in chunks of **`MAX_CONCURRENT_TASKS = 3`** (constant, no env knob).
-Consecutive-only batching is exactly [D]'s rule (toolOrchestration.ts:84-116); 3 vs pi's 4/8 ([A]
-index.ts:33-34) vs Claude's 10 — conservative for a single-user CLI. All other tools stay serial.
+with `Promise.all` in chunks of **`MAX_CONCURRENT_TASKS = 5`** (constant, no env knob).
+Consecutive-only batching is exactly [D]'s rule (toolOrchestration.ts:84-116); 5 sits between
+pi's 4/8 ([A] index.ts:33-34) and Claude's 10. The cap never drops work — tasks beyond it queue
+into waves — it only trades turn latency for endpoint pressure (10 concurrent SSE streams turn
+transient endpoint failures into retry storms) and for worst-case deterministic-`tool_end` wait
+(a fast task waits behind at most cap-1 slow siblings, each bounded by the clock). All other tools stay serial.
 
 **Gates before parallelism.** A chunk's `onToolCall` gates evaluate serially in call order *before*
 any execution; only the approved subset then runs concurrently. Gates are cheap, execution is slow —
@@ -199,7 +205,7 @@ returns the §3 abort error. One Ctrl+C, both loops stop cleanly.
 
 **Timeout.** Every child runs under
 `AbortSignal.any([parentSignal, AbortSignal.timeout(CHILD_TIMEOUT_MS)])` (node builtin, engines ≥
-20; zero deps); `CHILD_TIMEOUT_MS = 10 min`, one test-injectable constant. The loop's abort check
+20; zero deps); `CHILD_TIMEOUT_MS = 30 min`, one test-injectable constant (scales with maxIterations — see §4 invariant). The loop's abort check
 only runs between stream events (loop.ts:221-228), so a child hung on a stalled stream is otherwise
 unkillable — it would hold siblings' computed results in the event buffer forever, and print mode
 has no Ctrl+C. The timeout bounds that wait, fires the §3 timeout error via the abort recovery path,
@@ -266,7 +272,7 @@ Each milestone ships independently: tests green, no new deps.
   `npm ls --production` still lists only typebox.
 
 **M5b — concurrency + renderer (one mechanism pair, alone).**
-- Loop: `concurrencySafe` flag, consecutive-run batching, chunk cap 3, serial gate evaluation then
+- Loop: `concurrencySafe` flag, consecutive-run batching, chunk cap 5, serial gate evaluation then
   parallel execution, call-order `tool_end` with abort flush, call-order results (§6). Renderer:
   pending array + aggregate spinner, interactive only (§7). Sessions and error strings unchanged
   from M5a — M5b touches exactly the loop+renderer pair, so regressions bisect cleanly.
@@ -275,7 +281,7 @@ Each milestone ships independently: tests green, no new deps.
   byte-identity; existing corpus green.
 
 **M5c — agent registry (data-driven agents).**
-- Markdown + frontmatter files (`name`, `description`, optional `tools`, `model`) from
+- Markdown + frontmatter files (`name`, `description`, optional `tools`, `model`, `timeout`) from
   `.imp/agents/` and `~/.imp/agents/`; **project wins on name collision; no builtin agents** (imp
   ships no persona opinions; a hand-rolled parser is ~40 lines — zero deps, same call as [B]
   frontmatter.ts:75). `task` gains optional `agent`; the tool **description** enumerates agents with
@@ -300,8 +306,8 @@ Reuse `test/helpers/fakes.ts` throughout ([C] §6); child-loop tests share the l
 - **Timeout**: gated child + tiny injected `timeoutMs` → parent gets the §3 isError line naming the
   timeout; child session file complete; parent signal NOT aborted (only the child's composite signal
   fired).
-- **Contract branches**: 25 scripted tool-calling turns → success-shaped result +
-  `[task] hit the 25-turn cap` trailer; text-less final message → backward scan picks earlier
+- **Contract branches**: 40 scripted tool-calling turns → success-shaped result +
+  `[task] hit the 40-turn cap` trailer; text-less final message → backward scan picks earlier
   assistant text; no assistant text anywhere → `(subagent completed with no output)`.
 - **Partial failure**: child provider thunk that throws after 2 scripted turns → partial result +
   failure trailer; zero-throw → isError.
@@ -309,7 +315,7 @@ Reuse `test/helpers/fakes.ts` throughout ([C] §6); child-loop tests share the l
   count; usage trailer byte-exact in both shapes — with and without the cache segment
   (`cacheReadTokens` absent).
 - **Concurrency (M5b)**: three gated task calls released in shuffled order; assert `tool_end` and
-  result-array order = call order, and the 4th call waits (cap 3, observed via `tool_start` timing).
+  result-array order = call order, and the 6th call waits (cap 5, observed via `tool_start` timing).
   An order-recording `onToolCall` gate asserts gates ran serially in call order. Abort mid-chunk →
   buffered-but-unemitted `tool_end`s still flushed.
 - **Renderer**: `makeRenderer()` (ansi-free collector, fakes.ts:63-82) with injected `clock` and
@@ -325,25 +331,28 @@ Reuse `test/helpers/fakes.ts` throughout ([C] §6); child-loop tests share the l
 ## 11. Risks & open questions for the human
 
 Risks (with mitigations):
-- **Cost amplification**: 3 children × 25 turns spend fast. Mitigation: usage trailer in every
+- **Cost amplification**: 5 children × 40 turns spend fast (owner accepts: completion over cost). Mitigation: usage trailer in every
   result; one constant to lower. Residual: no dollar figures (no price table yet).
 - **Fresh-context prompt bloat**: parents paste huge context into `prompt`. Mitigation: the tool
   description teaches self-contained-but-minimal prompts.
 - **Child invisible to extension gates** (§8): a blocking `tool_call` extension cannot veto a
   child's bash. Documented; see Q3.
 - **Deterministic `tool_end` reordering** delays a fast task's report behind a slow sibling —
-  bounded by the 10-min timeout (§6); accepted for byte-stability.
+  bounded by the 30-min clock (§6); accepted for byte-stability.
 
 Open questions (post-review defaults — say the word to flip any):
 1. **Child session files default ON?** Yes — inspectability is imp's identity; calibration endorsed
    the shift (file churn is the cost).
-2. **Cap 3 or 4?** 3 (rate-limit conservatism); pi uses `MAX_CONCURRENCY = 4` /
-   `MAX_PARALLEL_TASKS = 8`. One constant.
+2. **Concurrency cap?** 5 (owner decision, post-review): the cap queues rather than drops work,
+   so it costs latency, not completion; 5 balances that against single-endpoint pressure. pi uses
+   `MAX_CONCURRENCY = 4` / `MAX_PARALLEL_TASKS = 8`; Claude Code caps at 10. One constant.
 3. **Extension gates on child tool calls?** No in M5 — children would be permission-gated by
    extensions they never see loaded. (Parent-side gate *ordering* is fixed regardless, §6.)
-4. **Wall-clock timeout for children?** **Yes — 10 min** (default flipped by adversarial review,
-   accepted): print mode has no rescuer; a stalled stream is unkillable between events
-   (loop.ts:221-228). `AbortSignal.any` is free; one injectable constant.
+4. **Wall-clock timeout for children?** **Yes — 30 min** (adversarial review flipped this to
+   10 min; owner raised it to 30 to match the 40-turn budget — see the §4 scaling invariant):
+   print mode has no rescuer; a stalled stream is unkillable between events
+   (loop.ts:221-228). `AbortSignal.any` is free; one injectable constant; per-agent override
+   arrives with the M5c registry (`timeout:` frontmatter).
 5. **Ship builtin agents in M5c?** None — the registry is user/project-owned from day one.
 
 ## 12. Review verdicts (adversarial + calibration)
@@ -378,3 +387,10 @@ Open questions (post-review defaults — say the word to flip any):
   every checkable [A]/[C] citation held.
 
 **§11 defaults:** Q1 ON, Q2 = 3, Q3 no (ordering fixed), Q4 = 10-min timeout (flipped), Q5 none.
+
+**Post-review revision (owner decision, 2026-09-04):** limits re-tuned for completion over cost —
+maxIterations 25 → 40, CHILD_TIMEOUT_MS 10 → 30 min (coupled by the §4 scaling invariant),
+MAX_CONCURRENT_TASKS 3 → 5 (10 considered and declined: the cap queues work rather than dropping
+it, so raising it buys latency at the price of endpoint pressure and worst-case `tool_end` wait).
+M5c registry gains a per-agent `timeout:` override. All changes above are already reflected in
+§3–§11.

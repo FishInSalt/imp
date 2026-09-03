@@ -67,6 +67,38 @@ imp            # interactive REPL (streaming, one-line tool status)
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).
 
+## Subagents
+
+The `task` tool delegates a self-contained job to a fresh subagent with its
+own context window: exploration bloat stays out of the main conversation; the
+subagent's final message comes back as the tool result (with a usage trailer;
+oversized results are tail-truncated to 50KB). Children run in-process with
+the parent's tools (minus `task` itself) and the parent's working directory,
+under a 40-turn / 30-minute budget, and every child transcript is persisted as
+a session file in a `children/` directory next to the parent's (opt out with
+`IMP_CHILD_SESSIONS=0`). Several `task` calls in one turn run concurrently
+(waves of up to 5) with deterministic, call-ordered output.
+
+Named agents live as markdown files with hand-parsed frontmatter — no YAML
+dependency, no builtins; the project directory wins on name collisions:
+
+```
+.imp/agents/scout.md        # or ~/.imp/agents/ for user-global agents
+---
+name: scout
+description: Explores a codebase to answer research questions
+tools: read, grep, find     # optional subset of the parent pool
+model: glm-5.3              # optional spawn-time override
+timeout: 300                # optional wall clock, seconds
+---
+
+You are a code scout. Go broad before deep.
+```
+
+The task tool's description enumerates registered agents (auto-routing hint);
+`task(agent: "scout", prompt: …)` runs one. Agent files load at startup — new
+files need a restart, like extension changes.
+
 ## Extensions
 
 imp loads **extensions** — plain ESM modules (`.mjs`) whose default export is a

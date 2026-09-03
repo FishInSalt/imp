@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { formatTokens } from "../../format.js";
 import type { LLMProvider } from "../../provider/types.js";
 import { MAX_BYTES } from "../constants.js";
+import type { AgentDefinition } from "../agents/registry.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
@@ -19,6 +20,9 @@ const taskSchema = Type.Object({
 		description:
 			"Complete, self-contained task for a fresh subagent. It sees nothing of this conversation; include all needed context (paths, what to return).",
 	}),
+	agent: Type.Optional(
+		Type.String({ description: "Named agent to run (listed in the tool description); omit for a generic subagent" }),
+	),
 });
 
 export interface TaskToolOptions {
@@ -37,6 +41,8 @@ export interface TaskToolOptions {
 	childSessions?: boolean;
 	/** Injectable wall clock for tests. */
 	timeoutMs?: number;
+	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
+	agents?: readonly AgentDefinition[];
 }
 
 /** Byte-accurate tail cut that never splits a UTF-8 sequence. */
@@ -57,15 +63,48 @@ function tailTruncate(text: string): { text: string; dropped: number } {
 export function createTaskTool(options: TaskToolOptions): Tool {
 	const childSessions = options.childSessions ?? process.env.IMP_CHILD_SESSIONS !== "0";
 	const timeoutMs = options.timeoutMs;
+	const agents = options.agents ?? [];
+	const agentsByName = new Map(agents.map((a) => [a.name, a] as const));
+	// Auto-routing hint (Claude Code prompt.ts pattern): the description
+	// enumerates agents so the model can pick one without guessing.
+	const roster = agents.length
+		? ` Agents: ${agents.map((a) => `${a.name} — ${a.description}`).join("; ")}.`
+		: "";
 
 	return {
 		name: "task",
 		concurrencySafe: true,
 		description:
-			"Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here.",
+			`Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here.${roster}`,
 		parameters: taskSchema,
 
 		async execute(args, signal): Promise<ToolExecuteResult> {
+			// Resolve the named agent (if any) before any side effects.
+			const wanted = typeof args.agent === "string" && args.agent !== "" ? args.agent : undefined;
+			const agent = wanted === undefined ? undefined : agentsByName.get(wanted);
+			if (wanted !== undefined && agent === undefined) {
+				const available = agents.length
+					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .imp/agents/ and ~/.imp/agents/).`
+					: "No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).";
+				return { output: `unknown agent "${wanted}". ${available}`, isError: true };
+			}
+
+			// Tools: parent pool minus task; an agent may narrow it further.
+			// Unknown names are a teaching error, never a silent drop.
+			let tools = options.getTools().filter((tool) => tool.name !== "task");
+			if (agent?.tools !== undefined) {
+				const byName = new Map(tools.map((t) => [t.name, t] as const));
+				const unknown = agent.tools.filter((n) => !byName.has(n));
+				if (unknown.length > 0) {
+					return {
+						output: `agent "${agent.name}" lists unknown tools: ${unknown.join(", ")}. Available: ${tools.map((t) => t.name).join(", ")}.`,
+						isError: true,
+					};
+				}
+				tools = agent.tools.map((n) => byName.get(n)).filter((t) => t !== undefined);
+			}
+			const effectiveTimeout = agent?.timeoutMs ?? timeoutMs;
+
 			let session: SessionStore | null = null;
 			if (childSessions) {
 				const parent = options.getSession();
@@ -73,15 +112,16 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			}
 			const outcome = await runSubagent({
 				provider: options.provider,
-				model: options.getModel(),
+				model: agent?.model ?? options.getModel(),
 				system: options.getSystem(),
-				tools: options.getTools().filter((tool) => tool.name !== "task"),
+				extraSystem: agent?.system,
+				tools,
 				prompt: String(args.prompt),
 				signal,
-				timeoutMs,
+				timeoutMs: effectiveTimeout,
 				onMessage: session ? (message) => session?.appendMessage(message) : undefined,
 			});
-			return taskResult(outcome, session, timeoutMs);
+			return taskResult(outcome, session, effectiveTimeout);
 		},
 	};
 }

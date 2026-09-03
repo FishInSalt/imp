@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
-import { assistant, scriptedProvider, user } from "./helpers/fakes.js";
+import { assistant, gate, scriptedProvider, user } from "./helpers/fakes.js";
 import { createChildSession, createSession, listSessions, sessionsDirFor } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
 import { buildSystemPrompt } from "../src/core/system-prompt.js";
@@ -218,6 +218,127 @@ describe("createTaskTool end-to-end", () => {
 	});
 });
 
+describe("named agents (M5c)", () => {
+	const scout = {
+		name: "scout",
+		description: "Explores a codebase to answer research questions",
+		tools: ["echo"],
+		model: "glm-4.6",
+		system: "You are a code scout. AGENT-BODY-MARKER.",
+		source: "/x/scout.md",
+	};
+	const reviewer = {
+		name: "reviewer",
+		description: "Reviews a diff for regressions",
+		system: "Review carefully.",
+		source: "/x/reviewer.md",
+	};
+
+	function agentTask(agents: readonly unknown[], overrides?: Record<string, unknown>) {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "scout says hi" }])], sink);
+		const task = createTaskTool({
+			provider,
+			getModel: () => "parent-model",
+			getSystem: () => "PARENT-SYSTEM",
+			getTools: () => [echo],
+			getSession: () => null,
+			agents: agents as never,
+			...overrides,
+		});
+		return { task, sink };
+	}
+
+	it("unknown agent → teaching error listing available agents; provider never called", async () => {
+		const { task, sink } = agentTask([scout, reviewer]);
+		const result = await task.execute({ prompt: "go", agent: "ghost" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toBe(
+			'unknown agent "ghost". Available agents: scout, reviewer (defined in .imp/agents/ and ~/.imp/agents/).',
+		);
+		expect(sink).toHaveLength(0);
+	});
+
+	it("unknown agent with no registry → points at the file locations", async () => {
+		const { task, sink } = agentTask([]);
+		const result = await task.execute({ prompt: "go", agent: "ghost" }, new AbortController().signal);
+		expect(result.output).toBe(
+			'unknown agent "ghost". No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).',
+		);
+		expect(sink).toHaveLength(0);
+	});
+
+	it("named agent: model + tools subset + system order (parent → CHILD_SUFFIX → agent body)", async () => {
+		const { task, sink } = agentTask([scout]);
+		const result = await task.execute({ prompt: "find the bug", agent: "scout" }, new AbortController().signal);
+		expect(result.isError ?? false).toBe(false);
+		const request = sink[0] as LLMRequest;
+		expect(request.model).toBe("glm-4.6"); // frontmatter override beats parent
+		expect(request.tools.map((t) => t.name)).toEqual(["echo"]); // subset
+		expect(request.system.indexOf("PARENT-SYSTEM")).toBe(0);
+		expect(request.system.indexOf("Subagent mode")).toBeGreaterThan("PARENT-SYSTEM".length);
+		expect(request.system.indexOf("AGENT-BODY-MARKER")).toBeGreaterThan(request.system.indexOf("Subagent mode"));
+	});
+
+	it("agent listing an unknown tool → teaching error listing the valid pool; provider never called", async () => {
+		const bad = { ...scout, tools: ["echo", "bash2"] };
+		const { task, sink } = agentTask([bad]);
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toBe(
+			'agent "scout" lists unknown tools: bash2. Available: echo.',
+		);
+		expect(sink).toHaveLength(0);
+	});
+
+	it("agent timeout override drives the timeout error's seconds", async () => {
+		const g = gate();
+		const slow: Tool = {
+			name: "echo",
+			description: "holds",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute(args, signal) {
+				await Promise.race([
+					g.promise,
+					new Promise<void>((resolve) => {
+						if (signal.aborted) return resolve();
+						signal.addEventListener("abort", () => resolve(), { once: true });
+					}),
+				]);
+				return { output: `echo: ${String(args.message)}` };
+			},
+		};
+		const timed = { ...scout, tools: undefined, timeoutMs: 1000 };
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([
+			assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hold" } }]),
+		], sink);
+		const task = createTaskTool({
+			provider,
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [slow],
+			getSession: () => null,
+			agents: [timed],
+			timeoutMs: 60_000, // factory default — the agent's 1s must win
+		});
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("task timed out after 1s (1 turns ran)");
+	});
+
+	it("the tool description enumerates the roster (auto-routing hint)", () => {
+		const { task } = agentTask([scout, reviewer]);
+		expect(task.description).toContain("Agents: scout — Explores a codebase");
+		expect(task.description).toContain("reviewer — Reviews a diff for regressions");
+	});
+
+	it("no agents → description has no roster suffix", () => {
+		const { task } = agentTask([]);
+		expect(task.description).not.toContain("Agents:");
+	});
+});
+
 describe("runner integration (default set)", () => {
 	it("task ships with the runner: parent → child → parent round trip, fresh child context, task excluded from child pool", async () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
@@ -270,6 +391,57 @@ describe("runner integration (default set)", () => {
 		const childrenDir = path.join(sessionsDirFor(cwd, baseDir), "children");
 		expect(existsSync(childrenDir)).toBe(true);
 		expect(readdirSync(childrenDir).filter((f) => f.endsWith(".jsonl"))).toHaveLength(1);
+	}, 20000);
+
+	it("M5c: runner discovers .imp/agents from cwd, warns on bad files, named agent reaches the child", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
+		const cwd = path.join(baseDir, "proj");
+		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-home-"));
+		const { mkdirSync, writeFileSync } = await import("node:fs");
+		mkdirSync(path.join(cwd, ".imp", "agents"), { recursive: true });
+		writeFileSync(
+			path.join(cwd, ".imp", "agents", "scout.md"),
+			'---\nname: scout\ndescription: explores\nmodel: glm-4.6\n---\nAGENT-BODY-RUNNER',
+			"utf8",
+		);
+		writeFileSync(path.join(cwd, ".imp", "agents", "broken.md"), "---\nname: broken\n---\n", "utf8");
+
+		const sink: LLMRequest[] = [];
+		// one shared provider: parent (task call) → child (final text) → parent (final text)
+		const provider = scriptedProvider(
+			[
+				assistant([
+					{ type: "toolCall", id: "t1", name: "task", arguments: { prompt: "scout it", agent: "scout" } },
+				]),
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "parent done" }]),
+			],
+			sink,
+		);
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "glm-5.3",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			agentsHomeDir: agentsHome,
+			renderer,
+			provider,
+		});
+
+		// the bad file warned at warmup, teaching-style
+		expect(output()).toContain("agent file skipped: ");
+		expect(output()).toContain('missing required field "description"');
+
+		const result = await runner.runTurn({ userMessage: "go scout" });
+		expect(result.stopReason).toBe("completed");
+		const childRequest = sink[1] as LLMRequest;
+		expect(childRequest.system).toContain("AGENT-BODY-RUNNER"); // agent body reached the child
+		expect(childRequest.model).toBe("glm-4.6"); // agent override beat the runner's glm-5.3
 	}, 20000);
 });
 

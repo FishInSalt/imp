@@ -1,4 +1,5 @@
 import { Value } from "typebox/value";
+import { MAX_CONCURRENT_TASKS } from "./constants.js";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
 import {
 	type AgentMessage,
@@ -153,13 +154,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		}
 
 		const results: ToolResult[] = [];
-		for (const call of toolCalls) {
-			if (signal?.aborted) break;
-			onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
-			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal, onToolCall);
-			results.push(result);
-			onEvent?.({ type: "tool_end", result });
-		}
+		await executeToolBatch(toolCalls, toolMap, signal, onToolCall, onEvent, results);
 
 		// Abort can stop mid-batch: synthesize results for tools that never ran,
 		// so history (and the persisted session) always has complete tool_use →
@@ -245,6 +240,173 @@ async function streamAssistant(args: {
 	throw new Error("Provider stream ended without a message_end event");
 }
 
+interface ToolCallRef {
+	id: string;
+	name: string;
+	arguments: unknown;
+}
+
+/** One assistant message's tool calls, executed in order (M5b design §6).
+ *
+ * Non-safe tools run strictly serially — the exact pre-M5b path. Maximal runs
+ * of consecutive concurrency-safe calls run as chunks of up to
+ * MAX_CONCURRENT_TASKS: gates evaluate serially in call order first
+ * (deterministic, non-interleaved extension state), then the approved subset
+ * executes concurrently, then tool_end fires in call order with all results
+ * in hand — byte-stable output regardless of completion timing. A finished
+ * call waits at most until its slowest predecessor in the chunk. */
+async function executeToolBatch(
+	toolCalls: ToolCallRef[],
+	toolMap: Map<string, Tool>,
+	signal: AbortSignal | undefined,
+	onToolCall: RunAgentLoopOptions["onToolCall"],
+	onEvent: RunAgentLoopOptions["onEvent"],
+	results: ToolResult[],
+): Promise<void> {
+	const isSafe = (name: string) => toolMap.get(name)?.concurrencySafe === true;
+	let i = 0;
+	while (i < toolCalls.length) {
+		if (signal?.aborted) return;
+		const call = toolCalls[i] as ToolCallRef;
+		if (!isSafe(call.name)) {
+			// Serial path — event order and behavior identical to pre-M5b.
+			onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
+			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal, onToolCall);
+			results.push(result);
+			onEvent?.({ type: "tool_end", result });
+			i++;
+			continue;
+		}
+		// Maximal run of consecutive safe calls → capped chunks.
+		const run: ToolCallRef[] = [];
+		while (i < toolCalls.length && isSafe((toolCalls[i] as ToolCallRef).name)) {
+			run.push(toolCalls[i] as ToolCallRef);
+			i++;
+		}
+		for (let c = 0; c < run.length; c += MAX_CONCURRENT_TASKS) {
+			if (signal?.aborted) return; // later chunks never start; fillMissing closes them
+			await executeChunk(run.slice(c, c + MAX_CONCURRENT_TASKS), toolMap, signal, onToolCall, onEvent, results);
+		}
+	}
+}
+
+/** A plan is either an immediate result (validation/gate refusal — no execution)
+ *  or an approved, unstarted execution. */
+type ChunkPlan = { run: (signal: AbortSignal | undefined) => Promise<ToolResult> } | { result: ToolResult };
+
+async function executeChunk(
+	chunk: ToolCallRef[],
+	toolMap: Map<string, Tool>,
+	signal: AbortSignal | undefined,
+	onToolCall: RunAgentLoopOptions["onToolCall"],
+	onEvent: RunAgentLoopOptions["onEvent"],
+	results: ToolResult[],
+): Promise<void> {
+	// Phase 1 — serial, in call order: tool_start, validation, gate. Gates see
+	// a deterministic, non-interleaved sequence instead of racing under Promise.all.
+	const plans: ChunkPlan[] = [];
+	for (const call of chunk) {
+		if (signal?.aborted) return; // not started: no events; fillMissing closes
+		onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
+		const prepared = prepareToolCall(call, toolMap);
+		if ("result" in prepared) {
+			plans.push(prepared);
+			continue;
+		}
+		const decision = await onToolCall?.({ toolCallId: call.id, name: call.name, args: call.arguments as Record<string, unknown> });
+		if (decision?.block) {
+			plans.push({
+				result: {
+					toolCallId: call.id,
+					toolName: call.name,
+					content: `Tool "${call.name}" blocked by an extension: ${decision.reason ?? "no reason given"}`,
+					isError: true,
+				},
+			});
+		} else {
+			plans.push(prepared);
+		}
+	}
+	// Phase 2 — the approved subset runs concurrently. Abort-aware tools settle
+	// fast on Ctrl+C; a settled-but-unemitted result can never be dropped.
+	if (signal?.aborted) return; // approved, never executed: fillMissing closes
+	const settled = await Promise.all(plans.map((plan) => ("run" in plan ? plan.run(signal) : plan.result)));
+	// Phase 3 — call-order emission: deterministic tool_end and result order.
+	for (const result of settled) {
+		results.push(result);
+		onEvent?.({ type: "tool_end", result });
+	}
+}
+
+/** Validation without side effects: unknown tool / non-object args / schema
+ *  check → immediate error result; otherwise a deferred execution. Shared by
+ *  the serial path (executeToolCall) and chunk planning. */
+function prepareToolCall(call: ToolCallRef, toolMap: Map<string, Tool>): ChunkPlan {
+	const tool = toolMap.get(call.name);
+	if (!tool) {
+		return {
+			result: {
+				toolCallId: call.id,
+				toolName: call.name,
+				content: `Error: unknown tool "${call.name}". Available tools: ${[...toolMap.keys()].join(", ")}.`,
+				isError: true,
+			},
+		};
+	}
+	const record = call.arguments as Record<string, unknown>;
+	if (typeof record !== "object" || record === null || Array.isArray(record)) {
+		return {
+			result: {
+				toolCallId: call.id,
+				toolName: call.name,
+				content: `Error: tool arguments must be a JSON object, got: ${JSON.stringify(call.arguments)?.slice(0, 200)}`,
+				isError: true,
+			},
+		};
+	}
+	if (!Value.Check(tool.parameters, record)) {
+		const issues = [...Value.Errors(tool.parameters, record)]
+			.slice(0, 5)
+			.map((e) => `${(e as { instancePath?: string }).instancePath || "(root)"}: ${e.message}`)
+			.join("; ");
+		return {
+			result: {
+				toolCallId: call.id,
+				toolName: call.name,
+				content: `Error: invalid arguments for ${call.name} — ${issues}. Fix the arguments and retry.`,
+				isError: true,
+			},
+		};
+	}
+	return {
+		run: (signal: AbortSignal | undefined) => runTool(call, tool, record, signal),
+	};
+}
+
+async function runTool(
+	call: ToolCallRef,
+	tool: Tool,
+	record: Record<string, unknown>,
+	signal: AbortSignal | undefined,
+): Promise<ToolResult> {
+	try {
+		const result = await tool.execute(record, signal ?? new AbortController().signal);
+		return {
+			toolCallId: call.id,
+			toolName: call.name,
+			content: result.output,
+			isError: result.isError ?? false,
+		};
+	} catch (err) {
+		return {
+			toolCallId: call.id,
+			toolName: call.name,
+			content: `Error: tool ${call.name} threw: ${err instanceof Error ? err.message : String(err)}`,
+			isError: true,
+		};
+	}
+}
+
 async function executeToolCall(
 	id: string,
 	name: string,
@@ -253,44 +415,15 @@ async function executeToolCall(
 	signal: AbortSignal | undefined,
 	onToolCall: RunAgentLoopOptions["onToolCall"],
 ): Promise<ToolResult> {
-	const tool = toolMap.get(name);
-	if (!tool) {
-		return {
-			toolCallId: id,
-			toolName: name,
-			content: `Error: unknown tool "${name}". Available tools: ${[...toolMap.keys()].join(", ")}.`,
-			isError: true,
-		};
-	}
-
-	const record = args as Record<string, unknown>;
-	if (typeof record !== "object" || record === null || Array.isArray(record)) {
-		return {
-			toolCallId: id,
-			toolName: name,
-			content: `Error: tool arguments must be a JSON object, got: ${JSON.stringify(args)?.slice(0, 200)}`,
-			isError: true,
-		};
-	}
-
-	if (!Value.Check(tool.parameters, record)) {
-		const issues = [...Value.Errors(tool.parameters, record)]
-			.slice(0, 5)
-			.map((e) => `${(e as { instancePath?: string }).instancePath || "(root)"}: ${e.message}`)
-			.join("; ");
-		return {
-			toolCallId: id,
-			toolName: name,
-			content: `Error: invalid arguments for ${name} — ${issues}. Fix the arguments and retry.`,
-			isError: true,
-		};
-	}
+	const call: ToolCallRef = { id, name, arguments: args };
+	const prepared = prepareToolCall(call, toolMap);
+	if ("result" in prepared) return prepared.result;
 
 	// The gate (M4c design §8.3): post-validation, pre-execute, so handlers see
 	// exactly what the tool will see. A block is a normal error result — it flows
 	// through results.push → onMessage → session persistence, so the refusal is
 	// resumable history and the run continues.
-	const decision = await onToolCall?.({ toolCallId: id, name, args: record });
+	const decision = await onToolCall?.({ toolCallId: id, name, args: args as Record<string, unknown> });
 	if (decision?.block) {
 		return {
 			toolCallId: id,
@@ -299,21 +432,5 @@ async function executeToolCall(
 			isError: true,
 		};
 	}
-
-	try {
-		const result = await tool.execute(record, signal ?? new AbortController().signal);
-		return {
-			toolCallId: id,
-			toolName: name,
-			content: result.output,
-			isError: result.isError ?? false,
-		};
-	} catch (err) {
-		return {
-			toolCallId: id,
-			toolName: name,
-			content: `Error: tool ${name} threw: ${err instanceof Error ? err.message : String(err)}`,
-			isError: true,
-		};
-	}
+	return prepared.run(signal);
 }

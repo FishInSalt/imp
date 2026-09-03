@@ -52,7 +52,10 @@ export class Renderer {
 	private readonly options: RendererOptions;
 	private readonly clock: () => number;
 	private needsNewline = false;
-	private pendingTool: PendingTool | null = null;
+	/** In-flight live tools in start (= call) order. Length 1 reproduces the
+	 *  pre-M5b single-slot behavior byte-for-byte; >1 collapses to one
+	 *  aggregate spinner line (M5b design §7). */
+	private pendingTools: PendingTool[] = [];
 	private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 	private thinkTimer: ReturnType<typeof setTimeout> | null = null;
 	private spinnerLabel: string | null = null;
@@ -155,12 +158,17 @@ export class Renderer {
 
 	/** Advance the spinner one frame and redraw its line. Exposed for tests. */
 	tick(): void {
-		const pending = this.pendingTool;
-		if (pending !== null) {
+		if (this.pendingTools.length === 1) {
+			const pending = this.pendingTools[0] as PendingTool;
 			this.spinnerFrame = pending.frame = (pending.frame + 1) % SPINNER_FRAMES.length;
 			this.redrawSpinner(
 				`${pending.base}${dim(` ${this.frame()} ${formatElapsed(this.clock() - pending.startedAt)}`, this.options.ansi)}`,
 			);
+			return;
+		}
+		if (this.pendingTools.length > 1) {
+			this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+			this.redrawSpinner(this.aggregateLine());
 			return;
 		}
 		if (this.spinnerLabel !== null) {
@@ -180,7 +188,7 @@ export class Renderer {
 		this.spinnerLabel = label;
 		this.spinnerStartedAt = this.clock();
 		this.spinnerFrame = 0;
-		this.pendingTool = null;
+		this.pendingTools = [];
 		this.write(`\r\x1b[2K${dim(`${this.frame()} ${label}`, this.options.ansi)}`);
 		this.needsNewline = false;
 		this.scheduleSpinnerTimer();
@@ -198,14 +206,14 @@ export class Renderer {
 	private stopSpinner(): void {
 		this.clearThinkTimer();
 		if (!this.options.liveTools) {
-			this.pendingTool = null;
+			this.pendingTools = [];
 			return;
 		}
-		if (this.spinnerLabel === null && this.pendingTool === null) return;
+		if (this.spinnerLabel === null && this.pendingTools.length === 0) return;
 		this.clearSpinnerTimer();
 		this.write("\r\x1b[2K");
 		this.spinnerLabel = null;
-		this.pendingTool = null;
+		this.pendingTools = [];
 		this.needsNewline = false;
 	}
 
@@ -273,7 +281,7 @@ export class Renderer {
 	}
 
 	private toolStart(id: string, name: string, args: unknown): void {
-		this.stopSpinner();
+		this.clearThinkTimer(); // a pending tool supersedes the thinking spinner
 		this.flushMarkdown();
 		if (this.options.toolStyle === "two-line") {
 			// Print mode: byte-identical to the original renderEvent.
@@ -282,23 +290,57 @@ export class Renderer {
 			return;
 		}
 		this.ensureNewline();
-		this.pendingTool = {
+		if (this.pendingTools.length === 0 && this.options.liveTools && this.spinnerLabel !== null) {
+			// Replace the thinking spinner's live line.
+			this.clearSpinnerTimer();
+			this.write("\r\x1b[2K");
+			this.spinnerLabel = null;
+		}
+		const pending: PendingTool = {
 			id,
 			base: this.toolBase(name, args),
 			startedAt: this.clock(),
 			frame: this.spinnerFrame,
 		};
+		this.pendingTools.push(pending);
 		if (this.options.liveTools) {
-			this.write(`\r\x1b[2K${this.pendingTool.base}${dim(` ${this.frame()}`, this.options.ansi)}`);
-			this.needsNewline = true;
-			this.scheduleSpinnerTimer();
+			if (this.pendingTools.length === 1) {
+				// Exactly the pre-M5b single-slot draw.
+				this.write(`\r\x1b[2K${pending.base}${dim(` ${this.frame()}`, this.options.ansi)}`);
+				this.needsNewline = true;
+				if (this.spinnerTimer === null) this.scheduleSpinnerTimer();
+			} else {
+				this.redrawSpinner(this.aggregateLine());
+				this.needsNewline = true;
+			}
+		}
+	}
+
+	/** The one live line while several tools run: `⠏ 2 tasks running 12s`.
+	 *  Elapsed from the oldest pending. No padding or column math — CJK-safe. */
+	private aggregateLine(): string {
+		const oldest = Math.min(...this.pendingTools.map((p) => p.startedAt));
+		return dim(
+			`${this.frame()} ${this.pendingTools.length} tasks running ${formatElapsed(this.clock() - oldest)}`,
+			this.options.ansi,
+		);
+	}
+
+	/** Redraw the in-flight line: the single pending's own line, or the aggregate. */
+	private redrawPending(): void {
+		if (this.pendingTools.length === 1) {
+			const pending = this.pendingTools[0] as PendingTool;
+			// Re-sync with the global frame: aggregate-phase ticks advanced the
+			// global spinner but not this pending's stored frame — without the
+			// sync the animation would jump back on return to single-pending.
+			pending.frame = this.spinnerFrame;
+			this.redrawSpinner(`${pending.base}${dim(` ${this.frame()}`, this.options.ansi)}`);
+		} else if (this.pendingTools.length > 1) {
+			this.redrawSpinner(this.aggregateLine());
 		}
 	}
 
 	private toolEnd(result: ToolResult): void {
-		const pending = this.pendingTool; // capture before stopSpinner clears it
-		this.stopSpinner();
-		this.pendingTool = null;
 		if (this.options.toolStyle === "two-line") {
 			const line = result.isError
 				? red(`  ✗ ${firstLine(result.content)}`, this.options.ansi)
@@ -307,6 +349,19 @@ export class Renderer {
 			this.needsNewline = false;
 			return;
 		}
+		// Capture the matching pending (for base + duration) before removal.
+		const pending = this.pendingTools.find((p) => p.id === result.toolCallId) ?? null;
+		const others = this.pendingTools.filter((p) => p.id !== result.toolCallId);
+		if (this.options.liveTools) {
+			if (pending !== null || this.spinnerLabel !== null) {
+				this.clearSpinnerTimer();
+				this.write("\r\x1b[2K"); // erase the pending/aggregate/thinking line
+				this.spinnerLabel = null;
+			}
+		} else {
+			this.stopSpinner();
+		}
+		this.pendingTools = others;
 		const base = pending ? pending.base : `${dim("● ", this.options.ansi)}${bold(result.toolName, this.options.ansi)}`;
 		let line: string;
 		if (result.isError) {
@@ -320,7 +375,13 @@ export class Renderer {
 		// Result summary — Claude-Code-style `⎿` under the call. Display only;
 		// the model still receives the full content through the session.
 		this.write(`${this.resultSummary(result)}\n`);
-		this.needsNewline = false;
+		if (others.length > 0 && this.options.liveTools) {
+			this.redrawPending(); // the aggregate (or sole survivor's line) stays live
+			this.needsNewline = true;
+			if (this.spinnerTimer === null) this.scheduleSpinnerTimer();
+		} else {
+			this.needsNewline = false;
+		}
 	}
 
 	private resultSummary(result: ToolResult): string {

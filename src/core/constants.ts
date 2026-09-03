@@ -16,3 +16,9 @@ export const CHILD_MAX_TURNS = 40;
 /** Subagent wall clock (M5). Scales with CHILD_MAX_TURNS: 40 turns at
  * ~45s/turn average (slow tools) needs ~30 minutes. */
 export const CHILD_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Max concurrent executions per chunk of concurrency-safe calls (M5b).
+ *  The cap queues work into waves — it never drops calls — so it trades
+ *  turn latency against endpoint pressure and worst-case deterministic
+ *  tool_end wait (a fast call reports behind at most cap-1 slow siblings). */
+export const MAX_CONCURRENT_TASKS = 5;

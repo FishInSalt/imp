@@ -14,14 +14,14 @@ function collector(): { chunks: string[]; write(s: string): void; output(): stri
 	};
 }
 
-const okResult = (content: string): ToolResult => ({
-	toolCallId: "t1",
+const okResult = (content: string, id = "t1"): ToolResult => ({
+	toolCallId: id,
 	toolName: "bash",
 	content,
 	isError: false,
 });
-const errResult = (content: string): ToolResult => ({
-	toolCallId: "t1",
+const errResult = (content: string, id = "t1"): ToolResult => ({
+	toolCallId: id,
 	toolName: "bash",
 	content,
 	isError: true,
@@ -69,12 +69,12 @@ describe("Renderer", () => {
 		// fast tool: no duration; empty content → (no output)
 		r.event({ type: "tool_start", toolCallId: "t2", name: "bash", args: { command: "true" } });
 		now += 400;
-		r.event({ type: "tool_end", result: okResult("") });
+		r.event({ type: "tool_end", result: okResult("", "t2") });
 		expect(out.output().endsWith("\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ true\x1b[0m \x1b[32m✓\x1b[0m\n\x1b[2m  ⎿  (no output)\x1b[0m\n")).toBe(true);
 		// error: dim ● + bold name + red ✗ + red firstLine(content, 120); ⎿ in red
 		const long = "x".repeat(130);
 		r.event({ type: "tool_start", toolCallId: "t3", name: "bash", args: { command: "cat nope" } });
-		r.event({ type: "tool_end", result: errResult(long) });
+		r.event({ type: "tool_end", result: errResult(long, "t3") });
 		expect(
 			out.output().endsWith(
 				`\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ cat nope\x1b[0m \x1b[31m✗\x1b[0m \x1b[31m${"x".repeat(120)}…\x1b[0m\n\x1b[31m  ⎿  ${"x".repeat(80)}…\x1b[0m\n`,
@@ -187,6 +187,73 @@ describe("Renderer", () => {
 		r.event({ type: "text_delta", text: "## raw **stays**\n\nuntouched" });
 		r.endRun();
 		expect(out.output()).toBe("## raw **stays**\n\nuntouched\n");
+	});
+});
+
+describe("concurrent live tools (M5b design §7)", () => {
+	it("two pendings collapse to one aggregate line; results print under it in call order", () => {
+		let now = 0;
+		const out = collector();
+		const r = new Renderer({
+			write: out.write,
+			ansi: true,
+			liveTools: true,
+			toolStyle: "one-line",
+			spinnerIntervalMs: 0,
+			clock: () => now,
+		});
+		r.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "scout A" } });
+		// first pending: today's single-slot line
+		expect(out.output()).toBe("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{\"prompt\":\"scout A\"}\x1b[0m\x1b[2m ⠋\x1b[0m");
+		// second pending: collapse to the aggregate line
+		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "scout B" } });
+		expect(out.output().endsWith("\r\x1b[2K\x1b[2m⠋ 2 tasks running 0s\x1b[0m")).toBe(true);
+		// aggregate ticks with the oldest start
+		now = 12000;
+		r.tick();
+		expect(out.output().endsWith("\r\x1b[2K\x1b[2m⠙ 2 tasks running 12s\x1b[0m")).toBe(true);
+		// first result: erase, final line + ⎿, then the survivor redraws alone
+		now = 12400;
+		r.event({ type: "tool_end", result: okResult("A found 3 files", "a") });
+		const afterA = out.output();
+		expect(afterA).toContain('\"scout A\"}\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n');
+		expect(afterA).toContain("\x1b[2m  ⎿  A found 3 files\x1b[0m\n");
+		expect(afterA.endsWith("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{\"prompt\":\"scout B\"}\x1b[0m\x1b[2m ⠙\x1b[0m")).toBe(true);
+		// sole survivor ticks in single-pending format (started at 0)
+		now = 20000;
+		r.tick();
+		expect(out.output().endsWith("\x1b[2m ⠹ 20s\x1b[0m")).toBe(true);
+		// last result: final line + ⎿, no live line after
+		r.event({ type: "tool_end", result: okResult("B found 1 file", "b") });
+		expect(out.output().endsWith("\x1b[2m  ⎿  B found 1 file\x1b[0m\n")).toBe(true);
+	});
+
+	it("CJK prompt args under the aggregate: no padding or column math anywhere", () => {
+		const out = collector();
+		const r = new Renderer({
+			write: out.write,
+			ansi: false,
+			liveTools: true,
+			toolStyle: "one-line",
+			spinnerIntervalMs: 0,
+		});
+		r.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "审查渲染层" } });
+		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "检查并发" } });
+		const output = out.output();
+		expect(output).toContain("2 tasks running 0s");
+		expect(output).not.toContain("\uFFFD");
+	});
+
+	it("print mode (two-line) with two concurrent tools: byte-identical to the serial shape", () => {
+		const out = collector();
+		const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "two-line" });
+		r.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "A" } });
+		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "B" } });
+		r.event({ type: "tool_end", result: okResult("ra", "a") });
+		r.event({ type: "tool_end", result: okResult("rb", "b") });
+		expect(out.output()).toBe(
+			'\n● task {"prompt":"A"}\n' + '\n● task {"prompt":"B"}\n' + "  → ra\n" + "  → rb\n",
+		);
 	});
 });
 

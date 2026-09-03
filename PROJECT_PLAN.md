@@ -273,6 +273,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 
 ### M5 — 锦上添花（按需）
 
+**M5 主菜：Subagents —— 设计已定稿（2026-09-03，`docs/m5-subagents-design.md`，workflow 8-agent 研究+对抗评审产出，引用已人工抽查核实）**
+- 范围 = M4 记录的最小委托：`task` 工具（自包含 prompt）→ 新上下文子代理（嵌套 `runAgentLoop`，复用父 system+`CHILD_SUFFIX`、工具池去掉 `task`、25 turn 上限、10 min 墙钟超时 `AbortSignal.any`）→ 末条 assistant 文本作为工具结果（≤50KB 尾截断 + usage 尾行）
+- 三子里程碑：**M5a** 顺序 task 工具 + 子会话文件（`children/` 子目录 + `parent` 头字段，默认开、`IMP_CHILD_SESSIONS=0` 关）→ **M5b** 并发（`concurrencySafe` 标志 + 连续段分块并发上限 3 + 门串行评估 + 调用序 `tool_end`/结果 + 渲染聚合 spinner）→ **M5c** agent 注册表（`.imp/agents/`+`~/.imp/agents/` markdown+frontmatter，无内置 agent，`tools:`/`model:` 可选）
+- 关键否决：子进程方案（pi 是 CLI shell-out，imp 无 `--mode json` 面）、子消息入父文件（双写者毁树遍历）、steering/后台/missions（产品层 bloat）、frontmatter YAML 依赖（手写 ~40 行解析）
+- 已知取舍：扩展门看不到子代理工具调用（Q3=否）；并发确定性 `tool_end` 排序以 10 min 超时为上界
+- 原 M5 清单其余项（多 provider、`--mode json`、Skills、TUI 等）顺延为 M5 后段/M6 候选
+
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）
 - `--mode json` 事件流输出 / RPC 模式（进程集成）
 - Skills 机制（按需加载的 SKILL.md 能力包）

@@ -23,6 +23,10 @@ export interface SessionHeader {
 	id: string;
 	timestamp: string;
 	cwd: string;
+	/** Session that spawned this one (subagent transcripts, M5 design §5).
+	 *  Absent on top-level sessions — its presence identifies a child.
+	 *  Readers ignore unknown header fields, so the format stays version 1. */
+	parent?: string;
 }
 
 interface EntryBase {
@@ -130,7 +134,7 @@ export class SessionStore {
 		this.leafId = entry.id;
 	}
 
-	static create(filePath: string, cwd: string, id = randomUUID()): SessionStore {
+	static create(filePath: string, cwd: string, id = randomUUID(), parent?: string): SessionStore {
 		const header: SessionHeader = {
 			type: "session",
 			version: 1,
@@ -138,6 +142,7 @@ export class SessionStore {
 			timestamp: new Date().toISOString(),
 			cwd,
 		};
+		if (parent !== undefined) header.parent = parent;
 		writeFileSync(filePath, `${JSON.stringify(header)}\n`, { encoding: "utf8" });
 		return new SessionStore(filePath, header, []);
 	}

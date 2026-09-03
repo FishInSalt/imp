@@ -29,6 +29,7 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
 - find: find files/directories by name glob (respects .gitignore). Prefer this over bash find/ls pipelines.
 - edit: change part of a file with exact text replacement. Each oldText must match the original file exactly (whitespace included) and be unique. All edits in one call apply atomically; any mismatch aborts with a message telling you how to fix it.
 - write: create a new file (parents auto-created) or replace one wholesale. Never rewrite an entire file just to change a few lines — use edit.
+- task: delegate a self-contained job to a fresh subagent (own context window). It sees ONLY your prompt, so include all paths and context it needs; its final message is the result. Use it for multi-step exploration that would bloat this conversation.
 
 # Editing rules
 1. ALWAYS read a file (or the relevant part of it) before editing — oldText must be copied exactly from the file, including indentation.

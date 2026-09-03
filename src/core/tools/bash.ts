@@ -3,10 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
+import { MAX_BYTES } from "../constants.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 const MAX_LINES = 500;
-const MAX_BYTES = 50 * 1024; // 50KB
 /** Rolling tail cap per stream so runaway output (`yes`, fork bombs) can't eat memory. */
 const TAIL_KEEP_BYTES = 256 * 1024;
 /** Hard cap on the full-output buffer written to the truncation temp file. */

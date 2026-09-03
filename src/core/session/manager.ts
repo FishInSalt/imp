@@ -47,6 +47,19 @@ export function createSession(cwd: string, baseDir?: string): SessionStore {
 	return SessionStore.create(filePath, cwd);
 }
 
+/**
+ * Create a child session file (subagents, M5 design §5): same naming scheme
+ * and directory, but under `children/`, with the header linked to the parent
+ * by id. The subdirectory keeps children out of listSessions/resolveSession
+ * scans (a flat `.jsonl` read) — resume stays parent-only by construction.
+ */
+export function createChildSession(parent: SessionStore, baseDir?: string): SessionStore {
+	const dir = path.join(sessionsDirFor(parent.header.cwd, baseDir), "children");
+	mkdirSync(dir, { recursive: true });
+	const filePath = path.join(dir, `${fileTimestamp()}-${randomUUID()}.jsonl`);
+	return SessionStore.create(filePath, parent.header.cwd, undefined, parent.header.id);
+}
+
 /** Cheap header + title scan of one session file (reads the whole file; files are small). */
 function inspectSessionFile(filePath: string): SessionInfo | null {
 	let store: SessionStore;

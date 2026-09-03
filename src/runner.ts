@@ -20,6 +20,7 @@ import { createEditTool } from "./core/tools/edit.js";
 import { createFindTool } from "./core/tools/find.js";
 import { createGrepTool } from "./core/tools/grep.js";
 import { createReadTool } from "./core/tools/read.js";
+import { createTaskTool } from "./core/tools/task.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
@@ -170,6 +171,20 @@ class RunnerImpl implements Runner {
 			]),
 			...(options.extensions?.tools ?? []),
 		];
+		// The task tool (M5): delegates to in-process subagents. Getters keep the
+		// spawn-time reads live — /model, /new, /resume all change what children
+		// should see. It references this.tools (name-filtered at spawn), so push
+		// after the array is built.
+		this.tools.push(
+			createTaskTool({
+				provider: this.provider,
+				getModel: () => this.model,
+				getSystem: () => this.system,
+				getTools: () => this.tools,
+				getSession: () => this.sessionStore,
+				sessionBaseDir: options.sessionBaseDir,
+			}),
+		);
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
 		this.system = "";
 		if (!options.deferInit) this.warmup();

@@ -75,7 +75,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 		name: "task",
 		concurrencySafe: true,
 		description:
-			`Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here.${roster}`,
+			`Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time.${roster}`,
 		parameters: taskSchema,
 
 		async execute(args, signal): Promise<ToolExecuteResult> {

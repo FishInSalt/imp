@@ -100,6 +100,16 @@ The task tool's description enumerates registered agents (auto-routing hint);
 files need a restart, like extension changes. A ready-to-copy example lives in
 `examples/agents/scout.md` (a read-only code scout: `tools: read, grep, find`).
 
+**Concurrency boundary.** Concurrent subagents share the parent's working
+directory. `edit`/`write` mutations to the same file serialize through a
+process-wide file lock, and a failed `oldText` match degrades into a teaching
+error (re-read, retry) — but `bash` mutations bypass the lock entirely, and a
+whole-file `write` silently clobbers an earlier one. So: delegate independent
+subtasks in parallel; same-file modifications sequentially (the task tool
+description tells the model the same). Read-only agent profiles (`tools:`
+without edit/write/bash) make that structural. Per-child git worktree
+isolation is the long-term fix, deferred by design.
+
 ## Extensions
 
 imp loads **extensions** — plain ESM modules (`.mjs`) whose default export is a

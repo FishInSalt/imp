@@ -337,6 +337,12 @@ describe("named agents (M5c)", () => {
 		const { task } = agentTask([]);
 		expect(task.description).not.toContain("Agents:");
 	});
+
+	it("description carries the concurrency discipline (same-file jobs sequential)", () => {
+		const { task } = agentTask([]);
+		expect(task.description).toContain("delegate only INDEPENDENT subtasks");
+		expect(task.description).toContain("jobs that modify the same files must be delegated one at a time");
+	});
 });
 
 describe("runner integration (default set)", () => {

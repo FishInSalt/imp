@@ -279,6 +279,7 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - 关键否决：子进程方案（pi 是 CLI shell-out，imp 无 `--mode json` 面）、子消息入父文件（双写者毁树遍历）、steering/后台/missions（产品层 bloat）、frontmatter YAML 依赖（手写 ~40 行解析）
 - 已知取舍：扩展门看不到子代理工具调用（Q3=否）；并发确定性 `tool_end` 排序以 10 min 超时为上界
 - 原 M5 清单其余项（多 provider、`--mode json`、Skills、TUI 等）顺延为 M5 后段/M6 候选
+- **M6 候选（并发竞争的正解）**：per-child git worktree 隔离——M5 共享 cwd 下 edit/write 有进程级文件锁（file-lock.ts，M5b 起承重）、oldText 失配退化为教学错误，但 bash 变更不在锁内、write 整替换会静默覆盖；task 工具描述已加并发纪律引导（2026-09-04）
 
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）
 - `--mode json` 事件流输出 / RPC 模式（进程集成）

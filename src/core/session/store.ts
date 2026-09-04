@@ -322,10 +322,14 @@ export class SessionStore {
 	}
 }
 
+/** Marker prefix identifying the framed summary message below (replay.ts
+ *  matches on this — keep it exported so the two cannot drift silently). */
+export const SUMMARY_MARK = "[Conversation summary —";
+
 /** The summary is replayed into context as a framed user message. */
 export function summaryToMessage(summary: string): AgentMessage {
 	return {
 		role: "user",
-		content: `[Conversation summary — earlier messages were compacted to save context space. Treat this as established context, not as a new request.]\n\n${summary}`,
+		content: `${SUMMARY_MARK} earlier messages were compacted to save context space. Treat this as established context, not as a new request.]\n\n${summary}`,
 	};
 }

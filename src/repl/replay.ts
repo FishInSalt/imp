@@ -1,3 +1,4 @@
+import { SUMMARY_MARK } from "../core/session/store.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { firstLine, summarizeArgs } from "../format.js";
@@ -11,7 +12,6 @@ export interface ReplayOptions {
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
-const SUMMARY_MARK = "[Conversation summary —";
 
 /**
  * Replays a resumed session's history through a non-live Renderer so the

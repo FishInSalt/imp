@@ -134,7 +134,7 @@ export function resolveSession(cwd: string, options: ResolveSessionOptions): Ses
 		const found = sessions.filter((s) => matches(wanted, s));
 		if (found.length === 0) {
 			throw new SessionNotFoundError(
-				`no session matching "${wanted}" in ${sessionsDirFor(cwd, options.baseDir)} — run \`imp sessions\` to list them`,
+				`no session matching "${wanted}" in ${sessionsDirFor(cwd, options.baseDir)} — run /sessions in the REPL to list them`,
 			);
 		}
 		if (found.length > 1) {

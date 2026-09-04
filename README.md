@@ -97,7 +97,8 @@ You are a code scout. Go broad before deep.
 
 The task tool's description enumerates registered agents (auto-routing hint);
 `task(agent: "scout", prompt: …)` runs one. Agent files load at startup — new
-files need a restart, like extension changes.
+files need a restart, like extension changes. A ready-to-copy example lives in
+`examples/agents/scout.md` (a read-only code scout: `tools: read, grep, find`).
 
 ## Extensions
 

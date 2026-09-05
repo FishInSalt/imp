@@ -77,6 +77,11 @@ export interface ToolEndEvent {
 	name: string;
 	output: string;
 	isError: boolean;
+	/** True when the call came from a subagent (task tool child), not the
+	 * main loop (M6a) — observers can audit children separately. */
+	subagent?: boolean;
+	/** The named agent profile the child is running under, if any (M5c). */
+	agent?: string;
 }
 
 export interface MessageEndEvent {

@@ -200,6 +200,23 @@ class RunnerImpl implements Runner {
 						subagent: true,
 						agent: info.agent,
 					}),
+				// Child tool_end feeds extension observers (audit trails) with
+				// the same discriminator — and nothing else: options.onEvent
+				// (the renderer) stays untouched, keeping M5's zero-rendering
+				// visibility decision intact. tool_start is dropped by design.
+				onEvent: (event, info) => {
+					if (event.type !== "tool_end") return;
+					const { result } = event;
+					this.options.extensions?.emitToolEnd({
+						type: "tool_end",
+						toolCallId: result.toolCallId,
+						name: result.toolName,
+						output: result.content,
+						isError: result.isError,
+						subagent: true,
+						agent: info.agent,
+					});
+				},
 			}),
 		);
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";

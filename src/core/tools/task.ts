@@ -6,7 +6,7 @@ import type { AgentDefinition } from "../agents/registry.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
-import type { ToolCallDecision } from "../loop.js";
+import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 /**
@@ -49,6 +49,9 @@ export interface TaskToolOptions {
 		call: { toolCallId: string; name: string; args: Record<string, unknown> },
 		info: { agent?: string },
 	) => Promise<ToolCallDecision | void | undefined> | ToolCallDecision | void | undefined;
+	/** Observes the child's tool events (tool_start/tool_end) with the same
+	 * agent context as onToolCall (M6a audit path). */
+	onEvent?: (event: AgentEvent, info: { agent?: string }) => void;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
 }
@@ -130,6 +133,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				onMessage: session ? (message) => session?.appendMessage(message) : undefined,
 				onToolCall: options.onToolCall
 					? (call) => options.onToolCall?.(call, { agent: agent?.name })
+					: undefined,
+				onEvent: options.onEvent
+					? (event) => options.onEvent?.(event, { agent: agent?.name })
 					: undefined,
 			});
 			return taskResult(outcome, session, effectiveTimeout);

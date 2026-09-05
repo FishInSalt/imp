@@ -60,7 +60,14 @@ export async function resolveRepoState(cwd: string): Promise<RepoState> {
 	// --git-common-dir is the shared root even from inside a linked worktree:
 	// children always attach to the main repository, never nest (CC pattern).
 	const common = (await git(cwd, ["rev-parse", "--git-common-dir"])).stdout.trim().replace(/\\/g, "/");
-	const root = common ? path.dirname(realpathSync(path.resolve(cwd, common))) : "";
+	let root = "";
+	if (common !== "") {
+		try {
+			root = path.dirname(realpathSync(path.resolve(cwd, common)));
+		} catch {
+			throw new Error(`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`);
+		}
+	}
 	if (!root || !existsSync(root)) {
 		throw new Error(`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`);
 	}
@@ -86,7 +93,10 @@ export async function createChildWorktree(
 ): Promise<ChildWorktree> {
 	const dir = path.join(worktreeBaseDir(overrideBaseDir), `imp-worktree-${name}`);
 	const branch = `imp/task-${name}`;
-	const add = await git(repo.root, ["worktree", "add", dir, "-b", branch, "HEAD"]);
+	// Base the branch on the PARENT's HEAD (repo.head), not the main root's:
+	// when the parent itself runs inside a linked worktree the two differ, and
+	// change detection diffs against repo.head (review B2).
+	const add = await git(repo.root, ["worktree", "add", dir, "-b", branch, repo.head]);
 	if (add.status !== 0) {
 		throw new Error(`git worktree add failed: ${(add.stderr || add.stdout).trim()}`);
 	}
@@ -105,9 +115,14 @@ export async function createChildWorktree(
 	return { path: dir, branch, nodeModulesLinked };
 }
 
-/** Any change vs the base commit: committed, staged, or plain dirty files. */
+/** Any change vs the base commit: committed, staged, or plain dirty files.
+ * The symlinked node_modules is synthetic — excluded, or repos that do not
+ * gitignore it would always look changed (review nit 4). */
 export async function hasWorktreeChanges(wt: ChildWorktree, repo: RepoState): Promise<boolean> {
-	const status = await git(wt.path, ["status", "--porcelain"]);
+	const statusArgs = wt.nodeModulesLinked
+		? ["status", "--porcelain", "--", ":!node_modules"]
+		: ["status", "--porcelain"];
+	const status = await git(wt.path, statusArgs);
 	if (status.status === 0 && status.stdout.trim() !== "") return true;
 	const diff = await git(wt.path, ["diff", "--quiet", repo.head, "--"]);
 	return diff.status === 1;
@@ -116,10 +131,15 @@ export async function hasWorktreeChanges(wt: ChildWorktree, repo: RepoState): Pr
 /** Compact change summary for the result trailer: shortstat vs HEAD plus
  * untracked names (git diff never lists those — the parent needs them to
  * know what to `git add`). */
-export async function worktreeChangeStat(wt: ChildWorktree): Promise<string> {
-	const stat = await git(wt.path, ["diff", "--shortstat", "HEAD", "--"]);
+export async function worktreeChangeStat(wt: ChildWorktree, repo: RepoState): Promise<string> {
+	// vs the base commit, not HEAD: the notice tells the child to COMMIT, and
+	// committed work must still show in the summary (review nit 1)
+	const stat = await git(wt.path, ["diff", "--shortstat", repo.head, "--"]);
 	const line = stat.status === 0 ? stat.stdout.trim() : "";
-	const untracked = (await git(wt.path, ["status", "--porcelain"])).stdout
+	const statusArgs = wt.nodeModulesLinked
+		? ["status", "--porcelain", "--", ":!node_modules"]
+		: ["status", "--porcelain"];
+	const untracked = (await git(wt.path, statusArgs)).stdout
 		.split("\n")
 		.map((l) => l.slice(3).trim())
 		.filter((name, i, all) => name !== "" && all.indexOf(name) === i);
@@ -151,12 +171,12 @@ export async function removeChildWorktree(wt: ChildWorktree, repo: RepoState): P
  * translate, only committed state is visible, commit before finishing — the
  * commit instruction is what makes the branch handback real.
  */
-export function buildWorktreeNotice(wt: ChildWorktree, parentCwd: string): string {
+export function buildWorktreeNotice(wt: ChildWorktree, agentCwd: string, parentCwd: string): string {
 	return [
 		"",
 		"---",
-		`[worktree] You are working in an isolated git worktree at ${wt.path} — same repository, separate working copy of the committed state.`,
-		`Paths in the task refer to the parent's working directory (${parentCwd}); translate them to your worktree. Uncommitted parent changes are not visible here — re-read files before relying on details.`,
+		`[worktree] You are working in an isolated git worktree at ${wt.path} — same repository, separate working copy of the committed state. Your working directory is ${agentCwd}.`,
+		`Paths in the task refer to the parent's working directory (${parentCwd}); translate them to your working directory. Uncommitted parent changes are not visible here — re-read files before relying on details. Extension tools are not available in this worktree.`,
 		`When your changes are complete, commit them on the current branch (${wt.branch}) with a descriptive message; the parent merges your branch.`,
 	].join("\n");
 }

@@ -27,7 +27,7 @@ not by machinery (both references do the same).
 | D2 | Location | `os.tmpdir()` default, `IMP_WORKTREE_DIR` override (pi default; inside-repo pollutes `git status`) |
 | D3 | Base | HEAD; dirty parent tree allowed, child prompt gets a notice (CC `forkSubagent.ts:205-209` pattern) |
 | D4 | Handback | Keep-worktree-and-report (CC): no changes → remove worktree+branch; changes → keep, result carries `worktree path / branch / change stat`; the **parent** merges. Patch machinery rejected (pi's guards exist because patches lose untracked/binary nuance) |
-| D5 | Tool pool | Builtins rebuilt with `cwd = worktree` (factories already take cwd); **extension tools excluded** from worktree children, stated in the result — their `api.cwd` cannot be redirected, mixing would silently split the pool across two trees |
+| D5 | Tool pool | Builtins rebuilt with `cwd = worktree` (factories already take cwd); **extension tools excluded** from worktree children — stated in the child notice and README (their `api.cwd` cannot be redirected, mixing would silently split the pool across two trees) |
 | D6 | node_modules | Symlink from repo root when present (pi `linkNodeModulesIfPresent`) — without it builds fail mysteriously |
 | D7 | Non-git / nested | Non-git cwd → teaching error telling the model to retry without `worktree`; worktree-in-worktree → resolve the canonical repo root (CC comment at `worktree.ts:922-925`) |
 | D8 | Cleanup | Same rule on completed/aborted/timeout/crash: no changes → `worktree remove` + `branch -D` + `prune`; changes → preserve. Never silently discard work (both references agree) |
@@ -91,3 +91,33 @@ execute(worktree=true)
 3. Abort path: aborted child with changes → worktree preserved, outcome notes it.
 4. Frontmatter: agent `worktree: true` flag reaches the task; call param overrides.
 5. Extension tools excluded: pool assert in a runner-level test.
+
+## 9. Post-review revision (2026-09-05, independent reviewer pass)
+
+Verdict was fix-first; all blockers and nits resolved in `fix/m6b-review`.
+
+- **B1 (blocker)**: the agent unknown-tools teaching error returned after
+  worktree creation but before the cleanup scope — leaking an empty worktree
+  and branch per misconfigured call. Fix: tools narrowing moved BEFORE
+  creation; everything after creation lives inside the try/finally (session
+  creation included).
+- **B2 (blocker)**: the branch was based on the MAIN root's HEAD while change
+  detection diffed against the PARENT's HEAD — a parent inside a linked
+  worktree got silent wrong-tree merges and never-cleaning worktrees. Fix:
+  `worktree add … repo.head`. Regression test builds the exact nested setup.
+- **Deadlock (found while testing B-coverage)**: an already-aborted parent
+  signal never fires "abort" again — `addEventListener` on it silently did
+  nothing and the child hung forever. Fix: relay immediately when the signal
+  (or timeout clock) is already aborted.
+- Nits: change stat now diffs vs the base commit (committed work shows);
+  cleanup failures surface in the result instead of leaking silently;
+  `getToolsForCwd` returning undefined fails loudly (same guard as missing);
+  symlinked node_modules excluded from change detection (unignored
+  `node_modules` no longer forces "changed"); realpath failure is a teaching
+  error; subdirectory parents remap the child working directory (pi agentCwd
+  pattern — cited in research, missed in v1); notice states the working
+  directory and the extension-tool exclusion; README stale/overclaiming lines
+  fixed.
+- Coverage added: B1/B2 regressions, abort-mid-child cleanup, committed-work
+  stat, two parallel worktree tasks (distinct branches, concurrent add),
+  unignored node_modules no-change cleanup.

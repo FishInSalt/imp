@@ -715,3 +715,246 @@ describe("worktree isolation (M6b)", () => {
 		expect(existsSync(path.join(wtPath, "crash-work.txt"))).toBe(true);
 	});
 });
+
+describe("worktree review fixes (B1/B2 + coverage)", () => {
+	function gitAt(cwd: string) {
+		return (args: string[]) => {
+			const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+			return r;
+		};
+	}
+
+	async function seedRepo(dir: string): Promise<void> {
+		const g = gitAt(dir);
+		g(["init", "-q"]);
+		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.name", "t"]);
+		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
+		g(["add", "."]);
+		g(["commit", "-qm", "seed"]);
+	}
+
+	it("B1: a misconfigured agent (worktree + unknown tools) leaks no worktree — the guard now runs before creation", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-b1-"));
+		await seedRepo(root);
+		const sink: LLMRequest[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider([], sink),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: () => [],
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-b1-base-${Date.now()}`),
+			agents: [
+				{ name: "builder", description: "writes", worktree: true, tools: ["nonexistent_tool"], system: "b", source: "/x/b.md" },
+			],
+		});
+		const result = await task.execute({ prompt: "build", agent: "builder" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("unknown tools: nonexistent_tool");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).toBe("");
+	});
+
+	it("B2: a parent inside a linked worktree branches from the PARENT's HEAD — empty child worktree still cleans up", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-b2-"));
+		await seedRepo(root);
+		const g = gitAt(root);
+		g(["checkout", "-qb", "feature-x"]);
+		writeFileSync(path.join(root, "feature.txt"), "on the feature branch\n", "utf8");
+		g(["add", "."]);
+		g(["commit", "-qm", "feature work"]);
+		// move the MAIN root back to main FIRST, then link a parent worktree on
+		// feature-x — now the two HEADs genuinely differ
+		g(["checkout", "-q", "main"]);
+		const parentCwd = path.join(root, "..", `parent-wt-${Date.now()}`);
+		g(["worktree", "add", "-q", parentCwd, "feature-x"]);
+
+		const sink: LLMRequest[] = [];
+		const childCwds: string[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider([assistant([{ type: "text", text: "looked only" }])], sink),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: parentCwd,
+			getToolsForCwd: (cwd: string) => {
+				childCwds.push(cwd);
+				return [];
+			},
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-b2-base-${Date.now()}`),
+		});
+		const result = await task.execute({ prompt: "look", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("looked only");
+		expect(result.output).not.toContain("changes kept in worktree");
+		// the main-root worktree listing shows no leaked child worktree
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+	});
+
+	it("committed child work shows in the trailer stat (diff vs base, not HEAD)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-stat-"));
+		await seedRepo(root);
+		const sink: LLMRequest[] = [];
+		const childCwds: string[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider(
+				[
+					assistant([
+						{
+							type: "toolCall",
+							id: "w1",
+							name: "write",
+							arguments: { path: "built.txt", content: "committed work" },
+						},
+					]),
+					assistant([{ type: "toolCall", id: "c1", name: "commit_all", arguments: {} }]),
+					assistant([{ type: "text", text: "committed" }]),
+				],
+				sink,
+			),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd: string) => {
+				childCwds.push(cwd);
+				return [createWriteTool({ cwd }), commitTool(cwd)];
+			},
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-stat-base-${Date.now()}`),
+		});
+		const result = await task.execute({ prompt: "build and commit", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("changes kept in worktree");
+		// diff vs BASE commit: the committed change is visible in the stat
+		expect(result.output).toMatch(/files? changed/);
+	});
+
+	it("abort mid-child: outcome aborted, empty worktree cleaned up (finally covers the abort path)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-abort-"));
+		await seedRepo(root);
+		const sink: LLMRequest[] = [];
+		const controller = new AbortController();
+		// abort-aware tool, the proven subagent.test.ts pattern (gate never opens)
+		const neverGate = gate();
+		const abortAware: Tool = {
+			name: "hang",
+			description: "hangs until the signal aborts",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute(args, signal) {
+				await Promise.race([
+					neverGate.promise,
+					new Promise<void>((resolve) => {
+						if (signal.aborted) return resolve();
+						signal.addEventListener("abort", () => resolve(), { once: true });
+					}),
+				]);
+				return { output: `hang: ${String(args.message)}` };
+			},
+		};
+		const task = createTaskTool({
+			provider: scriptedProvider(
+				[assistant([{ type: "toolCall", id: "h1", name: "hang", arguments: { message: "x" } }])],
+				sink,
+			),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: () => [abortAware],
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-abort-base-${Date.now()}`),
+		});
+		const running = task.execute({ prompt: "go", worktree: true }, controller.signal);
+		await new Promise((r) => setTimeout(r, 60)); // let the child reach the tool
+		controller.abort();
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("aborted");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+	});
+
+	it("two parallel worktree tasks: distinct branches, concurrent creation, no cross-talk", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-par-"));
+		await seedRepo(root);
+		const sink: LLMRequest[] = [];
+		const childCwds: string[] = [];
+		const make = () =>
+			createTaskTool({
+				provider: scriptedProvider([assistant([{ type: "text", text: "read-only" }])], sink),
+				getModel: () => "m",
+				getSystem: () => "PARENT",
+				getTools: () => [],
+				getSession: () => null,
+				cwd: root,
+				getToolsForCwd: (cwd: string) => {
+					childCwds.push(cwd);
+					return [];
+				},
+				worktreeBaseDir: path.join(tmpdir(), `imp-wt-par-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+			});
+		const [r1, r2] = await Promise.all([
+			make().execute({ prompt: "a", worktree: true }, new AbortController().signal),
+			make().execute({ prompt: "b", worktree: true }, new AbortController().signal),
+		]);
+		expect(r1.output).toContain("read-only");
+		expect(r2.output).toContain("read-only");
+		// two distinct worktree paths were provisioned
+		expect(new Set(childCwds).size).toBe(2);
+		// both cleaned up (no changes): nothing left, and prune left no stale refs
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).toBe("");
+	});
+
+	it("node_modules NOT gitignored at the root: symlinked copy still counts as no changes", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-nm-"));
+		await seedRepo(root);
+		// node_modules exists but is NOT in .gitignore and NOT committed
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(path.join(root, "node_modules"), { recursive: true });
+		writeFileSync(path.join(root, "node_modules", "junk.js"), "// not ignored\n", "utf8");
+		const sink: LLMRequest[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: () => [],
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-nm-base-${Date.now()}`),
+		});
+		const result = await task.execute({ prompt: "idle", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("idle");
+		expect(result.output).not.toContain("changes kept in worktree");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+	});
+
+	/** A test tool that shells out to git in the child's cwd — lets scripted
+	 * children "commit" like a real model following the notice. */
+	function commitTool(cwd: string): Tool {
+		return {
+			name: "commit_all",
+			description: "commit everything on the current branch",
+			parameters: Type.Object({}),
+			async execute() {
+				const g = gitAt(cwd);
+				g(["config", "user.email", "child@imp.dev"]);
+				g(["config", "user.name", "child"]);
+				g(["add", "."]);
+				g(["commit", "-qm", "child work"]);
+				return { output: "committed" };
+			},
+		};
+	}
+});

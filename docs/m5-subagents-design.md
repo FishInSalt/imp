@@ -253,6 +253,13 @@ extension, mirroring pi's shape ([A]). The M5c registry stays **file-based data 
 **Known gap, accepted:** extension `tool_call` gates do not see the child's tool calls
 (`runSubagent` takes no `onToolCall`). Documented; §11 Q3.
 
+> **Post-review revision (2026-09-04, M6a):** gap closed. `runSubagent`
+> forwards the parent gate into the child loop; `tool_call` events from
+> children carry `subagent: true` and the agent profile name. Blocked child
+> calls return the teaching-style error result to the child, which can adapt
+> and continue. Existing stateless gates (guardian) gained child coverage
+> with zero changes.
+
 ## 9. Milestones
 
 Each milestone ships independently: tests green, no new deps.

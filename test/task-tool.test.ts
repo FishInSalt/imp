@@ -338,6 +338,47 @@ describe("named agents (M5c)", () => {
 		expect(task.description).not.toContain("Agents:");
 	});
 
+	it("M6a: the gate fires inside the child with the agent name; a block reaches the child as an isError result", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }]),
+				assistant([{ type: "text", text: "noted the block" }]),
+			],
+			sink,
+		);
+		const gateCalls: Array<{ name: string; agent?: string }> = [];
+		const { task } = agentTask([scout], {
+			provider,
+			onToolCall: (call: { name: string }, info: { agent?: string }) => {
+				gateCalls.push({ name: call.name, agent: info.agent });
+				return { block: true, reason: "scout is read-only" };
+			},
+		});
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(gateCalls).toEqual([{ name: "echo", agent: "scout" }]);
+		// the block reason is the child's tool result (request 2), and the child recovered
+		expect(JSON.stringify(sink[1]?.messages)).toContain("scout is read-only");
+		expect(result.isError ?? false).toBe(false);
+		expect(result.output).toContain("noted the block");
+	});
+
+	it("M6a: generic tasks carry agent: undefined into the gate", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
+		const gateCalls: Array<{ agent?: string }> = [];
+		const { task } = agentTask([], {
+			provider,
+			onToolCall: (_call, info) => {
+				gateCalls.push({ agent: info.agent });
+			},
+		});
+		const result = await task.execute({ prompt: "plain" }, new AbortController().signal);
+		expect(result.output).toContain("done");
+		expect(gateCalls).toEqual([]);
+		expect(sink).toHaveLength(1); // no tool calls happened: nothing gated
+	});
+
 	it("description carries the concurrency discipline (same-file jobs sequential)", () => {
 		const { task } = agentTask([]);
 		expect(task.description).toContain("delegate only INDEPENDENT subtasks");

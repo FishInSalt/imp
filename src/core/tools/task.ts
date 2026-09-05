@@ -6,6 +6,7 @@ import type { AgentDefinition } from "../agents/registry.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
+import type { ToolCallDecision } from "../loop.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 /**
@@ -41,6 +42,13 @@ export interface TaskToolOptions {
 	childSessions?: boolean;
 	/** Injectable wall clock for tests. */
 	timeoutMs?: number;
+	/** The parent's permission gate, forwarded into the child loop (M6a).
+	 * Receives the call plus which named agent (if any) is running — the
+	 * caller marks the event as subagent-sourced. */
+	onToolCall?: (
+		call: { toolCallId: string; name: string; args: Record<string, unknown> },
+		info: { agent?: string },
+	) => Promise<ToolCallDecision | void | undefined> | ToolCallDecision | void | undefined;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
 }
@@ -120,6 +128,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				signal,
 				timeoutMs: effectiveTimeout,
 				onMessage: session ? (message) => session?.appendMessage(message) : undefined,
+				onToolCall: options.onToolCall
+					? (call) => options.onToolCall?.(call, { agent: agent?.name })
+					: undefined,
 			});
 			return taskResult(outcome, session, effectiveTimeout);
 		},

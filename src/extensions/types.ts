@@ -57,6 +57,11 @@ export interface ToolCallEvent {
 	name: string;
 	/** Schema-validated arguments (the same object execute() will receive). */
 	args: Record<string, unknown>;
+	/** True when the call comes from a subagent (task tool child), not the
+	 * main loop (M6a) — gates can apply stricter rules to children. */
+	subagent?: boolean;
+	/** The named agent profile the child is running under, if any (M5c). */
+	agent?: string;
 }
 
 // The union with void is the design §6.1 contract, verbatim: a handler may

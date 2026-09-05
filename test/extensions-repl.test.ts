@@ -49,6 +49,8 @@ interface StartArgs {
 	tools?: Tool[];
 	tty?: boolean;
 	extensionFiles?: Record<string, string>;
+	/** Written to <cwd>/.imp/agents/ before the runner loads (M5c discovery). */
+	agentFiles?: Record<string, string>;
 	extensionPaths?: string[];
 	noExtensions?: boolean;
 	noContextFiles?: boolean;
@@ -66,6 +68,13 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	const home = path.join(baseDir, "home"); // hermetic global extension dir
 	await mkdir(cwd, { recursive: true });
 	if (args.extensionFiles) await writeExtensionFiles(cwd, args.extensionFiles);
+	if (args.agentFiles) {
+		const agentsDir = path.join(cwd, ".imp", "agents");
+		await mkdir(agentsDir, { recursive: true });
+		for (const [name, content] of Object.entries(args.agentFiles)) {
+			await writeFile(path.join(agentsDir, name), content, "utf8");
+		}
+	}
 	if (args.agentsMd) await writeFile(path.join(cwd, "AGENTS.md"), "# Test agents context\n", "utf8");
 
 	const requests: LLMRequest[] = [];
@@ -504,6 +513,60 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 		expect(await env.repl).toBe(0);
 	});
 });
+
+	it("M6a: the extension gate sees subagent tool calls — subagent: true, agent name, block reaches the child", async () => {
+		const env = await startRepl({
+			scripts: [
+				toolCall("t1", "task", { prompt: "probe once", agent: "scout" }),
+				toolCall("c1", "probe_tool", {}),
+				reply("child saw the block"),
+				reply("parent done"),
+			],
+			agentFiles: {
+				"scout.md": "---\nname: scout\ndescription: probes\n---\nScout body.",
+			},
+			extensionFiles: {
+				"gate.mjs": `import { appendFileSync } from "node:fs";
+import path from "node:path";
+export default function (api) {
+	const log = path.join(api.cwd, "gate-events.jsonl");
+	api.on("tool_call", (e) => {
+		appendFileSync(log, JSON.stringify({ name: e.name, subagent: e.subagent, agent: e.agent }) + "\\n");
+		if (e.subagent) return { block: true, reason: "children may not probe" };
+	});
+	api.registerTool({
+		name: "probe_tool",
+		description: "probe",
+		parameters: { type: "object", properties: {} },
+		async execute() {
+			return { output: "probed" };
+		},
+	});
+}
+`,
+			},
+		});
+		env.send("delegate to scout");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+
+		// the gate observed both calls, with the subagent discriminator on the child's
+		const events = readFileSync(path.join(env.cwd, "gate-events.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(events).toEqual([
+			{ name: "task", subagent: undefined, agent: undefined }, // parent call: no subagent mark
+			{ name: "probe_tool", subagent: true, agent: "scout" }, // child call: marked + named
+		]);
+
+		// the block reason reached the child as its tool result (child request 2)
+		const childSecond = env.requests[2];
+		expect(JSON.stringify(childSecond?.messages)).toContain("children may not probe");
+		// the child recovered, the parent got the recovery text as the task result
+		expect(env.fake.output()).toContain("child saw the block");
+		expect(env.fake.output()).toContain("parent done");
+	});
 
 /** An observer fixture that appends every received event to events.jsonl. */
 const EVENTS_FIXTURE = `import { appendFileSync } from "node:fs";

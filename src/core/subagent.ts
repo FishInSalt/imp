@@ -1,7 +1,7 @@
 import type { LLMProvider } from "../provider/types.js";
 import { formatTokens } from "../format.js";
 import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
-import { runAgentLoop, type RunAgentLoopResult } from "./loop.js";
+import { runAgentLoop, type RunAgentLoopOptions, type RunAgentLoopResult } from "./loop.js";
 import type { AgentMessage, Usage } from "./messages.js";
 import type { Tool } from "./tools/types.js";
 
@@ -39,6 +39,11 @@ export interface SubagentOptions {
 	timeoutMs?: number;
 	/** Fires for every child message (the task tool persists its transcript). */
 	onMessage?: (message: AgentMessage) => void;
+	/** The parent's permission gate, forwarded to the child loop (M6a): a
+	 * blocked call returns an isError tool result to the child, same semantics
+	 * as the main loop. Concurrent children may interleave gate invocations —
+	 * handlers must stay stateless per call. */
+	onToolCall?: RunAgentLoopOptions["onToolCall"];
 }
 
 export type SubagentStatus =
@@ -115,6 +120,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			userMessage: options.prompt,
 			maxIterations: CHILD_MAX_TURNS,
 			onMessage: options.onMessage,
+			onToolCall: options.onToolCall,
 			signal: child.signal,
 		});
 		if (result.stopReason === "aborted") {

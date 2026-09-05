@@ -591,6 +591,11 @@ Revisit in 3b+ only if compactions grow long enough for this to matter.
 
 ## 8. Rendering (`src/repl/render.ts`)
 
+> **Revision (2026-09-04):** Renderer later moved to `src/render.ts` —
+> presentation is shared by print mode and REPL, not REPL-specific (first M5
+> dogfood finding). This section's design otherwise stands; only the path
+> changed.
+
 ### 8.1 Newline-state model
 
 Streaming text does not end at a line boundary, and `▪`/stats lines must never start

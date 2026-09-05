@@ -11,7 +11,8 @@
 // outside the project directory. A block is NOT a crash and NOT a dead end:
 // the model receives a teaching-style reason (what to do instead) as its tool
 // result, and the run continues. Every blocked/error result also appends one
-// audit line to ~/.imp/guardian.log.
+// audit line to ~/.imp/guardian.log; subagent calls are marked there as
+// `child` / `child:<agent>` so vetoes on delegated work stand out.
 //
 // Non-interactive by design: M4 has no ui.confirm (there is no TUI to confirm
 // in), and reading stdin directly would fight the REPL's readline. Interactive
@@ -92,12 +93,15 @@ export default function (api) {
 	});
 
 	// 2/2 — the audit trail: one line per blocked/error result, never fatal.
+	// Subagent calls are marked [tool child] / [tool child:agent] so the log
+	// shows WHO was vetoed, not just what (M6a event fields).
 	const logFile = path.join(os.homedir(), ".imp", "guardian.log");
 	api.on("tool_end", (event) => {
 		if (!event.isError) return;
+		const who = event.subagent ? ` child${event.agent ? `:${event.agent}` : ""}` : "";
 		try {
 			mkdirSync(path.dirname(logFile), { recursive: true });
-			appendFileSync(logFile, `${new Date().toISOString()} [${event.name}] ${firstLine(event.output)}\n`);
+			appendFileSync(logFile, `${new Date().toISOString()} [${event.name}${who}] ${firstLine(event.output)}\n`);
 		} catch {
 			// an observer must never break the host
 		}

@@ -241,30 +241,40 @@ export interface CompactResult {
 	usage: Usage;
 }
 
+/** Result of the pure compaction computation (no session involvement). */
+export interface CompactHistoryResult {
+	summary: string;
+	/** Messages kept verbatim after compaction — a self-contained checkpoint. */
+	retainedTail: AgentMessage[];
+	/** Estimated context right before compaction. */
+	tokensBefore: number;
+	/** Estimated context right after (summary + retained tail, char-based). */
+	tokensAfter: number;
+	usage: Usage;
+}
+
 /**
- * Compact a session in place:
- *  1. build context messages (already honoring previous compactions)
- *  2. split into summarize-part / retained tail at a turn boundary
- *  3. ask the LLM for a structured summary of the summarize-part
- *  4. append a compaction entry; the store's next buildContext() returns
- *     [summary, ...retainedTail]
+ * The pure half of compaction — no session, no persistence:
+ *  1. split messages into summarize-part / retained tail at a turn boundary
+ *  2. ask the LLM for a structured summary of the summarize-part
+ * Callers decide what happens with the result (compactSession appends it to a
+ * session store; the subagent engine splices it into an in-memory history).
  * Returns null when there is nothing worth compacting.
  */
-export async function compactSession(args: {
-	session: SessionStore;
+export async function compactHistory(args: {
+	messages: AgentMessage[];
 	provider: LLMProvider;
 	model: string;
 	signal?: AbortSignal;
 	settings?: CompactionSettings;
-}): Promise<CompactResult | null> {
+}): Promise<CompactHistoryResult | null> {
 	const settings = args.settings ?? DEFAULT_COMPACTION_SETTINGS;
-	const { messages } = args.session.buildContext();
-	const tokensBefore = estimateContextTokens(messages).tokens;
+	const tokensBefore = estimateContextTokens(args.messages).tokens;
 
-	const cut = findCutIndex(messages, settings.keepRecentTokens);
+	const cut = findCutIndex(args.messages, settings.keepRecentTokens);
 	if (cut <= 0) return null; // nothing older than the retained tail to summarize
-	const toSummarize = messages.slice(0, cut);
-	const retainedTail = messages.slice(cut);
+	const toSummarize = args.messages.slice(0, cut);
+	const retainedTail = args.messages.slice(cut);
 
 	const transcript = serializeForSummary(toSummarize);
 	const usage = emptyUsage();
@@ -290,12 +300,46 @@ export async function compactSession(args: {
 	if (summary.trim() === "" && finalText !== undefined) summary = finalText;
 	if (summary.trim() === "") throw new Error("compaction: summarizer returned an empty summary");
 
-	args.session.appendCompaction(summary, retainedTail, tokensBefore, usage);
 	const summaryMessage: AgentMessage = {
 		role: "user",
 		content: `${summary}`,
 	};
 	const tokensAfter =
 		estimateTokens(summaryMessage) + retainedTail.reduce((sum, m) => sum + estimateTokens(m), 0);
-	return { summary, retainedCount: retainedTail.length, tokensBefore, tokensAfter, usage };
+	return { summary, retainedTail, tokensBefore, tokensAfter, usage };
+}
+
+/**
+ * Compact a session in place — thin wrapper over compactHistory:
+ *  1. build context messages (already honoring previous compactions)
+ *  2. compute the summary + retained tail (pure)
+ *  3. append a compaction entry; the store's next buildContext() returns
+ *     [summary, ...retainedTail]
+ * Returns null when there is nothing worth compacting.
+ */
+export async function compactSession(args: {
+	session: SessionStore;
+	provider: LLMProvider;
+	model: string;
+	signal?: AbortSignal;
+	settings?: CompactionSettings;
+}): Promise<CompactResult | null> {
+	const { messages } = args.session.buildContext();
+	const result = await compactHistory({
+		messages,
+		provider: args.provider,
+		model: args.model,
+		signal: args.signal,
+		settings: args.settings,
+	});
+	if (result === null) return null;
+
+	args.session.appendCompaction(result.summary, result.retainedTail, result.tokensBefore, result.usage);
+	return {
+		summary: result.summary,
+		retainedCount: result.retainedTail.length,
+		tokensBefore: result.tokensBefore,
+		tokensAfter: result.tokensAfter,
+		usage: result.usage,
+	};
 }

@@ -48,7 +48,15 @@ interface OpenSection {
 export interface ExtensionRegistryOptions {
 	/** Teaching-style diagnostic sink (`imp: …` lines, design §12). Default: discard. */
 	report?: (line: string) => void;
+	/** Interactive confirm (the REPL's tty prompt). Absent — print mode, plain
+	 *  tests — api.confirm resolves false after one stderr teaching line and
+	 *  never hangs (spec part 2 item 5). */
+	confirm?: (message: string, detail?: string) => Promise<boolean>;
 }
+
+/** The one stderr line written when api.confirm runs without an interactive host. */
+export const NO_CONFIRM_LINE =
+	"imp: extension asked for confirmation but no interactive prompt is available — declining\n";
 
 function errorText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -71,6 +79,7 @@ export class ExtensionRegistry {
 	readonly contextSections: ContextSection[] = [];
 
 	private readonly report: (line: string) => void;
+	private readonly confirmHandler: ((message: string, detail?: string) => Promise<boolean>) | undefined;
 	/** Committed name → owning extension name (conflict policy, design §9). */
 	private readonly toolOwners = new Map<string, string>();
 	private readonly commandOwners = new Map<string, string>();
@@ -81,6 +90,7 @@ export class ExtensionRegistry {
 
 	constructor(options: ExtensionRegistryOptions = {}) {
 		this.report = options.report ?? (() => {});
+		this.confirmHandler = options.confirm;
 	}
 
 	// --- load lifecycle (loader-facing) ---
@@ -263,6 +273,24 @@ export class ExtensionRegistry {
 	}
 
 	// --- emits (isolated; the runner wires them from M4c) ---
+
+	/**
+	 * api.confirm(): true only on explicit approval. Fails safe — no wired
+	 * prompt or a throwing handler resolves false (with a teaching line), so
+	 * an extension gate can never hang a run on a question nobody can answer.
+	 */
+	async confirm(message: string, detail?: string): Promise<boolean> {
+		if (this.confirmHandler === undefined) {
+			process.stderr.write(NO_CONFIRM_LINE);
+			return false;
+		}
+		try {
+			return await this.confirmHandler(message, detail);
+		} catch (err) {
+			this.report(`imp: extension confirm handler error — ${firstLine(errorText(err), 160)}`);
+			return false;
+		}
+	}
 
 	/**
 	 * Chain "tool_call" handlers in load order. The first { block: true }

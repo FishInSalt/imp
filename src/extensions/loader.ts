@@ -24,6 +24,10 @@ export interface LoadExtensionsOptions {
 	home?: string;
 	/** Receives teaching-style diagnostic lines as they are discovered (renderer-backed). */
 	onDiagnostic?: (line: string) => void;
+	/** Interactive confirm handler (the REPL's tty prompt), forwarded to the
+	 *  registry's api.confirm. Absent (print mode, tests): api.confirm resolves
+	 *  false with one stderr teaching line — never hangs. */
+	confirm?: (message: string, detail?: string) => Promise<boolean>;
 }
 
 export interface LoadedExtensions {
@@ -200,6 +204,9 @@ function extensionApi(
 		on: (event: ExtensionEventName, handler: ExtensionEventHandlerMap[ExtensionEventName]): void => {
 			whileLoading(`subscribe to ${String(event)}`, () => registry.subscribe(event, handler));
 		},
+		// confirm works at RUNTIME (gates call it mid-run), unlike the
+		// registrations above — plain delegation, no factory-window guard.
+		confirm: (message, detail) => registry.confirm(message, detail),
 	};
 }
 
@@ -211,7 +218,7 @@ function extensionApi(
  */
 export async function loadExtensions(options: LoadExtensionsOptions): Promise<LoadedExtensions> {
 	const report = options.onDiagnostic ?? (() => {});
-	const registry = new ExtensionRegistry({ report });
+	const registry = new ExtensionRegistry({ report, confirm: options.confirm });
 	const summaries: ExtensionSummary[] = [];
 	const failures: ExtensionFailure[] = [];
 

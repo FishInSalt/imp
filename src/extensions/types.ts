@@ -19,9 +19,9 @@ export type { ToolCallDecision };
 export type ExtensionOrigin = "cli" | "project" | "global";
 
 /**
- * The entire M4 api: three read-only facts, three registration methods, one
- * subscriber — seven members. Anything an extension cannot do with this, it
- * cannot do in M4.
+ * The extension api: three read-only facts, three registration methods, one
+ * subscriber, one ask-the-human method — eight members. Anything an extension
+ * cannot do with this, it cannot do.
  */
 export interface ExtensionApi {
 	/** Absolute working directory imp was started in. */
@@ -43,6 +43,13 @@ export interface ExtensionApi {
 	on(event: "tool_end", handler: (event: ToolEndEvent) => void): void;
 	on(event: "message_end", handler: (event: MessageEndEvent) => void): void;
 	on(event: "run_end", handler: (event: RunEndEvent) => void): void;
+
+	/** Ask the human a yes/no question (the interactive host renders a [y/N]
+	 *  prompt on the tty). Resolves true only on explicit approval; false
+	 *  covers declines, empty/EOF answers, and hosts without an interactive
+	 *  prompt (print mode, plain tests) — it never rejects and never hangs,
+	 *  so a gate can always treat false as "not allowed". */
+	confirm(message: string, detail?: string): Promise<boolean>;
 }
 
 /**
@@ -62,6 +69,10 @@ export interface ToolCallEvent {
 	subagent?: boolean;
 	/** The named agent profile the child is running under, if any (M5c). */
 	agent?: string;
+	/** Working directory of the loop about to execute the call: the runner's
+	 *  cwd, or the child's own path when worktree isolation is active (M6b) —
+	 *  gates resolve relative targets against THIS, not the parent project. */
+	cwd?: string;
 }
 
 // The union with void is the design §6.1 contract, verbatim: a handler may
@@ -82,6 +93,9 @@ export interface ToolEndEvent {
 	subagent?: boolean;
 	/** The named agent profile the child is running under, if any (M5c). */
 	agent?: string;
+	/** Working directory of the loop that executed the call — same value the
+	 *  matching tool_call event carried (symmetry field for audit trails). */
+	cwd?: string;
 }
 
 export interface MessageEndEvent {

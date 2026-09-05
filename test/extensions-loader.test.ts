@@ -50,6 +50,7 @@ async function load(env: Env, options: Partial<LoadExtensionsOptions> = {}): Pro
 		noDiscovery: options.noDiscovery,
 		home: options.home ?? env.home,
 		onDiagnostic: (line) => lines.push(line),
+		confirm: options.confirm,
 	});
 	return { loaded, lines };
 }
@@ -252,5 +253,56 @@ describe("startup banner (design §7.3)", () => {
 			"▪ extension kitchen [project] — 1 tool, 1 command, 1 context, 1 hook",
 		]);
 		expect(extensionBannerLines(loaded.summaries)).toEqual(banner);
+	});
+});
+
+describe("api.confirm wiring (spec part 2)", () => {
+	/** A gate that runs api.confirm at runtime — mid-run, long after the factory window closed. */
+	const askerFixture = `export default function (api) {
+	api.on("tool_call", async (event) => {
+		if (event.name !== "ask_tool") return;
+		const ok = await api.confirm("run ask_tool?", "the detail line");
+		return ok ? undefined : { block: true, reason: "declined by the fake host" };
+	});
+}
+`;
+
+	it("confirm is live at runtime (not factory-window-gated): the injected handler answers and the gate obeys", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, { "asker.mjs": askerFixture });
+		const asks: Array<{ message: string; detail?: string }> = [];
+		const { loaded } = await load(env, {
+			confirm: async (message, detail) => {
+				asks.push({ message, detail });
+				return message === "run ask_tool?";
+			},
+		});
+		const call = { type: "tool_call", toolCallId: "t1", name: "ask_tool", args: {}, cwd: env.cwd } as const;
+		await expect(loaded.runtime.emitToolCall(call)).resolves.toBeUndefined(); // approved → allow
+		await expect(loaded.runtime.emitToolCall({ ...call, name: "other" })).resolves.toBeUndefined(); // not gated
+		expect(asks).toEqual([{ message: "run ask_tool?", detail: "the detail line" }]);
+	});
+
+	it("without a handler the same extension gets false and blocks — print-mode degradation, no hang", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, { "asker.mjs": askerFixture });
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		try {
+			const { loaded } = await load(env);
+			const decision = await Promise.race([
+				loaded.runtime.emitToolCall({
+					type: "tool_call",
+					toolCallId: "t1",
+					name: "ask_tool",
+					args: {},
+					cwd: env.cwd,
+				}),
+				new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 500)),
+			]);
+			expect(decision).toEqual({ block: true, reason: "declined by the fake host" });
+			expect(stderr).toHaveBeenCalledTimes(1);
+		} finally {
+			stderr.mockRestore();
+		}
 	});
 });

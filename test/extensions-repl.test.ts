@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ import {
 import { VERSION } from "../src/format.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
-import { runRepl } from "../src/repl/repl.js";
+import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import {
 	assistant,
@@ -55,6 +56,11 @@ interface StartArgs {
 	noExtensions?: boolean;
 	noContextFiles?: boolean;
 	agentsMd?: boolean;
+	/** git init + one commit in <cwd> — worktree-children tests (M6b). */
+	gitInit?: boolean;
+	/** Wire a TtyConfirm into loading + runRepl: api.confirm asks [y/N] on the
+	 *  fake stdin (spec part 2 item 6). */
+	confirm?: boolean;
 }
 
 /**
@@ -76,6 +82,18 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		}
 	}
 	if (args.agentsMd) await writeFile(path.join(cwd, "AGENTS.md"), "# Test agents context\n", "utf8");
+	if (args.gitInit === true) {
+		const g = (flags: string[]): void => {
+			const r = spawnSync("git", flags, { cwd, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${flags.join(" ")}: ${r.stderr}`);
+		};
+		g(["init", "-q"]);
+		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.name", "t"]);
+		await writeFile(path.join(cwd, "seed.txt"), "committed\n", "utf8");
+		g(["add", "."]);
+		g(["commit", "-qm", "seed"]);
+	}
 
 	const requests: LLMRequest[] = [];
 	const provider: LLMProvider = scriptedProvider(args.scripts ?? [reply("ok")], requests);
@@ -88,13 +106,16 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	});
 
 	// the exact cli wiring (design §10): load → banner → createRunner → runRepl
-	// with the registered commands (M4b §8.2)
+	// with the registered commands (M4b §8.2). confirm mirrors cli.ts's
+	// interactive wiring (spec part 2 item 6).
+	const ttyConfirm = args.confirm === true ? new TtyConfirm(renderer) : undefined;
 	const loaded: LoadedExtensions = await loadExtensions({
 		cwd,
 		cliPaths: args.extensionPaths ?? [],
 		noDiscovery: args.noExtensions ?? false,
 		home,
 		onDiagnostic: (line) => renderer.error(line),
+		confirm: ttyConfirm?.handler,
 	});
 	printExtensionDiagnostics(loaded.summaries, (line) => renderer.note(line));
 
@@ -120,6 +141,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		input: fake.stdin,
 		output: fake.stdout,
 		interactive: args.tty ?? true,
+		confirm: ttyConfirm,
 		exit: (code) => {
 			throw new Error(`force-exit:${code}`);
 		},
@@ -514,24 +536,24 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 	});
 });
 
-	it("M6a: the extension gate sees subagent tool calls — subagent: true, agent name, block reaches the child", async () => {
-		const env = await startRepl({
-			scripts: [
-				toolCall("t1", "task", { prompt: "probe once", agent: "scout" }),
-				toolCall("c1", "probe_tool", {}),
-				reply("child saw the block"),
-				reply("parent done"),
-			],
-			agentFiles: {
-				"scout.md": "---\nname: scout\ndescription: probes\n---\nScout body.",
-			},
-			extensionFiles: {
-				"gate.mjs": `import { appendFileSync } from "node:fs";
+it("M6a: the extension gate sees subagent tool calls — subagent: true, agent name, block reaches the child", async () => {
+	const env = await startRepl({
+		scripts: [
+			toolCall("t1", "task", { prompt: "probe once", agent: "scout" }),
+			toolCall("c1", "probe_tool", {}),
+			reply("child saw the block"),
+			reply("parent done"),
+		],
+		agentFiles: {
+			"scout.md": "---\nname: scout\ndescription: probes\n---\nScout body.",
+		},
+		extensionFiles: {
+			"gate.mjs": `import { appendFileSync } from "node:fs";
 import path from "node:path";
 export default function (api) {
 	const log = path.join(api.cwd, "gate-events.jsonl");
 	api.on("tool_call", (e) => {
-		appendFileSync(log, JSON.stringify({ kind: "call", name: e.name, subagent: e.subagent, agent: e.agent }) + "\\n");
+		appendFileSync(log, JSON.stringify({ kind: "call", name: e.name, subagent: e.subagent, agent: e.agent, cwd: e.cwd }) + "\\n");
 		if (e.subagent) return { block: true, reason: "children may not probe" };
 	});
 	api.on("tool_end", (e) => {
@@ -547,31 +569,32 @@ export default function (api) {
 	});
 }
 `,
-			},
-		});
-		env.send("delegate to scout");
-		env.fake.eof();
-		expect(await env.repl).toBe(0);
-
-		// the gate observed both calls, with the subagent discriminator on the child's
-		const events = readFileSync(path.join(env.cwd, "gate-events.jsonl"), "utf8")
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-		expect(events).toEqual([
-			{ kind: "call", name: "task", subagent: undefined, agent: undefined }, // parent: no subagent mark
-			{ kind: "call", name: "probe_tool", subagent: true, agent: "scout" }, // child: marked + named
-			{ kind: "end", name: "probe_tool", isError: true, subagent: true, agent: "scout" }, // child audit (M6a fix)
-			{ kind: "end", name: "task", isError: false, subagent: undefined, agent: undefined }, // parent's own task end
-		]);
-
-		// the block reason reached the child as its tool result (child request 2)
-		const childSecond = env.requests[2];
-		expect(JSON.stringify(childSecond?.messages)).toContain("children may not probe");
-		// the child recovered, the parent got the recovery text as the task result
-		expect(env.fake.output()).toContain("child saw the block");
-		expect(env.fake.output()).toContain("parent done");
+		},
 	});
+	env.send("delegate to scout");
+	env.fake.eof();
+	expect(await env.repl).toBe(0);
+
+	// the gate observed both calls, with the subagent discriminator on the
+	// child's; both loops run in the project cwd (no worktree here)
+	const events = readFileSync(path.join(env.cwd, "gate-events.jsonl"), "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	expect(events).toEqual([
+		{ kind: "call", name: "task", subagent: undefined, agent: undefined, cwd: env.cwd }, // parent: no subagent mark
+		{ kind: "call", name: "probe_tool", subagent: true, agent: "scout", cwd: env.cwd }, // child: marked + named
+		{ kind: "end", name: "probe_tool", isError: true, subagent: true, agent: "scout" }, // child audit (M6a fix)
+		{ kind: "end", name: "task", isError: false, subagent: undefined, agent: undefined }, // parent's own task end
+	]);
+
+	// the block reason reached the child as its tool result (child request 2)
+	const childSecond = env.requests[2];
+	expect(JSON.stringify(childSecond?.messages)).toContain("children may not probe");
+	// the child recovered, the parent got the recovery text as the task result
+	expect(env.fake.output()).toContain("child saw the block");
+	expect(env.fake.output()).toContain("parent done");
+});
 
 /** An observer fixture that appends every received event to events.jsonl. */
 const EVENTS_FIXTURE = `import { appendFileSync } from "node:fs";
@@ -579,8 +602,8 @@ import path from "node:path";
 export default function (api) {
 	const log = path.join(api.cwd, "events.jsonl");
 	const write = (entry) => appendFileSync(log, JSON.stringify(entry) + "\\n");
-	api.on("tool_call", (e) => write({ type: "tool_call", toolCallId: e.toolCallId, name: e.name }));
-	api.on("tool_end", (e) => write({ type: "tool_end", toolCallId: e.toolCallId, isError: e.isError }));
+	api.on("tool_call", (e) => write({ type: "tool_call", toolCallId: e.toolCallId, name: e.name, cwd: e.cwd }));
+	api.on("tool_end", (e) => write({ type: "tool_end", toolCallId: e.toolCallId, isError: e.isError, cwd: e.cwd }));
 	api.on("message_end", (e) => write({ type: "message_end", blocks: e.message.blocks.map((b) => b.type) }));
 	api.on("run_end", (e) =>
 		write({ type: "run_end", stopReason: e.stopReason, turns: e.turns, usage: e.usage }),
@@ -672,11 +695,12 @@ describe("context injection and loop events through the real path (M4c, design �
 			.split("\n")
 			.map((line) => JSON.parse(line) as Record<string, unknown>);
 		// emission order is the designed one: each assistant message as it enters
-		// history, the gate around each execution, then the run result
+		// history, the gate around each execution, then the run result. Main-loop
+		// tool events carry the runner's cwd (spec part 1 item 2).
 		expect(events).toEqual([
 			{ type: "message_end", blocks: ["toolCall"] },
-			{ type: "tool_call", toolCallId: "t1", name: "probe_tool" },
-			{ type: "tool_end", toolCallId: "t1", isError: false },
+			{ type: "tool_call", toolCallId: "t1", name: "probe_tool", cwd: env.cwd },
+			{ type: "tool_end", toolCallId: "t1", isError: false, cwd: env.cwd },
 			{ type: "message_end", blocks: ["text"] },
 			{
 				type: "run_end",
@@ -729,8 +753,8 @@ describe("context injection and loop events through the real path (M4c, design �
 		// synthesized closer is not a completed tool; design §6.1/§8.3)
 		expect(events).toEqual([
 			{ type: "message_end", blocks: ["toolCall", "toolCall"] },
-			{ type: "tool_call", toolCallId: "t1", name: "abortme" },
-			{ type: "tool_end", toolCallId: "t1", isError: false },
+			{ type: "tool_call", toolCallId: "t1", name: "abortme", cwd: env.cwd },
+			{ type: "tool_end", toolCallId: "t1", isError: false, cwd: env.cwd },
 			{
 				type: "run_end",
 				stopReason: "aborted",
@@ -880,7 +904,9 @@ describe("guardian case study (design §13.1)", () => {
 		// the veto reached the child, and the audit line names the child
 		const refusal = env.requests[2]?.messages.find((m) => m.role === "toolResult")?.results[0];
 		expect(refusal?.content).toContain("blocked by an extension: recursive force delete");
-		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8").trim().split("\n");
+		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8")
+			.trim()
+			.split("\n");
 		expect(audit).toHaveLength(1);
 		expect(audit[0]).toContain("[bash child:wrecker]");
 		expect(audit[0]).toContain("blocked by an extension");
@@ -954,5 +980,125 @@ describe("handler isolation through the full path (design §6.1, E10)", () => {
 		).toHaveLength(2); // one per assistant message: the tool_use turn and the closing reply
 		env.fake.eof();
 		expect(await env.repl).toBe(0); // the host process is still standing
+	});
+});
+
+describe("caller cwd on gate events + ui.confirm through the live REPL (spec parts 1-3)", () => {
+	/** Logs one line per tool_call with its cwd — the cwd-discriminator probe. */
+	const CWD_LOG_FIXTURE = `import { appendFileSync } from "node:fs";
+import path from "node:path";
+export default function (api) {
+	const log = path.join(api.cwd, "cwd-events.jsonl");
+	api.on("tool_call", (e) => {
+		appendFileSync(log, JSON.stringify({ name: e.name, subagent: e.subagent ?? false, cwd: e.cwd }) + "\\n");
+	});
+}
+`;
+
+	it("M6b: a worktree child's tool_call carries the worktree path as cwd; the parent's carries the project cwd", async () => {
+		const env = await startRepl({
+			gitInit: true,
+			scripts: [
+				toolCall("t1", "task", { prompt: "write child-note.txt", worktree: true }),
+				toolCall("w1", "write", { path: "child-note.txt", content: "child work" }),
+				reply("child done"),
+				reply("parent done"),
+			],
+			extensionFiles: { "cwdlog.mjs": CWD_LOG_FIXTURE },
+		});
+		env.send("delegate\n");
+		await waitUntil(() => env.output().includes("parent done"));
+		const events = readFileSync(path.join(env.cwd, "cwd-events.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { name: string; subagent: boolean; cwd?: string });
+		const taskCall = events.find((e) => e.name === "task");
+		const childWrite = events.find((e) => e.name === "write");
+		expect(taskCall).toMatchObject({ subagent: false, cwd: env.cwd });
+		// the whole point (M6b): the child's cwd is ITS worktree, not the parent
+		// project — the known guardian false positive on absolute worktree paths
+		expect(childWrite).toMatchObject({ subagent: true });
+		expect(childWrite?.cwd).toContain("imp-worktree-");
+		expect(childWrite?.cwd).not.toBe(env.cwd);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("ui.confirm over the fake tty: y approves and the tool runs; n declines with the pre-confirm teaching text", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
+		vi.stubEnv("HOME", fakeHome); // guardian audits to ~/.imp/guardian.log — keep it hermetic
+		const env = await startRepl({
+			confirm: true,
+			scripts: [
+				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
+				reply("ran the approved delete"),
+				toolCall("g2", "bash", { command: "rm -rf sacrifice" }),
+				reply("adapted after the decline"),
+			],
+			extensionFiles: {
+				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
+			},
+		});
+		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
+		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
+		// approved: the question renders on the tty, y executes the delete
+		await mkdir(sacrifice, { recursive: true });
+		env.send("clean up\n");
+		await waitUntil(() => env.output().includes("proceed? [y/N]"));
+		env.send("y\n");
+		await waitUntil(() => env.output().includes("ran the approved delete"));
+		expect(existsSync(sacrifice)).toBe(false); // approved → the command really ran
+		// declined: same rule, answered n → the old teaching reason reaches the model
+		await mkdir(sacrifice, { recursive: true });
+		env.send("clean up again\n");
+		await waitUntil(() => env.output().split("[y/N]").length >= 3); // second prompt shown
+		env.send("n\n");
+		await waitUntil(() => env.output().includes("adapted after the decline"));
+		const refusal = env.requests[3]?.messages
+			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
+			.find((r) => r.toolCallId === "g2");
+		expect(refusal?.content).toBe(
+			'Tool "bash" blocked by an extension: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
+		);
+		expect(existsSync(sacrifice)).toBe(true); // declined → nothing deleted
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("ui.confirm over the fake tty: an outside-cwd write approved by y runs; EOF/empty answers decline", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
+		vi.stubEnv("HOME", fakeHome);
+		const outsideDir = await mkdtemp(path.join(tmpdir(), "imp-confout-"));
+		const env = await startRepl({
+			confirm: true,
+			scripts: [
+				toolCall("g1", "write", { path: path.join(outsideDir, "approved.txt"), content: "yes" }),
+				reply("wrote it"),
+				toolCall("g2", "write", { path: path.join(outsideDir, "declined.txt"), content: "no" }),
+				reply("adapted"),
+			],
+			extensionFiles: {
+				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
+			},
+		});
+		env.send("write outside\n");
+		await waitUntil(() => env.output().includes("proceed? [y/N]"));
+		env.send("yes\n"); // the long form approves too
+		await waitUntil(() => env.output().includes("wrote it"));
+		expect(readFileSync(path.join(outsideDir, "approved.txt"), "utf8")).toBe("yes");
+		// empty answer = decline (the [y/N] default)
+		env.send("write outside again\n");
+		await waitUntil(() => env.output().split("[y/N]").length >= 3);
+		env.send("\n");
+		await waitUntil(() => env.output().includes("adapted"));
+		const refusal = env.requests[3]?.messages
+			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
+			.find((r) => r.toolCallId === "g2");
+		expect(refusal?.content).toMatch(
+			/^Tool "write" blocked by an extension: writing outside the project directory \(.*\) — /,
+		);
+		expect(existsSync(path.join(outsideDir, "declined.txt"))).toBe(false);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
 	});
 });

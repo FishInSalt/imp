@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Tool } from "../src/core/tools/types.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
 import type { ExtensionSummary } from "../src/extensions/types.js";
@@ -275,5 +275,54 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			'imp: extension odd could not subscribe to "session_shutdown" — known events: tool_call tool_end message_end run_end',
 			"imp: extension odd could not subscribe to tool_end — handler must be a function, got string",
 		]);
+	});
+});
+
+describe("ui.confirm plumbing (spec part 2)", () => {
+	it("an injected handler receives message + detail and its resolution flows back", async () => {
+		const asks: Array<{ message: string; detail?: string }> = [];
+		const registry = new ExtensionRegistry({
+			confirm: async (message, detail) => {
+				asks.push({ message, detail });
+				return message === "yes-question";
+			},
+		});
+		await expect(registry.confirm("yes-question", "the detail")).resolves.toBe(true);
+		await expect(registry.confirm("no-question")).resolves.toBe(false);
+		expect(asks).toEqual([
+			{ message: "yes-question", detail: "the detail" },
+			{ message: "no-question", detail: undefined },
+		]);
+	});
+
+	it("no handler: resolves false promptly (bounded) and writes one stderr teaching line — never hangs", async () => {
+		const registry = new ExtensionRegistry();
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		try {
+			// bounded race: if confirm ever hangs, the timer answer ("hung") fails the assertion
+			const answer = await Promise.race([
+				registry.confirm("anyone there?"),
+				new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 500)),
+			]);
+			expect(answer).toBe(false);
+			expect(stderr).toHaveBeenCalledTimes(1);
+			expect(String(stderr.mock.calls[0]?.[0])).toBe(
+				"imp: extension asked for confirmation but no interactive prompt is available — declining\n",
+			);
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
+	it("a throwing handler fails safe: false plus one teaching report line", async () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({
+			report: (l) => lines.push(l),
+			confirm: async () => {
+				throw new Error("prompt exploded");
+			},
+		});
+		await expect(registry.confirm("q")).resolves.toBe(false);
+		expect(lines).toEqual(["imp: extension confirm handler error — prompt exploded"]);
 	});
 });

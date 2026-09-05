@@ -32,6 +32,11 @@ interface RlRuntime {
 	history: string[];
 }
 
+/** The [y/N] contract: only an explicit y/yes (case-insensitive) approves. */
+function isYes(answer: string): boolean {
+	return /^y(?:es)?$/i.test(answer.trim());
+}
+
 function proxyOutput(output: ReplOutput): Writable {
 	const proxy = new Writable({
 		write(chunk, _encoding, callback) {
@@ -54,6 +59,12 @@ export class ReplInput {
 	private rl: readline.Interface | null = null;
 	private closed = false;
 	private onProcessSigint: (() => void) | null = null;
+	/** Current prompt string ("+ "/"> ") — restored after a confirm question. */
+	private prompt = "> ";
+	/** Queued [y/N] questions (api.confirm's tty side). Concurrent gated
+	 *  children can ask before the first is answered — FIFO keeps each answer
+	 *  bound to its own question. */
+	private pendingAsks: Array<{ question: string; resolve: (approved: boolean) => void }> = [];
 
 	constructor(options: ReplInputOptions) {
 		this.options = options;
@@ -69,15 +80,30 @@ export class ReplInput {
 			historySize: 100, // readline skips empties + consecutive dups (interactive only)
 		});
 		this.rl = rl;
-		rl.on("line", (line: string) => this.options.onLine(line));
+		rl.on("line", (line: string) => {
+			if (this.pendingAsks.length > 0) {
+				this.settleAsk(isYes(line));
+				return;
+			}
+			this.options.onLine(line);
+		});
 		// Terminal mode: readline captures \x03 and emits SIGINT on the interface.
-		rl.on("SIGINT", () => this.options.onInterrupt());
+		rl.on("SIGINT", () => {
+			if (this.pendingAsks.length > 0) {
+				// Ctrl+C answers the question with "no" — a declined confirm is a
+				// block, not an interrupt; the run itself keeps going.
+				this.settleAsk(false);
+				return;
+			}
+			this.options.onInterrupt();
+		});
 		// Non-TTY / `kill -INT` case; idempotent through the caller's state machine.
 		const onProcessSigint = () => this.options.onInterrupt();
 		this.onProcessSigint = onProcessSigint;
 		process.on("SIGINT", onProcessSigint);
 		// EOF / pipe end: buffered lines are delivered before "close" (readline guarantees it).
 		rl.on("close", () => {
+			while (this.pendingAsks.length > 0) this.settleAsk(false); // EOF answers "no"
 			if (!this.closed) this.options.onEof();
 		});
 		if (this.options.interactive) rl.prompt();
@@ -86,7 +112,8 @@ export class ReplInput {
 	/** Prompt becomes "+ " while a run/compaction is active, "> " when idle. */
 	setActive(active: boolean): void {
 		if (this.rl === null || !this.options.interactive) return;
-		this.rl.setPrompt(active ? "+ " : "> ");
+		this.prompt = active ? "+ " : "> ";
+		this.rl.setPrompt(this.prompt);
 		this.rl.prompt(true);
 	}
 
@@ -103,6 +130,44 @@ export class ReplInput {
 		rl.line = "";
 		if (this.options.interactive) this.rl.prompt(true);
 		return had;
+	}
+
+	/** One-line [y/N] question on the live interface (api.confirm's tty side).
+	 * While pending, input lines answer the question instead of reaching
+	 * onLine — a "y" typed at a prompt must never leak into the queue as
+	 * steering text. Empty, EOF, and anything but y/yes resolve false. */
+	ask(question: string): Promise<boolean> {
+		if (this.rl === null || this.closed) return Promise.resolve(false);
+		const rl = this.rl;
+		return new Promise<boolean>((resolve) => {
+			const wasIdle = this.pendingAsks.length === 0;
+			this.pendingAsks.push({ question, resolve });
+			if (wasIdle) {
+				rl.setPrompt(question);
+				rl.prompt(true);
+			}
+		});
+	}
+
+	/** Resolve the oldest pending question, then show the next (if queued). */
+	private settleAsk(approved: boolean): void {
+		const oldest = this.pendingAsks.shift();
+		if (oldest === undefined) return;
+		const next = this.pendingAsks[0];
+		if (next !== undefined) {
+			this.rl?.setPrompt(next.question);
+			this.rl?.prompt(true);
+		} else {
+			this.restorePrompt();
+		}
+		oldest.resolve(approved);
+	}
+
+	/** Back to the machine's prompt ("+ "/"> ") after a question was answered. */
+	private restorePrompt(): void {
+		if (this.rl === null || !this.options.interactive || this.closed) return;
+		this.rl.setPrompt(this.prompt);
+		this.rl.prompt(true);
 	}
 
 	/** History so far (newest first, as readline keeps it). Interactive only. */

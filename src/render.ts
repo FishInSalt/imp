@@ -174,7 +174,10 @@ export class Renderer {
 		if (this.spinnerLabel !== null) {
 			this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
 			this.redrawSpinner(
-				dim(`${this.frame()} ${this.spinnerLabel} ${formatElapsed(this.clock() - this.spinnerStartedAt)}`, this.options.ansi),
+				dim(
+					`${this.frame()} ${this.spinnerLabel} ${formatElapsed(this.clock() - this.spinnerStartedAt)}`,
+					this.options.ansi,
+				),
 			);
 		}
 	}
@@ -362,13 +365,15 @@ export class Renderer {
 			this.stopSpinner();
 		}
 		this.pendingTools = others;
-		const base = pending ? pending.base : `${dim("● ", this.options.ansi)}${bold(result.toolName, this.options.ansi)}`;
+		const base = pending
+			? pending.base
+			: `${dim("● ", this.options.ansi)}${bold(result.toolName, this.options.ansi)}`;
 		let line: string;
 		if (result.isError) {
 			line = `${base} ${red("✗", this.options.ansi)} ${red(firstLine(result.content, 120), this.options.ansi)}`;
 		} else {
 			const seconds = pending ? (this.clock() - pending.startedAt) / 1000 : 0;
-			const duration = seconds >= 1 ? ` ${dim(seconds.toFixed(1) + "s", this.options.ansi)}` : "";
+			const duration = seconds >= 1 ? ` ${dim(`${seconds.toFixed(1)}s`, this.options.ansi)}` : "";
 			line = `${base} ${green("✓", this.options.ansi)}${duration}`;
 		}
 		this.write(`${line}\n`);

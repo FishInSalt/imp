@@ -30,7 +30,7 @@ import { formatTokens } from "./format.js";
 import { createAnthropicProvider } from "./provider/anthropic.js";
 import { withLogging } from "./provider/logging.js";
 import type { LLMProvider } from "./provider/types.js";
-import type { Renderer } from "./repl/render.js";
+import type { Renderer } from "./render.js";
 
 export type RunMode = "print" | "repl";
 

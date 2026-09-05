@@ -1,6 +1,6 @@
-import type { AgentEvent } from "../core/loop.js";
-import type { ToolResult } from "../core/messages.js";
-import { bold, dim, firstLine, green, red, renderMarkdownLite, summarizeArgs } from "../format.js";
+import type { AgentEvent } from "./core/loop.js";
+import type { ToolResult } from "./core/messages.js";
+import { bold, dim, firstLine, green, red, renderMarkdownLite, summarizeArgs } from "./format.js";
 
 export type ToolStyle = "two-line" | "one-line";
 

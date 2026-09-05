@@ -10,7 +10,7 @@ import {
 	printExtensionDiagnostics,
 } from "../src/extensions/loader.js";
 import type { LLMRequest } from "../src/provider/types.js";
-import { Renderer } from "../src/repl/render.js";
+import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import {

@@ -10,7 +10,7 @@ import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import { replaySession } from "./replay.js";
 import type { SessionStore } from "../core/session/store.js";
-import type { Renderer } from "./render.js";
+import type { Renderer } from "../render.js";
 
 export interface ReplOptions {
 	runner: Runner;

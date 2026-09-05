@@ -2,7 +2,7 @@ import { SUMMARY_MARK } from "../core/session/store.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { firstLine, summarizeArgs } from "../format.js";
-import { Renderer } from "./render.js";
+import { Renderer } from "../render.js";
 
 export interface ReplayOptions {
 	write: (text: string) => void;

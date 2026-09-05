@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolResult } from "../src/core/messages.js";
 import { renderMarkdownLite } from "../src/format.js";
-import { Renderer } from "../src/repl/render.js";
+import { Renderer } from "../src/render.js";
 
 function collector(): { chunks: string[]; write(s: string): void; output(): string } {
 	const chunks: string[] = [];

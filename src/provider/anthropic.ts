@@ -212,9 +212,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				}
 			}
 			if (response === null) {
-				throw new Error(
-					`Anthropic request failed: ${networkError?.message ?? "retries exhausted"}`,
-				);
+				throw new Error(`Anthropic request failed: ${networkError?.message ?? "retries exhausted"}`);
 			}
 
 			if (!response.ok || !response.body) {

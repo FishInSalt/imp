@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, symlinkSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -65,17 +65,23 @@ export async function resolveRepoState(cwd: string): Promise<RepoState> {
 		try {
 			root = path.dirname(realpathSync(path.resolve(cwd, common)));
 		} catch {
-			throw new Error(`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`);
+			throw new Error(
+				`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`,
+			);
 		}
 	}
 	if (!root || !existsSync(root)) {
-		throw new Error(`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`);
+		throw new Error(
+			`could not resolve the repository root above "${cwd}" — retry the task without the worktree option.`,
+		);
 	}
 	const prefix = (await git(cwd, ["rev-parse", "--show-prefix"])).stdout.trim().replace(/[\\/]+$/, "");
 	const head = (await git(cwd, ["rev-parse", "HEAD"])).stdout.trim();
 	// an empty repo resolves HEAD to the literal string "HEAD" with exit 0
 	if (!/^[0-9a-f]{7,40}$/.test(head)) {
-		throw new Error(`the repository at "${root}" has no commits yet — commit once before using worktree isolation.`);
+		throw new Error(
+			`the repository at "${root}" has no commits yet — commit once before using worktree isolation.`,
+		);
 	}
 	return { root, cwdRelative: prefix ? path.normalize(prefix) : "", head };
 }

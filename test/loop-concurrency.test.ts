@@ -1,11 +1,10 @@
-import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
+import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
-import { assistant, gate, type Gate, scriptedProvider, user } from "./helpers/fakes.js";
-import { waitUntil } from "./helpers/fakes.js";
+import { assistant, type Gate, gate, scriptedProvider, user, waitUntil } from "./helpers/fakes.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
  *  concurrency/abort tests need tools that honor the signal (as bash does). */
@@ -56,7 +55,12 @@ function serialTool(name: string, log: string[]): Tool {
 
 function calls(names: string[]) {
 	return assistant(
-		names.map((n, i) => ({ type: "toolCall" as const, id: `c${i + 1}`, name: n, arguments: { message: "go" } })),
+		names.map((n, i) => ({
+			type: "toolCall" as const,
+			id: `c${i + 1}`,
+			name: n,
+			arguments: { message: "go" },
+		})),
 		"tool_use",
 	);
 }
@@ -115,10 +119,9 @@ describe("tool concurrency (M5b design §6)", () => {
 		expect((ends[1] as { result: { toolName: string } }).result.toolName).toBe("fast");
 		// Result array in the toolResult message also follows call order.
 		const toolResults = history.find((m) => m.role === "toolResult");
-		expect(toolResults && toolResults.role === "toolResult" ? toolResults.results.map((r) => r.toolName) : []).toEqual([
-			"slow",
-			"fast",
-		]);
+		expect(
+			toolResults && toolResults.role === "toolResult" ? toolResults.results.map((r) => r.toolName) : [],
+		).toEqual(["slow", "fast"]);
 		expect(result.stopReason).toBe("completed");
 	});
 
@@ -148,7 +151,9 @@ describe("tool concurrency (M5b design §6)", () => {
 		await waitUntil(() => events.filter((e) => e.type === "tool_start").length === 6);
 		for (const g of gates.slice(1)) g.resolve();
 		await pending;
-		const order = events.filter((e) => e.type === "tool_end").map((e) => (e as { result: { toolName: string } }).result.toolName);
+		const order = events
+			.filter((e) => e.type === "tool_end")
+			.map((e) => (e as { result: { toolName: string } }).result.toolName);
 		expect(order).toEqual(["t1", "t2", "t3", "t4", "t5", "t6"]);
 	});
 
@@ -156,7 +161,10 @@ describe("tool concurrency (M5b design §6)", () => {
 		const trace: string[] = [];
 		const ga = gate();
 		const gb = gate();
-		const tools = [holdTool("a", ga, () => trace.push("a:run")), holdTool("b", gb, () => trace.push("b:run"))];
+		const tools = [
+			holdTool("a", ga, () => trace.push("a:run")),
+			holdTool("b", gb, () => trace.push("b:run")),
+		];
 		const history: AgentMessage[] = [];
 		const pending = runAgentLoop({
 			provider: scriptedProvider([calls(["a", "b"]), finalText]),
@@ -283,6 +291,9 @@ describe("tool concurrency (M5b design §6)", () => {
 			onEvent: (e) => events.push(e),
 		});
 		const ends = events.filter((e) => e.type === "tool_end");
-		expect(ends.map((e) => (e as { result: { toolName: string } }).result.toolName)).toEqual(["slow80", "quick"]);
+		expect(ends.map((e) => (e as { result: { toolName: string } }).result.toolName)).toEqual([
+			"slow80",
+			"quick",
+		]);
 	});
 });

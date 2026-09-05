@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync, writeFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
 import {
 	buildWorktreeNotice,
 	buildWorktreeTrailer,
@@ -31,7 +31,8 @@ function git(cwd: string, args: string[]): void {
 	if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
 }
 
-const baseDir = () => path.join(tmpdir(), `imp-wt-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+const baseDir = () =>
+	path.join(tmpdir(), `imp-wt-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
 
 describe("worktree isolation (M6b)", () => {
 	it("resolveRepoState: root, head, and a subdirectory cwd maps relatively", async () => {
@@ -45,7 +46,9 @@ describe("worktree isolation (M6b)", () => {
 
 	it("resolveRepoState: non-git cwd → teaching error naming the retry", async () => {
 		const nowhere = await mkdtemp(path.join(tmpdir(), "imp-wt-nogit-"));
-		await expect(resolveRepoState(nowhere)).rejects.toThrow(/requires a git repository.*without the worktree/s);
+		await expect(resolveRepoState(nowhere)).rejects.toThrow(
+			/requires a git repository.*without the worktree/s,
+		);
 	});
 
 	it("resolveRepoState: a repo with no commits yet → teaching error", async () => {

@@ -63,7 +63,12 @@ async function startRepl(args: StartArgs): Promise<Env> {
 	const requests: LLMRequest[] = [];
 	const provider = scriptedProvider(args.scripts ?? [reply("ok")], requests);
 	const fake = makeConsole({ tty: true });
-	const renderer = new Renderer({ write: (t) => fake.stdout.write(t), ansi: false, liveTools: false, toolStyle: "one-line" });
+	const renderer = new Renderer({
+		write: (t) => fake.stdout.write(t),
+		ansi: false,
+		liveTools: false,
+		toolStyle: "one-line",
+	});
 	const loaded: LoadedExtensions = await loadExtensions({
 		cwd,
 		cliPaths: [],
@@ -131,7 +136,10 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 		await waitUntil(() => env.output().includes("done"));
 		const dry = path.join(env.baseDir, "notify.jsonl");
 		await waitUntil(() => existsSync(dry));
-		const entries = readFileSync(dry, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+		const entries = readFileSync(dry, "utf8")
+			.trim()
+			.split("\n")
+			.map((l) => JSON.parse(l));
 		expect(entries.length).toBe(1);
 		expect(entries[0].title).toBe("imp — completed");
 		expect(entries[0].body).toContain("1 turns");
@@ -239,7 +247,9 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		const fetchMock = vi.fn().mockResolvedValue(
 			new Response(
 				JSON.stringify({
-					results: [{ title: "Fresh doc", url: "https://docs.example.com/x", content: "c", raw_content: raw }],
+					results: [
+						{ title: "Fresh doc", url: "https://docs.example.com/x", content: "c", raw_content: raw },
+					],
 				}),
 				{ status: 200, headers: { "content-type": "application/json" } },
 			),
@@ -280,12 +290,14 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 	});
 
 	it("session cache: identical repeated queries hit the network once", async () => {
-		const fetchMock = vi.fn().mockResolvedValue(
-			new Response(
-				JSON.stringify({ results: [{ title: "Cached hit", url: "https://example.com/c", content: "cc" }] }),
-				{ status: 200, headers: { "content-type": "application/json" } },
-			),
-		);
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(
+					JSON.stringify({ results: [{ title: "Cached hit", url: "https://example.com/c", content: "cc" }] }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+			);
 		vi.stubGlobal("fetch", fetchMock);
 		const env = await startRepl({
 			scripts: [
@@ -328,12 +340,14 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 	it("url_read: html → readable text (scripts/styles stripped, entities decoded)", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn().mockResolvedValue(
-				new Response(
-					'<html><head><script>evil()</script><style>.x{}</style></head><body><h1>Title</h1><p>Hello&nbsp;world</p><a href="x">link</a></body></html>',
-					{ status: 200, headers: { "content-type": "text/html" } },
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response(
+						'<html><head><script>evil()</script><style>.x{}</style></head><body><h1>Title</h1><p>Hello&nbsp;world</p><a href="x">link</a></body></html>',
+						{ status: 200, headers: { "content-type": "text/html" } },
+					),
 				),
-			),
 		);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "url_read", { url: "https://example.com/page" }), reply("read it")],
@@ -352,7 +366,11 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 	it("url_read rejects non-http URLs and binaries with teaching errors", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn().mockResolvedValue(new Response("%PDF", { status: 200, headers: { "content-type": "application/pdf" } })),
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response("%PDF", { status: 200, headers: { "content-type": "application/pdf" } }),
+				),
 		);
 		const env = await startRepl({
 			scripts: [

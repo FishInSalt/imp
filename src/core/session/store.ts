@@ -293,9 +293,11 @@ export class SessionStore {
 	}
 
 	/**
-	 * Aggregates over ALL entries in the file, not just the current branch.
-	 * Linear sessions (imp today) are exact; once branching UI exists (M5)
-	 * this should walk getBranch() instead.
+	 * Aggregates over the current branch (root to leaf), not the whole
+	 * file: abandoned branches keep their entries in the append-only tree,
+	 * but only entries reachable from the current leaf count. Compaction
+	 * entries are not messages and never count. Linear sessions (a single
+	 * branch) get exactly the file totals.
 	 */
 	stats(): SessionStats {
 		const stats: SessionStats = {
@@ -306,7 +308,7 @@ export class SessionStore {
 			cacheReadTokens: 0,
 			cacheWriteTokens: 0,
 		};
-		for (const entry of this.entries) {
+		for (const entry of this.getBranch()) {
 			if (entry.type !== "message") continue;
 			stats.messageCount += 1;
 			const msg = entry.message;

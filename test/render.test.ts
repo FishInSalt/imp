@@ -55,7 +55,9 @@ describe("Renderer", () => {
 		});
 		// pending: erase prefix + dim ● + bold name + dim args + dim frame, no newline
 		r.event({ type: "tool_start", toolCallId: "t1", name: "bash", args: { command: "npm test" } });
-		expect(out.output()).toBe("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ npm test\x1b[0m\x1b[2m ⠋\x1b[0m");
+		expect(out.output()).toBe(
+			"\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ npm test\x1b[0m\x1b[2m ⠋\x1b[0m",
+		);
 		// tick at 5s: rewrite with next frame + elapsed
 		now = 5000;
 		r.tick();
@@ -63,22 +65,34 @@ describe("Renderer", () => {
 		// success with 12.4s duration, then ⎿ summary line
 		now = 12400;
 		r.event({ type: "tool_end", result: okResult("all good") });
-		expect(out.output().endsWith(
-			"\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ npm test\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n\x1b[2m  ⎿  all good\x1b[0m\n",
-		)).toBe(true);
+		expect(
+			out
+				.output()
+				.endsWith(
+					"\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ npm test\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n\x1b[2m  ⎿  all good\x1b[0m\n",
+				),
+		).toBe(true);
 		// fast tool: no duration; empty content → (no output)
 		r.event({ type: "tool_start", toolCallId: "t2", name: "bash", args: { command: "true" } });
 		now += 400;
 		r.event({ type: "tool_end", result: okResult("", "t2") });
-		expect(out.output().endsWith("\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ true\x1b[0m \x1b[32m✓\x1b[0m\n\x1b[2m  ⎿  (no output)\x1b[0m\n")).toBe(true);
+		expect(
+			out
+				.output()
+				.endsWith(
+					"\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ true\x1b[0m \x1b[32m✓\x1b[0m\n\x1b[2m  ⎿  (no output)\x1b[0m\n",
+				),
+		).toBe(true);
 		// error: dim ● + bold name + red ✗ + red firstLine(content, 120); ⎿ in red
 		const long = "x".repeat(130);
 		r.event({ type: "tool_start", toolCallId: "t3", name: "bash", args: { command: "cat nope" } });
 		r.event({ type: "tool_end", result: errResult(long, "t3") });
 		expect(
-			out.output().endsWith(
-				`\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ cat nope\x1b[0m \x1b[31m✗\x1b[0m \x1b[31m${"x".repeat(120)}…\x1b[0m\n\x1b[31m  ⎿  ${"x".repeat(80)}…\x1b[0m\n`,
-			),
+			out
+				.output()
+				.endsWith(
+					`\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mbash\x1b[0m \x1b[2m$ cat nope\x1b[0m \x1b[31m✗\x1b[0m \x1b[31m${"x".repeat(120)}…\x1b[0m\n\x1b[31m  ⎿  ${"x".repeat(80)}…\x1b[0m\n`,
+				),
 		).toBe(true);
 	});
 
@@ -165,7 +179,13 @@ describe("Renderer", () => {
 
 	it("markdown mode: streamed text is paragraph-buffered and rendered; flushed at endRun", () => {
 		const out = collector();
-		const r = new Renderer({ write: out.write, ansi: true, liveTools: false, toolStyle: "one-line", markdown: true });
+		const r = new Renderer({
+			write: out.write,
+			ansi: true,
+			liveTools: false,
+			toolStyle: "one-line",
+			markdown: true,
+		});
 		// paragraph 1 completes at the blank line — rendered immediately
 		r.event({ type: "text_delta", text: "## Header\nplain " });
 		r.event({ type: "text_delta", text: "text\n\n" });
@@ -204,7 +224,9 @@ describe("concurrent live tools (M5b design §7)", () => {
 		});
 		r.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "scout A" } });
 		// first pending: today's single-slot line
-		expect(out.output()).toBe("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{\"prompt\":\"scout A\"}\x1b[0m\x1b[2m ⠋\x1b[0m");
+		expect(out.output()).toBe(
+			'\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{"prompt":"scout A"}\x1b[0m\x1b[2m ⠋\x1b[0m',
+		);
 		// second pending: collapse to the aggregate line
 		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "scout B" } });
 		expect(out.output().endsWith("\r\x1b[2K\x1b[2m⠋ 2 tasks running 0s\x1b[0m")).toBe(true);
@@ -216,9 +238,13 @@ describe("concurrent live tools (M5b design §7)", () => {
 		now = 12400;
 		r.event({ type: "tool_end", result: okResult("A found 3 files", "a") });
 		const afterA = out.output();
-		expect(afterA).toContain('\"scout A\"}\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n');
+		expect(afterA).toContain('"scout A"}\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n');
 		expect(afterA).toContain("\x1b[2m  ⎿  A found 3 files\x1b[0m\n");
-		expect(afterA.endsWith("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{\"prompt\":\"scout B\"}\x1b[0m\x1b[2m ⠙\x1b[0m")).toBe(true);
+		expect(
+			afterA.endsWith(
+				'\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{"prompt":"scout B"}\x1b[0m\x1b[2m ⠙\x1b[0m',
+			),
+		).toBe(true);
 		// sole survivor ticks in single-pending format (started at 0)
 		now = 20000;
 		r.tick();

@@ -1,22 +1,10 @@
-import { describe, expect, it } from "vitest";
-import {
-	assistant,
-	gate,
-	type Gate,
-	scriptedProvider,
-	type ScriptStep,
-	user,
-} from "./helpers/fakes.js";
-import type { LLMRequest } from "../src/provider/types.js";
-import {
-	childUsageTrailer,
-	finalAssistantText,
-	runSubagent,
-	CHILD_SUFFIX,
-} from "../src/core/subagent.js";
-import type { SubagentOutcome } from "../src/core/subagent.js";
-import type { Tool } from "../src/core/tools/types.js";
 import { Type } from "typebox";
+import { describe, expect, it } from "vitest";
+import type { SubagentOutcome } from "../src/core/subagent.js";
+import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
+import type { Tool } from "../src/core/tools/types.js";
+import type { LLMRequest } from "../src/provider/types.js";
+import { assistant, type Gate, gate, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
 
 /** A tool that settles when the gate opens OR its signal aborts — the loop
  *  awaits execute() unconditionally, so abort/timeout tests need a tool that
@@ -56,18 +44,21 @@ describe("finalAssistantText", () => {
 			user("go"),
 			assistant([{ type: "text", text: "first" }]),
 			assistant([{ type: "toolCall", id: "t1", name: "echo", arguments: {} }]),
-			{ role: "toolResult", results: [{ toolCallId: "t1", toolName: "echo", content: "ok", isError: false }] },
-			assistant([{ type: "toolCall", id: "t2", name: "echo", arguments: {} }, { type: "text", text: "" }]),
+			{
+				role: "toolResult",
+				results: [{ toolCallId: "t1", toolName: "echo", content: "ok", isError: false }],
+			},
+			assistant([
+				{ type: "toolCall", id: "t2", name: "echo", arguments: {} },
+				{ type: "text", text: "" },
+			]),
 		];
 		// text-less final message → backward scan falls to the earlier one
 		expect(finalAssistantText(messages)).toBe("first");
 	});
 
 	it("returns undefined when no assistant text exists anywhere", () => {
-		const messages = [
-			user("go"),
-			assistant([{ type: "toolCall", id: "t1", name: "echo", arguments: {} }]),
-		];
+		const messages = [user("go"), assistant([{ type: "toolCall", id: "t1", name: "echo", arguments: {} }])];
 		expect(finalAssistantText(messages)).toBeUndefined();
 	});
 });
@@ -167,8 +158,8 @@ describe("runSubagent", () => {
 			assistant(
 				[
 					{ type: "text", text: "partial answer" },
-				{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } },
-			],
+					{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } },
+				],
 				"tool_use",
 				{ inputTokens: 100, outputTokens: 7 },
 			),
@@ -187,7 +178,12 @@ describe("runSubagent", () => {
 		expect(outcome.reason).toBe("endpoint exploded");
 		expect(outcome.text).toBe("partial answer"); // survived the crash
 		expect(outcome.turns).toBe(1); // recomputed from history, not lost with the throw
-		expect(outcome.usage).toEqual({ inputTokens: 100, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0 });
+		expect(outcome.usage).toEqual({
+			inputTokens: 100,
+			outputTokens: 7,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
 	});
 
 	it("crash on the first request: zero turns, no text", async () => {
@@ -211,59 +207,61 @@ describe("runSubagent", () => {
 	});
 });
 
-	it("M6a: onToolCall forwards to the child loop — blocked calls return an isError result the child can recover from", async () => {
-		const sink: LLMRequest[] = [];
-		const seen: Array<{ name: string; args: Record<string, unknown> }> = [];
-		const provider = scriptedProvider(
-			[
-				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }]),
-				assistant([{ type: "text", text: "gate blocked me, adjusting" }]),
-			],
-			sink,
-		);
-		const outcome = await runSubagent({
-			provider,
-			model: "m",
-			system: "PARENT",
-			tools: [echo],
-			prompt: "go",
-			onToolCall: (call) => {
-				seen.push({ name: call.name, args: call.args });
-				return { block: true, reason: "not allowed in scout mode" };
-			},
-		});
-		expect(seen).toEqual([{ name: "echo", args: { message: "hi" } }]);
-		// the child saw the block reason as its tool result (request 2 carries it)
-		const second = JSON.stringify((sink[1] as LLMRequest).messages);
-		expect(second).toContain("not allowed in scout mode");
-		expect(outcome.status).toBe("completed");
-		expect(outcome.text).toBe("gate blocked me, adjusting");
+it("M6a: onToolCall forwards to the child loop — blocked calls return an isError result the child can recover from", async () => {
+	const sink: LLMRequest[] = [];
+	const seen: Array<{ name: string; args: Record<string, unknown> }> = [];
+	const provider = scriptedProvider(
+		[
+			assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }]),
+			assistant([{ type: "text", text: "gate blocked me, adjusting" }]),
+		],
+		sink,
+	);
+	const outcome = await runSubagent({
+		provider,
+		model: "m",
+		system: "PARENT",
+		tools: [echo],
+		prompt: "go",
+		onToolCall: (call) => {
+			seen.push({ name: call.name, args: call.args });
+			return { block: true, reason: "not allowed in scout mode" };
+		},
 	});
+	expect(seen).toEqual([{ name: "echo", args: { message: "hi" } }]);
+	// the child saw the block reason as its tool result (request 2 carries it)
+	const second = JSON.stringify((sink[1] as LLMRequest).messages);
+	expect(second).toContain("not allowed in scout mode");
+	expect(outcome.status).toBe("completed");
+	expect(outcome.text).toBe("gate blocked me, adjusting");
+});
 
-	it("extraSystem (M5c) lands after CHILD_SUFFIX, append-only", async () => {
-		const sink: LLMRequest[] = [];
-		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], sink);
-		await runSubagent({
-			provider,
-			model: "m",
-			system: "PARENT",
-			tools: [echo],
-			prompt: "go",
-			extraSystem: "AGENT-BODY",
-		});
-		const system = (sink[0] as LLMRequest).system;
-		expect(system.startsWith("PARENT")).toBe(true);
-		expect(system.indexOf("Subagent mode")).toBeGreaterThan("PARENT".length - 1);
-		expect(system.indexOf("# Agent profile")).toBeGreaterThan(system.indexOf("Subagent mode"));
-		expect(system.indexOf("AGENT-BODY")).toBeGreaterThan(system.indexOf("# Agent profile"));
+it("extraSystem (M5c) lands after CHILD_SUFFIX, append-only", async () => {
+	const sink: LLMRequest[] = [];
+	const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], sink);
+	await runSubagent({
+		provider,
+		model: "m",
+		system: "PARENT",
+		tools: [echo],
+		prompt: "go",
+		extraSystem: "AGENT-BODY",
 	});
+	const system = (sink[0] as LLMRequest).system;
+	expect(system.startsWith("PARENT")).toBe(true);
+	expect(system.indexOf("Subagent mode")).toBeGreaterThan("PARENT".length - 1);
+	expect(system.indexOf("# Agent profile")).toBeGreaterThan(system.indexOf("Subagent mode"));
+	expect(system.indexOf("AGENT-BODY")).toBeGreaterThan(system.indexOf("# Agent profile"));
+});
 
 describe("childUsageTrailer", () => {
 	it("formats turns and tokens; cache segment only when cache read > 0", () => {
 		expect(childUsageTrailer(7, { inputTokens: 12345, outputTokens: 1400, cacheReadTokens: 9800 })).toBe(
 			"(child: 7 turns, 12.3k in / 1.4k out / 9.8k cache)",
 		);
-		expect(childUsageTrailer(1, { inputTokens: 10, outputTokens: 5 })).toBe("(child: 1 turns, 10 in / 5 out)");
+		expect(childUsageTrailer(1, { inputTokens: 10, outputTokens: 5 })).toBe(
+			"(child: 1 turns, 10 in / 5 out)",
+		);
 		expect(childUsageTrailer(1, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0 })).toBe(
 			"(child: 1 turns, 10 in / 5 out)",
 		);

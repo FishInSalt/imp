@@ -1,17 +1,17 @@
-import type { LLMProvider } from "../provider/types.js";
 import { formatTokens } from "../format.js";
+import type { LLMProvider } from "../provider/types.js";
 import {
+	type CompactionSettings,
 	compactHistory,
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	shouldCompact,
-	type CompactionSettings,
 } from "./compaction.js";
 import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
-import { runAgentLoop, type RunAgentLoopOptions, type RunAgentLoopResult } from "./loop.js";
+import { type RunAgentLoopOptions, type RunAgentLoopResult, runAgentLoop } from "./loop.js";
 import type { AgentMessage, Usage } from "./messages.js";
-import { summaryToMessage, type SessionStore } from "./session/store.js";
+import { type SessionStore, summaryToMessage } from "./session/store.js";
 import type { Tool } from "./tools/types.js";
 
 /**
@@ -200,7 +200,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			provider: options.provider,
 			model: options.model,
 			system:
-				options.system + CHILD_SUFFIX + (options.extraSystem ? `\n\n# Agent profile\n\n${options.extraSystem}` : ""),
+				options.system +
+				CHILD_SUFFIX +
+				(options.extraSystem ? `\n\n# Agent profile\n\n${options.extraSystem}` : ""),
 			tools: options.tools,
 			history,
 			userMessage: options.prompt,

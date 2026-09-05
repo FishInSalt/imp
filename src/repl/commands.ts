@@ -1,7 +1,7 @@
-import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { SessionStore } from "../core/session/store.js";
-import type { Runner } from "../runner.js";
+import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Renderer } from "../render.js";
+import type { Runner } from "../runner.js";
 
 export interface CommandContext {
 	runner: Runner;

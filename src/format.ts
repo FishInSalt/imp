@@ -79,7 +79,9 @@ export function renderMarkdownLite(text: string, ansi = process.stdout.isTTY ===
 		}
 		const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
 		if (bullet) {
-			out.push(`${bullet[1] ?? ""}  • ${(bullet[2] ?? "").replace(/\*\*(.+?)\*\*/g, (_m, inner) => bold(inner, ansi))}`);
+			out.push(
+				`${bullet[1] ?? ""}  • ${(bullet[2] ?? "").replace(/\*\*(.+?)\*\*/g, (_m, inner) => bold(inner, ansi))}`,
+			);
 			continue;
 		}
 		out.push(line.replace(/\*\*(.+?)\*\*/g, (_m, inner) => bold(inner, ansi)));

@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
-import { MAX_CONCURRENT_TASKS } from "./constants.js";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
+import { MAX_CONCURRENT_TASKS } from "./constants.js";
 import {
 	type AgentMessage,
 	type AssistantMessage,
@@ -285,7 +285,14 @@ async function executeToolBatch(
 		}
 		for (let c = 0; c < run.length; c += MAX_CONCURRENT_TASKS) {
 			if (signal?.aborted) return; // later chunks never start; fillMissing closes them
-			await executeChunk(run.slice(c, c + MAX_CONCURRENT_TASKS), toolMap, signal, onToolCall, onEvent, results);
+			await executeChunk(
+				run.slice(c, c + MAX_CONCURRENT_TASKS),
+				toolMap,
+				signal,
+				onToolCall,
+				onEvent,
+				results,
+			);
 		}
 	}
 }
@@ -313,7 +320,11 @@ async function executeChunk(
 			plans.push(prepared);
 			continue;
 		}
-		const decision = await onToolCall?.({ toolCallId: call.id, name: call.name, args: call.arguments as Record<string, unknown> });
+		const decision = await onToolCall?.({
+			toolCallId: call.id,
+			name: call.name,
+			args: call.arguments as Record<string, unknown>,
+		});
 		if (decision?.block) {
 			plans.push({
 				result: {

@@ -111,10 +111,18 @@ describe("anthropic provider abort mid-stream", () => {
 				return;
 			}
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n');
-			res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n');
-			res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"recovered"}}\n\n');
-			res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n');
+			res.write(
+				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n',
+			);
+			res.write(
+				'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n',
+			);
+			res.write(
+				'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"recovered"}}\n\n',
+			);
+			res.write(
+				'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n',
+			);
 			res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
 			res.end();
 			req.on("close", () => res.destroy());
@@ -155,7 +163,9 @@ describe("anthropic provider abort mid-stream", () => {
 				return;
 			}
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n');
+			res.write(
+				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n',
+			);
 			res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
 			res.end();
 			req.on("close", () => res.destroy());

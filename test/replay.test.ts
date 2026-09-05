@@ -9,10 +9,7 @@ function fakeSession(messages: AgentMessage[]): SessionStore {
 
 function run(messages: AgentMessage[], ansi = false, markdown = false): string {
 	const chunks: string[] = [];
-	const n = replaySession(
-		{ write: (s) => chunks.push(s), ansi, markdown },
-		fakeSession(messages),
-	);
+	const n = replaySession({ write: (s) => chunks.push(s), ansi, markdown }, fakeSession(messages));
 	expect(n).toBe(messages.length);
 	return chunks.join("");
 }
@@ -32,9 +29,7 @@ describe("replaySession", () => {
 			},
 			{
 				role: "toolResult",
-				results: [
-					{ toolCallId: "t1", toolName: "read", content: "line 1\nline 2\nline 3", isError: false },
-				],
+				results: [{ toolCallId: "t1", toolName: "read", content: "line 1\nline 2\nline 3", isError: false }],
 			},
 			{
 				role: "assistant",

@@ -3,6 +3,17 @@ import { formatTokens } from "../../format.js";
 import type { LLMProvider } from "../../provider/types.js";
 import { MAX_BYTES } from "../constants.js";
 import type { AgentDefinition } from "../agents/registry.js";
+import {
+	buildWorktreeNotice,
+	buildWorktreeTrailer,
+	createChildWorktree,
+	hasWorktreeChanges,
+	removeChildWorktree,
+	resolveRepoState,
+	worktreeChangeStat,
+	type ChildWorktree,
+	type RepoState,
+} from "../worktree.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
@@ -23,6 +34,12 @@ const taskSchema = Type.Object({
 	}),
 	agent: Type.Optional(
 		Type.String({ description: "Named agent to run (listed in the tool description); omit for a generic subagent" }),
+	),
+	worktree: Type.Optional(
+		Type.Boolean({
+			description:
+				"Run in an isolated git worktree (own checkout, own branch; requires a git repository). Use for writing tasks that must not touch the current files; the result names the branch to merge. Requires the git repository to have at least one commit.",
+		}),
 	),
 });
 
@@ -52,6 +69,14 @@ export interface TaskToolOptions {
 	/** Observes the child's tool events (tool_start/tool_end) with the same
 	 * agent context as onToolCall (M6a audit path). */
 	onEvent?: (event: AgentEvent, info: { agent?: string }) => void;
+	/** The parent's working directory — worktree children resolve the repo
+	 * from here (M6b). Defaults to process.cwd() at spawn time. */
+	cwd?: string;
+	/** Rebuild the builtin tool pool rooted at another cwd (M6b worktree
+	 * children). Returning undefined falls back to the parent pool minus task. */
+	getToolsForCwd?: (cwd: string) => Tool[] | undefined;
+	/** Test seam: worktree base dir override (IMP_WORKTREE_DIR in production). */
+	worktreeBaseDir?: string;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
 }
@@ -100,9 +125,41 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				return { output: `unknown agent "${wanted}". ${available}`, isError: true };
 			}
 
+			// Worktree isolation (M6b): agent frontmatter default, call override.
+			const wantWorktree = args.worktree === true || (args.worktree === undefined && agent?.worktree === true);
+			let wt: ChildWorktree | undefined;
+			let repo: RepoState | undefined;
+			let prompt = String(args.prompt);
+			if (wantWorktree) {
+				const cwd = options.cwd ?? process.cwd();
+				try {
+					repo = await resolveRepoState(cwd);
+					wt = await createChildWorktree(repo, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, options.worktreeBaseDir);
+				} catch (err) {
+					return {
+						output: err instanceof Error ? err.message : String(err),
+						isError: true,
+					};
+				}
+				prompt += buildWorktreeNotice(wt, cwd);
+				// A worktree child without a per-cwd pool would inherit tools
+				// rooted at the PARENT cwd — silently violating the isolation
+				// this feature exists to provide. Fail loudly instead.
+				if (options.getToolsForCwd === undefined) {
+					await removeChildWorktree(wt, repo);
+					return {
+						output: "worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.",
+						isError: true,
+					};
+				}
+			}
+
 			// Tools: parent pool minus task; an agent may narrow it further.
 			// Unknown names are a teaching error, never a silent drop.
-			let tools = options.getTools().filter((tool) => tool.name !== "task");
+			// Worktree children get builtins rebuilt at the worktree path —
+			// extension tools are excluded (their api.cwd cannot move; design D5).
+			let tools = (wt !== undefined ? options.getToolsForCwd?.(wt.path) : undefined)
+				?? options.getTools().filter((tool) => tool.name !== "task");
 			if (agent?.tools !== undefined) {
 				const byName = new Map(tools.map((t) => [t.name, t] as const));
 				const unknown = agent.tools.filter((n) => !byName.has(n));
@@ -121,24 +178,42 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				const parent = options.getSession();
 				if (parent !== null) session = createChildSession(parent, options.sessionBaseDir);
 			}
-			const outcome = await runSubagent({
-				provider: options.provider,
-				model: agent?.model ?? options.getModel(),
-				system: options.getSystem(),
-				extraSystem: agent?.system,
-				tools,
-				prompt: String(args.prompt),
-				signal,
-				timeoutMs: effectiveTimeout,
-				onMessage: session ? (message) => session?.appendMessage(message) : undefined,
-				onToolCall: options.onToolCall
-					? (call) => options.onToolCall?.(call, { agent: agent?.name })
-					: undefined,
-				onEvent: options.onEvent
-					? (event) => options.onEvent?.(event, { agent: agent?.name })
-					: undefined,
-			});
-			return taskResult(outcome, session, effectiveTimeout);
+			let outcome;
+			try {
+				outcome = await runSubagent({
+					provider: options.provider,
+					model: agent?.model ?? options.getModel(),
+					system: options.getSystem(),
+					extraSystem: agent?.system,
+					tools,
+					prompt,
+					signal,
+					timeoutMs: effectiveTimeout,
+					onMessage: session ? (message) => session?.appendMessage(message) : undefined,
+					onToolCall: options.onToolCall
+						? (call) => options.onToolCall?.(call, { agent: agent?.name })
+						: undefined,
+					onEvent: options.onEvent
+						? (event) => options.onEvent?.(event, { agent: agent?.name })
+						: undefined,
+				});
+			} finally {
+				// Cleanup runs on every path (design D8): completed, aborted,
+				// timeout, crash. Preserved work is never discarded.
+				if (wt !== undefined && repo !== undefined) {
+					const changed = await hasWorktreeChanges(wt, repo).catch(() => true);
+					if (!changed) {
+						await removeChildWorktree(wt, repo);
+						wt = undefined;
+					}
+				}
+			}
+			if (wt === undefined) return taskResult(outcome, session, effectiveTimeout);
+			const stat = await worktreeChangeStat(wt);
+			const base = taskResult(outcome, session, effectiveTimeout);
+			// A crash outside the worktree helpers still keeps preserved work:
+			// append the trailer so the parent knows where the changes are.
+			return { ...base, output: `${base.output}${buildWorktreeTrailer(wt, stat)}` };
 		},
 	};
 }

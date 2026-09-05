@@ -16,6 +16,7 @@ import path from "node:path";
  *   tools: read, grep, find        # optional: subset of the parent pool
  *   model: glm-5.3                 # optional: spawn-time override
  *   timeout: 300                   # optional: seconds, wall clock
+ *   worktree: true                 # optional: isolated git worktree (M6b)
  *   ---
  *
  *   Body appended to the child's system prompt (append-only mode).
@@ -30,6 +31,8 @@ export interface AgentDefinition {
 	tools?: string[];
 	/** Optional model override, read at spawn. */
 	model?: string;
+	/** Run this agent's tasks in an isolated git worktree (M6b). */
+	worktree?: boolean;
 	/** Optional wall clock (ms), from frontmatter seconds. */
 	timeoutMs?: number;
 	/** Markdown body — appended after CHILD_SUFFIX. */
@@ -76,6 +79,15 @@ export function parseAgentFile(content: string, source: string): AgentDefinition
 		}
 		timeoutMs = seconds * 1000;
 	}
+	let worktree = false;
+	const worktreeRaw = fields.get("worktree");
+	if (worktreeRaw !== undefined) {
+		const flag = worktreeRaw.trim().toLowerCase();
+		if (flag === "true") worktree = true;
+		else if (flag !== "false") {
+			return `${source}: invalid "worktree" "${worktreeRaw}" — use true or false`;
+		}
+	}
 
 	const toolsRaw = fields.get("tools");
 	const tools = toolsRaw
@@ -94,6 +106,7 @@ export function parseAgentFile(content: string, source: string): AgentDefinition
 		tools: tools && tools.length > 0 ? tools : undefined,
 		model: fields.get("model"),
 		timeoutMs,
+		worktree: worktree || undefined,
 		system: body,
 		source,
 	};

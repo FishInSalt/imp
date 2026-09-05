@@ -289,6 +289,7 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 实际运行验收（2026-09-04）：两个通用子代理并发执行 13/16 轮、子会话文件与 parent 链接在磁盘核实、usage 尾行格式与设计逐字符一致；**计划外验证了错误路径**——未安装 scout 时模型收到教学错误后自行改道重试成功
   - 实际运行暴露的三个代码问题全部修复 `9eb2294`（报错指向不存在的 CLI 命令、SUMMARY_MARK 单一来源、Renderer 移出 repl/ `371eed2`）
   - 遗留观察（M6 候选）：扩展门看不到子代理工具调用（Q3，安全缺口——**已于 M6a 修复，见下**）；无子级 compaction（子代理上下文耗尽是真实上限）；worktree 隔离
+- **M6b worktree 隔离**（2026-09-05，`docs/m6b-worktree-design.md`）：task 参数 `worktree: true` / agent frontmatter `worktree:`；`git worktree add -b imp/task-* HEAD`（tmpdir 默认、`IMP_WORKTREE_DIR` 可覆盖、node_modules symlink、canonical root 防嵌套）；子代理工具池按 worktree 路径重建（内置六件套；扩展工具排除——api.cwd 无法迁移）；提示注入路径换算+提交指引（分支制回传的前提）；无改动→自动清理（worktree+branch+prune），有改动→保留+结果尾行教合并（`git merge <branch>`）；crash/abort/timeout 同规则（finally 清理，工作不丢）。参照核验：pi-subagents worktree.ts（802 行，补丁制回传被否决）与 Claude Code worktree.ts（保留+报告制，采纳）。非 git / 无提交 / 宿主未接 per-cwd 池 → 教学错误。子模块、未提交状态传播显式不解决。
 - **M6a 扩展门覆盖子代理**（2026-09-04）：`runSubagent` 透传 `onToolCall` 给子循环；`ToolCallEvent` 增量字段 `subagent?: boolean` + `agent?: string`（现有扩展零改动即覆盖子代理——guardian 的 bash 规则与路径规则自动约束分身）；被拦截的子代理调用返回教学式错误结果，子代理可自行改道。三层测试：runSubagent 单元（透传+拦截恢复）、task 工具（agent 名上下文）、runner 级（真实扩展文件 + 真实 `.imp/agents/` 发现 + 真实 loader）
 
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）

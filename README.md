@@ -100,6 +100,16 @@ The task tool's description enumerates registered agents (auto-routing hint);
 files need a restart, like extension changes. A ready-to-copy example lives in
 `examples/agents/scout.md` (a read-only code scout: `tools: read, grep, find`).
 
+**Worktree isolation.** A `task` call may set `worktree: true` (or an agent
+file may declare `worktree:`): the child runs on its own git worktree — a
+separate checkout of the committed state under the system temp dir — with the
+builtin tools rebuilt at that path, so it physically cannot touch the parent's
+files. The child prompt is told to translate paths and to commit its work; the
+result names the branch and change summary, and the parent merges with
+`git merge <branch>` when it wants the work. A worktree with no changes is
+removed (branch and all); preserved work is never discarded. Extension tools
+are excluded from worktree children (their registered cwd cannot move).
+
 **Concurrency boundary.** Concurrent subagents share the parent's working
 directory. `edit`/`write` mutations to the same file serialize through a
 process-wide file lock, and a failed `oldText` match degrades into a teaching

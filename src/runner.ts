@@ -190,6 +190,19 @@ class RunnerImpl implements Runner {
 				getSession: () => this.sessionStore,
 				sessionBaseDir: options.sessionBaseDir,
 				agents: this.agents.agents,
+				cwd: options.cwd,
+				// Worktree children (M6b): builtins rebuilt at the worktree
+				// path. Extension tools are excluded by construction here —
+				// their api.cwd cannot move (design D5), and a pool split
+				// across two trees would fail silently.
+				getToolsForCwd: (cwd) => [
+					createBashTool({ cwd }),
+					createReadTool({ cwd }),
+					createEditTool({ cwd }),
+					createWriteTool({ cwd }),
+					createGrepTool({ cwd }),
+					createFindTool({ cwd }),
+				],
 				// Same registry gate as the main loop, but events are marked
 				// subagent-sourced so "tool_call" handlers can tell children
 				// apart (M6a — closes the M5 design Q3 gap).

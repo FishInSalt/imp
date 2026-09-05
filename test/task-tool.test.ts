@@ -363,6 +363,31 @@ describe("named agents (M5c)", () => {
 		expect(result.output).toContain("noted the block");
 	});
 
+	it("M6a: onEvent observes the child's tool events with the agent name", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }]),
+				assistant([{ type: "text", text: "done" }]),
+			],
+			sink,
+		);
+		const events: Array<{ type: string; agent?: string }> = [];
+		const { task } = agentTask([scout], {
+			provider,
+			onEvent: (event: { type: string }, info: { agent?: string }) => {
+				if (event.type === "tool_start" || event.type === "tool_end") {
+					events.push({ type: event.type, agent: info.agent });
+				}
+			},
+		});
+		await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(events).toEqual([
+			{ type: "tool_start", agent: "scout" },
+			{ type: "tool_end", agent: "scout" },
+		]);
+	});
+
 	it("M6a: generic tasks carry agent: undefined into the gate", async () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);

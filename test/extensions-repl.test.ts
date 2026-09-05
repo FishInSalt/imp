@@ -531,8 +531,11 @@ import path from "node:path";
 export default function (api) {
 	const log = path.join(api.cwd, "gate-events.jsonl");
 	api.on("tool_call", (e) => {
-		appendFileSync(log, JSON.stringify({ name: e.name, subagent: e.subagent, agent: e.agent }) + "\\n");
+		appendFileSync(log, JSON.stringify({ kind: "call", name: e.name, subagent: e.subagent, agent: e.agent }) + "\\n");
 		if (e.subagent) return { block: true, reason: "children may not probe" };
+	});
+	api.on("tool_end", (e) => {
+		appendFileSync(log, JSON.stringify({ kind: "end", name: e.name, isError: e.isError, subagent: e.subagent, agent: e.agent }) + "\\n");
 	});
 	api.registerTool({
 		name: "probe_tool",
@@ -556,8 +559,10 @@ export default function (api) {
 			.split("\n")
 			.map((line) => JSON.parse(line));
 		expect(events).toEqual([
-			{ name: "task", subagent: undefined, agent: undefined }, // parent call: no subagent mark
-			{ name: "probe_tool", subagent: true, agent: "scout" }, // child call: marked + named
+			{ kind: "call", name: "task", subagent: undefined, agent: undefined }, // parent: no subagent mark
+			{ kind: "call", name: "probe_tool", subagent: true, agent: "scout" }, // child: marked + named
+			{ kind: "end", name: "probe_tool", isError: true, subagent: true, agent: "scout" }, // child audit (M6a fix)
+			{ kind: "end", name: "task", isError: false, subagent: undefined, agent: undefined }, // parent's own task end
 		]);
 
 		// the block reason reached the child as its tool result (child request 2)

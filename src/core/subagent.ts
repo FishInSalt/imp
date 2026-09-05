@@ -44,6 +44,10 @@ export interface SubagentOptions {
 	 * as the main loop. Concurrent children may interleave gate invocations —
 	 * handlers must stay stateless per call. */
 	onToolCall?: RunAgentLoopOptions["onToolCall"];
+	/** Observes the child's tool events (M6a audit): tool_start/tool_end fire
+	 * here exactly as in the main loop; the caller decides what reaches
+	 * extensions (rendering stays excluded by the M5 decision). */
+	onEvent?: RunAgentLoopOptions["onEvent"];
 }
 
 export type SubagentStatus =
@@ -121,6 +125,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			maxIterations: CHILD_MAX_TURNS,
 			onMessage: options.onMessage,
 			onToolCall: options.onToolCall,
+			onEvent: options.onEvent,
 			signal: child.signal,
 		});
 		if (result.stopReason === "aborted") {

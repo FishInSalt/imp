@@ -295,6 +295,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 独立审查（reviewer 子代理，裁决 fix-first）`819d4e7` 全部修复：**B1** agent 工具校验在 worktree 创建后返回导致泄漏（校验前移，创建后全部纳入 try/finally）；**B2** 分支基于主根 HEAD 而变更检测对比父 HEAD——父代理在链接 worktree 内时静默合并错误的树（改为基于 repo.head，回归测试搭真实嵌套场景）；**补测试时发现的死锁**（审查报告未含）：已中止的父信号不再触发 abort 事件，子代理永久挂起（继电器对已中止信号立即触发）；8 条 nit 全修（提交后工作入统计、清理失败可见、node_modules 排除、子目录重映射等）。审查→测试→再发现问题的链条是本轮最大收获
   - 真机验证（2026-09-05，/tmp 测试仓库）：隔离执行（主检出零改动）→ 子代理按注入提示提交（`imp/task-*` 分支）→ 结果尾行给分支名+统计+合并命令 → 手动 `git merge` 快进合入 → 清理后无孤儿 worktree/分支；子会话双留痕。**计划外**：模型误派只读 scout 执行写任务，结构性失败可见、父代理自行改派成功（M5c 纪律在真实场景再次生效）
   - 已知行为（记录不修）：guardian 路径规则以父目录为基准——worktree 子代理用绝对路径写 `/tmp` 下隔离区会被误报"项目外写入"（防御性误报，相对路径默认行为不受影响）
+
+- **M7 横向加固（2026-09-05，workflow 三并行编排）**：一个 workflow 脚本、三个实现代理、33 个新测试（298→331），串行合并三段。
+  - `fix/stats-branch`：`stats()` 改走 `getBranch()`（M5 分支化后旧统计把废弃分支也计入）；线性会话数字不变（钉住）；坏父链文件在列表层按"跳过不致命"处理
+  - `feat/gate-confirm`：`ToolCallEvent/ToolEndEvent` 增 `cwd?: string`（执行方工作目录——worktree 子代理的绝对路径不再被 guardian 误报，M6b 已知行为就此修复）；`ExtensionApi` 第 8 个成员 `confirm(message, detail)`（无交互宿主→stderr 教学行+false，绝不挂死；REPL 侧 [y/N] 队列化、Ctrl+C=拒绝）；guardian 两层化（硬底线不问：/etc、~/.ssh、~/.gnupg、rm -rf 指向家目录根；其余先问后拦，拒绝返回原教学文案，print 模式退化为旧行为）
+  - `feat/child-compaction`：`compactHistory` 拆出纯计算层（compactSession 变薄封装，行为逐字节不变）；`runSubagent` 镜像主循环 onBeforeTurn 自动压缩（有会话→appendCompaction+buildContext 重建；无会话→纯内存 splice，framed summary 保持回放一致）；`IMP_AUTOCOMPACT=0` 同门控；40 轮上限不重置（压缩买上下文不买轮数，注释写明）；摘要调用失败→保留原历史下轮重试（子代理无外层宿主，catch 即 REPL 对主循环的等价契约）
+  - **真机验证**：日记任务子会话 5 个 compaction 条目（小窗口反复触发，轮边界重试路径一并验证）、结构化摘要、压缩后子代理继续完成；guardian print 模式降级端到端（rm -rf → confirm 无宿主 → 拦截 + `[bash]` 审计行 + 模型改道）；TTY 弹问由 fake-stdin e2e 覆盖（y/n/yes/空），真 pty 未测（非交互 shell 不可行，如实记录）
+  - **编排事故与流程修复**：workflow 的 `worktree: true` 未隔离——三代理共用主检出、互相切分支（代理自行察觉并在报告中说明，分支恰好堆叠成链反而强制了正确合并顺序）；合并链里 `npm run lint | tail -1` 吞退出码致 20 条预存诊断漏网（至少 M6a 起）——管道退役，另花两个清理提交清零（含一个用既有 throwing-script 模式替代豁免注释的教训）
+
 - **M6a 扩展门覆盖子代理**（2026-09-04）：`runSubagent` 透传 `onToolCall` 给子循环；`ToolCallEvent` 增量字段 `subagent?: boolean` + `agent?: string`（现有扩展零改动即覆盖子代理——guardian 的 bash 规则与路径规则自动约束分身）；被拦截的子代理调用返回教学式错误结果，子代理可自行改道。三层测试：runSubagent 单元（透传+拦截恢复）、task 工具（agent 名上下文）、runner 级（真实扩展文件 + 真实 `.imp/agents/` 发现 + 真实 loader）
 
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）

@@ -138,7 +138,10 @@ export default function (api) {
   "message_end" | "run_end")` subscribes to loop/turn events — `tool_call`
   handlers run after argument validation and before execution, and a block
   decision becomes the tool result the model sees (teaching-style reason and
-  all), so the run adapts instead of dying.
+  all), so the run adapts instead of dying. Subagent tool calls pass through
+  the same gate: those events carry `subagent: true` plus the `agent` profile
+  name (if any), so a gate can hold children to stricter rules than the main
+  loop.
 - A bad extension never kills imp: load failures, registration conflicts, and
   handler throws each become one `imp:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).

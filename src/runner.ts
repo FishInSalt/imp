@@ -190,6 +190,16 @@ class RunnerImpl implements Runner {
 				getSession: () => this.sessionStore,
 				sessionBaseDir: options.sessionBaseDir,
 				agents: this.agents.agents,
+				// Same registry gate as the main loop, but events are marked
+				// subagent-sourced so "tool_call" handlers can tell children
+				// apart (M6a — closes the M5 design Q3 gap).
+				onToolCall: (call, info) =>
+					this.options.extensions?.emitToolCall({
+						type: "tool_call",
+						...call,
+						subagent: true,
+						agent: info.agent,
+					}),
 			}),
 		);
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";

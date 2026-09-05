@@ -211,6 +211,35 @@ describe("runSubagent", () => {
 	});
 });
 
+	it("M6a: onToolCall forwards to the child loop — blocked calls return an isError result the child can recover from", async () => {
+		const sink: LLMRequest[] = [];
+		const seen: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }]),
+				assistant([{ type: "text", text: "gate blocked me, adjusting" }]),
+			],
+			sink,
+		);
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "PARENT",
+			tools: [echo],
+			prompt: "go",
+			onToolCall: (call) => {
+				seen.push({ name: call.name, args: call.args });
+				return { block: true, reason: "not allowed in scout mode" };
+			},
+		});
+		expect(seen).toEqual([{ name: "echo", args: { message: "hi" } }]);
+		// the child saw the block reason as its tool result (request 2 carries it)
+		const second = JSON.stringify((sink[1] as LLMRequest).messages);
+		expect(second).toContain("not allowed in scout mode");
+		expect(outcome.status).toBe("completed");
+		expect(outcome.text).toBe("gate blocked me, adjusting");
+	});
+
 	it("extraSystem (M5c) lands after CHILD_SUFFIX, append-only", async () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], sink);

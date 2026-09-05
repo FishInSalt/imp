@@ -56,11 +56,15 @@ describe("parseAgentFile", () => {
 	});
 
 	it("teaching diagnostics: missing name, missing description, no frontmatter, unterminated, bad timeout", () => {
-		expect(parseAgentFile("---\ndescription: x\n---\n", "/x/1.md")).toBe('/x/1.md: missing required field "name"');
+		expect(parseAgentFile("---\ndescription: x\n---\n", "/x/1.md")).toBe(
+			'/x/1.md: missing required field "name"',
+		);
 		expect(parseAgentFile("---\nname: x\n---\n", "/x/2.md")).toBe(
 			'/x/2.md: missing required field "description"',
 		);
-		expect(parseAgentFile("just body\n", "/x/3.md")).toBe('/x/3.md: no frontmatter — start the file with a "---" line');
+		expect(parseAgentFile("just body\n", "/x/3.md")).toBe(
+			'/x/3.md: no frontmatter — start the file with a "---" line',
+		);
 		expect(parseAgentFile("---\nname: x\ndescription: y\n", "/x/4.md")).toBe(
 			'/x/4.md: unterminated frontmatter — close it with a "---" line',
 		);
@@ -76,9 +80,9 @@ describe("parseAgentFile", () => {
 describe("loadAgentDefinitions", () => {
 	it("discovers user + project agents, alphabetical; project wins on collision", () => {
 		const t = tempProject();
-		agentFile(t.homeDir, "zz-user", '---\nname: zz-user\ndescription: from home\n---\nH');
-		agentFile(t.projectDir, "scout", '---\nname: scout\ndescription: from project\n---\nP');
-		agentFile(t.homeDir, "scout", '---\nname: scout\ndescription: from home\n---\nH');
+		agentFile(t.homeDir, "zz-user", "---\nname: zz-user\ndescription: from home\n---\nH");
+		agentFile(t.projectDir, "scout", "---\nname: scout\ndescription: from project\n---\nP");
+		agentFile(t.homeDir, "scout", "---\nname: scout\ndescription: from home\n---\nH");
 		const { agents, warnings } = loadAgentDefinitions(t.cwd, t.home);
 		expect(warnings).toEqual([]);
 		expect(agents.map((a) => a.name)).toEqual(["scout", "zz-user"]); // alphabetical
@@ -90,10 +94,12 @@ describe("loadAgentDefinitions", () => {
 	it("invalid files warn and are skipped; valid ones still load", () => {
 		const t = tempProject();
 		agentFile(t.projectDir, "bad", "---\nname: bad\n---\n");
-		agentFile(t.projectDir, "good", '---\nname: good\ndescription: fine\n---\nok');
+		agentFile(t.projectDir, "good", "---\nname: good\ndescription: fine\n---\nok");
 		const { agents, warnings } = loadAgentDefinitions(t.cwd, t.home);
 		expect(agents.map((a) => a.name)).toEqual(["good"]);
-		expect(warnings).toEqual(['agent file skipped: ' + path.join(t.projectDir, "bad.md") + ': missing required field "description"']);
+		expect(warnings).toEqual([
+			`agent file skipped: ${path.join(t.projectDir, "bad.md")}: missing required field "description"`,
+		]);
 	});
 
 	it("missing directories → empty registry, no warnings; non-.md files ignored", () => {

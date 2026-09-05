@@ -1,4 +1,5 @@
 import path from "node:path";
+import { type AgentRegistry, loadAgentDefinitions } from "./core/agents/registry.js";
 import {
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -10,10 +11,9 @@ import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
-import { createSession, listSessions, resolveSession } from "./core/session/manager.js";
 import type { SessionInfo } from "./core/session/manager.js";
+import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { SessionStore } from "./core/session/store.js";
-import { SessionNotFoundError } from "./core/session/manager.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -21,7 +21,6 @@ import { createFindTool } from "./core/tools/find.js";
 import { createGrepTool } from "./core/tools/grep.js";
 import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
-import { loadAgentDefinitions, type AgentRegistry } from "./core/agents/registry.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
@@ -205,13 +204,15 @@ class RunnerImpl implements Runner {
 				],
 				// Same registry gate as the main loop, but events are marked
 				// subagent-sourced so "tool_call" handlers can tell children
-				// apart (M6a — closes the M5 design Q3 gap).
+				// apart (M6a — closes the M5 design Q3 gap). cwd is the child's
+				// own working directory — the worktree path under isolation (M6b).
 				onToolCall: (call, info) =>
 					this.options.extensions?.emitToolCall({
 						type: "tool_call",
 						...call,
 						subagent: true,
 						agent: info.agent,
+						cwd: info.cwd,
 					}),
 				// Child tool_end feeds extension observers (audit trails) with
 				// the same discriminator — and nothing else: options.onEvent
@@ -228,6 +229,7 @@ class RunnerImpl implements Runner {
 						isError: result.isError,
 						subagent: true,
 						agent: info.agent,
+						cwd: info.cwd,
 					});
 				},
 			}),
@@ -363,8 +365,11 @@ class RunnerImpl implements Runner {
 				},
 				// The gate seam: the registry chains "tool_call" handlers in load
 				// order and fails safe on a throwing handler (E9) — the loop only
-				// knows the generic { block, reason } decision.
-				onToolCall: (call) => this.options.extensions?.emitToolCall({ type: "tool_call", ...call }),
+				// knows the generic { block, reason } decision. Events carry the
+				// runner's cwd so gates resolve relative paths against the loop
+				// that is about to execute them (M6b).
+				onToolCall: (call) =>
+					this.options.extensions?.emitToolCall({ type: "tool_call", ...call, cwd: this.options.cwd }),
 				onBeforeTurn: session
 					? async (history) => {
 							if (!this.autoCompact) return;
@@ -388,6 +393,7 @@ class RunnerImpl implements Runner {
 							name: result.toolName,
 							output: result.content,
 							isError: result.isError,
+							cwd: this.options.cwd,
 						});
 					}
 				},

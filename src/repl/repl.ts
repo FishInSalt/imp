@@ -1,16 +1,17 @@
 import type { Readable } from "node:stream";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
+import type { SessionStore } from "../core/session/store.js";
+import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { VERSION } from "../format.js";
+import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { CommandContext } from "./commands.js";
 import { dispatchCommand, parseCommand } from "./commands.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import { replaySession } from "./replay.js";
-import type { SessionStore } from "../core/session/store.js";
-import type { Renderer } from "../render.js";
 
 export interface ReplOptions {
 	runner: Runner;
@@ -21,6 +22,10 @@ export interface ReplOptions {
 	output?: ReplOutput; // default process.stdout
 	interactive?: boolean; // default: stdin && stdout TTY
 	exit?: (code: number) => never; // default process.exit; injected in tests
+	/** Interactive confirm host for extension gates (api.confirm): created by
+	 *  cli.ts before extension loading (which precedes this call) and bound
+	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
+	confirm?: TtyConfirm;
 }
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
@@ -28,6 +33,39 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
 /** Queued/steering display: cap at 80 chars, ellipsis when truncated. */
 function shorten(text: string): string {
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+/**
+ * The interactive side of api.confirm: one host created before extension
+ * loading (cli.ts loads extensions before the REPL exists), bound to the
+ * live ReplInput once runRepl starts. Unbound (scripted mode, tests): the
+ * same never-hangs contract as the registry fallback — false + one stderr
+ * teaching line.
+ */
+export class TtyConfirm {
+	private ask: ((question: string) => Promise<boolean>) | null = null;
+	private readonly renderer: Renderer;
+
+	constructor(renderer: Renderer) {
+		this.renderer = renderer;
+	}
+
+	/** The confirm handler — pass to loadExtensions when interactive. */
+	readonly handler = (message: string, detail?: string): Promise<boolean> => {
+		this.renderer.note(`▪ confirm: ${message}`);
+		if (detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
+		const ask = this.ask;
+		if (ask === null) {
+			process.stderr.write(NO_CONFIRM_LINE);
+			return Promise.resolve(false);
+		}
+		return ask("proceed? [y/N] ");
+	};
+
+	/** runRepl binds the live tty once its input exists. */
+	bind(ask: (question: string) => Promise<boolean>): void {
+		this.ask = ask;
+	}
 }
 
 interface ReplMachineOptions {
@@ -252,7 +290,7 @@ class ReplMachine {
 		// lost otherwise (dogfood report 2026-09-01: 6 tool results survived,
 		// the user just wasn't told they could type 继续).
 		this.renderer.note(
-			"completed work from this turn is saved in the session — send another message (e.g. \"继续\") to resume from the break",
+			'completed work from this turn is saved in the session — send another message (e.g. "继续") to resume from the break',
 		);
 		this.discardQueue();
 		this.returnToIdle();
@@ -366,7 +404,10 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	const runner = options.runner;
 	const renderer = runner.renderer; // one renderer, one newline state, shared with the runner
 	const replay = (session: SessionStore): number =>
-		replaySession({ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true }, session);
+		replaySession(
+			{ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true },
+			session,
+		);
 
 	let resolveDone!: (code: number) => void;
 	const done = new Promise<number>((resolve) => {
@@ -399,6 +440,9 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		finish,
 		replay,
 	});
+	// api.confirm's tty side: route questions to this REPL's single readline
+	// interface (a second interface would race it for stdin bytes).
+	options.confirm?.bind((question: string) => input.ask(question));
 
 	input.start();
 	if (interactive) {

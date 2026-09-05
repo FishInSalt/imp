@@ -1,24 +1,23 @@
 import path from "node:path";
 import { Type } from "typebox";
-import { formatTokens } from "../../format.js";
 import type { LLMProvider } from "../../provider/types.js";
-import { MAX_BYTES } from "../constants.js";
 import type { AgentDefinition } from "../agents/registry.js";
-import {
-	buildWorktreeNotice,
-	buildWorktreeTrailer,
-	createChildWorktree,
-	hasWorktreeChanges,
-	removeChildWorktree,
-	resolveRepoState,
-	worktreeChangeStat,
-	type ChildWorktree,
-	type RepoState,
-} from "../worktree.js";
+import { MAX_BYTES } from "../constants.js";
+import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
-import type { AgentEvent, ToolCallDecision } from "../loop.js";
+import {
+	buildWorktreeNotice,
+	buildWorktreeTrailer,
+	type ChildWorktree,
+	createChildWorktree,
+	hasWorktreeChanges,
+	type RepoState,
+	removeChildWorktree,
+	resolveRepoState,
+	worktreeChangeStat,
+} from "../worktree.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 /**
@@ -34,7 +33,9 @@ const taskSchema = Type.Object({
 			"Complete, self-contained task for a fresh subagent. It sees nothing of this conversation; include all needed context (paths, what to return).",
 	}),
 	agent: Type.Optional(
-		Type.String({ description: "Named agent to run (listed in the tool description); omit for a generic subagent" }),
+		Type.String({
+			description: "Named agent to run (listed in the tool description); omit for a generic subagent",
+		}),
 	),
 	worktree: Type.Optional(
 		Type.Boolean({
@@ -61,15 +62,17 @@ export interface TaskToolOptions {
 	/** Injectable wall clock for tests. */
 	timeoutMs?: number;
 	/** The parent's permission gate, forwarded into the child loop (M6a).
-	 * Receives the call plus which named agent (if any) is running — the
-	 * caller marks the event as subagent-sourced. */
+	 * Receives the call plus which named agent (if any) is running and the
+	 * child's working directory — the worktree path when isolation is active
+	 * (M6b) — the caller marks the event as subagent-sourced. */
 	onToolCall?: (
 		call: { toolCallId: string; name: string; args: Record<string, unknown> },
-		info: { agent?: string },
+		info: { agent?: string; cwd?: string },
+		// biome-ignore lint/suspicious/noConfusingVoidType: mirrors the loop's gate contract — a gate may return a decision, nothing (void), or undefined
 	) => Promise<ToolCallDecision | void | undefined> | ToolCallDecision | void | undefined;
 	/** Observes the child's tool events (tool_start/tool_end) with the same
-	 * agent context as onToolCall (M6a audit path). */
-	onEvent?: (event: AgentEvent, info: { agent?: string }) => void;
+	 * agent and cwd context as onToolCall (M6a audit path). */
+	onEvent?: (event: AgentEvent, info: { agent?: string; cwd?: string }) => void;
 	/** The parent's working directory — worktree children resolve the repo
 	 * from here (M6b). Defaults to process.cwd() at spawn time. */
 	cwd?: string;
@@ -111,8 +114,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 	return {
 		name: "task",
 		concurrencySafe: true,
-		description:
-			`Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time.${roster}`,
+		description: `Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time.${roster}`,
 		parameters: taskSchema,
 
 		async execute(args, signal): Promise<ToolExecuteResult> {
@@ -144,17 +146,26 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			};
 
 			// Worktree isolation (M6b): agent frontmatter default, call override.
-			const wantWorktree = args.worktree === true || (args.worktree === undefined && agent?.worktree === true);
+			const wantWorktree =
+				args.worktree === true || (args.worktree === undefined && agent?.worktree === true);
 			let wt: ChildWorktree | undefined;
 			let repo: RepoState | undefined;
 			let cleanupErrors: string[] = [];
 			let prompt = String(args.prompt);
 			let tools: Tool[];
+			// Child cwd for gate events (M6b): the worktree path when isolation is
+			// active, otherwise the parent's cwd — gates resolve paths against the
+			// loop that executes the call, not the project root.
+			let childCwd = options.cwd ?? process.cwd();
 			if (wantWorktree) {
 				const cwd = options.cwd ?? process.cwd();
 				try {
 					repo = await resolveRepoState(cwd);
-					wt = await createChildWorktree(repo, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, options.worktreeBaseDir);
+					wt = await createChildWorktree(
+						repo,
+						`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+						options.worktreeBaseDir,
+					);
 				} catch (err) {
 					return {
 						output: err instanceof Error ? err.message : String(err),
@@ -164,6 +175,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				// Subdirectory parents keep their relative position inside the
 				// worktree (pi's agentCwd pattern): relative paths keep working.
 				const agentCwd = repo.cwdRelative ? path.join(wt.path, repo.cwdRelative) : wt.path;
+				childCwd = agentCwd;
 				prompt += buildWorktreeNotice(wt, agentCwd, cwd);
 				// A worktree child without a per-cwd pool would inherit tools
 				// rooted at the PARENT cwd — silently violating the isolation
@@ -173,7 +185,8 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				if (rebuilt === undefined) {
 					cleanupErrors = await removeChildWorktree(wt, repo);
 					return {
-						output: "worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.",
+						output:
+							"worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.",
 						isError: true,
 					};
 				}
@@ -191,7 +204,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			const effectiveTimeout = agent?.timeoutMs ?? timeoutMs;
 
 			let session: SessionStore | null = null;
-			let outcome;
+			let outcome: SubagentOutcome;
 			try {
 				if (childSessions) {
 					const parent = options.getSession();
@@ -209,10 +222,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					session: session ?? undefined,
 					onMessage: session ? (message) => session?.appendMessage(message) : undefined,
 					onToolCall: options.onToolCall
-						? (call) => options.onToolCall?.(call, { agent: agent?.name })
+						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd })
 						: undefined,
 					onEvent: options.onEvent
-						? (event) => options.onEvent?.(event, { agent: agent?.name })
+						? (event) => options.onEvent?.(event, { agent: agent?.name, cwd: childCwd })
 						: undefined,
 				});
 			} finally {
@@ -230,7 +243,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			const base = taskResult(outcome, session, effectiveTimeout);
 			if (wt === undefined && cleanupErrors.length === 0) return base;
 			if (wt === undefined) {
-				return { ...base, output: `${base.output}\n[task] worktree cleanup failed: ${cleanupErrors.join("; ")}` };
+				return {
+					...base,
+					output: `${base.output}\n[task] worktree cleanup failed: ${cleanupErrors.join("; ")}`,
+				};
 			}
 			const stat = await worktreeChangeStat(wt, repo as RepoState);
 			return { ...base, output: `${base.output}${buildWorktreeTrailer(wt, stat)}` };
@@ -265,7 +281,7 @@ export function taskResult(
 	}
 
 	// Success-shaped: completed / max_iterations / crash-with-partial.
-	let text = outcome.text ?? "(subagent completed with no output)";
+	const text = outcome.text ?? "(subagent completed with no output)";
 	const { text: tail, dropped } = tailTruncate(text);
 	const parts: string[] = [];
 	if (dropped > 0) {

@@ -1,23 +1,25 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
-import { assistant, gate, scriptedProvider, user } from "./helpers/fakes.js";
-import { createChildSession, createSession, listSessions, sessionsDirFor } from "../src/core/session/manager.js";
+import { describe, expect, it } from "vitest";
+import {
+	createChildSession,
+	createSession,
+	listSessions,
+	sessionsDirFor,
+} from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import type { SubagentOutcome } from "../src/core/subagent.js";
 import { buildSystemPrompt } from "../src/core/system-prompt.js";
 import { createTaskTool, taskResult } from "../src/core/tools/task.js";
-import type { SubagentOutcome } from "../src/core/subagent.js";
-import type { ToolExecuteResult } from "../src/core/tools/types.js";
-import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
-import { createWriteTool } from "../src/core/tools/write.js";
-import type { LLMProvider } from "../src/provider/types.js";
-import type { LLMRequest } from "../src/provider/types.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { createWriteTool } from "../src/core/tools/write.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
-import { makeRenderer } from "./helpers/fakes.js";
+import { assistant, gate, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
 
 const echo: Tool = {
 	name: "echo",
@@ -89,7 +91,9 @@ describe("taskResult contract (§3)", () => {
 
 	it("aborted without a session: 'not persisted'", () => {
 		const result = taskResult(outcome({ status: "aborted" }), null);
-		expect(result.output).toBe("task aborted before completion (2 turns ran). Partial transcript: not persisted.");
+		expect(result.output).toBe(
+			"task aborted before completion (2 turns ran). Partial transcript: not persisted.",
+		);
 	});
 
 	it("timeout: isError with the injected budget in seconds", () => {
@@ -98,10 +102,7 @@ describe("taskResult contract (§3)", () => {
 	});
 
 	it("crash with partial text: success-shaped + failure trailer; no usage ambiguity", () => {
-		const result = taskResult(
-			outcome({ status: "crash", reason: "endpoint exploded", turns: 2 }),
-			null,
-		);
+		const result = taskResult(outcome({ status: "crash", reason: "endpoint exploded", turns: 2 }), null);
 		expect(result.isError).toBe(false);
 		expect(result.output).toBe(
 			"answer text\n\n[task] child failed after 2 turns: endpoint exploded; partial result above.\n\n(child: 2 turns, 10 in / 5 out)",
@@ -109,7 +110,10 @@ describe("taskResult contract (§3)", () => {
 	});
 
 	it("zero-turn crash: isError teaching line", () => {
-		const result = taskResult(outcome({ status: "crash", reason: "connection refused", text: undefined, turns: 0 }), null);
+		const result = taskResult(
+			outcome({ status: "crash", reason: "connection refused", text: undefined, turns: 0 }),
+			null,
+		);
 		expect(result.isError).toBe(true);
 		expect(result.output).toBe(
 			"task failed after 0 turns: connection refused. Partial transcript: not persisted.",
@@ -208,7 +212,10 @@ describe("createTaskTool end-to-end", () => {
 		const sink: LLMRequest[] = [];
 		let model = "old-model";
 		const task = createTaskTool({
-			provider: scriptedProvider([assistant([{ type: "text", text: "1" }]), assistant([{ type: "text", text: "2" }])], sink),
+			provider: scriptedProvider(
+				[assistant([{ type: "text", text: "1" }]), assistant([{ type: "text", text: "2" }])],
+				sink,
+			),
 			getModel: () => model,
 			getSystem: () => "SYS",
 			getTools: () => [echo],
@@ -274,14 +281,19 @@ describe("named agents (M5c)", () => {
 
 	it("named agent: model + tools subset + system order (parent → CHILD_SUFFIX → agent body)", async () => {
 		const { task, sink } = agentTask([scout]);
-		const result = await task.execute({ prompt: "find the bug", agent: "scout" }, new AbortController().signal);
+		const result = await task.execute(
+			{ prompt: "find the bug", agent: "scout" },
+			new AbortController().signal,
+		);
 		expect(result.isError ?? false).toBe(false);
 		const request = sink[0] as LLMRequest;
 		expect(request.model).toBe("glm-4.6"); // frontmatter override beats parent
 		expect(request.tools.map((t) => t.name)).toEqual(["echo"]); // subset
 		expect(request.system.indexOf("PARENT-SYSTEM")).toBe(0);
 		expect(request.system.indexOf("Subagent mode")).toBeGreaterThan("PARENT-SYSTEM".length);
-		expect(request.system.indexOf("AGENT-BODY-MARKER")).toBeGreaterThan(request.system.indexOf("Subagent mode"));
+		expect(request.system.indexOf("AGENT-BODY-MARKER")).toBeGreaterThan(
+			request.system.indexOf("Subagent mode"),
+		);
 	});
 
 	it("agent listing an unknown tool → teaching error listing the valid pool; provider never called", async () => {
@@ -289,9 +301,7 @@ describe("named agents (M5c)", () => {
 		const { task, sink } = agentTask([bad]);
 		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
 		expect(result.isError).toBe(true);
-		expect(result.output).toBe(
-			'agent "scout" lists unknown tools: bash2. Available: echo.',
-		);
+		expect(result.output).toBe('agent "scout" lists unknown tools: bash2. Available: echo.');
 		expect(sink).toHaveLength(0);
 	});
 
@@ -314,9 +324,10 @@ describe("named agents (M5c)", () => {
 		};
 		const timed = { ...scout, tools: undefined, timeoutMs: 1000 };
 		const sink: LLMRequest[] = [];
-		const provider = scriptedProvider([
-			assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hold" } }]),
-		], sink);
+		const provider = scriptedProvider(
+			[assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hold" } }])],
+			sink,
+		);
 		const task = createTaskTool({
 			provider,
 			getModel: () => "m",
@@ -342,7 +353,7 @@ describe("named agents (M5c)", () => {
 		expect(task.description).not.toContain("Agents:");
 	});
 
-	it("M6a: the gate fires inside the child with the agent name; a block reaches the child as an isError result", async () => {
+	it("M6a: the gate fires inside the child with the agent name and the child's cwd; a block reaches the child as an isError result", async () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider(
 			[
@@ -351,23 +362,24 @@ describe("named agents (M5c)", () => {
 			],
 			sink,
 		);
-		const gateCalls: Array<{ name: string; agent?: string }> = [];
+		const gateCalls: Array<{ name: string; agent?: string; cwd?: string }> = [];
 		const { task } = agentTask([scout], {
 			provider,
-			onToolCall: (call: { name: string }, info: { agent?: string }) => {
-				gateCalls.push({ name: call.name, agent: info.agent });
+			cwd: "/wired-parent-cwd", // the runner always passes its cwd — pinned here (M6b)
+			onToolCall: (call: { name: string }, info: { agent?: string; cwd?: string }) => {
+				gateCalls.push({ name: call.name, agent: info.agent, cwd: info.cwd });
 				return { block: true, reason: "scout is read-only" };
 			},
 		});
 		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
-		expect(gateCalls).toEqual([{ name: "echo", agent: "scout" }]);
+		expect(gateCalls).toEqual([{ name: "echo", agent: "scout", cwd: "/wired-parent-cwd" }]);
 		// the block reason is the child's tool result (request 2), and the child recovered
 		expect(JSON.stringify(sink[1]?.messages)).toContain("scout is read-only");
 		expect(result.isError ?? false).toBe(false);
 		expect(result.output).toContain("noted the block");
 	});
 
-	it("M6a: onEvent observes the child's tool events with the agent name", async () => {
+	it("M6a: onEvent observes the child's tool events with the agent name and cwd", async () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider(
 			[
@@ -376,19 +388,20 @@ describe("named agents (M5c)", () => {
 			],
 			sink,
 		);
-		const events: Array<{ type: string; agent?: string }> = [];
+		const events: Array<{ type: string; agent?: string; cwd?: string }> = [];
 		const { task } = agentTask([scout], {
 			provider,
-			onEvent: (event: { type: string }, info: { agent?: string }) => {
+			cwd: "/wired-parent-cwd",
+			onEvent: (event: { type: string }, info: { agent?: string; cwd?: string }) => {
 				if (event.type === "tool_start" || event.type === "tool_end") {
-					events.push({ type: event.type, agent: info.agent });
+					events.push({ type: event.type, agent: info.agent, cwd: info.cwd });
 				}
 			},
 		});
 		await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
 		expect(events).toEqual([
-			{ type: "tool_start", agent: "scout" },
-			{ type: "tool_end", agent: "scout" },
+			{ type: "tool_start", agent: "scout", cwd: "/wired-parent-cwd" },
+			{ type: "tool_end", agent: "scout", cwd: "/wired-parent-cwd" },
 		]);
 	});
 
@@ -477,7 +490,7 @@ describe("runner integration (default set)", () => {
 		mkdirSync(path.join(cwd, ".imp", "agents"), { recursive: true });
 		writeFileSync(
 			path.join(cwd, ".imp", "agents", "scout.md"),
-			'---\nname: scout\ndescription: explores\nmodel: glm-4.6\n---\nAGENT-BODY-RUNNER',
+			"---\nname: scout\ndescription: explores\nmodel: glm-4.6\n---\nAGENT-BODY-RUNNER",
 			"utf8",
 		);
 		writeFileSync(path.join(cwd, ".imp", "agents", "broken.md"), "---\nname: broken\n---\n", "utf8");
@@ -557,11 +570,41 @@ describe("worktree isolation (M6b)", () => {
 				childCwds.push(cwd);
 				return [createWriteTool({ cwd })];
 			},
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-e2e-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+			worktreeBaseDir: path.join(
+				tmpdir(),
+				`imp-wt-e2e-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+			),
 			...overrides,
 		});
 		return { task, sink, root, childCwds, rgit };
 	}
+
+	it("M6b: the child gate receives the worktree path as info.cwd — gates resolve against the caller's tree, not the parent", async () => {
+		const sink: LLMRequest[] = [];
+		const gateCalls: Array<{ name: string; cwd?: string }> = [];
+		const { task, childCwds } = await repoTask({
+			provider: scriptedProvider(
+				[
+					assistant([
+						{ type: "toolCall", id: "w1", name: "write", arguments: { path: "note.txt", content: "x" } },
+					]),
+					assistant([{ type: "text", text: "done" }]),
+				],
+				sink,
+			),
+			onToolCall: (call: { name: string }, info: { cwd?: string }) => {
+				gateCalls.push({ name: call.name, cwd: info.cwd });
+			},
+		});
+		const result = await task.execute(
+			{ prompt: "write note.txt", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.isError ?? false).toBe(false);
+		const wtPath = childCwds[0] as string;
+		expect(wtPath).toContain("imp-worktree-");
+		expect(gateCalls).toEqual([{ name: "write", cwd: wtPath }]); // the worktree, not the repo root
+	});
 
 	it("a child writing inside its worktree keeps the work: file lands there, parent tree untouched, trailer names the branch", async () => {
 		const sink: LLMRequest[] = [];
@@ -581,7 +624,10 @@ describe("worktree isolation (M6b)", () => {
 				sink,
 			),
 		});
-		const result = await task.execute({ prompt: "write child-note.txt", worktree: true }, new AbortController().signal);
+		const result = await task.execute(
+			{ prompt: "write child-note.txt", worktree: true },
+			new AbortController().signal,
+		);
 		expect(result.isError ?? false).toBe(false);
 		const childPrompt = JSON.stringify((sink[0] as LLMRequest).messages);
 		expect(childPrompt).toContain("[worktree]");
@@ -677,7 +723,10 @@ describe("worktree isolation (M6b)", () => {
 		const r1 = await task.execute({ prompt: "build", agent: "builder" }, new AbortController().signal);
 		expect(childCwds).toHaveLength(1);
 		expect(r1.output).toContain("idle");
-		const r2 = await task.execute({ prompt: "build again", agent: "builder", worktree: false }, new AbortController().signal);
+		const r2 = await task.execute(
+			{ prompt: "build again", agent: "builder", worktree: false },
+			new AbortController().signal,
+		);
 		expect(childCwds).toHaveLength(1);
 		expect(r2.output).toContain("idle");
 	});
@@ -695,7 +744,12 @@ describe("worktree isolation (M6b)", () => {
 					yield {
 						type: "message_end",
 						message: assistant([
-							{ type: "toolCall", id: "w1", name: "write", arguments: { path: "crash-work.txt", content: "before the crash" } },
+							{
+								type: "toolCall",
+								id: "w1",
+								name: "write",
+								arguments: { path: "crash-work.txt", content: "before the crash" },
+							},
 						]),
 					};
 					return;
@@ -704,12 +758,15 @@ describe("worktree isolation (M6b)", () => {
 			},
 		};
 		const { task, root } = await repoTask({ provider: throwing });
-		const result = await task.execute({ prompt: "write then die", worktree: true }, new AbortController().signal);
+		const result = await task.execute(
+			{ prompt: "write then die", worktree: true },
+			new AbortController().signal,
+		);
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("endpoint exploded");
 		expect(result.output).toContain("[task] changes kept in worktree");
-		const wtLine = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" }).stdout
-			.split("\n")
+		const wtLine = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" })
+			.stdout.split("\n")
 			.find((l) => l.startsWith("worktree ") && l.includes("imp-worktree-"));
 		const wtPath = wtLine?.slice("worktree ".length).trim() ?? "";
 		expect(existsSync(path.join(wtPath, "crash-work.txt"))).toBe(true);
@@ -749,7 +806,14 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getToolsForCwd: () => [],
 			worktreeBaseDir: path.join(tmpdir(), `imp-wt-b1-base-${Date.now()}`),
 			agents: [
-				{ name: "builder", description: "writes", worktree: true, tools: ["nonexistent_tool"], system: "b", source: "/x/b.md" },
+				{
+					name: "builder",
+					description: "writes",
+					worktree: true,
+					tools: ["nonexistent_tool"],
+					system: "b",
+					source: "/x/b.md",
+				},
 			],
 		});
 		const result = await task.execute({ prompt: "build", agent: "builder" }, new AbortController().signal);
@@ -830,7 +894,10 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			},
 			worktreeBaseDir: path.join(tmpdir(), `imp-wt-stat-base-${Date.now()}`),
 		});
-		const result = await task.execute({ prompt: "build and commit", worktree: true }, new AbortController().signal);
+		const result = await task.execute(
+			{ prompt: "build and commit", worktree: true },
+			new AbortController().signal,
+		);
 		expect(result.output).toContain("changes kept in worktree");
 		// diff vs BASE commit: the committed change is visible in the stat
 		expect(result.output).toMatch(/files? changed/);
@@ -898,7 +965,10 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 					childCwds.push(cwd);
 					return [];
 				},
-				worktreeBaseDir: path.join(tmpdir(), `imp-wt-par-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+				worktreeBaseDir: path.join(
+					tmpdir(),
+					`imp-wt-par-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+				),
 			});
 		const [r1, r2] = await Promise.all([
 			make().execute({ prompt: "a", worktree: true }, new AbortController().signal),

@@ -4,7 +4,7 @@ import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from
 import type { RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
-import { runRepl } from "./repl/repl.js";
+import { runRepl, TtyConfirm } from "./repl/repl.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
@@ -200,13 +200,20 @@ async function main(): Promise<void> {
  * after the renderer exists and before createRunner, streaming failure
  * lines through renderer.error and then the dim `▪` banner — so extension
  * output always precedes the runner's own banners (incl. `▪ context:`).
+ * `confirm` is the interactive handler (REPL only); print mode passes none,
+ * so api.confirm there declines with a teaching line instead of hanging.
  */
-async function loadExtensionSetup(opts: CliOptions, renderer: Renderer): Promise<LoadedExtensions> {
+async function loadExtensionSetup(
+	opts: CliOptions,
+	renderer: Renderer,
+	confirm?: (message: string, detail?: string) => Promise<boolean>,
+): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({
 		cwd: process.cwd(),
 		cliPaths: opts.extensionPaths,
 		noDiscovery: opts.noExtensions,
 		onDiagnostic: (line) => renderer.error(line),
+		confirm,
 	});
 	printExtensionDiagnostics(loaded.summaries, (line) => renderer.note(line));
 	return loaded;
@@ -226,10 +233,13 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		toolStyle: "one-line",
 		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text
 	});
+	// Extension confirm (interactive only): the host exists before extensions
+	// load; runRepl binds it to the live tty prompt once the REPL starts.
+	const confirm = interactive ? new TtyConfirm(renderer) : undefined;
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
 	try {
-		const extensions = await loadExtensionSetup(opts, renderer);
+		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler);
 		commands = extensions.runtime.commands;
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
@@ -243,7 +253,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	let code: number;
 	try {
-		code = await runRepl({ runner, commands });
+		code = await runRepl({ runner, commands, confirm });
 	} catch (err) {
 		reportStartupError(err);
 		runner.close();

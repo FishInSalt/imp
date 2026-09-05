@@ -98,6 +98,50 @@ describe("session manager", () => {
 		expect(resumed?.header.id).toBe("deadbeef-0001");
 	});
 
+	it("listing a forked session counts only the head branch", async () => {
+		const { baseDir, cwd } = await setup();
+		const store = seed(baseDir, cwd, [user("question A"), assistantText("answer A")]);
+		// Fork rooted before the assistant answer, appended directly to the
+		// append-only file — the listing must show the head branch, not the tree.
+		const forkParentId = store.getEntries()[0]?.id ?? null;
+		const { appendFileSync } = await import("node:fs");
+		appendFileSync(
+			store.filePath,
+			`${JSON.stringify({
+				type: "message",
+				id: "aa11bb22",
+				parentId: forkParentId,
+				timestamp: new Date().toISOString(),
+				message: user("question B"),
+			})}\n`,
+		);
+		const list = listSessions(cwd, baseDir);
+		expect(list.length).toBe(1);
+		expect(list[0]?.messageCount).toBe(2); // question A + question B; answer A is off-branch
+		expect(list[0]?.turnCount).toBe(0);
+	});
+
+	it("session files with a broken parent chain are skipped, not fatal", async () => {
+		const { baseDir, cwd } = await setup();
+		seed(baseDir, cwd, [user("good"), assistantText("one")]);
+		const dir = sessionsDirFor(cwd, baseDir);
+		const broken = SessionStore.create(path.join(dir, "broken-chain.jsonl"), cwd, "cccc0000-0000");
+		broken.appendMessage(user("q"));
+		broken.appendMessage(assistantText("a"));
+		// Dangle the last entry's parentId: open() still loads it, but stats()
+		// walks the branch and throws — the listing must skip the file, not crash.
+		const fs = await import("node:fs");
+		const lines = fs.readFileSync(broken.filePath, "utf8").trimEnd().split("\n");
+		const last = JSON.parse(lines[lines.length - 1] as string) as { parentId: string };
+		last.parentId = "deadbeef";
+		lines[lines.length - 1] = JSON.stringify(last);
+		fs.writeFileSync(broken.filePath, `${lines.join("\n")}\n`);
+
+		const list = listSessions(cwd, baseDir);
+		expect(list.length).toBe(1);
+		expect(list[0]?.title).toBe("good");
+	});
+
 	it("corrupt session files are skipped, not fatal", async () => {
 		const { baseDir, cwd } = await setup();
 		seed(baseDir, cwd, [user("good"), assistantText("one")]);

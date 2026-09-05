@@ -1,8 +1,17 @@
 import type { LLMProvider } from "../provider/types.js";
 import { formatTokens } from "../format.js";
+import {
+	compactHistory,
+	compactSession,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateContextTokens,
+	shouldCompact,
+	type CompactionSettings,
+} from "./compaction.js";
 import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
 import { runAgentLoop, type RunAgentLoopOptions, type RunAgentLoopResult } from "./loop.js";
 import type { AgentMessage, Usage } from "./messages.js";
+import { summaryToMessage, type SessionStore } from "./session/store.js";
 import type { Tool } from "./tools/types.js";
 
 /**
@@ -39,6 +48,16 @@ export interface SubagentOptions {
 	timeoutMs?: number;
 	/** Fires for every child message (the task tool persists its transcript). */
 	onMessage?: (message: AgentMessage) => void;
+	/** The child's session store (the task tool's children/ file). When set,
+	 *  between-turn auto-compaction appends a compaction entry to it and splices
+	 *  the live history from buildContext — mirroring runner.compactAndSplice.
+	 *  The caller owns persistence wiring: onMessage must append to this store
+	 *  (the task tool does), or the splice would rebuild from a stale file. */
+	session?: SessionStore;
+	/** Compaction settings (runner pattern: DEFAULT_COMPACTION_SETTINGS by
+	 *  default, injectable for hermetic tests). Gates the between-turn
+	 *  auto-compaction hook only — never the child's own LLM calls. */
+	settings?: CompactionSettings;
 	/** The parent's permission gate, forwarded to the child loop (M6a): a
 	 * blocked call returns an isError tool result to the child, same semantics
 	 * as the main loop. Concurrent children may interleave gate invocations —
@@ -102,6 +121,64 @@ function historyStats(messages: AgentMessage[]): { turns: number; usage: Usage }
 export async function runSubagent(options: SubagentOptions): Promise<SubagentOutcome> {
 	const timeoutMs = options.timeoutMs ?? CHILD_TIMEOUT_MS;
 	const history: AgentMessage[] = [];
+	const settings = options.settings ?? DEFAULT_COMPACTION_SETTINGS;
+
+	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
+	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.
+	// IMP_AUTOCOMPACT=0 disables it exactly like the main loop. NOTE: compaction
+	// does NOT reset the turn budget — CHILD_MAX_TURNS still bounds the child.
+	// The loop's turn counter is untouched by the history splice: compaction
+	// buys context room, not extra turns.
+	const autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+	const onBeforeTurn: RunAgentLoopOptions["onBeforeTurn"] | undefined = autoCompact
+		? async (history) => {
+				const est = estimateContextTokens(history);
+				if (!shouldCompact(est.tokens, settings)) return;
+				await compactChildHistory(history);
+			}
+		: undefined;
+
+	/** Compact the child's history in place (details inline per branch). A
+	 *  summarizer LLM call failing must not kill the child: the main loop's turn
+	 *  throws there but its host (the REPL) catches it and the next turn retries
+	 *  — a child has no outer host, so the equivalent contract (run survives,
+	 *  un-compacted history, retry at the next turn boundary if still over
+	 *  threshold) is provided by catching here. */
+	async function compactChildHistory(history: AgentMessage[]): Promise<void> {
+		try {
+			if (options.session) {
+				// Session path = runner.compactAndSplice verbatim: the compaction
+				// entry lands in the store, then the live history is rebuilt from
+				// buildContext ([framed summary, ...retainedTail]).
+				const compacted = await compactSession({
+					session: options.session,
+					provider: options.provider,
+					model: options.model,
+					settings,
+				});
+				if (compacted) {
+					history.splice(0, history.length, ...options.session.buildContext().messages);
+				}
+			} else {
+				// No session (sessions disabled): pure computation + in-place splice.
+				// The framed summary keeps the replayed context identical to what a
+				// session store would rebuild (summaryToMessage, SUMMARY_MARK framed).
+				const compacted = await compactHistory({
+					messages: history,
+					provider: options.provider,
+					model: options.model,
+					settings,
+				});
+				if (compacted) {
+					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);
+				}
+			}
+		} catch {
+			// Keep the un-compacted history and continue; the next turn boundary
+			// retries if the estimate is still over the threshold (bounded by
+			// CHILD_MAX_TURNS). The child has no status channel to report to.
+		}
+	}
 
 	// Composite abort: parent signal OR the child's own clock. A manual relay
 	// (not AbortSignal.any) keeps engines ">=20" exactly true — any() needs
@@ -131,6 +208,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			onMessage: options.onMessage,
 			onToolCall: options.onToolCall,
 			onEvent: options.onEvent,
+			onBeforeTurn,
 			signal: child.signal,
 		});
 		if (result.stopReason === "aborted") {

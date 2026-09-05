@@ -124,6 +124,103 @@ describe("SessionStore", () => {
 		expect(stats.outputTokens).toBe(40);
 	});
 
+	it("stats() ignores compaction entries: not messages, usage not folded in", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
+		store.appendMessage(user("q"));
+		store.appendMessage(assistantText("a1"));
+		// compaction carries its own summary-LLM usage — it must stay out of stats
+		store.appendCompaction("SUMMARY TEXT", [user("q"), assistantText("a1")], 50_000, {
+			inputTokens: 999,
+			outputTokens: 999,
+		});
+		store.appendMessage(user("after"));
+		const stats = store.stats();
+		expect(stats.messageCount).toBe(3); // 2 before compaction + 1 after; compaction is not a message
+		expect(stats.turnCount).toBe(1);
+		expect(stats.inputTokens).toBe(100);
+		expect(stats.outputTokens).toBe(20);
+	});
+
+	it("stats() on a linear session matches hand-computed totals (regression pin)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
+		store.appendMessage(user("q1"));
+		store.appendMessage({
+			role: "assistant",
+			blocks: [{ type: "text", text: "a1" }],
+			usage: { inputTokens: 120, outputTokens: 30, cacheReadTokens: 1000, cacheWriteTokens: 500 },
+			stopReason: "end_turn",
+		});
+		// toolResult messages count toward messageCount but carry no usage
+		store.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "call1", toolName: "bash", content: "ok", isError: false }],
+		});
+		store.appendMessage({
+			role: "assistant",
+			blocks: [{ type: "text", text: "a2" }],
+			usage: { inputTokens: 80, outputTokens: 40, cacheReadTokens: 2000 },
+			stopReason: "end_turn",
+		});
+		store.appendMessage(user("q2"));
+
+		// Hand-computed: 5 message entries, 2 assistant turns; usage from
+		// assistants only: input 120+80, output 30+40, cacheRead 1000+2000,
+		// cacheWrite 500 (+0 when absent).
+		expect(store.stats()).toEqual({
+			messageCount: 5,
+			turnCount: 2,
+			inputTokens: 200,
+			outputTokens: 70,
+			cacheReadTokens: 3000,
+			cacheWriteTokens: 500,
+		});
+	});
+
+	it("stats() counts only the current branch after a fork", async () => {
+		const dir = await mkpath();
+		const file = path.join(dir, "s.jsonl");
+		const store = SessionStore.create(file, "/p");
+		store.appendMessage(user("question A"));
+		store.appendMessage(assistantText("answer A"));
+
+		// Fork: append a sibling turn rooted BEFORE "answer A" — the file is
+		// append-only, so the tree grows a second branch and the old one stays.
+		const forkParentId = store.getEntries()[0]?.id ?? null;
+		const fsp = await import("node:fs");
+		fsp.appendFileSync(
+			file,
+			`${JSON.stringify({
+				type: "message",
+				id: "aa11bb22",
+				parentId: forkParentId,
+				timestamp: new Date().toISOString(),
+				message: user("question B"),
+			})}\n`,
+		);
+
+		// Reopen: the forked entry is the new leaf, so turn B grows on it.
+		const reopened = SessionStore.open(file);
+		reopened.appendMessage(assistantText("answer B"));
+
+		// Whole file still holds 4 entries (append-only; answer A is not deleted)
+		expect(reopened.getEntries().length).toBe(4);
+		// ...but stats reflects the head branch only: [question A, question B, answer B]
+		const stats = reopened.stats();
+		expect(stats.messageCount).toBe(3);
+		expect(stats.turnCount).toBe(1); // answer A is on the abandoned branch
+		expect(stats.inputTokens).toBe(100);
+		expect(stats.outputTokens).toBe(20);
+		// context walks the same branch — stats and buildContext must agree
+		const context = reopened.buildContext();
+		expect(context.messages.map((m) => (m.role === "user" ? m.content : m.role))).toEqual([
+			"question A",
+			"question B",
+			"assistant",
+		]);
+	});
+
 	it("compaction entry collapses older messages in buildContext()", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");

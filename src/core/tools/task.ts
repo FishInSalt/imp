@@ -206,6 +206,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					prompt,
 					signal,
 					timeoutMs: effectiveTimeout,
+					session: session ?? undefined,
 					onMessage: session ? (message) => session?.appendMessage(message) : undefined,
 					onToolCall: options.onToolCall
 						? (call) => options.onToolCall?.(call, { agent: agent?.name })

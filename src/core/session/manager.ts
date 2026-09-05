@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { SessionError, type SessionHeader, SessionStore } from "./store.js";
+import { SessionError, type SessionHeader, type SessionStats, SessionStore } from "./store.js";
 
 /**
  * Session discovery: where files live, listing, and `--continue`/`--resume`.
@@ -63,13 +63,16 @@ export function createChildSession(parent: SessionStore, baseDir?: string): Sess
 /** Cheap header + title scan of one session file (reads the whole file; files are small). */
 function inspectSessionFile(filePath: string): SessionInfo | null {
 	let store: SessionStore;
+	let stats: SessionStats;
 	try {
 		store = SessionStore.open(filePath);
+		// stats() walks the branch and throws on a broken parent chain — such
+		// files are skipped like unreadable ones, not fatal to the listing.
+		stats = store.stats();
 	} catch {
 		return null; // unreadable/corrupt files are skipped, not fatal
 	}
 	const header: SessionHeader = store.header;
-	const stats = store.stats();
 	let title = "(empty session)";
 	for (const entry of store.getEntries()) {
 		if (entry.type === "message" && entry.message.role === "user") {

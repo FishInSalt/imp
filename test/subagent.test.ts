@@ -189,6 +189,8 @@ describe("runSubagent", () => {
 	it("crash on the first request: zero turns, no text", async () => {
 		const provider = {
 			name: "dead",
+			// biome-ignore lint/correctness/useYield: a crashing provider never
+			// yields — that IS the scenario under test.
 			async *stream(): AsyncGenerator<never> {
 				throw new Error("connection refused");
 			},

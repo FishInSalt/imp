@@ -3,7 +3,7 @@ import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
-import { Renderer } from "./repl/render.js";
+import { Renderer } from "./render.js";
 import { runRepl } from "./repl/repl.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
 

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
-import { Renderer } from "../src/repl/render.js";
+import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import {

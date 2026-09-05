@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import type { AgentMessage, AssistantMessage, Usage } from "../../src/core/messages.js";
 import type { Tool } from "../../src/core/tools/types.js";
 import type { LLMProvider, LLMRequest } from "../../src/provider/types.js";
-import { Renderer } from "../../src/repl/render.js";
+import { Renderer } from "../../src/render.js";
 
 /**
  * Shared fakes for runner/REPL tests — no network, no real providers.

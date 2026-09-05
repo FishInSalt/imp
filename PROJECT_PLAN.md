@@ -281,6 +281,15 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
 - 原 M5 清单其余项（多 provider、`--mode json`、Skills、TUI 等）顺延为 M5 后段/M6 候选
 - **M6 候选（并发竞争的正解）**：per-child git worktree 隔离——M5 共享 cwd 下 edit/write 有进程级文件锁（file-lock.ts，M5b 起承重）、oldText 失配退化为教学错误，但 bash 变更不在锁内、write 整替换会静默覆盖；task 工具描述已加并发纪律引导（2026-09-04）
 
+- **M5 正式关闭（2026-09-04）**：a/b/c 三子里程碑全部落地并推送，测试 220 → 273（25 文件），零新依赖。
+  - M5a `2a3ec71`：task 工具 + 嵌套 runAgentLoop 子代理（src/core/subagent.ts）+ 子会话（`children/` 子目录 + `parent` 头字段）；测试曾抓到真实 bug：createChildSession 未透传 sessionBaseDir，子会话写进了真实 `~/.imp/sessions/`
+  - M5b `c224fcc`：`concurrencySafe` 标志 + 固定波次并发（cap 5，只排队不丢任务）+ 门串行评估 + 调用序发射 + 聚合 spinner；print 模式字节零变化（有测试保护）
+  - M5c `fc9b3be`：agent 注册表（手写 frontmatter 解析，无 YAML 依赖，项目级胜出）+ `agent` 参数 + roster 自动路由提示；示例 `examples/agents/scout.md`（只读子集）
+  - 并发边界文档化 `68a8798`：edit/write 进程级锁、oldText 失配退化为教学错误、bash 不在锁内——task 描述加并发纪律引导并测试固定
+  - 实际运行验收（2026-09-04）：两个通用子代理并发执行 13/16 轮、子会话文件与 parent 链接在磁盘核实、usage 尾行格式与设计逐字符一致；**计划外验证了错误路径**——未安装 scout 时模型收到教学错误后自行改道重试成功
+  - 实际运行暴露的三个代码问题全部修复 `9eb2294`（报错指向不存在的 CLI 命令、SUMMARY_MARK 单一来源、Renderer 移出 repl/ `371eed2`）
+  - 遗留观察（M6 候选）：扩展门看不到子代理工具调用（Q3，安全缺口，M6 首个任务）；无子级 compaction（子代理上下文耗尽是真实上限）；worktree 隔离
+
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）
 - `--mode json` 事件流输出 / RPC 模式（进程集成）
 - Skills 机制（按需加载的 SKILL.md 能力包）

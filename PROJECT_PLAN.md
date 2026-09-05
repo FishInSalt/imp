@@ -290,6 +290,11 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 实际运行暴露的三个代码问题全部修复 `9eb2294`（报错指向不存在的 CLI 命令、SUMMARY_MARK 单一来源、Renderer 移出 repl/ `371eed2`）
   - 遗留观察（M6 候选）：扩展门看不到子代理工具调用（Q3，安全缺口——**已于 M6a 修复，见下**）；无子级 compaction（子代理上下文耗尽是真实上限）；worktree 隔离
 - **M6b worktree 隔离**（2026-09-05，`docs/m6b-worktree-design.md`）：task 参数 `worktree: true` / agent frontmatter `worktree:`；`git worktree add -b imp/task-* HEAD`（tmpdir 默认、`IMP_WORKTREE_DIR` 可覆盖、node_modules symlink、canonical root 防嵌套）；子代理工具池按 worktree 路径重建（内置六件套；扩展工具排除——api.cwd 无法迁移）；提示注入路径换算+提交指引（分支制回传的前提）；无改动→自动清理（worktree+branch+prune），有改动→保留+结果尾行教合并（`git merge <branch>`）；crash/abort/timeout 同规则（finally 清理，工作不丢）。参照核验：pi-subagents worktree.ts（802 行，补丁制回传被否决）与 Claude Code worktree.ts（保留+报告制，采纳）。非 git / 无提交 / 宿主未接 per-cwd 池 → 教学错误。子模块、未提交状态传播显式不解决。
+- **M6b 正式关闭（2026-09-05）**：实现 + 独立审查 + 真机验证三段闭环。
+  - 实现 `a1a4621`（292 测试）：`src/core/worktree.ts`（约 200 行，canonical root 解析/创建/变更检测/清理/提示与尾行）+ task 参数与生命周期 + runner per-cwd 工具池 + registry frontmatter
+  - 独立审查（reviewer 子代理，裁决 fix-first）`819d4e7` 全部修复：**B1** agent 工具校验在 worktree 创建后返回导致泄漏（校验前移，创建后全部纳入 try/finally）；**B2** 分支基于主根 HEAD 而变更检测对比父 HEAD——父代理在链接 worktree 内时静默合并错误的树（改为基于 repo.head，回归测试搭真实嵌套场景）；**补测试时发现的死锁**（审查报告未含）：已中止的父信号不再触发 abort 事件，子代理永久挂起（继电器对已中止信号立即触发）；8 条 nit 全修（提交后工作入统计、清理失败可见、node_modules 排除、子目录重映射等）。审查→测试→再发现问题的链条是本轮最大收获
+  - 真机验证（2026-09-05，/tmp 测试仓库）：隔离执行（主检出零改动）→ 子代理按注入提示提交（`imp/task-*` 分支）→ 结果尾行给分支名+统计+合并命令 → 手动 `git merge` 快进合入 → 清理后无孤儿 worktree/分支；子会话双留痕。**计划外**：模型误派只读 scout 执行写任务，结构性失败可见、父代理自行改派成功（M5c 纪律在真实场景再次生效）
+  - 已知行为（记录不修）：guardian 路径规则以父目录为基准——worktree 子代理用绝对路径写 `/tmp` 下隔离区会被误报"项目外写入"（防御性误报，相对路径默认行为不受影响）
 - **M6a 扩展门覆盖子代理**（2026-09-04）：`runSubagent` 透传 `onToolCall` 给子循环；`ToolCallEvent` 增量字段 `subagent?: boolean` + `agent?: string`（现有扩展零改动即覆盖子代理——guardian 的 bash 规则与路径规则自动约束分身）；被拦截的子代理调用返回教学式错误结果，子代理可自行改道。三层测试：runSubagent 单元（透传+拦截恢复）、task 工具（agent 名上下文）、runner 级（真实扩展文件 + 真实 `.imp/agents/` 发现 + 真实 loader）
 
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）

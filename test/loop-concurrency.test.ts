@@ -4,7 +4,7 @@ import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
-import { assistant, type Gate, gate, scriptedProvider, user, waitUntil } from "./helpers/fakes.js";
+import { assistant, type Gate, gate, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
  *  concurrency/abort tests need tools that honor the signal (as bash does). */
@@ -14,7 +14,7 @@ function holdTool(name: string, g: Gate, onRun?: () => void): Tool {
 		description: "holds until the gate opens or the signal aborts",
 		parameters: Type.Object({ message: Type.String() }),
 		concurrencySafe: true,
-		async execute(args, signal) {
+		async execute(_args, signal) {
 			onRun?.();
 			await Promise.race([
 				g.promise,
@@ -41,7 +41,7 @@ function delayTool(name: string, ms: number): Tool {
 	};
 }
 
-function serialTool(name: string, log: string[]): Tool {
+function _serialTool(name: string, log: string[]): Tool {
 	return {
 		name,
 		description: "serial by default",

@@ -10,6 +10,10 @@ import { buildSystemPrompt } from "../src/core/system-prompt.js";
 import { createTaskTool, taskResult } from "../src/core/tools/task.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import type { ToolExecuteResult } from "../src/core/tools/types.js";
+import { spawnSync } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { createWriteTool } from "../src/core/tools/write.js";
+import type { LLMProvider } from "../src/provider/types.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { createRunner } from "../src/runner.js";
@@ -521,5 +525,193 @@ describe("system prompt gate (M5a)", () => {
 	it("the §Tools list advertises exactly one task line", () => {
 		const prompt = buildSystemPrompt({ cwd: "/w", platform: "darwin", arch: "arm64", date: "2026-09-04" });
 		expect(prompt.match(/^- task:/gm)).toHaveLength(1);
+	});
+});
+
+describe("worktree isolation (M6b)", () => {
+	/** A hermetic git repo cwd + a task tool whose worktree children get a real
+	 * write tool rooted at their worktree path (mirrors the runner wiring). */
+	async function repoTask(overrides?: Record<string, unknown>) {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-e2e-"));
+		const rgit = (args: string[]) => {
+			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+		};
+		rgit(["init", "-q"]);
+		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.name", "t"]);
+		writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
+		rgit(["add", "."]);
+		rgit(["commit", "-qm", "seed"]);
+		const sink: LLMRequest[] = [];
+		const childCwds: string[] = [];
+		const provider = scriptedProvider([], sink);
+		const task = createTaskTool({
+			provider,
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd: string) => {
+				childCwds.push(cwd);
+				return [createWriteTool({ cwd })];
+			},
+			worktreeBaseDir: path.join(tmpdir(), `imp-wt-e2e-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+			...overrides,
+		});
+		return { task, sink, root, childCwds, rgit };
+	}
+
+	it("a child writing inside its worktree keeps the work: file lands there, parent tree untouched, trailer names the branch", async () => {
+		const sink: LLMRequest[] = [];
+		const { task, root, childCwds } = await repoTask({
+			provider: scriptedProvider(
+				[
+					assistant([
+						{
+							type: "toolCall",
+							id: "w1",
+							name: "write",
+							arguments: { path: "child-note.txt", content: "written by the child" },
+						},
+					]),
+					assistant([{ type: "text", text: "wrote the note" }]),
+				],
+				sink,
+			),
+		});
+		const result = await task.execute({ prompt: "write child-note.txt", worktree: true }, new AbortController().signal);
+		expect(result.isError ?? false).toBe(false);
+		const childPrompt = JSON.stringify((sink[0] as LLMRequest).messages);
+		expect(childPrompt).toContain("[worktree]");
+		expect(childPrompt).toContain("isolated git worktree");
+		const wtPath = childCwds[0] as string;
+		expect(wtPath).toContain("imp-worktree-");
+		expect(existsSync(path.join(wtPath, "child-note.txt"))).toBe(true);
+		expect(existsSync(path.join(root, "child-note.txt"))).toBe(false);
+		expect(result.output).toContain("wrote the note");
+		expect(result.output).toContain("[task] changes kept in worktree");
+		expect(result.output).toContain("git merge imp/task-");
+		expect(result.output).toContain("untracked: child-note.txt");
+	});
+
+	it("a child that changes nothing gets its worktree removed and no trailer", async () => {
+		const sink: LLMRequest[] = [];
+		const { task, root } = await repoTask({
+			provider: scriptedProvider([assistant([{ type: "text", text: "just looked around" }])], sink),
+		});
+		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("just looked around");
+		expect(result.output).not.toContain("changes kept in worktree");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).toBe("");
+	});
+
+	it("no per-cwd tool pool wired → teaching error (isolation would be silently violated)", async () => {
+		// a real repo, but a host that never wired getToolsForCwd
+		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-nopool-"));
+		const rgit = (args: string[]) => {
+			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git: ${r.stderr}`);
+		};
+		rgit(["init", "-q"]);
+		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.name", "t"]);
+		writeFileSync(path.join(root, "seed.txt"), "x\n", "utf8");
+		rgit(["add", "."]);
+		rgit(["commit", "-qm", "seed"]);
+		const sink: LLMRequest[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider([], sink),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			// getToolsForCwd deliberately absent
+		});
+		const result = await task.execute({ prompt: "go", worktree: true }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("no per-directory tool pool");
+		expect(sink).toHaveLength(0);
+		// the half-created worktree was rolled back
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("imp-worktree-");
+	});
+
+	it("non-git cwd → teaching error, provider never called", async () => {
+		const nowhere = await mkdtemp(path.join(tmpdir(), "imp-wt-nogit-"));
+		const sink: LLMRequest[] = [];
+		const task = createTaskTool({
+			provider: scriptedProvider([], sink),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: nowhere,
+		});
+		const result = await task.execute({ prompt: "go", worktree: true }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("requires a git repository");
+		expect(result.output).toContain("without the worktree");
+		expect(sink).toHaveLength(0);
+	});
+
+	it("agent frontmatter worktree: true defaults the isolation on; the call can still opt out", async () => {
+		const sink: LLMRequest[] = [];
+		const { task, childCwds } = await repoTask({
+			provider: scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
+			agents: [
+				{
+					name: "builder",
+					description: "writes code",
+					worktree: true,
+					system: "Build things.",
+					source: "/x/builder.md",
+				},
+			],
+		});
+		const r1 = await task.execute({ prompt: "build", agent: "builder" }, new AbortController().signal);
+		expect(childCwds).toHaveLength(1);
+		expect(r1.output).toContain("idle");
+		const r2 = await task.execute({ prompt: "build again", agent: "builder", worktree: false }, new AbortController().signal);
+		expect(childCwds).toHaveLength(1);
+		expect(r2.output).toContain("idle");
+	});
+
+	it("crash mid-child still preserves the child's uncommitted work (cleanup in finally)", async () => {
+		const sink: LLMRequest[] = [];
+		let call = 0;
+		const throwing: LLMProvider = {
+			name: "crasher",
+			async *stream(request) {
+				sink.push({ ...request, messages: [...request.messages] });
+				call++;
+				if (call === 1) {
+					yield { type: "tool_call_start", id: "w1", name: "write" };
+					yield {
+						type: "message_end",
+						message: assistant([
+							{ type: "toolCall", id: "w1", name: "write", arguments: { path: "crash-work.txt", content: "before the crash" } },
+						]),
+					};
+					return;
+				}
+				throw new Error("endpoint exploded");
+			},
+		};
+		const { task, root } = await repoTask({ provider: throwing });
+		const result = await task.execute({ prompt: "write then die", worktree: true }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("endpoint exploded");
+		expect(result.output).toContain("[task] changes kept in worktree");
+		const wtLine = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" }).stdout
+			.split("\n")
+			.find((l) => l.startsWith("worktree ") && l.includes("imp-worktree-"));
+		const wtPath = wtLine?.slice("worktree ".length).trim() ?? "";
+		expect(existsSync(path.join(wtPath, "crash-work.txt"))).toBe(true);
 	});
 });

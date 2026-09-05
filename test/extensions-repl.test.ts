@@ -855,6 +855,41 @@ describe("guardian case study (design §13.1)", () => {
 		expect(await env.repl).toBe(0);
 	});
 
+	it("M6a audit: a named subagent's blocked call is logged as [bash child:wrecker]", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
+		vi.stubEnv("HOME", fakeHome);
+		const env = await startRepl({
+			scripts: [
+				toolCall("t1", "task", { prompt: "delete the sacrifice tree", agent: "wrecker" }),
+				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
+				reply("child adapted"),
+				reply("parent done"),
+			],
+			agentFiles: {
+				// no `tools:` restriction — the child pool includes bash
+				"wrecker.md": "---\nname: wrecker\ndescription: demolishes sacrificial trees\n---\nWreck things.",
+			},
+			extensionFiles: {
+				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
+			},
+		});
+		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
+		await mkdir(sacrifice, { recursive: true });
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("parent done"));
+		// the veto reached the child, and the audit line names the child
+		const refusal = env.requests[2]?.messages.find((m) => m.role === "toolResult")?.results[0];
+		expect(refusal?.content).toContain("blocked by an extension: recursive force delete");
+		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8").trim().split("\n");
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toContain("[bash child:wrecker]");
+		expect(audit[0]).toContain("blocked by an extension");
+		// the tree the child tried to delete still stands
+		expect(existsSync(sacrifice)).toBe(true);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
 	it("IMP_GUARDIAN_BLOCK adds custom patterns with a teaching reason; invalid patterns are skipped without taking the gate down", async () => {
 		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
 		vi.stubEnv("HOME", fakeHome); // the blocked result triggers an audit write

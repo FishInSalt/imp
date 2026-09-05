@@ -110,8 +110,13 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	const clock = AbortSignal.timeout(timeoutMs);
 	const child = new AbortController();
 	const relay = () => child.abort();
-	options.signal?.addEventListener("abort", relay);
-	clock.addEventListener("abort", relay);
+	// An ALREADY-aborted signal never fires "abort" again — attach the
+	// listener only when live, else relay immediately (a parent signal aborted
+	// during worktree setup used to deadlock the child forever).
+	if (options.signal?.aborted) child.abort();
+	else options.signal?.addEventListener("abort", relay);
+	if (clock.aborted) child.abort();
+	else clock.addEventListener("abort", relay);
 
 	try {
 		const result: RunAgentLoopResult = await runAgentLoop({

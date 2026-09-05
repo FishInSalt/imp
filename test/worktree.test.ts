@@ -63,7 +63,7 @@ describe("worktree isolation (M6b)", () => {
 		expect(await hasWorktreeChanges(wt, state)).toBe(false);
 		writeFileSync(path.join(wt.path, "made.txt"), "child work\n", "utf8");
 		expect(await hasWorktreeChanges(wt, state)).toBe(true);
-		expect(await worktreeChangeStat(wt)).toContain("made.txt");
+		expect(await worktreeChangeStat(wt, state)).toContain("made.txt");
 
 		const errors = await removeChildWorktree(wt, state);
 		expect(errors).toEqual([]);

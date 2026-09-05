@@ -109,6 +109,8 @@ result names the branch and change summary, and the parent merges with
 `git merge <branch>` when it wants the work. A worktree with no changes is
 removed (branch and all); preserved work is never discarded. Extension tools
 are excluded from worktree children (their registered cwd cannot move).
+Isolation is by default working directory — a child's `bash` could still
+reference absolute paths outside it, same as the reference implementations.
 
 **Concurrency boundary.** Concurrent subagents share the parent's working
 directory. `edit`/`write` mutations to the same file serialize through a
@@ -117,8 +119,8 @@ error (re-read, retry) — but `bash` mutations bypass the lock entirely, and a
 whole-file `write` silently clobbers an earlier one. So: delegate independent
 subtasks in parallel; same-file modifications sequentially (the task tool
 description tells the model the same). Read-only agent profiles (`tools:`
-without edit/write/bash) make that structural. Per-child git worktree
-isolation is the long-term fix, deferred by design.
+without edit/write/bash) make that structural — and `worktree: true` removes
+the shared surface entirely (see above).
 
 ## Extensions
 

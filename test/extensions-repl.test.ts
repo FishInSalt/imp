@@ -1102,3 +1102,87 @@ export default function (api) {
 		expect(await env.repl).toBe(0);
 	});
 });
+
+describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => {
+	const GUARDIAN = { "guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8") };
+
+	it("EOF (Ctrl+D) at a pending ask declines it and exits cleanly — no ERR_USE_AFTER_CLOSE, no lost turn", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-eofhome-"));
+		vi.stubEnv("HOME", fakeHome);
+		// The P1: settleAsk prompted the NEXT question on an interface whose
+		// close event was already firing — uncaught exception, ask never
+		// resolved, process died. Fix: resolve first, prompt only if live.
+		const env = await startRepl({
+			confirm: true,
+			scripts: [
+				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
+				toolCall("g2", "bash", { command: "rm -rf sacrifice" }),
+				reply("both declined"),
+			],
+			extensionFiles: GUARDIAN,
+		});
+		env.send("clean up\n");
+		await waitUntil(() => env.output().includes("proceed? [y/N]"));
+		env.fake.eof(); // Ctrl+D at the question — both asks drain as declines
+		const code = await env.repl; // completing AT ALL is the regression pin
+		expect(code).toBe(0);
+	});
+
+	it("FIFO: two gated calls in ONE turn queue two asks; y settles the first, n the second — no crossed answers", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-fifo-"));
+		vi.stubEnv("HOME", fakeHome);
+		const env = await startRepl({
+			confirm: true,
+			scripts: [
+				// one assistant message, TWO tool calls — both gates fire before
+				// either command runs, so both asks are pending simultaneously
+				assistant(
+					[
+						{ type: "toolCall", id: "g1", name: "bash", arguments: { command: "rm -rf first" } },
+						{ type: "toolCall", id: "g2", name: "bash", arguments: { command: "rm -rf second" } },
+					],
+					"tool_use",
+				),
+				reply("handled both"),
+			],
+			extensionFiles: GUARDIAN,
+		});
+		await mkdir(path.join(env.cwd, "first"), { recursive: true });
+		await mkdir(path.join(env.cwd, "second"), { recursive: true });
+		env.send("clean\n");
+		await waitUntil(() => env.output().includes("proceed? [y/N]")); // first question renders
+		env.send("y\n"); // approves g1 only
+		await waitUntil(() => env.output().split("proceed? [y/N]").length >= 3); // second renders
+		env.send("n\n"); // declines g2
+		await waitUntil(() => env.output().includes("handled both"));
+		expect(existsSync(path.join(env.cwd, "first"))).toBe(false); // approved → ran
+		expect(existsSync(path.join(env.cwd, "second"))).toBe(true); // declined → untouched
+		const results = env.requests
+			.flatMap((r) => r.messages.flatMap((m) => (m.role === "toolResult" ? m.results : [])))
+			.filter((r) => r.toolCallId === "g1" || r.toolCallId === "g2");
+		const g2 = results.find((r) => r.toolCallId === "g2");
+		expect(g2?.isError ?? (g2?.content ?? "").startsWith('Tool "bash" blocked')).toBe(true);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("terminal Ctrl+C at a pending ask declines THAT question; the run continues (single settle)", async () => {
+		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-ctr-"));
+		vi.stubEnv("HOME", fakeHome);
+		const env = await startRepl({
+			confirm: true,
+			scripts: [toolCall("g1", "bash", { command: "rm -rf sacrifice" }), reply("adapted after ctrl-c")],
+			extensionFiles: GUARDIAN,
+		});
+		env.send("clean up\n");
+		await waitUntil(() => env.output().includes("proceed? [y/N]"));
+		env.fake.interrupt(); // \x03 — readline raw mode routes it as SIGINT on the ask
+		await waitUntil(() => env.output().includes("adapted after ctrl-c"));
+		const refusal = env.requests[1]?.messages
+			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
+			.find((r) => r.toolCallId === "g1");
+		expect(refusal?.content).toContain("blocked by an extension");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+});

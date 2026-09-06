@@ -410,3 +410,157 @@ describe("IMP_AUTOCOMPACT=0 (main-loop parity)", () => {
 		}
 	});
 });
+
+describe("M7 review coverage: repeat compactions, session-path retry, failure cap, crash accounting", () => {
+	it("TWO consecutive compactions in one child run: both entries persist, replay honors the latest", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-child-compact2-"));
+		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1500),
+				toolTurn("c3", "three", 1500),
+				toolTurn("c4", "four", 1500),
+				toolTurn("c5", "five", 1500),
+				assistant([{ type: "text", text: "still standing" }]),
+			],
+			"SUMMARY-TEXT",
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+			session,
+			onMessage: (message) => session.appendMessage(message),
+		});
+
+		expect(outcome.status).toBe("completed");
+		const compactions = session.getEntries().filter((e) => e.type === "compaction");
+		expect(compactions.length).toBeGreaterThanOrEqual(2);
+		// buildContext replays ONLY the last compaction's checkpoint (latest wins)
+		const context = session.buildContext();
+		const summaryMessages = context.messages.filter(
+			(m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith(SUMMARY_MARK),
+		);
+		expect(summaryMessages).toHaveLength(1);
+		// the reopened file agrees — persistence of the second splice is real
+		const reopened = SessionStore.open(session.filePath);
+		expect(reopened.buildContext().messages.length).toBe(context.messages.length);
+		// and the live request history shows repeated re-compaction: each boundary
+		// after the first normally grows by +2 messages; a non-increase marks a splice
+		const counts = messageCounts(routed.loopRequests);
+		let splices = 0;
+		for (let i = 1; i < counts.length; i++) if ((counts[i] ?? 0) <= (counts[i - 1] ?? 0)) splices++;
+		expect(splices).toBeGreaterThanOrEqual(2);
+	});
+
+	it("SESSION path: a failing summarizer retries at the next boundary and persists (mirror of the no-session test)", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-child-compact3-"));
+		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1500),
+				toolTurn("c3", "three", 1500),
+				assistant([{ type: "text", text: "survived too" }]),
+			],
+			"SESSION-SUMMARY-ON-RETRY",
+			[1],
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+			session,
+			onMessage: (message) => session.appendMessage(message),
+		});
+
+		expect(outcome.status).toBe("completed");
+		expect(routed.summaryRequests).toHaveLength(2); // one failure, one success
+		const compactions = session.getEntries().filter((e) => e.type === "compaction");
+		expect(compactions).toHaveLength(1);
+		const final = routed.loopRequests.at(-1)?.messages as Array<{ role: string; content?: string }>;
+		expect(final[0]?.content).toContain("SESSION-SUMMARY-ON-RETRY");
+	});
+
+	it("failure cap: 3 consecutive summarizer failures disable compaction for the run (one stderr note, run continues)", async () => {
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		try {
+			const routed = routingProvider(
+				[
+					toolTurn("c1", "one", 500),
+					toolTurn("c2", "two", 1500),
+					toolTurn("c3", "three", 1500),
+					toolTurn("c4", "four", 1500),
+					toolTurn("c5", "five", 1500),
+					assistant([{ type: "text", text: "gave up quietly" }]),
+				],
+				"NEVER-USED",
+				[1, 2, 3, 4, 5, 6, 7, 8], // every attempt fails
+			);
+			const outcome = await runSubagent({
+				provider: routed.provider,
+				model: "m",
+				system: "PARENT",
+				tools: [bigEcho],
+				prompt: "do the big job",
+				settings: TINY_SETTINGS,
+			});
+
+			expect(outcome.status).toBe("completed");
+			expect(outcome.text).toBe("gave up quietly");
+			// exactly 3 summarizer attempts — the cap stopped the bleeding
+			expect(routed.summaryRequests).toHaveLength(3);
+			// one teaching note, once
+			const notes = stderr.mock.calls
+				.map((c) => String(c[0]))
+				.filter((l) => l.includes("child compaction failed"));
+			expect(notes).toHaveLength(1);
+			// history never spliced: strictly increasing request sizes
+			const counts = messageCounts(routed.loopRequests);
+			for (let i = 1; i < counts.length; i++) expect(counts[i]).toBeGreaterThan(counts[i - 1] ?? 0);
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
+	it("crash AFTER a compaction: the trailer counts the summarized-away turns and usage, not just the spliced tail", async () => {
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1500),
+				() => {
+					throw new Error("endpoint exploded");
+				},
+			],
+			"SUMMARY-TEXT",
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+		});
+
+		expect(outcome.status).toBe("crash");
+		expect(outcome.reason).toBe("endpoint exploded");
+		expect(routed.summaryRequests).toHaveLength(1); // exactly one compaction happened
+		// crash turns count ASSISTANT messages in history + the summarized-away
+		// ones: post-splice history keeps a2 (1), a1 was summarized (1) → 2 —
+		// without the accumulator the trailer would undercount at 1
+		expect(outcome.turns).toBe(2);
+		// usage: spliced-history stats (c2: 1500 in / 5 out)
+		//      + summarized-away c1 (500 in / 5 out)
+		//      + the summarizer call itself (3 in / 2 out)
+		expect(outcome.usage.inputTokens).toBe(1500 + 500 + 3);
+		expect(outcome.usage.outputTokens).toBe(5 + 5 + 2);
+	});
+});

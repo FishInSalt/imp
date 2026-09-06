@@ -111,6 +111,21 @@ describe("SessionStore", () => {
 		expect(() => reopened.getBranch()).toThrow(/broken parentId chain/);
 	});
 
+	it("stats() throws on a broken parentId chain — pinned at the unit that owns it (M7 review)", async () => {
+		const dir = await mkpath();
+		const file = path.join(dir, "chain2.jsonl");
+		const store = SessionStore.create(file, "/p");
+		store.appendMessage(user("q"));
+		const fsp = await import("node:fs");
+		const lines = fsp.readFileSync(file, "utf8").trimEnd().split("\n");
+		const leafObj = JSON.parse(lines[lines.length - 1] as string);
+		leafObj.parentId = "missing-parent";
+		lines[lines.length - 1] = JSON.stringify(leafObj);
+		fsp.writeFileSync(file, lines.join("\n"));
+		const reopened = SessionStore.open(file);
+		expect(() => reopened.stats()).toThrow(/broken parentId chain/);
+	});
+
 	it("stats() aggregates assistant usage and turns", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");

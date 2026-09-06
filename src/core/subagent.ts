@@ -1,7 +1,9 @@
 import { formatTokens } from "../format.js";
 import type { LLMProvider } from "../provider/types.js";
 import {
+	type CompactHistoryResult,
 	type CompactionSettings,
+	type CompactResult,
 	compactHistory,
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -10,7 +12,7 @@ import {
 } from "./compaction.js";
 import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
 import { type RunAgentLoopOptions, type RunAgentLoopResult, runAgentLoop } from "./loop.js";
-import type { AgentMessage, Usage } from "./messages.js";
+import { type AgentMessage, addUsage, type Usage } from "./messages.js";
 import { type SessionStore, summaryToMessage } from "./session/store.js";
 import type { Tool } from "./tools/types.js";
 
@@ -102,6 +104,30 @@ export function finalAssistantText(messages: AgentMessage[]): string | undefined
 	return undefined;
 }
 
+/** Componentwise before−after usage delta (clamped at 0) — the cost carried
+ *  away by a history splice. Valid because the retained tail is a subset of
+ *  the pre-splice messages with identical usage entries. */
+function usageDelta(before: Usage, after: Usage): Usage {
+	const clamp = (n: number) => Math.max(0, n);
+	return {
+		inputTokens: clamp(before.inputTokens - after.inputTokens),
+		outputTokens: clamp(before.outputTokens - after.outputTokens),
+		cacheReadTokens: clamp((before.cacheReadTokens ?? 0) - (after.cacheReadTokens ?? 0)),
+		cacheWriteTokens: clamp((before.cacheWriteTokens ?? 0) - (after.cacheWriteTokens ?? 0)),
+	};
+}
+
+/** usage + carried-away stats as a fresh object (addUsage mutates its target). */
+function addUsageIntoNew(base: Usage, extra: Usage): Usage {
+	const sum: Usage = {
+		...base,
+		cacheReadTokens: base.cacheReadTokens ?? 0,
+		cacheWriteTokens: base.cacheWriteTokens ?? 0,
+	};
+	addUsage(sum, extra);
+	return sum;
+}
+
 function historyStats(messages: AgentMessage[]): { turns: number; usage: Usage } {
 	// Recomputable from history — the loop's counters are unreachable when it
 	// throws mid-run (crash path), so derive from what actually happened.
@@ -130,8 +156,21 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// The loop's turn counter is untouched by the history splice: compaction
 	// buys context room, not extra turns.
 	const autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+	// Summarizer-failure backstop: after 3 consecutive failures compaction is
+	// disabled for the rest of the run (one stderr note) — a persistent auth
+	// failure must not buy 40 silent paid retry calls.
+	let consecutiveFailures = 0;
+	let compactionDisabled = false;
+	// Stats carried away by compaction splices: on crash the trailer reports
+	// historyStats(history), which only sees the post-splice history — the
+	// summarized-away turns/usage are added back through this accumulator so
+	// cost accounting stays truthful.
+	let summarizedTurns = 0;
+	let summarizedAny = false;
+	const summarizedUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 	const onBeforeTurn: RunAgentLoopOptions["onBeforeTurn"] | undefined = autoCompact
 		? async (history) => {
+				if (compactionDisabled) return;
 				const est = estimateContextTokens(history);
 				if (!shouldCompact(est.tokens, settings)) return;
 				await compactChildHistory(history);
@@ -146,14 +185,21 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	 *  threshold) is provided by catching here. */
 	async function compactChildHistory(history: AgentMessage[]): Promise<void> {
 		try {
+			// The child's signal IS forwarded (unlike the runner's /compact, which
+			// deliberately waits): children have a wall clock the main loop lacks,
+			// and persistence only happens after a fully streamed summary — an
+			// aborted stream throws here, is caught below, and nothing is persisted.
+			const beforeStats = historyStats(history);
+			let compacted: CompactHistoryResult | CompactResult | null;
 			if (options.session) {
 				// Session path = runner.compactAndSplice verbatim: the compaction
 				// entry lands in the store, then the live history is rebuilt from
 				// buildContext ([framed summary, ...retainedTail]).
-				const compacted = await compactSession({
+				compacted = await compactSession({
 					session: options.session,
 					provider: options.provider,
 					model: options.model,
+					signal: child.signal,
 					settings,
 				});
 				if (compacted) {
@@ -163,20 +209,40 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				// No session (sessions disabled): pure computation + in-place splice.
 				// The framed summary keeps the replayed context identical to what a
 				// session store would rebuild (summaryToMessage, SUMMARY_MARK framed).
-				const compacted = await compactHistory({
+				compacted = await compactHistory({
 					messages: history,
 					provider: options.provider,
 					model: options.model,
+					signal: child.signal,
 					settings,
 				});
 				if (compacted) {
 					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);
 				}
 			}
+			if (compacted) {
+				consecutiveFailures = 0;
+				// Carry the summarized-away assistant stats into the crash-path
+				// accumulator: removed = before-splice − after-splice (the retained
+				// tail survives with identical usage, so the componentwise delta is
+				// exact), plus the summarizer's own call cost.
+				const afterStats = historyStats(history);
+				addUsage(summarizedUsage, usageDelta(beforeStats.usage, afterStats.usage));
+				addUsage(summarizedUsage, compacted.usage);
+				summarizedTurns += beforeStats.turns - afterStats.turns;
+				summarizedAny = true;
+			}
 		} catch {
 			// Keep the un-compacted history and continue; the next turn boundary
 			// retries if the estimate is still over the threshold (bounded by
 			// CHILD_MAX_TURNS). The child has no status channel to report to.
+			consecutiveFailures += 1;
+			if (consecutiveFailures >= 3) {
+				compactionDisabled = true;
+				process.stderr.write(
+					"imp: child compaction failed 3 times in a row — giving up for this task; the run continues un-compacted\n",
+				);
+			}
 		}
 	}
 
@@ -236,8 +302,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			status: "crash",
 			reason: err instanceof Error ? err.message : String(err),
 			text: finalAssistantText(history),
-			turns,
-			usage,
+			// The spliced history lost the summarized-away turns/usage — add the
+			// accumulator back so the (child: N turns, …) trailer stays truthful.
+			turns: turns + summarizedTurns,
+			usage: summarizedAny ? addUsageIntoNew(usage, summarizedUsage) : usage,
 		};
 	} finally {
 		options.signal?.removeEventListener("abort", relay);

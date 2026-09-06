@@ -80,6 +80,8 @@ export class ExtensionRegistry {
 
 	private readonly report: (line: string) => void;
 	private readonly confirmHandler: ((message: string, detail?: string) => Promise<boolean>) | undefined;
+	/** The no-handler stderr line has been written once already. */
+	private noConfirmWarned = false;
 	/** Committed name → owning extension name (conflict policy, design §9). */
 	private readonly toolOwners = new Map<string, string>();
 	private readonly commandOwners = new Map<string, string>();
@@ -281,7 +283,12 @@ export class ExtensionRegistry {
 	 */
 	async confirm(message: string, detail?: string): Promise<boolean> {
 		if (this.confirmHandler === undefined) {
-			process.stderr.write(NO_CONFIRM_LINE);
+			// once per registry: a chatty gate in print mode (a model retrying a
+			// blocked call in a loop) must not spam one stderr line per attempt
+			if (!this.noConfirmWarned) {
+				this.noConfirmWarned = true;
+				process.stderr.write(NO_CONFIRM_LINE);
+			}
 			return false;
 		}
 		try {

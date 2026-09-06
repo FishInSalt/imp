@@ -58,6 +58,8 @@ export class ReplInput {
 	private readonly options: ReplInputOptions;
 	private rl: readline.Interface | null = null;
 	private closed = false;
+	/** The readline stream hit EOF/close — no prompt() may run after this. */
+	private streamClosed = false;
 	private onProcessSigint: (() => void) | null = null;
 	/** Current prompt string ("+ "/"> ") — restored after a confirm question. */
 	private prompt = "> ";
@@ -98,10 +100,17 @@ export class ReplInput {
 			this.options.onInterrupt();
 		});
 		// Non-TTY / `kill -INT` case; idempotent through the caller's state machine.
-		const onProcessSigint = () => this.options.onInterrupt();
+		// Pending questions are drained as declines first: the run is being
+		// aborted, they are moot, and a queued question would silently swallow
+		// the user's next typed line as its answer.
+		const onProcessSigint = () => {
+			this.drainAsks();
+			this.options.onInterrupt();
+		};
 		this.onProcessSigint = onProcessSigint;
 		process.on("SIGINT", onProcessSigint);
 		// EOF / pipe end: buffered lines are delivered before "close" (readline guarantees it).
+		this.streamClosed = true; // before draining: no prompt() may run on a closed interface
 		rl.on("close", () => {
 			while (this.pendingAsks.length > 0) this.settleAsk(false); // EOF answers "no"
 			if (!this.closed) this.options.onEof();
@@ -149,23 +158,40 @@ export class ReplInput {
 		});
 	}
 
-	/** Resolve the oldest pending question, then show the next (if queued). */
+	/** Resolve the oldest pending question, then show the next (if queued).
+	 * Resolves FIRST: rendering the next question touches a readline interface
+	 * that may already be closed (EOF drain) — a thrown ERR_USE_AFTER_CLOSE must
+	 * never strand the awaiting gate. */
 	private settleAsk(approved: boolean): void {
 		const oldest = this.pendingAsks.shift();
 		if (oldest === undefined) return;
+		oldest.resolve(approved);
 		const next = this.pendingAsks[0];
 		if (next !== undefined) {
-			this.rl?.setPrompt(next.question);
-			this.rl?.prompt(true);
+			this.setPromptIfLive(next.question);
 		} else {
 			this.restorePrompt();
 		}
-		oldest.resolve(approved);
+	}
+
+	/** Decline every pending question without rendering anything (abort paths). */
+	private drainAsks(): void {
+		while (this.pendingAsks.length > 0) {
+			const oldest = this.pendingAsks.shift();
+			oldest?.resolve(false);
+		}
+	}
+
+	/** setPrompt+prompt guarded against a closed stream (EOF already fired). */
+	private setPromptIfLive(question: string): void {
+		if (this.streamClosed) return;
+		this.rl?.setPrompt(question);
+		this.rl?.prompt(true);
 	}
 
 	/** Back to the machine's prompt ("+ "/"> ") after a question was answered. */
 	private restorePrompt(): void {
-		if (this.rl === null || !this.options.interactive || this.closed) return;
+		if (this.rl === null || !this.options.interactive || this.closed || this.streamClosed) return;
 		this.rl.setPrompt(this.prompt);
 		this.rl.prompt(true);
 	}

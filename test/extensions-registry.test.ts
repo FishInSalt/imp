@@ -314,6 +314,19 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 		}
 	});
 
+	it("M7 review: the no-handler stderr line is capped at once per registry — a chatty gate must not spam", async () => {
+		const registry = new ExtensionRegistry();
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		try {
+			expect(await registry.confirm("first")).toBe(false);
+			expect(await registry.confirm("second")).toBe(false);
+			expect(await registry.confirm("third")).toBe(false);
+			expect(stderr).toHaveBeenCalledTimes(1); // once, not once per call
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
 	it("a throwing handler fails safe: false plus one teaching report line", async () => {
 		const lines: string[] = [];
 		const registry = new ExtensionRegistry({

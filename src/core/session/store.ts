@@ -242,17 +242,20 @@ export class SessionStore {
 	getBranch(leafId?: string | null): SessionEntry[] {
 		const target = leafId === undefined ? this.leafId : leafId;
 		if (target === null) return [];
-		const path: SessionEntry[] = [];
+		// push + reverse: repeated unshift shifts the whole accumulated array
+		// per step (O(n²) slots for depth n) — linear instead.
+		const reversed: SessionEntry[] = [];
 		let current: SessionEntry | undefined = this.byId.get(target);
 		while (current) {
-			path.unshift(current);
+			reversed.push(current);
 			current = current.parentId === null ? undefined : this.byId.get(current.parentId);
 		}
+		const path = reversed.reverse();
 		// The walk must terminate at a root (parentId === null). A parentId that
 		// is not in the file exits the loop early with a truncated path — its
 		// head could be any role (e.g. a toolResult), which would break resume.
 		// NOTE: the old guard `path[path.length - 1]?.id !== target` was dead code
-		// — target is always the last element after unshifting.
+		// — target is always the first element after reversing.
 		const head = path[0];
 		if (!head) throw new SessionError(`entry ${target} not found`);
 		if (head.parentId !== null) {

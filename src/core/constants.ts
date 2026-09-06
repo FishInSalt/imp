@@ -8,9 +8,8 @@
 export const MAX_BYTES = 50 * 1024; // 50KB
 
 /** Subagent turn budget (M5). Parent parity — the valve guards runaway spin,
- * not honest work; the true ceiling for heavy jobs is child context
- * exhaustion (no child compaction in M5), which degrades through the task
- * tool's crash path. */
+ * not honest work. Children auto-compact between turns like the main loop
+ * (M7), so the practical ceiling is this turn cap, not context space. */
 export const CHILD_MAX_TURNS = 40;
 
 /** Subagent wall clock (M5). Scales with CHILD_MAX_TURNS: 40 turns at

@@ -43,12 +43,13 @@ const firstLine = (text) => {
 
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
+	const rmRule = {
+		test: /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/i,
+		reason:
+			"recursive force delete — list the files that would go and ask first, or delete the specific files one by one",
+	};
 	const rules = [
-		{
-			test: /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/i,
-			reason:
-				"recursive force delete — list the files that would go and ask first, or delete the specific files one by one",
-		},
+		rmRule,
 		{
 			test: /\bgit\s+push\b[^\n]*--force(?!\s*-with-lease)/,
 			reason:
@@ -101,7 +102,16 @@ export default function (api) {
 		return resolved === dir || resolved.startsWith(`${dir}${path.sep}`);
 	};
 
-	/** Path-ish arguments of every `rm` in the command (flags skipped, surrounding quotes stripped) — heuristic, fail-closed by the caller. */
+	/** A leading ~ / $HOME / ${HOME} expands like the real shell would —
+	 * path.resolve() does NOT expand them, and an unexpanded `~/.ssh` once
+	 * resolved to `<cwd>/~/.ssh`, silently missing the floor entirely. */
+	const expandHome = (target) =>
+		target
+			.replace(/^~([/]|$)/, `${home}$1`)
+			.replace(/^\$\{HOME\}/, home)
+			.replace(/^\$HOME/, home);
+
+	/** Path-ish arguments of every `rm` in the command (flags skipped, surrounding quotes stripped, home-EXPANDED). */
 	const rmTargets = (command) => {
 		const targets = [];
 		for (const segment of command.split(/[;&|]/)) {
@@ -110,16 +120,44 @@ export default function (api) {
 			if (at === -1) continue;
 			for (const word of words.slice(at + 1)) {
 				if (word.startsWith("-")) continue; // flags, incl. combined -rf
-				targets.push(word.replace(/^["']|["']$/g, ""));
+				// quotes anywhere in the word (e.g. "$HOME"/.ssh), not just at the
+				// edges — an interior quote once made the $HOME expansion miss
+				targets.push(expandHome(word.replace(/["']/g, "")));
 			}
 		}
 		return targets;
 	};
 
-	/** The rm hard floor: any rm aimed at a home-directory root itself, or at anything under a protected dir. */
+	/** rm with recursive+force intent in ANY flag spelling — combined -rf/-fr,
+	 * separate -r and -f, or --recursive/--force. The ask-tier regex only
+	 * matches combined tokens; without this, `rm -r -f target` slipped past
+	 * BOTH tiers (floor checks targets, rules check the regex). */
+	const rmForceRecursive = (command) => {
+		for (const segment of command.split(/[;&|]/)) {
+			const words = segment.trim().split(/\s+/);
+			const at = words.indexOf("rm");
+			if (at === -1) continue;
+			let recursive = false;
+			let force = false;
+			for (const word of words.slice(at + 1)) {
+				if (!word.startsWith("-")) break; // flag run ends at the first operand
+				if (word === "--recursive") recursive = true;
+				else if (word === "--force") force = true;
+				else if (/^-[a-z]{2,}$/.test(word)) {
+					if (word.includes("r")) recursive = true;
+					if (word.includes("f")) force = true;
+				} else if (word === "-r" || word === "-R") recursive = true;
+				else if (word === "-f") force = true;
+			}
+			if (recursive && force) return true;
+		}
+		return false;
+	};
+
+	/** The rm hard floor: any rm aimed at a home-directory root itself, or at anything under a protected dir. Targets arrive home-EXPANDED (expandHome), so `~/.ssh` and `$HOME/.ssh` resolve like the shell would. */
 	const rmFloor = (command, cwd) => {
 		for (const target of rmTargets(command)) {
-			if (target === "~" || target === "~/" || target === "$HOME" || target === "${HOME}") return home;
+			if (target === home || target === `${home}/`) return home;
 			const resolved = path.resolve(cwd, target);
 			if (resolved === home) return home;
 			const floor = floorOf(resolved);
@@ -136,10 +174,14 @@ export default function (api) {
 			const floor = rmFloor(command, cwd);
 			if (floor !== undefined) return { block: true, reason: floorReason(floor) };
 			const rule = rules.find((r) => r.test.test(command));
-			if (rule) {
-				const approved = await api.confirm("[guardian] allow this bash command?", `${command}\nwhy it matched: ${rule.reason}`);
+			// Split-flag rm -r -f misses the combined-token regex; treat it as the
+			// same recursive force delete rule (ask tier) when the floor didn't hit.
+			const splitFlagRm = !rule && rmForceRecursive(command) ? rmRule : undefined;
+			const effective = rule ?? splitFlagRm;
+			if (effective) {
+				const approved = await api.confirm("[guardian] allow this bash command?", `${command}\nwhy it matched: ${effective.reason}`);
 				if (approved) return undefined; // the human said yes — run it
-				return { block: true, reason: rule.reason }; // declined: same teaching text as before
+				return { block: true, reason: effective.reason }; // declined: same teaching text as before
 			}
 		}
 		if ((event.name === "write" || event.name === "edit") && typeof event.args.path === "string") {

@@ -180,3 +180,63 @@ describe("guardian hard floor — never asks, always denies (spec part 3 item 9)
 		expect(confirm).toHaveBeenCalledTimes(1); // asked, not floor-denied
 	});
 });
+
+describe("M7 review: the floor must be unbypassable — home spellings and split flags", () => {
+	// The review found these exact commands passing with NO gate at all
+	// (fail-open): path.resolve() does not expand ~ / $HOME, and the ask-tier
+	// regex only sees combined -rf tokens.
+	it("rm -r -f ~/.ssh/known_hosts (split flags + tilde) hits the FLOOR — no confirm, straight deny", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const decision = (await g.gate({ name: "bash", args: { command: "rm -r -f ~/.ssh/known_hosts" } })) as {
+			block: boolean;
+			reason: string;
+		};
+		expect(decision.block).toBe(true);
+		expect(decision.reason).toContain("protected");
+		expect(g.confirm).not.toHaveBeenCalled();
+	});
+
+	it("rm --recursive --force ~/.ssh hits the FLOOR", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const decision = (await g.gate({ name: "bash", args: { command: "rm --recursive --force ~/.ssh" } })) as {
+			block: boolean;
+		};
+		expect(decision.block).toBe(true);
+		expect(g.confirm).not.toHaveBeenCalled();
+	});
+
+	it('rm -rf "$HOME"/.ssh (interior quotes) hits the FLOOR after quote stripping + expansion', async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const decision = (await g.gate({ name: "bash", args: { command: 'rm -rf "$HOME"/.ssh' } })) as {
+			block: boolean;
+		};
+		expect(decision.block).toBe(true);
+		expect(g.confirm).not.toHaveBeenCalled();
+	});
+
+	it("rm -rf ~/.ssh (combined flags, tilde) is FLOOR-denied — not the ask tier", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const decision = (await g.gate({ name: "bash", args: { command: "rm -rf ~/.ssh" } })) as {
+			block: boolean;
+		};
+		expect(decision.block).toBe(true);
+		expect(g.confirm).not.toHaveBeenCalled();
+	});
+
+	it("rm -r -f on a NORMAL path asks (split flags reach the ask tier)", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const decision = await g.gate({ name: "bash", args: { command: "rm -r -f /tmp/normal-dir" } });
+		// declined confirm → the recursive-force-delete teaching reason
+		expect(decision).toMatchObject({
+			block: true,
+			reason: expect.stringContaining("recursive force delete"),
+		});
+		expect(g.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("plain rm (no flags) still never asks", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		expect(await g.gate({ name: "bash", args: { command: "rm notes.txt" } })).toBeUndefined();
+		expect(g.confirm).not.toHaveBeenCalled();
+	});
+});

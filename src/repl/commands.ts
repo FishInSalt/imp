@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import type { SessionStore } from "../core/session/store.js";
 import { defaultTrustStorePath, nearestTrustEntry, readTrustFile, removeTrust } from "../core/trust.js";
+import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
@@ -15,6 +16,8 @@ export interface CommandContext {
 	replay(session: SessionStore): number;
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
+	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
+	worktreeCwd?: string;
 }
 
 export type CommandOutcome = "handled" | "exit-requested";
@@ -184,6 +187,41 @@ export const COMMANDS: readonly SlashCommand[] = [
 			}
 			ctx.runner.model = id;
 			ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
+			return "handled";
+		},
+	},
+	{
+		name: "worktrees",
+		summary: "list worktrees kept for a manual merge (M6b handbacks)",
+		allowedDuringRun: false,
+		run: (_args, ctx) => {
+			void (async () => {
+				try {
+					const repo = await resolveRepoState(ctx.worktreeCwd ?? process.cwd());
+					const entries = await listChildWorktrees(repo);
+					if (entries.length === 0) {
+						ctx.renderer.note("▪ no kept worktrees — task isolation cleans up after itself");
+						return;
+					}
+					for (const entry of entries) {
+						const state = entry.merged
+							? "merged — nothing to merge, safe to delete"
+							: entry.stat === ""
+								? "no changes yet"
+								: entry.stat;
+						ctx.renderer.writeLine(`${entry.branch}  ${ctx.renderer.dim(state)}`);
+						ctx.renderer.writeLine(ctx.renderer.dim(`  ${entry.path}`));
+					}
+					const unmerged = entries.filter((e) => !e.merged);
+					if (unmerged.length > 0) {
+						ctx.renderer.note(
+							"▪ merge from the repo root: " + unmerged.map((e) => `git merge ${e.branch}`).join("; "),
+						);
+					}
+				} catch (err) {
+					ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+				}
+			})();
 			return "handled";
 		},
 	},

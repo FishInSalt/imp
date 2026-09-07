@@ -1,8 +1,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	askTrustOnce,
 	canonicalizeDir,
 	defaultTrustStorePath,
 	nearestTrustEntry,
@@ -91,5 +93,48 @@ describe("trustRequiringResources", () => {
 		expect(trustRequiringResources(dir)).toEqual([".imp/agents"]);
 		mkdirSync(join(dir, ".imp", "extensions"), { recursive: true });
 		expect(trustRequiringResources(dir)).toEqual([".imp/extensions", ".imp/agents"]);
+	});
+});
+
+describe("askTrustOnce (the interactive one-time ask)", () => {
+	function makeIo() {
+		const stdin = new PassThrough();
+		const chunks: string[] = [];
+		const stdout = new Writable({
+			write(chunk, _enc, cb) {
+				chunks.push(String(chunk));
+				cb();
+			},
+		});
+		return { stdin, stdout, output: () => chunks.join("") };
+	}
+
+	it("renders the question naming the resources; y/yes approve", async () => {
+		const io = makeIo();
+		const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions", ".imp/agents"]);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(io.output()).toContain("trust the files in this directory?");
+		expect(io.output()).toContain(".imp/extensions, .imp/agents");
+		expect(io.output()).toContain("[y/N]");
+		io.stdin.write("y\n");
+		expect(await answer).toBe(true);
+	});
+
+	it("anything but y/yes denies — empty enter, n, no, stray text", async () => {
+		for (const line of ["\n", "n\n", "no\n", "sure why not\n"]) {
+			const io = makeIo();
+			const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions"]);
+			await new Promise((r) => setTimeout(r, 5));
+			io.stdin.write(line);
+			expect(await answer).toBe(false);
+		}
+	});
+
+	it("EOF/Ctrl+D at the ask resolves false — a closing prompt is a denial, never a hang", async () => {
+		const io = makeIo();
+		const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions"]);
+		await new Promise((r) => setTimeout(r, 5));
+		io.stdin.end();
+		expect(await answer).toBe(false);
 	});
 });

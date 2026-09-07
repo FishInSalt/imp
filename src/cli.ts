@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import * as readline from "node:readline";
 import { listSessions } from "./core/session/manager.js";
 import {
+	askTrustOnce,
 	defaultTrustStorePath,
 	nearestTrustEntry,
 	readTrustFile,
@@ -316,17 +316,7 @@ function reportStartupError(err: unknown): void {
  *  ReplInput exists — a short-lived readline, closed before the session
  *  starts). Non-interactive callers never reach this: they deny instead. */
 function askTrustOnTty(resources: readonly string[]): Promise<boolean> {
-	return new Promise((resolvePrompt) => {
-		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-		const list = resources.join(", ");
-		rl.question(`trust the files in this directory? it wants to load: ${list} [y/N] `, (answer) => {
-			const approved = /^y(?:es)?$/i.test(answer.trim());
-			rl.close();
-			resolvePrompt(approved);
-		});
-		// Ctrl+C at the trust prompt is a denial, not an abort
-		rl.on("close", () => resolvePrompt(false));
-	});
+	return askTrustOnce(process.stdin, process.stdout, resources);
 }
 
 /** Resolve the M8 project-trust gate before any project resource loads.

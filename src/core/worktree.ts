@@ -159,6 +159,49 @@ export async function worktreeChangeStat(wt: ChildWorktree, repo: RepoState): Pr
 	return parts.filter((p) => p !== "").join("; ");
 }
 
+/** One kept worktree as /worktrees shows it (M6b §7 follow-up). */
+export interface WorktreeListEntry {
+	path: string;
+	/** Branch name without refs/heads/ (imp/task-*). */
+	branch: string;
+	/** The branch commit is an ancestor of the main checkout's HEAD —
+	 *  already merged, so nothing on it can be lost by removing it. */
+	merged: boolean;
+	/** Change summary vs the main HEAD ("" when none) — same shape the
+	 *  child's handback trailer prints. */
+	stat: string;
+}
+
+/** Enumerate imp-kept child worktrees of `repo` (M6b handbacks awaiting a
+ *  manual merge). Source of truth is `git worktree list --porcelain` — no
+ *  bookkeeping of our own can drift from reality. */
+export async function listChildWorktrees(repo: RepoState): Promise<WorktreeListEntry[]> {
+	const raw = await git(repo.root, ["worktree", "list", "--porcelain"]);
+	if (raw.status !== 0) throw new Error(`git worktree list failed: ${(raw.stderr || raw.stdout).trim()}`);
+	const entries: WorktreeListEntry[] = [];
+	for (const block of raw.stdout.split(/\n\n+/)) {
+		const lines = block.split("\n").filter((l) => l !== "");
+		const wtPath = lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length);
+		const branchRef = lines.find((l) => l.startsWith("branch "))?.slice("branch ".length);
+		if (wtPath === undefined || branchRef === undefined) continue;
+		if (!path.basename(wtPath).startsWith("imp-worktree-")) continue; // only imp's children
+		const branch = branchRef.replace(/^refs\/heads\//, "");
+		const mergedProbe = await git(repo.root, ["merge-base", "--is-ancestor", branch, "HEAD"]);
+		const wt: ChildWorktree = {
+			path: wtPath,
+			branch,
+			nodeModulesLinked: existsSync(path.join(wtPath, "node_modules")),
+		};
+		entries.push({
+			path: wtPath,
+			branch,
+			merged: mergedProbe.status === 0,
+			stat: await worktreeChangeStat(wt, repo),
+		});
+	}
+	return entries.sort((a, b) => a.branch.localeCompare(b.branch));
+}
+
 /** Remove worktree + its branch. Best effort: prunes stale metadata too. */
 export async function removeChildWorktree(wt: ChildWorktree, repo: RepoState): Promise<string[]> {
 	const errors: string[] = [];

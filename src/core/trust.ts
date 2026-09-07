@@ -16,6 +16,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import * as readline from "node:readline";
 
 /** `true`/`false` records; absent key = undecided. `null` is not stored. */
 export type TrustFile = Record<string, boolean>;
@@ -99,6 +100,33 @@ export function removeTrust(storePath: string, dir: string): boolean {
 	delete data[key];
 	writeTrustFile(storePath, data);
 	return true;
+}
+
+/** The one-time [y/N] ask (interactive callers only). Streams are injected
+ *  so tests drive it exactly like the REPL's confirm queue; Ctrl+C, Ctrl+D,
+ *  or EOF resolve false — a closing prompt is a denial, never a hang. */
+export function askTrustOnce(
+	input: NodeJS.ReadableStream & { on: NodeJS.ReadableStream["on"] },
+	output: NodeJS.WritableStream,
+	resources: readonly string[],
+): Promise<boolean> {
+	const rl = readline.createInterface({ input, output });
+	return new Promise((resolve) => {
+		let settled = false;
+		const settle = (approved: boolean): void => {
+			if (settled) return;
+			settled = true;
+			rl.close();
+			resolve(approved);
+		};
+		rl.question(
+			`trust the files in this directory? it wants to load: ${resources.join(", ")} [y/N] `,
+			(answer) => {
+				settle(/^y(?:es)?$/i.test(answer.trim()));
+			},
+		);
+		rl.on("close", () => settle(false));
+	});
 }
 
 /** Project resources that REQUIRE trust: only `<cwd>/.imp/` items that load

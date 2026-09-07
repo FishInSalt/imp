@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import type { LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
 import { createRunner, type Runner } from "../src/runner.js";
-import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { assistant, makeRenderer, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
 beforeEach(() => {
 	vi.stubEnv("IMP_LOG", "0");
@@ -41,6 +42,33 @@ interface TestEnv {
 	aborted: boolean;
 	/** Hermetic M8 trust store (create records with setTrust from trust.ts). */
 	trustStore: string;
+}
+
+/** Minimal git repo with one imp-style child worktree on its own branch. */
+async function makeGitRepo(args?: { noChild?: boolean }): Promise<{
+	root: string;
+	path: string;
+	branch: string;
+}> {
+	const base = await mkdtemp(path.join(tmpdir(), "imp-wtlist-"));
+	const root = path.join(base, "repo");
+	mkdirSync(root, { recursive: true });
+	const run = (cmd: string[], cwd: string) => execFileSync("git", cmd, { cwd, encoding: "utf8" });
+	run(["init", "-q"], root);
+	run(["config", "user.email", "t@example.com"], root);
+	run(["config", "user.name", "t"], root);
+	writeFileSync(path.join(root, "a.txt"), "base\n");
+	run(["add", "."], root);
+	run(["commit", "-q", "-m", "base"], root);
+	if (args?.noChild === true) return { root, path: "", branch: "" };
+	const wtPath = path.join(base, "imp-worktree-task-test01");
+	const branch = "imp/task-test01";
+	run(["worktree", "add", wtPath, "-b", branch], root);
+	// the handback shape that matters: committed work the parent has NOT merged
+	writeFileSync(path.join(wtPath, "b.txt"), "child change\n");
+	run(["add", "."], wtPath);
+	run(["commit", "-q", "-m", "child"], wtPath);
+	return { root, path: wtPath, branch };
 }
 
 async function makeEnv(args?: {
@@ -125,6 +153,7 @@ describe("slash commands", () => {
 			"/sessions",
 			"/resume <id>",
 			"/model [id]",
+			"/worktrees",
 			"/trust",
 			"/compact",
 		]) {
@@ -146,6 +175,7 @@ describe("slash commands", () => {
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
+				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
 				"  /compact           summarize older context now",
 				"",
@@ -247,7 +277,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /sessions /resume /model /trust /compact — /help shows what they do\n",
+				"known: /help /exit /new /sessions /resume /model /worktrees /trust /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -255,6 +285,46 @@ describe("slash commands", () => {
 		await dispatchCommand("/", bare.ctx);
 		expect(bare.output()).toContain('imp: unknown command "/"\n');
 		expect(bare.requests).toHaveLength(0);
+	});
+});
+
+describe("/worktrees (M6b §7 follow-up)", () => {
+	it("outside a git repository: the teaching error, not a stack", async () => {
+		const env = await makeEnv();
+		const scratch = mkdtempSync(path.join(tmpdir(), "imp-nowt-"));
+		env.ctx.worktreeCwd = scratch;
+		await dispatchCommand("/worktrees", env.ctx);
+		await waitUntil(() => env.output().includes("worktree isolation requires a git repository"));
+		expect(env.output()).toContain("worktree isolation requires a git repository");
+	});
+
+	it("lists kept handbacks: merged entries say so, unmerged ones teach the merge command", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo(); // helper: init, commit, create one child worktree
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		await waitUntil(() => env.output().includes("git merge imp/task-"));
+		const out = env.output();
+		expect(out).toContain(repo.branch); // imp/task-*
+		expect(out).toContain(repo.path); // the worktree path line
+		expect(out).toContain("1 file changed");
+		expect(out).toContain("git merge imp/task-");
+		// merge the branch in, re-list: now reported as merged
+		execFileSync("git", ["merge", "--ff-only", repo.branch], { cwd: repo.root });
+		await dispatchCommand("/worktrees", env.ctx);
+		await waitUntil(() => env.output().lastIndexOf("merged — nothing to merge") > 0);
+		expect(env.output().lastIndexOf("merged — nothing to merge")).toBeGreaterThan(
+			out.lastIndexOf("git merge"),
+		);
+	});
+
+	it("a repository with no children says so", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo({ noChild: true });
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		await waitUntil(() => env.output().includes("no kept worktrees"));
+		expect(env.output()).toContain("no kept worktrees");
 	});
 });
 

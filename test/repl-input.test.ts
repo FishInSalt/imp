@@ -108,3 +108,56 @@ describe("ReplInput", () => {
 		input.close();
 	});
 });
+
+describe("confirm rendering after the streamClosed misplacement fix (byte-level pins)", () => {
+	// The M7 review follow-up: the EOF-crash fix set streamClosed at start()
+	// instead of inside the close handler — ask() still rendered (direct path),
+	// but restorePrompt and the FIFO next-question render silently no-op'd.
+	// These pins assert RENDERING BYTES, not settlement booleans.
+
+	it("answering a question restores the machine prompt '> ' in the output stream", async () => {
+		const { fake, input } = makeInput({ tty: true });
+		input.start();
+		const answer = input.ask("first? [y/N]");
+		await ticks();
+		expect(fake.output()).toContain("first? [y/N]");
+		const before = fake.output().length;
+		fake.send("y\n");
+		expect(await answer).toBe(true);
+		await ticks();
+		// byte-level: the post-answer delta must redraw the prompt (TTY cursor
+		// escapes wrap it — assert the '> ' marker itself)
+		expect(fake.output().slice(before)).toContain("> ");
+		input.close();
+	});
+
+	it("a QUEUED second question renders when the first settles (real FIFO path)", async () => {
+		const { fake, input } = makeInput({ tty: true });
+		input.start();
+		const a = input.ask("q-a? [y/N]");
+		const b = input.ask("q-b? [y/N]"); // queued before a settles — the FIFO shape
+		await ticks();
+		expect(fake.output()).toContain("q-a? [y/N]");
+		expect(fake.output()).not.toContain("q-b? [y/N]"); // still queued, not rendered
+		fake.send("n\n");
+		expect(await a).toBe(false);
+		await ticks();
+		// the second question becomes visible exactly now, not before
+		expect(fake.output()).toContain("q-b? [y/N]");
+		fake.send("y\n");
+		expect(await b).toBe(true);
+		input.close();
+	});
+
+	it("EOF at a pending ask settles it false and never prompts on the closed interface", async () => {
+		const { fake, input, events } = makeInput({ tty: true });
+		input.start();
+		const a = input.ask("last? [y/N]");
+		await ticks();
+		fake.eof();
+		expect(await a).toBe(false);
+		await ticks();
+		expect(events).toContain("eof");
+		input.close();
+	});
+});

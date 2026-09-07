@@ -14,7 +14,19 @@
  * asks). Paths are canonicalized through realpath so symlinked checkouts
  * cannot dodge a recorded denial.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import * as readline from "node:readline";
 
@@ -45,7 +57,9 @@ export function readTrustFile(storePath: string): TrustFile {
 		parsed = JSON.parse(readFileSync(storePath, "utf8"));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`failed to read the trust store ${storePath}: ${message}`);
+		throw new Error(
+			`failed to read the trust store ${storePath}: ${message} — fix or delete that file to recover (it only holds trust decisions)`,
+		);
 	}
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
 		throw new Error(`invalid trust store ${storePath}: expected an object of { "dir": true|false }`);
@@ -62,7 +76,11 @@ export function readTrustFile(storePath: string): TrustFile {
 	return data;
 }
 
-/** Sorted keys keep the file diff-friendly under version control. */
+/** Sorted keys keep the file diff-friendly under version control. The write
+ *  is tmp+rename so a concurrent reader never sees a torn file (M8 review:
+ *  a bare writeFileSync read mid-write crashed a whole imp startup), and the
+ *  read-modify-write helpers below serialize through an exclusive lock file
+ *  so two imp processes cannot silently drop each other's records. */
 export function writeTrustFile(storePath: string, data: TrustFile): void {
 	const sorted: TrustFile = {};
 	for (const key of Object.keys(data).sort()) {
@@ -70,7 +88,37 @@ export function writeTrustFile(storePath: string, data: TrustFile): void {
 		if (value === true || value === false) sorted[key] = value;
 	}
 	mkdirSync(dirname(storePath), { recursive: true });
-	writeFileSync(storePath, `${JSON.stringify(sorted, null, "\t")}\n`, "utf8");
+	const tmp = `${storePath}.${process.pid}.tmp`;
+	writeFileSync(tmp, `${JSON.stringify(sorted, null, "\t")}\n`, "utf8");
+	renameSync(tmp, storePath);
+}
+
+/** Minimal exclusive lock (zero deps, unlike pi's proper-lockfile): O_EXCL
+ *  on a sidecar file, bounded retry, stale-break after 5s — enough for the
+ *  two-imp-terminals case, not a distributed lock. Degrades to unlocked
+ *  rather than bricking after 1s of contention. */
+function withStoreLock<T>(storePath: string, fn: () => T): T {
+	const lockPath = `${storePath}.lock`;
+	mkdirSync(dirname(storePath), { recursive: true });
+	for (let attempt = 0; ; attempt++) {
+		let fd: number | undefined;
+		try {
+			fd = openSync(lockPath, "wx");
+		} catch {
+			if (attempt >= 50) return fn(); // degraded: proceed unlocked rather than brick
+			const started = Date.now();
+			while (Date.now() - started < 20) {
+				/* busy-wait 20ms — sync context, no Atomics needed */
+			}
+			continue;
+		}
+		try {
+			return fn();
+		} finally {
+			closeSync(fd);
+			unlinkSync(lockPath);
+		}
+	}
 }
 
 /** Walk canonical `dir` upward; the first recorded ancestor decides. */
@@ -85,47 +133,67 @@ export function nearestTrustEntry(data: TrustFile, dir: string): { path: string;
 	}
 }
 
-/** Record a decision at `dir` (canonicalized) in one read-modify-write. */
-export function setTrust(storePath: string, dir: string, trusted: boolean): void {
-	const data = readTrustFile(storePath);
-	data[canonicalizeDir(dir)] = trusted;
-	writeTrustFile(storePath, data);
+/** Record a decision at `dir` (canonicalized) in one locked read-modify-write.
+ *  `rebuildOnCorrupt` (the --trust/--no-trust flag path): an unreadable store
+ *  is replaced instead of propagated — the documented recovery command must
+ *  itself be able to repair the store (M8 review). */
+export function setTrust(storePath: string, dir: string, trusted: boolean, rebuildOnCorrupt = false): void {
+	withStoreLock(storePath, () => {
+		let data: TrustFile;
+		try {
+			data = readTrustFile(storePath);
+		} catch (err) {
+			if (!rebuildOnCorrupt) throw err;
+			data = {};
+		}
+		data[canonicalizeDir(dir)] = trusted;
+		writeTrustFile(storePath, data);
+	});
 }
 
-/** Remove one record (exact directory; `null` when it was not recorded). */
+/** Remove one record (exact directory; false when it was not recorded). */
 export function removeTrust(storePath: string, dir: string): boolean {
-	const data = readTrustFile(storePath);
-	const key = canonicalizeDir(dir);
-	if (!(key in data)) return false;
-	delete data[key];
-	writeTrustFile(storePath, data);
-	return true;
+	return withStoreLock(storePath, () => {
+		const data = readTrustFile(storePath);
+		const key = canonicalizeDir(dir);
+		if (!(key in data)) return false;
+		delete data[key];
+		writeTrustFile(storePath, data);
+		return true;
+	});
 }
 
 /** The one-time [y/N] ask (interactive callers only). Streams are injected
  *  so tests drive it exactly like the REPL's confirm queue; Ctrl+C, Ctrl+D,
  *  or EOF resolve false — a closing prompt is a denial, never a hang. */
+/** The one-time [y/N] ask (interactive callers only). Streams are injected
+ *  so tests drive it exactly like the REPL's confirm queue. Tri-state:
+ *  `true`/`false` are EXPLICIT line answers (recorded by the caller);
+ *  `null` = cancelled — EOF, Ctrl+D, or SIGINT closed the prompt without an
+ *  answer, which denies for the session but records NOTHING (a dropped SSH
+ *  session must not become a permanent denial — M8 review). The SIGINT
+ *  listener is load-bearing: without one, readline only PAUSES and the
+ *  promise may never settle (the pause→close fallback on current Node is
+ *  not the documented contract). */
 export function askTrustOnce(
-	input: NodeJS.ReadableStream & { on: NodeJS.ReadableStream["on"] },
+	input: NodeJS.ReadableStream,
 	output: NodeJS.WritableStream,
-	resources: readonly string[],
-): Promise<boolean> {
+	question: string,
+): Promise<boolean | null> {
 	const rl = readline.createInterface({ input, output });
 	return new Promise((resolve) => {
 		let settled = false;
-		const settle = (approved: boolean): void => {
+		const settle = (answer: boolean | null): void => {
 			if (settled) return;
 			settled = true;
 			rl.close();
-			resolve(approved);
+			resolve(answer);
 		};
-		rl.question(
-			`trust the files in this directory? it wants to load: ${resources.join(", ")} [y/N] `,
-			(answer) => {
-				settle(/^y(?:es)?$/i.test(answer.trim()));
-			},
-		);
-		rl.on("close", () => settle(false));
+		rl.question(question, (line) => {
+			settle(/^y(?:es)?$/i.test(line.trim()));
+		});
+		rl.on("SIGINT", () => settle(null));
+		rl.on("close", () => settle(null));
 	});
 }
 
@@ -133,10 +201,36 @@ export function askTrustOnce(
  *  executable or model-directed content. Global `~/.imp/` needs no gate —
  *  the user installed it themselves. Plain `AGENTS.md` context files stay
  *  ungated (prompt-level, matching pi and Claude Code). */
-export function trustRequiringResources(cwd: string): string[] {
+export function trustRequiringResources(cwd: string, home: string): string[] {
+	if (isWithin(cwd, home)) return []; // ~ is the user's own installation — never gated
 	const found: string[] = [];
 	for (const rel of [".imp/extensions", ".imp/agents"]) {
-		if (existsSync(join(cwd, rel))) found.push(rel);
+		const target = join(cwd, rel);
+		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}
 	return found;
+}
+
+function isWithin(child: string, ancestor: string): boolean {
+	const c = canonicalizeDir(child);
+	const a = canonicalizeDir(ancestor);
+	return c === a || c.startsWith(`${a}/`);
+}
+
+/** "dir (N file[s])" for the ask line — the user should not vouch blind
+ *  (M8 review: name what is about to load, not just the category dirs). */
+export function describeTrustResources(cwd: string, resources: readonly string[]): string {
+	return resources
+		.map((rel) => {
+			let count = 0;
+			try {
+				count = readdirSync(join(cwd, rel)).filter(
+					(f) => f.endsWith(".mjs") || f.endsWith(".js") || f.endsWith(".md"),
+				).length;
+			} catch {
+				/* unreadable → just show the dir */
+			}
+			return count > 0 ? `${rel} (${count} file${count === 1 ? "" : "s"})` : rel;
+		})
+		.join(", ");
 }

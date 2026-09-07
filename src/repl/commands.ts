@@ -1,6 +1,12 @@
 import { homedir } from "node:os";
 import type { SessionStore } from "../core/session/store.js";
-import { defaultTrustStorePath, nearestTrustEntry, readTrustFile, removeTrust } from "../core/trust.js";
+import {
+	canonicalizeDir,
+	defaultTrustStorePath,
+	nearestTrustEntry,
+	readTrustFile,
+	removeTrust,
+} from "../core/trust.js";
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Renderer } from "../render.js";
@@ -194,34 +200,52 @@ export const COMMANDS: readonly SlashCommand[] = [
 		name: "worktrees",
 		summary: "list worktrees kept for a manual merge (M6b handbacks)",
 		allowedDuringRun: false,
-		run: (_args, ctx) => {
-			void (async () => {
-				try {
-					const repo = await resolveRepoState(ctx.worktreeCwd ?? process.cwd());
-					const entries = await listChildWorktrees(repo);
-					if (entries.length === 0) {
-						ctx.renderer.note("▪ no kept worktrees — task isolation cleans up after itself");
-						return;
-					}
-					for (const entry of entries) {
-						const state = entry.merged
-							? "merged — nothing to merge, safe to delete"
-							: entry.stat === ""
-								? "no changes yet"
-								: entry.stat;
-						ctx.renderer.writeLine(`${entry.branch}  ${ctx.renderer.dim(state)}`);
-						ctx.renderer.writeLine(ctx.renderer.dim(`  ${entry.path}`));
-					}
-					const unmerged = entries.filter((e) => !e.merged);
-					if (unmerged.length > 0) {
-						ctx.renderer.note(
-							"▪ merge from the repo root: " + unmerged.map((e) => `git merge ${e.branch}`).join("; "),
-						);
-					}
-				} catch (err) {
-					ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+		// awaited (like /compact): output must land before the next command's
+		// (M8 review F5 — fire-and-forget interleaved lines after later output)
+		run: async (_args, ctx): Promise<CommandOutcome> => {
+			try {
+				const repo = await resolveRepoState(ctx.worktreeCwd ?? process.cwd());
+				const entries = await listChildWorktrees(repo);
+				if (entries.length === 0) {
+					ctx.renderer.note("▪ no kept worktrees — task isolation cleans up after itself");
+					return "handled";
 				}
-			})();
+				const deletable: string[] = [];
+				for (const entry of entries) {
+					// Deletion safety needs BOTH: nothing to merge AND nothing
+					// uncommitted. `merged` alone lied for dirty worktrees whose
+					// branch tip is an ancestor (M8 review P1).
+					let state: string;
+					if (entry.missing) {
+						state = "directory missing — run: git worktree prune";
+					} else if (entry.merged || entry.patchEquivalent) {
+						state =
+							entry.stat === ""
+								? `${entry.patchEquivalent ? "already in main" : "merged"} — safe to delete`
+								: `${entry.patchEquivalent ? "already in main" : "merged"}, but uncommitted work remains: ${entry.stat}`;
+					} else if (entry.stat === "") {
+						state = "no differences vs main";
+					} else {
+						state = entry.stat;
+					}
+					ctx.renderer.writeLine(`${entry.branch}  ${ctx.renderer.dim(state)}`);
+					ctx.renderer.writeLine(ctx.renderer.dim(`  ${entry.path}`));
+					if (!entry.missing && (entry.merged || entry.patchEquivalent) && entry.stat === "") {
+						deletable.push(entry.branch);
+					}
+				}
+				const unmerged = entries.filter((e) => !e.missing && !e.merged && !e.patchEquivalent);
+				if (unmerged.length > 0) {
+					ctx.renderer.note(
+						"▪ merge from the repo root: " + unmerged.map((e) => `git merge ${e.branch}`).join("; "),
+					);
+				}
+				if (deletable.length > 0) {
+					ctx.renderer.note(`▪ already in main with no uncommitted work: ${deletable.join(", ")}`);
+				}
+			} catch (err) {
+				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+			}
 			return "handled";
 		},
 	},
@@ -239,10 +263,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 					return "handled";
 				}
 				try {
+					// echo the canonical key, not the raw input ("." vs the
+					// resolved path confused users — M8 review F7)
+					const shown = canonicalizeDir(target);
 					ctx.renderer.note(
 						removeTrust(store, target)
-							? `▪ removed the trust record for ${target}`
-							: `▪ no trust record for ${target}`,
+							? `▪ removed the trust record for ${shown}`
+							: `▪ no trust record for ${shown} (paths are absolute; "~" is not expanded)`,
 					);
 				} catch (err) {
 					ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);

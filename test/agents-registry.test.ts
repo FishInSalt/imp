@@ -112,3 +112,47 @@ describe("loadAgentDefinitions", () => {
 		expect(warnings[0]).toContain("no frontmatter");
 	});
 });
+
+describe("M8 trust gate: projectAllowed=false (the skipped tier)", () => {
+	it("skips the project tier, keeps the global tier, and reports projectGated", () => {
+		const { cwd, home, projectDir, homeDir } = tempProject();
+		agentFile(projectDir, "scout", SCOUT);
+		agentFile(homeDir, "global1", SCOUT.replace(/name: scout/, "name: global1"));
+		const registry = loadAgentDefinitions(cwd, home, false);
+		expect(registry.agents.map((a) => a.name)).toEqual(["global1"]); // project agent gone
+		expect(registry.projectGated).toBe(true); // task tool must not say "no agents defined"
+	});
+
+	it("undefined (default) loads both tiers and projectGated is false", () => {
+		const { cwd, home, projectDir, homeDir } = tempProject();
+		agentFile(projectDir, "scout", SCOUT);
+		agentFile(homeDir, "global1", SCOUT.replace(/name: scout/, "name: global1"));
+		const registry = loadAgentDefinitions(cwd, home);
+		expect(registry.agents.map((a) => a.name).sort()).toEqual(["global1", "scout"]);
+		expect(registry.projectGated).toBe(false);
+	});
+
+	it("a gated but EMPTY project dir is not projectGated (nothing was withheld)", () => {
+		const { cwd, home } = tempProject();
+		const registry = loadAgentDefinitions(cwd, home, false);
+		expect(registry.agents).toEqual([]);
+		expect(registry.projectGated).toBe(false);
+	});
+
+	it("cwd === home: the shared directory is the user's global tier — never gated (M8 review)", () => {
+		const { cwd, home, homeDir } = tempProject();
+		agentFile(homeDir, "mine", SCOUT.replace(/name: scout/, "name: mine"));
+		const registry = loadAgentDefinitions(cwd, home, false); // same dir for both tiers
+		expect(registry.agents.map((a) => a.name)).toEqual(["mine"]); // still loaded
+		expect(registry.projectGated).toBe(false);
+	});
+
+	it("name collision with the project tier skipped: the global definition wins silently (accepted, pinned)", () => {
+		const { cwd, home, projectDir, homeDir } = tempProject();
+		agentFile(projectDir, "twin", SCOUT);
+		agentFile(homeDir, "twin", SCOUT.replace("Explores a codebase", "GLOBAL VERSION"));
+		const registry = loadAgentDefinitions(cwd, home, false);
+		expect(registry.agents).toHaveLength(1);
+		expect(registry.agents[0]?.description).toContain("GLOBAL VERSION");
+	});
+});

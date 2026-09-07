@@ -137,16 +137,23 @@ export async function hasWorktreeChanges(wt: ChildWorktree, repo: RepoState): Pr
 /** Compact change summary for the result trailer: shortstat vs HEAD plus
  * untracked names (git diff never lists those — the parent needs them to
  * know what to `git add`). */
-export async function worktreeChangeStat(wt: ChildWorktree, repo: RepoState): Promise<string> {
+export async function worktreeChangeStat(wt: ChildWorktree, repo: RepoState, base?: string): Promise<string> {
 	// vs the base commit, not HEAD: the notice tells the child to COMMIT, and
-	// committed work must still show in the summary (review nit 1)
-	const stat = await git(wt.path, ["diff", "--shortstat", repo.head, "--"]);
+	// committed work must still show in the summary (review nit 1). The task
+	// trailer passes no base (repo.head = the parent HEAD captured at task
+	// start); /worktrees passes the merge-base so main's forward commits are
+	// not misattributed to the child (M8 review F2).
+	const stat = await git(wt.path, ["diff", "--shortstat", base ?? repo.head, "--"]);
 	const line = stat.status === 0 ? stat.stdout.trim() : "";
 	const statusArgs = wt.nodeModulesLinked
 		? ["status", "--porcelain", "--", ":!node_modules"]
 		: ["status", "--porcelain"];
+	// only "??" entries are untracked — modified tracked files already appear
+	// in the shortstat and must not be double-reported under the wrong label
+	// (M8 review F6, pre-existing since M6b)
 	const untracked = (await git(wt.path, statusArgs)).stdout
 		.split("\n")
+		.filter((l) => l.startsWith("?? "))
 		.map((l) => l.slice(3).trim())
 		.filter((name, i, all) => name !== "" && all.indexOf(name) === i);
 	if (line === "" && untracked.length === 0) return "";
@@ -165,11 +172,19 @@ export interface WorktreeListEntry {
 	/** Branch name without refs/heads/ (imp/task-*). */
 	branch: string;
 	/** The branch commit is an ancestor of the main checkout's HEAD —
-	 *  already merged, so nothing on it can be lost by removing it. */
+	 *  committed work on the branch cannot be lost by removing it. Says
+	 *  NOTHING about uncommitted files: the caller must also check `stat`. */
 	merged: boolean;
-	/** Change summary vs the main HEAD ("" when none) — same shape the
-	 *  child's handback trailer prints. */
+	/** Content already sits in main via squash/cherry-pick (patch-id
+	 *  equivalent) even though the commit is not an ancestor — nothing to
+	 *  merge; a literal merge would only create an empty merge commit. */
+	patchEquivalent: boolean;
+	/** Change summary vs the merge-base ("" when none) — includes
+	 *  uncommitted work, which is exactly what `merged` cannot see. */
 	stat: string;
+	/** The worktree directory is gone (deleted behind git's back); the
+	 *  listed path is dead until `git worktree prune`. */
+	missing: boolean;
 }
 
 /** Enumerate imp-kept child worktrees of `repo` (M6b handbacks awaiting a
@@ -184,9 +199,33 @@ export async function listChildWorktrees(repo: RepoState): Promise<WorktreeListE
 		const wtPath = lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length);
 		const branchRef = lines.find((l) => l.startsWith("branch "))?.slice("branch ".length);
 		if (wtPath === undefined || branchRef === undefined) continue;
+		if (wtPath === repo.root) continue; // the main checkout is never a handback (M8 review F4)
 		if (!path.basename(wtPath).startsWith("imp-worktree-")) continue; // only imp's children
 		const branch = branchRef.replace(/^refs\/heads\//, "");
 		const mergedProbe = await git(repo.root, ["merge-base", "--is-ancestor", branch, "HEAD"]);
+		const merged = mergedProbe.status === 0;
+		// squash/cherry-pick detection: commits in `branch` whose patch already
+		// exists in HEAD render as "-" lines in `git cherry`
+		let patchEquivalent = false;
+		if (!merged) {
+			const cherry = await git(repo.root, ["cherry", "HEAD", branch]);
+			const cherryLines = cherry.stdout.split("\n").filter((l) => l !== "");
+			if (cherry.status === 0 && cherryLines.length > 0 && cherryLines.every((l) => l.startsWith("-"))) {
+				patchEquivalent = true;
+			}
+		}
+		// honest stat base: the merge-base, so main's forward commits are not
+		// misattributed to the child (M8 review F2). Patch-equivalent entries
+		// diff from the branch TIP instead — their committed work is already
+		// in main, so only genuinely uncommitted files should show.
+		let base = repo.head;
+		if (patchEquivalent) {
+			const tip = await git(repo.root, ["rev-parse", branch]);
+			if (tip.status === 0 && tip.stdout.trim() !== "") base = tip.stdout.trim();
+		} else {
+			const mergeBase = await git(repo.root, ["merge-base", repo.head, branch]);
+			if (mergeBase.status === 0 && mergeBase.stdout.trim() !== "") base = mergeBase.stdout.trim();
+		}
 		const wt: ChildWorktree = {
 			path: wtPath,
 			branch,
@@ -195,8 +234,10 @@ export async function listChildWorktrees(repo: RepoState): Promise<WorktreeListE
 		entries.push({
 			path: wtPath,
 			branch,
-			merged: mergedProbe.status === 0,
-			stat: await worktreeChangeStat(wt, repo),
+			merged,
+			patchEquivalent,
+			stat: await worktreeChangeStat(wt, repo, base),
+			missing: !existsSync(wtPath),
 		});
 	}
 	return entries.sort((a, b) => a.branch.localeCompare(b.branch));

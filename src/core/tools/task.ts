@@ -53,6 +53,9 @@ export interface TaskToolOptions {
 	getSystem: () => string;
 	/** The parent's tool array; task itself is filtered out of the child pool. */
 	getTools: () => Tool[];
+	/** Project `.imp/agents` exists but was skipped by the trust gate — the
+	 *  roster must say so instead of "no agents are defined" (M8 review). */
+	agentsProjectGated?: boolean;
 	/** Current parent session — children link to it and live beside it. Null when sessions are disabled. */
 	getSession: () => SessionStore | null;
 	/** Hermetic tests: session base dir override (passed through to the session manager). */
@@ -124,7 +127,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			if (wanted !== undefined && agent === undefined) {
 				const available = agents.length
 					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .imp/agents/ and ~/.imp/agents/).`
-					: "No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).";
+					: options.agentsProjectGated === true
+						? "No agents are loaded — this directory's .imp/agents was skipped because the directory is not trusted (review it, then restart with: imp --trust)."
+						: "No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).";
 				return { output: `unknown agent "${wanted}". ${available}`, isError: true };
 			}
 

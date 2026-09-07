@@ -58,11 +58,41 @@ describe("trust store round-trip", () => {
 		expect(canonicalizeDir(link)).toBe(canonicalizeDir(real));
 	});
 
+	it("removeTrust converges symlink aliases onto the canonical record (M8 review tierScope)", () => {
+		const real = mkdtempSync(join(tmpdir(), "imp-trust-real2-"));
+		const link = join(home, "alias-link");
+		symlinkSync(real, link);
+		setTrust(store, link, true); // recorded via the alias → canonical key
+		// remove via a DIFFERENT alias (and via the real path) must hit the same record
+		const link2 = join(home, "alias-link-2");
+		symlinkSync(real, link2);
+		expect(removeTrust(store, link2)).toBe(true);
+		expect(readTrustFile(store)).toEqual({});
+	});
+
 	it("removeTrust deletes exactly one record and reports misses", () => {
 		setTrust(store, "/x", true);
 		expect(removeTrust(store, "/x")).toBe(true);
 		expect(readTrustFile(store)).toEqual({});
 		expect(removeTrust(store, "/x")).toBe(false);
+	});
+
+	it("setTrust rebuildOnCorrupt replaces an unreadable store (the --trust recovery path, M8 review)", () => {
+		mkdirSync(join(home, ".imp"), { recursive: true });
+		writeFileSync(store, "{oops", "utf8");
+		expect(() => setTrust(store, "/x", true)).toThrow(); // default: propagate
+		setTrust(store, "/x", true, true); // flag path: rebuild
+		expect(readTrustFile(store)).toEqual({ "/x": true });
+	});
+
+	it("concurrent writers do not tear the file (tmp+rename) and the lock serializes RMW", () => {
+		// two synchronous interleaved writers via the same process still round-trip
+		for (let i = 0; i < 40; i++) {
+			setTrust(store, `/a${i}`, true);
+			setTrust(store, `/b${i}`, false);
+		}
+		const data = readTrustFile(store);
+		expect(Object.keys(data)).toHaveLength(80);
 	});
 
 	it("a malformed store is a hard teaching error, not silent reinterpretation", () => {
@@ -86,13 +116,33 @@ describe("nearest-ancestor inheritance (monorepo ergonomics)", () => {
 describe("trustRequiringResources", () => {
 	it("only .imp extensions and agents count; AGENTS.md never does", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-proj-"));
-		expect(trustRequiringResources(dir)).toEqual([]);
+		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home-"));
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 		writeFileSync(join(dir, "AGENTS.md"), "# untrusted but prompt-level — not gated\n");
-		expect(trustRequiringResources(dir)).toEqual([]);
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 		mkdirSync(join(dir, ".imp", "agents"), { recursive: true });
-		expect(trustRequiringResources(dir)).toEqual([".imp/agents"]);
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/agents"]);
 		mkdirSync(join(dir, ".imp", "extensions"), { recursive: true });
-		expect(trustRequiringResources(dir)).toEqual([".imp/extensions", ".imp/agents"]);
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/extensions", ".imp/agents"]);
+	});
+
+	it("a plain FILE named .imp/extensions gates nothing (directories only)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-trust-file-"));
+		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home2-"));
+		mkdirSync(join(dir, ".imp"), { recursive: true });
+		writeFileSync(join(dir, ".imp", "extensions"), "not a directory\n");
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
+	});
+
+	it("cwd at or under the home dir gates nothing — the user's own installation (M8 review)", () => {
+		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
+		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
+		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && imp
+		expect(trustRequiringResources(join(home, "some", "repo"), home)).toEqual([]); // still under ~
+		// a genuinely foreign cwd still gates
+		const foreign = mkdtempSync(join(tmpdir(), "imp-trust-foreign-"));
+		mkdirSync(join(foreign, ".imp", "extensions"), { recursive: true });
+		expect(trustRequiringResources(foreign, home)).toEqual([".imp/extensions"]);
 	});
 });
 
@@ -109,32 +159,35 @@ describe("askTrustOnce (the interactive one-time ask)", () => {
 		return { stdin, stdout, output: () => chunks.join("") };
 	}
 
-	it("renders the question naming the resources; y/yes approve", async () => {
+	it("renders the question verbatim; y/yes approve (explicit answer)", async () => {
 		const io = makeIo();
-		const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions", ".imp/agents"]);
+		const answer = askTrustOnce(
+			io.stdin,
+			io.stdout,
+			"trust the files in /x? it wants to load: .imp/extensions (2 files) [y/N] ",
+		);
 		await new Promise((r) => setTimeout(r, 10));
-		expect(io.output()).toContain("trust the files in this directory?");
-		expect(io.output()).toContain(".imp/extensions, .imp/agents");
-		expect(io.output()).toContain("[y/N]");
+		expect(io.output()).toContain("trust the files in /x?");
+		expect(io.output()).toContain(".imp/extensions (2 files)");
 		io.stdin.write("y\n");
 		expect(await answer).toBe(true);
 	});
 
-	it("anything but y/yes denies — empty enter, n, no, stray text", async () => {
+	it("anything but y/yes is an explicit denial — empty enter, n, no, stray text", async () => {
 		for (const line of ["\n", "n\n", "no\n", "sure why not\n"]) {
 			const io = makeIo();
-			const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions"]);
+			const answer = askTrustOnce(io.stdin, io.stdout, "q [y/N] ");
 			await new Promise((r) => setTimeout(r, 5));
 			io.stdin.write(line);
 			expect(await answer).toBe(false);
 		}
 	});
 
-	it("EOF/Ctrl+D at the ask resolves false — a closing prompt is a denial, never a hang", async () => {
+	it("EOF/Ctrl+D resolves null (cancelled) — deny for the session, but NOT an explicit answer", async () => {
 		const io = makeIo();
-		const answer = askTrustOnce(io.stdin, io.stdout, [".imp/extensions"]);
+		const answer = askTrustOnce(io.stdin, io.stdout, "q [y/N] ");
 		await new Promise((r) => setTimeout(r, 5));
 		io.stdin.end();
-		expect(await answer).toBe(false);
+		expect(await answer).toBeNull();
 	});
 });

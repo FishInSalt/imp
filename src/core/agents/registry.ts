@@ -45,6 +45,9 @@ export interface AgentRegistry {
 	agents: AgentDefinition[];
 	/** Teaching-style diagnostics for skipped files (shown once at startup). */
 	warnings: string[];
+	/** Project `.imp/agents` existed but was skipped by the trust gate — the
+	 *  task tool's roster message must not claim "no agents are defined". */
+	projectGated: boolean;
 }
 
 /** Parse one agent file. Exported for direct testing. */
@@ -138,7 +141,12 @@ export function loadAgentDefinitions(
 		path.join(homeDir, ".imp", "agents"), // scanned first: loses collisions
 		path.join(cwd, ".imp", "agents"), // scanned last: wins collisions
 	];
-	const skip = projectAllowed === false ? [dirs[1]] : []; // M8 trust gate
+	// M8 trust gate. When cwd IS the home dir the two entries are the same
+	// directory — the global tier is the user's own installation and is never
+	// gated, so only a distinct project dir is skippable (pi makes the same
+	// exemption; M8 review).
+	const skip = projectAllowed === false && dirs[0] !== dirs[1] ? [dirs[1]] : [];
+	const projectGated = skip.length > 0 && scanDir(dirs[1] ?? "").length > 0;
 	for (const dir of dirs) {
 		if (skip.includes(dir)) continue;
 		for (const file of scanDir(dir)) {
@@ -152,5 +160,5 @@ export function loadAgentDefinitions(
 		}
 	}
 	const agents = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-	return { agents, warnings };
+	return { agents, warnings, projectGated };
 }

@@ -1028,3 +1028,28 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		};
 	}
 });
+
+describe("task tool roster under the trust gate (M8 review tierScope F1)", () => {
+	it("gated agents say WHY, instead of the false 'no agents are defined'", async () => {
+		const provider: LLMProvider = {
+			stream: async function* () {},
+		} as unknown as LLMProvider;
+		const task = createTaskTool({
+			provider,
+			getModel: () => "glm-5.3",
+			getSystem: () => "PARENT-SYSTEM",
+			getTools: () => [],
+			getSession: () => null,
+			agents: [], // the post-gate state: .imp/agents exists but was skipped
+			agentsProjectGated: true,
+		});
+		const result = await task.execute({ prompt: "x", agent: "scout" }, undefined);
+		if (!("output" in result)) throw new Error("expected tool result");
+		expect(result.output).toContain("No agents are loaded");
+		expect(result.output).toContain("not trusted");
+		expect(result.output).toContain("imp --trust");
+		// the old falsehood must be gone — the model would otherwise "helpfully"
+		// create .imp/agents files in the untrusted repo
+		expect(result.output).not.toContain("create .imp/agents");
+	});
+});

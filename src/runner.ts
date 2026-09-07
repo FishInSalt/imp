@@ -191,6 +191,7 @@ class RunnerImpl implements Runner {
 				getSession: () => this.sessionStore,
 				sessionBaseDir: options.sessionBaseDir,
 				agents: this.agents.agents,
+				agentsProjectGated: this.agents.projectGated,
 				cwd: options.cwd,
 				// Worktree children (M6b): builtins rebuilt at the worktree
 				// path. Extension tools are excluded by construction here —

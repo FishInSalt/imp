@@ -2,7 +2,9 @@ import { homedir } from "node:os";
 import { listSessions } from "./core/session/manager.js";
 import {
 	askTrustOnce,
+	canonicalizeDir,
 	defaultTrustStorePath,
+	describeTrustResources,
 	nearestTrustEntry,
 	readTrustFile,
 	setTrust,
@@ -54,10 +56,11 @@ Options:
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
       --no-session         Do not persist this run (also disables auto-compaction)
-  -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable)
+  -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable;
+                           explicit -e paths load regardless of the trust gate)
   -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
-      --trust              Trust this directory's .imp/ resources and record it
-      --no-trust           Refuse this directory's .imp/ resources and record it
+      --trust              Trust this directory's .imp/ resources, when present, and record it
+      --no-trust           Refuse this directory's .imp/ resources, when present, and record it
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -315,8 +318,15 @@ function reportStartupError(err: unknown): void {
 /** One-question tty prompt for the trust gate (asked before the REPL's
  *  ReplInput exists — a short-lived readline, closed before the session
  *  starts). Non-interactive callers never reach this: they deny instead. */
-function askTrustOnTty(resources: readonly string[]): Promise<boolean> {
-	return askTrustOnce(process.stdin, process.stdout, resources);
+/** Typed-ahead input between the answer line and the REPL's own readline is
+ *  swallowed here (sub-second window, cosmetic loss — M8 review F9). */
+function askTrustOnTty(cwd: string, resources: readonly string[]): Promise<boolean | null> {
+	const described = describeTrustResources(cwd, resources);
+	return askTrustOnce(
+		process.stdin,
+		process.stdout,
+		`trust the files in ${cwd}? it wants to load: ${described} [y/N] `,
+	);
 }
 
 /** Resolve the M8 project-trust gate before any project resource loads.
@@ -332,17 +342,18 @@ async function resolveProjectTrust(
 	interactive: boolean,
 ): Promise<boolean> {
 	const cwd = process.cwd();
-	const resources = trustRequiringResources(cwd).filter(
+	const resources = trustRequiringResources(cwd, homedir()).filter(
 		(r) => !(opts.noExtensions && r === ".imp/extensions"), // -ne already refuses that tier
 	);
 	if (resources.length === 0) return true; // zero friction for plain repos
 	const store = defaultTrustStorePath(homedir());
 	if (opts.trustDecision === "trust") {
-		setTrust(store, cwd, true);
+		setTrust(store, cwd, true, true); // rebuildOnCorrupt: the recovery flag must repair
+		renderer.note(dim(broadAncestorWarning(store, cwd, true)));
 		return true;
 	}
 	if (opts.trustDecision === "no-trust") {
-		setTrust(store, cwd, false);
+		setTrust(store, cwd, false, true);
 		renderer.note(dim(`▪ trust: recorded “do not trust” for ${cwd}`));
 		return false;
 	}
@@ -356,16 +367,24 @@ async function resolveProjectTrust(
 		return entry.trusted;
 	}
 	if (interactive) {
-		const approved = await askTrustOnTty(resources);
-		setTrust(store, cwd, approved);
-		if (!approved) {
+		const answer = await askTrustOnTty(cwd, resources);
+		if (answer === null) {
+			// cancelled (EOF/Ctrl+C/Ctrl+D): deny for THIS session only — a
+			// dropped terminal must not become a permanent record (M8 review)
+			renderer.note(
+				dim(`▪ trust: no answer — skipping ${resources.join(", ")} for this session (asked again next open)`),
+			);
+			return false;
+		}
+		setTrust(store, cwd, answer);
+		if (!answer) {
 			renderer.note(
 				dim(
 					`▪ trust: recorded “do not trust” for ${cwd} — skipping ${resources.join(", ")} (re-enable with: imp --trust)`,
 				),
 			);
 		}
-		return approved;
+		return answer;
 	}
 	// print mode / pipes: deny without recording, with the teaching line
 	process.stderr.write(
@@ -375,6 +394,17 @@ async function resolveProjectTrust(
 		),
 	);
 	return false;
+}
+
+/** Recording at (or an ancestor of) the whole home tree is broad; say so
+ *  once instead of silently (M8 review F6). */
+function broadAncestorWarning(store: string, cwd: string, trusted: boolean): string {
+	const home = homedir();
+	const note = `▪ trust: recorded ${trusted ? "“trust”" : "“do not trust”"} for ${cwd}`;
+	if (canonicalizeDir(cwd) === canonicalizeDir(home) || cwd === "/") {
+		return `${note} — this covers every directory beneath it`;
+	}
+	return note;
 }
 
 async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {

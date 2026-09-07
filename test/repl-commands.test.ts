@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,13 +45,19 @@ interface TestEnv {
 }
 
 /** Minimal git repo with one imp-style child worktree on its own branch. */
-async function makeGitRepo(args?: { noChild?: boolean }): Promise<{
+async function makeGitRepo(args?: {
+	noChild?: boolean;
+	/** Create the worktree but make no commit in it (branch tip == base). */
+	noChildCommit?: boolean;
+	/** Name of the repo directory (default "repo"). */
+	repoDirName?: string;
+}): Promise<{
 	root: string;
 	path: string;
 	branch: string;
 }> {
 	const base = await mkdtemp(path.join(tmpdir(), "imp-wtlist-"));
-	const root = path.join(base, "repo");
+	const root = path.join(base, args?.repoDirName ?? "repo");
 	mkdirSync(root, { recursive: true });
 	const run = (cmd: string[], cwd: string) => execFileSync("git", cmd, { cwd, encoding: "utf8" });
 	run(["init", "-q"], root);
@@ -64,6 +70,7 @@ async function makeGitRepo(args?: { noChild?: boolean }): Promise<{
 	const wtPath = path.join(base, "imp-worktree-task-test01");
 	const branch = "imp/task-test01";
 	run(["worktree", "add", wtPath, "-b", branch], root);
+	if (args?.noChildCommit === true) return { root, path: wtPath, branch };
 	// the handback shape that matters: committed work the parent has NOT merged
 	writeFileSync(path.join(wtPath, "b.txt"), "child change\n");
 	run(["add", "."], wtPath);
@@ -293,29 +300,98 @@ describe("/worktrees (M6b §7 follow-up)", () => {
 		const env = await makeEnv();
 		const scratch = mkdtempSync(path.join(tmpdir(), "imp-nowt-"));
 		env.ctx.worktreeCwd = scratch;
-		await dispatchCommand("/worktrees", env.ctx);
-		await waitUntil(() => env.output().includes("worktree isolation requires a git repository"));
+		await dispatchCommand("/worktrees", env.ctx); // awaited command: output complete on return (M8 review F5)
 		expect(env.output()).toContain("worktree isolation requires a git repository");
 	});
 
-	it("lists kept handbacks: merged entries say so, unmerged ones teach the merge command", async () => {
+	it("lists kept handbacks; after an ff-merge the advice flips to safe-to-delete and the merge note is gone", async () => {
 		const env = await makeEnv();
-		const repo = await makeGitRepo(); // helper: init, commit, create one child worktree
+		const repo = await makeGitRepo(); // helper: init, commit, child worktree with one commit
 		env.ctx.worktreeCwd = repo.root;
 		await dispatchCommand("/worktrees", env.ctx);
-		await waitUntil(() => env.output().includes("git merge imp/task-"));
 		const out = env.output();
 		expect(out).toContain(repo.branch); // imp/task-*
 		expect(out).toContain(repo.path); // the worktree path line
 		expect(out).toContain("1 file changed");
 		expect(out).toContain("git merge imp/task-");
-		// merge the branch in, re-list: now reported as merged
+		expect(out).not.toContain("safe to delete");
+		const first = env.output().length;
 		execFileSync("git", ["merge", "--ff-only", repo.branch], { cwd: repo.root });
 		await dispatchCommand("/worktrees", env.ctx);
-		await waitUntil(() => env.output().lastIndexOf("merged — nothing to merge") > 0);
-		expect(env.output().lastIndexOf("merged — nothing to merge")).toBeGreaterThan(
-			out.lastIndexOf("git merge"),
-		);
+		const second = env.output().slice(first); // second dispatch only
+		expect(second).toContain("merged — safe to delete");
+		expect(second).not.toContain("git merge imp/task-");
+	});
+
+	it("M8 review P1: merged + uncommitted work must NOT say safe to delete", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo(); // branch tip == one commit ahead
+		execFileSync("git", ["merge", "--ff-only", repo.branch], { cwd: repo.root });
+		writeFileSync(path.join(repo.path, "dirty.txt"), "uncommitted output\n");
+		writeFileSync(path.join(repo.path, "orphan.txt"), "untracked output\n");
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		const out = env.output();
+		expect(out).toContain("merged, but uncommitted work remains:");
+		expect(out).toContain("untracked: dirty.txt, orphan.txt");
+		expect(out).not.toContain("merged — safe to delete");
+	});
+
+	it("M8 review P1-b2: untracked-only handback (branch never diverged) still shows the work", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo({ noChildCommit: true }); // worktree, no commit
+		writeFileSync(path.join(repo.path, "result.txt"), "the agent's only output\n");
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		const out = env.output();
+		expect(out).toContain("uncommitted work remains");
+		expect(out).toContain("result.txt");
+		expect(out).not.toContain("safe to delete");
+	});
+
+	it("M8 review F2: main advanced after branching — stat is vs the merge-base, no phantom deletions", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo(); // child: one new file (+1 line)
+		writeFileSync(path.join(repo.root, "main-moved.txt"), "1\n2\n3\n4\n5\n");
+		execFileSync("git", ["add", "."], { cwd: repo.root });
+		execFileSync("git", ["commit", "-q", "-m", "main moves"], { cwd: repo.root });
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		const out = env.output();
+		expect(out).toContain("1 file changed, 1 insertion(+)");
+		expect(out).not.toContain("deletions"); // main's lines must not appear as child deletions
+	});
+
+	it("M8 review F3: squash-merged handback reads already-in-main, no empty merge advice", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo();
+		execFileSync("git", ["merge", "--squash", repo.branch], { cwd: repo.root });
+		execFileSync("git", ["commit", "-q", "-m", "squashed"], { cwd: repo.root });
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		const out = env.output();
+		expect(out).toContain("already in main — safe to delete");
+		expect(out).not.toContain("git merge imp/task-");
+	});
+
+	it("M8 review F4: a main checkout named imp-worktree-* is never listed as a handback", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo({ repoDirName: "imp-worktree-task-notachild" });
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		const out = env.output();
+		expect(out).toContain(repo.branch); // the real child is still listed
+		expect(out).not.toContain(`  ${repo.root}`); // the main checkout itself never appears
+	});
+
+	it("M8 review F7: a deleted-behind-git's-back worktree says prune, not safe-to-delete", async () => {
+		const env = await makeEnv();
+		const repo = await makeGitRepo();
+		rmSync(repo.path, { recursive: true, force: true });
+		env.ctx.worktreeCwd = repo.root;
+		await dispatchCommand("/worktrees", env.ctx);
+		expect(env.output()).toContain("directory missing — run: git worktree prune");
+		expect(env.output()).not.toContain("safe to delete");
 	});
 
 	it("a repository with no children says so", async () => {
@@ -323,7 +399,6 @@ describe("/worktrees (M6b §7 follow-up)", () => {
 		const repo = await makeGitRepo({ noChild: true });
 		env.ctx.worktreeCwd = repo.root;
 		await dispatchCommand("/worktrees", env.ctx);
-		await waitUntil(() => env.output().includes("no kept worktrees"));
 		expect(env.output()).toContain("no kept worktrees");
 	});
 });

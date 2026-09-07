@@ -48,6 +48,7 @@ async function load(env: Env, options: Partial<LoadExtensionsOptions> = {}): Pro
 		cwd: env.cwd,
 		cliPaths: options.cliPaths ?? [],
 		noDiscovery: options.noDiscovery,
+		projectDirAllowed: options.projectDirAllowed,
 		home: options.home ?? env.home,
 		onDiagnostic: (line) => lines.push(line),
 		confirm: options.confirm,
@@ -203,6 +204,27 @@ describe("-ne / --no-extensions (design §3.1)", () => {
 		const { loaded, lines } = await load(env, { cliPaths: [extra], noDiscovery: true });
 		expect(lines).toEqual([]);
 		expect(loaded.runtime.tools.map((t) => t.name)).toEqual(["z_tool"]);
+	});
+});
+
+describe("M8 trust gate: projectDirAllowed=false", () => {
+	it("skips the <cwd>/.imp/extensions tier but keeps -e paths and the global dir", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, { "proj.mjs": toolFixture("proj_tool") });
+		await writeExtensionFiles(env.home, { "glob.mjs": toolFixture("glob_tool") });
+		const explicitDir = await mkdtemp(path.join(tmpdir(), "imp-ext-cli-"));
+		const explicit = path.join(explicitDir, "explicit.mjs");
+		writeFileSync(explicit, toolFixture("explicit_tool"));
+		const { loaded } = await load(env, { cliPaths: [explicit], projectDirAllowed: false });
+		// the untrusted project tier is gone; chosen paths and global dir remain
+		expect(loaded.summaries.map((s) => `${s.name}:${s.origin}`)).toEqual(["explicit:cli", "glob:global"]);
+	});
+
+	it("projectDirAllowed=true (default) still loads the project tier", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, { "proj.mjs": toolFixture("proj_tool") });
+		const { loaded } = await load(env, {});
+		expect(loaded.summaries.map((s) => s.origin)).toContain("project");
 	});
 });
 

@@ -1,4 +1,6 @@
+import { homedir } from "node:os";
 import type { SessionStore } from "../core/session/store.js";
+import { defaultTrustStorePath, nearestTrustEntry, readTrustFile, removeTrust } from "../core/trust.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
@@ -11,6 +13,8 @@ export interface CommandContext {
 	abortActive(): boolean; // abort controller if active
 	/** Replay a session's history on screen (wired in repl.ts; records in tests). */
 	replay(session: SessionStore): number;
+	/** M8 trust store location — hermetic tests inject a temp path. */
+	trustStorePath?: string;
 }
 
 export type CommandOutcome = "handled" | "exit-requested";
@@ -180,6 +184,59 @@ export const COMMANDS: readonly SlashCommand[] = [
 			}
 			ctx.runner.model = id;
 			ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
+			return "handled";
+		},
+	},
+	{
+		name: "trust",
+		summary: "show the project-trust decision for this directory (and all records)",
+		allowedDuringRun: false,
+		run: (args, ctx) => {
+			const store = ctx.trustStorePath ?? defaultTrustStorePath(homedir());
+			const cwd = process.cwd();
+			if (args.startsWith("remove ")) {
+				const target = args.slice("remove ".length).trim();
+				if (target === "") {
+					ctx.renderer.error("imp: /trust remove <dir> — which record?");
+					return "handled";
+				}
+				try {
+					ctx.renderer.note(
+						removeTrust(store, target)
+							? `▪ removed the trust record for ${target}`
+							: `▪ no trust record for ${target}`,
+					);
+				} catch (err) {
+					ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+				}
+				return "handled";
+			}
+			if (args !== "") {
+				ctx.renderer.writeLine("/trust — show decisions · /trust remove <dir> — forget one record");
+				return "handled";
+			}
+			try {
+				const data = readTrustFile(store);
+				const entry = nearestTrustEntry(data, cwd);
+				const status =
+					entry === null
+						? "undecided — project .imp/ resources are skipped until trusted (imp --trust, or the startup ask)"
+						: entry.trusted
+							? `trusted (decided at ${entry.path})`
+							: `not trusted (decided at ${entry.path})`;
+				ctx.renderer.note(`▪ this directory: ${status}`);
+				const records = Object.keys(data).sort();
+				if (records.length === 0) {
+					ctx.renderer.note("▪ no records yet");
+				} else {
+					for (const dir of records) {
+						ctx.renderer.writeLine(`${data[dir] ? "✓" : "✗"} ${dir}`);
+					}
+					ctx.renderer.note("▪ /trust remove <dir> forgets a record");
+				}
+			} catch (err) {
+				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+			}
 			return "handled";
 		},
 	},

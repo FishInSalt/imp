@@ -110,8 +110,9 @@ export class ReplInput {
 		this.onProcessSigint = onProcessSigint;
 		process.on("SIGINT", onProcessSigint);
 		// EOF / pipe end: buffered lines are delivered before "close" (readline guarantees it).
-		this.streamClosed = true; // before draining: no prompt() may run on a closed interface
 		rl.on("close", () => {
+			// FIRST, before draining: no prompt() may run on a closed interface
+			this.streamClosed = true;
 			while (this.pendingAsks.length > 0) this.settleAsk(false); // EOF answers "no"
 			if (!this.closed) this.options.onEof();
 		});

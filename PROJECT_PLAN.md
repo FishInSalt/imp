@@ -304,6 +304,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **独立审查轮（三份并行 fix-first，2026-09-05）**：裁决 stats=ship-with-nits、compaction=ship-with-nits、gate=**fix-first**。全部发现先对照代码核实再修（`1e59783`，+15 测试）。**gate 两个 P1**：其一，EOF/Ctrl+D 在待答 [y/N] 上崩溃进程（settleAsk 在 resolve 之前对已关闭 readline 调 prompt，ERR_USE_AFTER_CLOSE，等待者永不结算）——改为先结算、仅活流提示；其二，guardian 硬底线对 `~`/`$HOME` 拼写与分离旗标 **fail-open**（`rm -r -f ~/.ssh/known_hosts` 两层全漏、无任何门）——家目录展开（含词内引号）、rmForceRecursive 接受 `-r -f`/`--recursive --force`、底线先于一切层。其余：kill -INT 排空待答队列、NO_CONFIRM 单次上限、失败注释重写；compaction 三次连败熔断+stderr 教学行、子信号转发进摘要调用（持久化仅在全量流后，安全）、崩溃路径轮数/用量带回被摘要量、constants.ts 过时注释；stats 标题同分支、getBranch 线性化、抛错单元钉住。审查要求的三个场景（EOF 中断、FIFO 双问、Ctrl+C 单结算）全部落测。审查会话：imp-m7-review-mtp64ium-hnolu0
   - **编排事故与流程修复**：workflow 的 `worktree: true` 未隔离——三代理共用主检出、互相切分支（代理自行察觉并在报告中说明，分支恰好堆叠成链反而强制了正确合并顺序）；合并链里 `npm run lint | tail -1` 吞退出码致 20 条预存诊断漏网（至少 M6a 起）——管道退役，另花两个清理提交清零（含一个用既有 throwing-script 模式替代豁免注释的教训）
 
+- **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把"clone 即 RCE"的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
+  - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
+  - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销
+  - **`/worktrees` 命令**（M6b §7 follow-up）：数据源 `git worktree list --porcelain` 过滤 `imp-worktree-*`（自有台账必然漂移，git 才是事实）；每条带 merged（`merge-base --is-ancestor` 对主检出 HEAD——merged 分支上没有可丢的工作）与变更统计（与子代理回传尾行同形）；未合并的给出 `git merge` 命令；非 git 目录=标准教学错误
+  - **真机验证**：假"恶意"项目（evil.mjs 写 stderr）——无旗标 print 模式：教学行+项目层跳过+全局扩展完好、PWNED 不出现；`--trust` 落记录（`/private/tmp/...` 规范化路径）并加载；`--no-trust` 翻转记录并跳过。/worktrees 演示仓 ff-merge 前后 merged 翻转
+  - **教训**：`bin/imp.js` 走 `dist/`——bin 级冒烟必须先 `npm run build`，只跑 `tsc --noEmit` 会拿陈旧产物得出假阳性（本轮第一次冒烟"PWNED 出现"即此）；交互式信任首问不可 pty 冒烟（与 M7 TtyConfirm 同限），以可注入流的 `askTrustOnce` 单元测试钉住（渲染字节、严格 y/yes、EOF=拒绝）
+
 - **M6a 扩展门覆盖子代理**（2026-09-04）：`runSubagent` 透传 `onToolCall` 给子循环；`ToolCallEvent` 增量字段 `subagent?: boolean` + `agent?: string`（现有扩展零改动即覆盖子代理——guardian 的 bash 规则与路径规则自动约束分身）；被拦截的子代理调用返回教学式错误结果，子代理可自行改道。三层测试：runSubagent 单元（透传+拦截恢复）、task 工具（agent 名上下文）、runner 级（真实扩展文件 + 真实 `.imp/agents/` 发现 + 真实 loader）
 
 - 多 provider（抽象出 provider 接口 + 能力探测：工具调用/视觉/思考模式）

@@ -127,14 +127,20 @@ function scanDir(dir: string): string[] {
  * entries overwrite same-name user entries (project wins). Listing order is
  * alphabetical by name, so /help-style surfaces stay deterministic.
  */
-export function loadAgentDefinitions(cwd: string, homeDir = homedir()): AgentRegistry {
+export function loadAgentDefinitions(
+	cwd: string,
+	homeDir = homedir(),
+	projectAllowed?: boolean,
+): AgentRegistry {
 	const byName = new Map<string, AgentDefinition>();
 	const warnings: string[] = [];
 	const dirs = [
 		path.join(homeDir, ".imp", "agents"), // scanned first: loses collisions
 		path.join(cwd, ".imp", "agents"), // scanned last: wins collisions
 	];
+	const skip = projectAllowed === false ? [dirs[1]] : []; // M8 trust gate
 	for (const dir of dirs) {
+		if (skip.includes(dir)) continue;
 		for (const file of scanDir(dir)) {
 			const filePath = path.join(dir, file);
 			const parsed = parseAgentFile(readFileSync(filePath, "utf8"), filePath);

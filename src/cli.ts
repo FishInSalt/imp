@@ -1,4 +1,13 @@
+import { homedir } from "node:os";
+import * as readline from "node:readline";
 import { listSessions } from "./core/session/manager.js";
+import {
+	defaultTrustStorePath,
+	nearestTrustEntry,
+	readTrustFile,
+	setTrust,
+	trustRequiringResources,
+} from "./core/trust.js";
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { RegisteredExtensionCommand } from "./extensions/types.js";
@@ -17,6 +26,8 @@ interface CliOptions {
 	maxTokens: number;
 	maxTurns: number;
 	noContextFiles: boolean;
+	/** M8 trust gate: explicit --trust / --no-trust override the ask-once flow. */
+	trustDecision: "trust" | "no-trust" | undefined;
 	continueRecent: boolean;
 	resume: string | undefined;
 	noSession: boolean;
@@ -45,6 +56,8 @@ Options:
       --no-session         Do not persist this run (also disables auto-compaction)
   -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable)
   -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
+      --trust              Trust this directory's .imp/ resources and record it
+      --no-trust           Refuse this directory's .imp/ resources and record it
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -73,6 +86,7 @@ function parseArgs(argv: string[]): CliOptions {
 		maxTokens: 16384,
 		maxTurns: 40,
 		noContextFiles: false,
+		trustDecision: undefined,
 		continueRecent: false,
 		resume: undefined,
 		noSession: false,
@@ -130,6 +144,12 @@ function parseArgs(argv: string[]): CliOptions {
 			case "-ne":
 			case "--no-extensions":
 				opts.noExtensions = true;
+				break;
+			case "--trust":
+				opts.trustDecision = "trust";
+				break;
+			case "--no-trust":
+				opts.trustDecision = "no-trust";
 				break;
 			case "-h":
 			case "--help":
@@ -206,12 +226,14 @@ async function main(): Promise<void> {
 async function loadExtensionSetup(
 	opts: CliOptions,
 	renderer: Renderer,
-	confirm?: (message: string, detail?: string) => Promise<boolean>,
+	confirm: ((message: string, detail?: string) => Promise<boolean>) | undefined,
+	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({
 		cwd: process.cwd(),
 		cliPaths: opts.extensionPaths,
 		noDiscovery: opts.noExtensions,
+		projectDirAllowed: projectTrusted,
 		onDiagnostic: (line) => renderer.error(line),
 		confirm,
 	});
@@ -239,11 +261,13 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
 	try {
-		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler);
+		const projectTrusted = await resolveProjectTrust(opts, renderer, interactive);
+		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
 		commands = extensions.runtime.commands;
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,
+			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
 		});
@@ -288,6 +312,81 @@ function reportStartupError(err: unknown): void {
 }
 
 /** Print mode: one runTurn over a fresh Runner, byte-identical to the pre-runner output. */
+/** One-question tty prompt for the trust gate (asked before the REPL's
+ *  ReplInput exists — a short-lived readline, closed before the session
+ *  starts). Non-interactive callers never reach this: they deny instead. */
+function askTrustOnTty(resources: readonly string[]): Promise<boolean> {
+	return new Promise((resolvePrompt) => {
+		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+		const list = resources.join(", ");
+		rl.question(`trust the files in this directory? it wants to load: ${list} [y/N] `, (answer) => {
+			const approved = /^y(?:es)?$/i.test(answer.trim());
+			rl.close();
+			resolvePrompt(approved);
+		});
+		// Ctrl+C at the trust prompt is a denial, not an abort
+		rl.on("close", () => resolvePrompt(false));
+	});
+}
+
+/** Resolve the M8 project-trust gate before any project resource loads.
+ *
+ *  Order of authority: explicit --trust/--no-trust flag, then the recorded
+ *  nearest-ancestor decision, then (interactive only) a one-time [y/N] ask
+ *  that RECORDS the answer. A non-interactive undecided directory is denied
+ *  for the session without recording — the teaching line says how to change
+ *  it, and a later interactive open still asks. */
+async function resolveProjectTrust(
+	opts: CliOptions,
+	renderer: Renderer,
+	interactive: boolean,
+): Promise<boolean> {
+	const cwd = process.cwd();
+	const resources = trustRequiringResources(cwd).filter(
+		(r) => !(opts.noExtensions && r === ".imp/extensions"), // -ne already refuses that tier
+	);
+	if (resources.length === 0) return true; // zero friction for plain repos
+	const store = defaultTrustStorePath(homedir());
+	if (opts.trustDecision === "trust") {
+		setTrust(store, cwd, true);
+		return true;
+	}
+	if (opts.trustDecision === "no-trust") {
+		setTrust(store, cwd, false);
+		renderer.note(dim(`▪ trust: recorded “do not trust” for ${cwd}`));
+		return false;
+	}
+	const entry = nearestTrustEntry(readTrustFile(store), cwd);
+	if (entry !== null) {
+		if (!entry.trusted) {
+			renderer.note(
+				dim(`▪ trust: ${cwd} is not trusted (recorded at ${entry.path}) — skipping ${resources.join(", ")}`),
+			);
+		}
+		return entry.trusted;
+	}
+	if (interactive) {
+		const approved = await askTrustOnTty(resources);
+		setTrust(store, cwd, approved);
+		if (!approved) {
+			renderer.note(
+				dim(
+					`▪ trust: recorded “do not trust” for ${cwd} — skipping ${resources.join(", ")} (re-enable with: imp --trust)`,
+				),
+			);
+		}
+		return approved;
+	}
+	// print mode / pipes: deny without recording, with the teaching line
+	process.stderr.write(
+		dim(
+			`imp: ${resources.join(", ")} found in an untrusted directory — not loaded. ` +
+				`Review them, then run: imp --trust\n`,
+		),
+	);
+	return false;
+}
+
 async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	const renderer = new Renderer({
 		write: (text) => process.stdout.write(text),
@@ -297,9 +396,11 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	});
 	let runner: Runner;
 	try {
-		const extensions = await loadExtensionSetup(opts, renderer);
+		const projectTrusted = await resolveProjectTrust(opts, renderer, false);
+		const extensions = await loadExtensionSetup(opts, renderer, undefined, projectTrusted);
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
+			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
 		});

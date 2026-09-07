@@ -1,9 +1,11 @@
+import { writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
+import { setTrust } from "../src/core/trust.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
@@ -37,6 +39,8 @@ interface TestEnv {
 	requests: LLMRequest[];
 	exitCodes: number[];
 	aborted: boolean;
+	/** Hermetic M8 trust store (create records with setTrust from trust.ts). */
+	trustStore: string;
 }
 
 async function makeEnv(args?: {
@@ -69,10 +73,12 @@ async function makeEnv(args?: {
 	const replayed: string[] = [];
 	const exitCodes: number[] = [];
 	const banner = output(); // ▪ resumed … line from seeding, if any
+	const trustStore = path.join(baseDir, "trust.json");
 	const env: TestEnv = {
 		cwd,
 		baseDir,
 		runner,
+		trustStore,
 		output: () => output().slice(banner.length),
 		requests,
 		exitCodes,
@@ -90,6 +96,7 @@ async function makeEnv(args?: {
 				replayed.push(session.header.id);
 				return session.stats().messageCount;
 			},
+			trustStorePath: trustStore,
 		},
 	};
 	(env as { replayed: string[] }).replayed = replayed;
@@ -111,7 +118,16 @@ describe("slash commands", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/help", env.ctx);
 		const text = env.output();
-		for (const label of ["/help", "/exit", "/new", "/sessions", "/resume <id>", "/model [id]", "/compact"]) {
+		for (const label of [
+			"/help",
+			"/exit",
+			"/new",
+			"/sessions",
+			"/resume <id>",
+			"/model [id]",
+			"/trust",
+			"/compact",
+		]) {
 			expect(text).toContain(label);
 		}
 		expect(text).toContain("Ctrl+C");
@@ -130,6 +146,7 @@ describe("slash commands", () => {
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
+				"  /trust             show the project-trust decision for this directory (and all records)",
 				"  /compact           summarize older context now",
 				"",
 				"",
@@ -230,7 +247,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /sessions /resume /model /compact — /help shows what they do\n",
+				"known: /help /exit /new /sessions /resume /model /trust /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -238,6 +255,46 @@ describe("slash commands", () => {
 		await dispatchCommand("/", bare.ctx);
 		expect(bare.output()).toContain('imp: unknown command "/"\n');
 		expect(bare.requests).toHaveLength(0);
+	});
+});
+
+describe("/trust (M8)", () => {
+	it("no records: this directory is undecided, with the teaching line", async () => {
+		const env = await makeEnv();
+		const outcome = await dispatchCommand("/trust", env.ctx);
+		expect(outcome).toBe("handled");
+		expect(env.output()).toContain("undecided");
+		expect(env.output()).toContain("no records yet");
+	});
+
+	it("records render as a checklist; the decision names where it was recorded", async () => {
+		const env = await makeEnv();
+		// /trust reads process.cwd(); the STORE is the hermetic temp file, so
+		// recording the real repo cwd stays hermetic (nothing touches ~/.imp)
+		setTrust(env.trustStore, process.cwd(), true);
+		const outcome = await dispatchCommand("/trust", env.ctx);
+		expect(outcome).toBe("handled");
+		const out = env.output();
+		expect(out).toContain("trusted (decided at");
+		expect(out).toContain("✓");
+		expect(out).toContain(process.cwd());
+	});
+
+	it("remove deletes a record and reports misses without erroring", async () => {
+		const env = await makeEnv();
+		setTrust(env.trustStore, "/gone", false);
+		await dispatchCommand("/trust remove /gone", env.ctx);
+		expect(env.output()).toContain("removed the trust record for /gone");
+		await dispatchCommand("/trust remove /gone", env.ctx);
+		expect(env.output()).toContain("no trust record for /gone");
+	});
+
+	it("a corrupt store surfaces the teaching error, not a stack", async () => {
+		const env = await makeEnv();
+		writeFileSync(env.trustStore, "{oops", "utf8");
+		const outcome = await dispatchCommand("/trust", env.ctx);
+		expect(outcome).toBe("handled");
+		expect(env.output()).toContain("failed to read the trust store");
 	});
 });
 

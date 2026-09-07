@@ -58,6 +58,8 @@ export interface RunnerOptions {
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
 	/** Hermetic tests: overrides ~/.imp/agents for the agent registry (M5c). */
 	agentsHomeDir?: string;
+	/** M8 trust gate: false skips `<cwd>/.imp/agents` (global agents still load). */
+	agentsProjectAllowed?: boolean;
 	/** Defer session creation and startup banners until the first warmup()
 	 *  call. Scripted (piped) mode uses this so a zero-line pipe — the "forgot
 	 *  -p" case — exits with HELP and no side effects (no banners, no empty
@@ -179,7 +181,7 @@ class RunnerImpl implements Runner {
 		// should see. It references this.tools (name-filtered at spawn), so push
 		// after the array is built. Agents load once from disk (M5c) — new agent
 		// files need a restart, like extension changes.
-		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir);
+		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir, options.agentsProjectAllowed);
 		this.tools.push(
 			createTaskTool({
 				provider: this.provider,

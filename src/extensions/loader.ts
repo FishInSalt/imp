@@ -20,6 +20,9 @@ export interface LoadExtensionsOptions {
 	cliPaths: readonly string[];
 	/** -ne/--no-extensions: skip both discovery dirs (explicit -e paths still load). */
 	noDiscovery?: boolean;
+	/** M8 trust gate: false skips the `<cwd>/.imp/extensions` tier only —
+	 *  `-e` paths and the global dir still load (the user chose those). */
+	projectDirAllowed?: boolean;
 	/** Overrides os.homedir() — hermetic tests point the global dir at a temp dir. */
 	home?: string;
 	/** Receives teaching-style diagnostic lines as they are discovered (renderer-backed). */
@@ -162,8 +165,12 @@ function discoverCandidates(options: LoadExtensionsOptions): ExtensionCandidate[
 		}
 	}
 	if (!options.noDiscovery) {
-		const projectDir = path.join(options.cwd, ".imp", "extensions");
-		if (isDirectory(projectDir)) addDir(projectDir, "project");
+		// M8 trust gate: only the project tier is gated — the global dir is
+		// the user's own installation and explicit -e paths were chosen.
+		if (options.projectDirAllowed !== false) {
+			const projectDir = path.join(options.cwd, ".imp", "extensions");
+			if (isDirectory(projectDir)) addDir(projectDir, "project");
+		}
 		const globalDir = path.join(options.home ?? os.homedir(), ".imp", "extensions");
 		if (isDirectory(globalDir)) addDir(globalDir, "global");
 	}

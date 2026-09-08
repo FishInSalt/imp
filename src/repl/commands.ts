@@ -57,8 +57,16 @@ const HELP_KEYS = `
 Keys:
   Ctrl+C             abort the running turn (press twice to force quit);
                      at an empty prompt: press twice to exit
+  Esc                abort the running turn (same as Ctrl+C); with the
+                     autocomplete panel open, one Esc closes it and aborts
   Ctrl+D             exit
   Ctrl+O             expand/collapse the newest diff fold
+  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
+  ! prefix           run a shell command directly — e.g. ! ls -la
+  autocomplete (/ commands · @ files):
+    ↑/↓              move the selection
+    Tab / Enter      complete — Enter on a command completes and runs it
+    Esc              close the panel
   while a picker is open:
     ↑/↓              move the selection
     Enter            pick · Esc or Ctrl+C cancels (no interrupt)

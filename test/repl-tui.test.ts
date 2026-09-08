@@ -3,13 +3,21 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
+import { detectBinary } from "../src/core/tools/bin-detect.js";
+import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
-import { TuiShell } from "../src/repl/shell.js";
+import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner, type Runner } from "../src/runner.js";
-import { resolveShell, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
+import {
+	type AutocompleteSlashCommand,
+	resolveShell,
+	StdinBuffer,
+	type Terminal,
+	visibleWidth,
+} from "../src/tui.js";
 import { settle as _settle, type ScriptStep, scriptedProvider, ticks } from "./helpers/fakes.js";
 
 void _settle;
@@ -125,13 +133,14 @@ async function settle(extraMs = 30): Promise<void> {
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function makeShell(options?: { onLine?: (l: string) => void }) {
+function makeShell(options?: { onLine?: (l: string) => void; autocomplete?: AutocompleteOptions }) {
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();
 	const events: string[] = [];
 	const shell = new TuiShell({
 		transcript,
 		terminal,
+		autocomplete: options?.autocomplete,
 		onLine: (line) => {
 			events.push(`line:${line}`);
 			options?.onLine?.(line);
@@ -716,9 +725,219 @@ describe("M9-2 review regressions", () => {
 	});
 });
 
-// ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
+// ── M10: autocomplete panel, placeholder hint, Esc interrupt ───────────
 
-// ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
+/** fd probe for the @ completion tests — one spawn per process (bin-detect
+ *  caches); environments without fd skip the fd-dependent pins. */
+const fdReady = detectBinary("fd");
+
+describe("TuiShell autocomplete (M10)", () => {
+	const commands: AutocompleteSlashCommand[] = [
+		{ name: "model", description: "switch the model" },
+		{ name: "help", description: "show help" },
+	];
+
+	it("typing / filters the command panel — the provider is wired at construction", async () => {
+		const { terminal, shell } = makeShell({ autocomplete: { commands, basePath: "/tmp", fdPath: null } });
+		shell.start();
+		await settle(120);
+		terminal.data("/mo");
+		await settle(120); // key travel + provider round-trip
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("model"); // the filtered match renders
+		expect(frame).toContain("switch the model");
+		expect(frame).not.toContain("show help"); // filtered out, not listed
+		shell.close();
+	});
+
+	it("Enter on a slash completion completes AND submits in one press (pi-tui falls through for / prefixes)", async () => {
+		const { terminal, shell, events } = makeShell({
+			autocomplete: { commands, basePath: "/tmp", fdPath: null },
+		});
+		shell.start();
+		await settle(0);
+		terminal.data("/mo");
+		await settle(120);
+		terminal.data("\r");
+		await settle(0);
+		expect(events).toEqual(["line:/model"]); // completed, then submitted — one press
+		shell.close();
+	});
+
+	it("without autocomplete options the editor stays provider-less — /mo submits raw", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("/mo");
+		await settle(120);
+		terminal.data("\r");
+		await settle(0);
+		expect(events).toEqual(["line:/mo"]); // no panel, no completion
+		shell.close();
+	});
+
+	it("Esc closes the panel; the typed text stays and submits as-is", async () => {
+		const { terminal, shell, events } = makeShell({
+			autocomplete: { commands, basePath: "/tmp", fdPath: null },
+		});
+		shell.start();
+		await settle(0);
+		terminal.data("/mo");
+		await settle(120);
+		terminal.data("\x1b"); // Esc — close the panel (the splitter holds a lone ESC ~10ms)
+		await settle(60);
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).not.toContain("switch the model"); // panel gone
+		terminal.data("\r");
+		await settle(0);
+		expect(events).toEqual(["line:/mo"]); // the raw text survived
+		shell.close();
+	});
+
+	it("@ lists files under basePath; Enter completes without submitting — a second Enter submits", async () => {
+		if (!(await fdReady)) return; // fd missing here — the @ fuzzy search is off, nothing to pin
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-ac-"));
+		await writeFile(path.join(dir, "alpha.txt"), "a", "utf-8");
+		await writeFile(path.join(dir, "beta.md"), "b", "utf-8");
+		const { terminal, shell, events } = makeShell({
+			autocomplete: { commands: [], basePath: dir, fdPath: "fd" },
+		});
+		shell.start();
+		await settle(0);
+		terminal.data("@al");
+		await settle(400); // @ debounce (20ms) + the fd walk
+		expect(terminal.frameSince(0)).toContain("alpha.txt"); // the file list renders
+		terminal.data("\r"); // complete — NOT submit (only / prefixes fall through)
+		await settle(0);
+		expect(events).toEqual([]);
+		terminal.data("\r"); // now the completed text submits
+		await settle(0);
+		expect(events).toEqual(["line:@alpha.txt"]); // input aid: path text, nothing read
+		shell.close();
+	});
+});
+
+describe("TuiShell placeholder hint (M10)", () => {
+	const hint = "(/ for commands · @ files · ! bash · shift+enter newline)";
+
+	/** forceRender into a fresh mark — the differential renderer may skip
+	 *  unchanged lines otherwise (same pattern as the marker tests). */
+	async function paint(terminal: FakeTerminal, shell: TuiShell): Promise<string> {
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		return terminal.frameSince(mark);
+	}
+
+	it("idle + empty editor shows the hint; typing hides it; emptying restores it", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(); // the initial paint must land before the first mark
+		expect(await paint(terminal, shell)).toContain(hint);
+		terminal.data("hi");
+		await settle(0);
+		expect(await paint(terminal, shell)).not.toContain(hint);
+		terminal.data("\x7f\x7f"); // backspace both chars → empty again
+		await settle(0);
+		expect(await paint(terminal, shell)).toContain(hint);
+		shell.close();
+	});
+
+	it("active hides the hint; idle restores it (setActive drives it)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setActive(true);
+		await settle(0);
+		expect(await paint(terminal, shell)).not.toContain(hint);
+		shell.setActive(false);
+		await settle(0);
+		expect(await paint(terminal, shell)).toContain(hint);
+		shell.close();
+	});
+
+	it("a pending ask hides the hint; settling restores it", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const question = shell.ask("proceed? [y/N] ");
+		await settle(0);
+		expect(await paint(terminal, shell)).not.toContain(hint);
+		terminal.data("n\r");
+		await settle(0);
+		await expect(question).resolves.toBe(false);
+		expect(await paint(terminal, shell)).toContain(hint);
+		shell.close();
+	});
+});
+
+describe("TuiShell Esc routing (M10)", () => {
+	it("Esc while active interrupts — the same machine path as Ctrl+C", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setActive(true);
+		terminal.data("\x1b");
+		await settle(60); // the splitter holds a lone ESC ~10ms before emitting it
+		expect(events).toEqual(["interrupt"]);
+		// Known dual-consumer edge (documented in HELP_KEYS): with the editor's
+		// autocomplete panel ALSO open, this one Esc closes the panel and
+		// interrupts — pi-tui exposes no panel-visibility state to split them,
+		// so the key is deliberately left unconsumed.
+		shell.close();
+	});
+
+	it("Esc while idle is an editor key — never an interrupt", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("\x1b");
+		await settle(0);
+		expect(events).toEqual([]);
+		shell.close();
+	});
+
+	it("Esc with a selector open cancels the selector — the interrupt never fires", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		<arg_value>(<b88a6f17>await settle(0));
+		shell.setActive(true); // a run is live while the picker is open
+		const pick = shell.select({ items: [{ label: "alpha" }, { label: "beta" }] });
+		await settle(0);
+		terminal.data("\x1b");
+		await expect(pick).resolves.toBeNull(); // the selector consumed the Esc
+		expect(events).toEqual([]); // positive control: no interrupt leaked out
+		shell.close();
+	});
+});
+
+describe("multi-line submissions (M10 pin)", () => {
+	it("Ctrl+J newline + Enter submits ONE line event with an embedded newline", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("line1\nline2\r"); // \n = the Ctrl+J byte through the real splitter
+		await settle(0);
+		expect(events).toEqual(["line:line1\nline2"]);
+		shell.close();
+	});
+
+	it("kitty shift+enter (CSI-u) inserts the newline the same way", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("aa\x1b[13;2ubb\r");
+		await settle(0);
+		expect(events).toEqual(["line:aa\nbb"]);
+		shell.close();
+	});
+});
+
+// ── runRepl ↔ TuiShell integration (the production wiring) ────────────
+
+// ── runRepl ↔ TuiShell integration (the production wiring) ────────────
 
 describe("runRepl with shell:tui", () => {
 	const reply = (text: string): AssistantMessage => ({
@@ -728,7 +947,7 @@ describe("runRepl with shell:tui", () => {
 		stopReason: "end_turn",
 	});
 
-	async function startTuiRepl(scripts: ScriptStep[]) {
+	async function startTuiRepl(scripts: ScriptStep[], options?: { commands?: RegisteredExtensionCommand[] }) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
 		const requests: LLMRequest[] = [];
 		const provider: LLMProvider = scriptedProvider(scripts, requests);
@@ -756,7 +975,7 @@ describe("runRepl with shell:tui", () => {
 		});
 		const repl = runRepl({
 			runner,
-			commands: [],
+			commands: options?.commands ?? [],
 			shell: "tui",
 			transcript,
 			terminal,
@@ -915,5 +1134,82 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
+	});
+
+	it("autocomplete is live in production wiring: imp's COMMANDS feed the panel, Enter completes and runs /help", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("/he"); // filters COMMANDS: help matches, model does not
+		await settle(150);
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("show this help"); // real /help summary → mapped description
+		expect(frame).not.toContain("show the current model"); // filtered out
+		env.terminal.data("\r"); // complete AND submit (pi-tui's / fall-through)
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("Commands:"); // /help actually ran
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("extension commands ride the same panel (M4b commands reach the provider)", async () => {
+		const deploy: RegisteredExtensionCommand = {
+			command: {
+				name: "deploy",
+				summary: "ship it",
+				allowedDuringRun: false,
+				run: (_args, ctx) => {
+					ctx.renderer.writeLine("deployed!");
+					return "handled";
+				},
+			},
+			source: "test",
+		};
+		const env = await startTuiRepl([reply("ok")], { commands: [deploy] });
+		await settle();
+		env.terminal.data("/de");
+		await settle(150);
+		expect(env.terminal.frameSince(0)).toContain("ship it"); // extension row in the panel
+		env.terminal.data("\r"); // complete + submit → dispatches the extension command
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("deployed!");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("! passthrough on the TUI shell: dim echo, real bash tool, output in the transcript", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("! echo lane-a\r");
+		await settle(200);
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("! echo lane-a"); // the echo line
+		expect(frame).toContain("lane-a"); // the command's stdout rendered
+		expect(env.requests.length).toBe(0); // never the model
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	it("the placeholder hint hides while a turn runs and returns when idle", async () => {
+		let releaseTurn: () => void = () => {};
+		const gated = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		const env = await startTuiRepl([() => gated.then(() => reply("done"))]);
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("(/ for commands"); // idle at startup
+		env.terminal.data("hi\r");
+		const mark = env.terminal.writes.length;
+		await settle();
+		const runFrame = env.terminal.frameSince(mark); // the run's own repaint only
+		expect(runFrame).toContain("+ "); // active while gated
+		expect(runFrame).not.toContain("(/ for commands"); // hidden while running
+		releaseTurn();
+		const mark2 = env.terminal.writes.length;
+		await settle();
+		await settle();
+		expect(env.terminal.frameSince(mark2)).toContain("(/ for commands"); // back when idle
+		env.terminal.data("/exit\r");
+		await env.repl;
 	});
 });

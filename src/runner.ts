@@ -116,6 +116,10 @@ export interface Runner {
 	/** Before a force quit: close dangling tool_use in the persisted session so
 	 *  it stays resumable. Returns the number of synthesized results. */
 	persistMissingToolResults(reason: string): number;
+	/** Look up a tool in this runner's tool set by name (the REPL's !
+	 *  passthrough executes the bash tool directly; tests reach their
+	 *  createRunner-injected fakes through here). */
+	getTool(name: string): Tool | undefined;
 	close(): void; // logger.close()
 }
 
@@ -488,6 +492,10 @@ class RunnerImpl implements Runner {
 			if (message.role === "toolResult") count += message.results.length;
 		}
 		return count;
+	}
+
+	getTool(name: string): Tool | undefined {
+		return this.tools.find((tool) => tool.name === name);
 	}
 
 	close(): void {

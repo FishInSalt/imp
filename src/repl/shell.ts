@@ -1,5 +1,7 @@
 import { dim } from "../format.js";
 import {
+	type AutocompleteSlashCommand,
+	CombinedAutocompleteProvider,
 	Container,
 	Editor,
 	type EditorOptions,
@@ -17,12 +19,27 @@ import { Fold } from "./components/fold.js";
 import type { LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
+/** Autocomplete wiring for the editor (M10): slash commands at line start
+ *  and @ file completion anywhere, both through pi-tui's combined provider.
+ *  fdPath null (fd not found) keeps slash completion and drops only the @
+ *  fuzzy search. */
+export interface AutocompleteOptions {
+	/** Commands in pi-tui's autocomplete shape (name/description/argumentHint). */
+	commands: readonly AutocompleteSlashCommand[];
+	/** Directory @ completions and plain path prefixes resolve against. */
+	basePath: string;
+	/** fd binary path (PATH-resolvable name is fine), or null to disable. */
+	fdPath: string | null;
+}
+
 export interface TuiShellOptions extends LineInputEvents {
 	/** Shared with the Renderer's write sink — the transcript IS the output. */
 	transcript: TranscriptSink;
 	/** Injected in tests; default binds the real process terminal. */
 	terminal?: Terminal;
 	editorOptions?: EditorOptions;
+	/** Editor autocomplete (M10); absent leaves the editor provider-less. */
+	autocomplete?: AutocompleteOptions;
 }
 
 /** Identity functions throughout — the pre-M9 plain aesthetic. */
@@ -47,8 +64,12 @@ export function tuiEditorTheme(): EditorTheme {
  *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
  *   ├─ ask line   ([y/N] question while one is pending; an item selector
  *   │              while one is open; hidden otherwise)
+ *   ├─ hint row   (dim placeholder while idle with an empty editor and no
+ *   │              pending ask: the "/ @ ! newline" cheat sheet; zero
+ *   │              rows otherwise)
  *   ├─ marker     ("> " idle / "+ " active)
- *   ├─ editor     (focused except while a selector is open)
+ *   ├─ editor     (focused except while a selector is open; its autocomplete
+ *   │              panel — slash commands, @ files — renders in place)
  *   └─ footer     (dim status line: model · session · cumulative tokens;
  *                 pushed by the machine, pi places it below the editor too)
  *
@@ -87,7 +108,25 @@ export function tuiEditorTheme(): EditorTheme {
  *    rendered by the picker's finish(); SIGINT tears the picker down
  *    before interrupting. The readline shell has no selector — its /model
  *    keeps printing text.
+ *  - Esc while a turn (or a ! passthrough) runs mirrors Ctrl+C exactly
+ *    (M10). It falls through unconsumed, so with the editor's autocomplete
+ *    panel ALSO open one Esc does both — closes the panel and interrupts:
+ *    pi-tui exposes no panel-visibility state to split the two consumers
+ *    (known edge, stated in HELP_KEYS). While a picker is open Esc stays
+ *    the picker's cancel, never an interrupt.
+ *  - The editor's autocomplete panel (slash commands at line start, @
+ *    files anywhere) is pi-tui's built-in and a TUI-only affordance (M10):
+ *    ↑/↓ move, Tab/Enter complete, Esc closes. Enter on a slash completion
+ *    completes AND submits in one press (pi-tui falls through for "/"
+ *    prefixes); on @ completions Enter only completes. The @ list inserts
+ *    path text — it does NOT read files into the turn. The readline shell
+ *    has no panel.
  */
+
+/** The hint row's text (M10): input affordances, dim — input aid only,
+ *  @ inserts path text, it never reads files into the turn. */
+const PLACEHOLDER_HINT = dim("(/ for commands · @ files · ! bash · shift+enter newline)", true);
+
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
 	/** One theme for every pi-tui component (editor AND select lists). */
@@ -106,6 +145,12 @@ export class TuiShell implements LineInput {
 	private selector: { teardown: () => void } | null = null;
 	private marker: Text | null = null;
 	private footer: Text | null = null;
+	/** The dim hint row between the ask line and the marker (M10). */
+	private placeholder: Text | null = null;
+	/** Marker-side mirror of the machine's active flag (setActive). */
+	private active = false;
+	/** Editor text mirror (onChange keeps it current) — placeholder input. */
+	private editorText = "";
 	/** Buffered setFooter text — pushes may arrive before start() (the
 	 *  machine's constructor runs first) and must not be dropped (M9-2
 	 *  review P1: the startup footer was silently blank). */
@@ -133,15 +178,35 @@ export class TuiShell implements LineInput {
 
 		const marker = new Text("> ");
 		this.marker = marker;
+		const placeholder = new Text(""); // empty Text renders zero rows
+		this.placeholder = placeholder;
 		const editorBox = new Container();
 		const editor = new Editor(tui, this.theme, this.options.editorOptions);
 		this.editor = editor;
 		editor.onSubmit = (text) => this.submit(text);
+		if (this.options.autocomplete !== undefined) {
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider(
+					[...this.options.autocomplete.commands],
+					this.options.autocomplete.basePath,
+					this.options.autocomplete.fdPath,
+				),
+			);
+		}
+		// Mirror the editor text for the hint row. Chain any onChange wired
+		// above (none today — defensive) so nothing else's hook is dropped.
+		const previousOnChange = editor.onChange;
+		editor.onChange = (text) => {
+			previousOnChange?.(text);
+			this.editorText = text;
+			this.updatePlaceholder();
+		};
 		editorBox.addChild(editor);
 
 		tui.addChild(this.options.transcript);
 		tui.addChild(this.foldContainer);
 		tui.addChild(this.askContainer);
+		tui.addChild(placeholder); // hint row: after the ask line, before the marker
 		tui.addChild(marker);
 		tui.addChild(editorBox);
 		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true));
@@ -163,6 +228,15 @@ export class TuiShell implements LineInput {
 			if (this.selector !== null) {
 				if (matchesKey(data, "ctrl+c")) return undefined;
 				if (matchesKey(data, "ctrl+d")) return { consume: true };
+			}
+			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt
+			// path. NOT consumed: an open autocomplete panel closes too (the
+			// known dual-consumer edge, see the ledger above). While a selector
+			// is open Esc stays the selector's cancel — never an interrupt.
+			if (this.active && this.selector === null && matchesKey(data, "escape")) {
+				if (this.pendingAsks.length > 0) this.settleAsk(false);
+				else this.options.onInterrupt();
+				return undefined;
 			}
 			if (matchesKey(data, "ctrl+c")) {
 				if (this.pendingAsks.length > 0) this.settleAsk(false);
@@ -207,6 +281,7 @@ export class TuiShell implements LineInput {
 		// the user's shell (M9 review P2). Registered for the process
 		// lifetime; stopTerminal() is idempotent.
 		process.on("exit", () => this.stopTerminal());
+		this.updatePlaceholder(); // idle + empty editor: the hint row starts visible
 	}
 
 	private submit(text: string): void {
@@ -228,7 +303,9 @@ export class TuiShell implements LineInput {
 	}
 
 	setActive(active: boolean): void {
+		this.active = active;
 		this.marker?.setText(active ? "+ " : "> ");
+		this.updatePlaceholder();
 		this.tui?.requestRender();
 	}
 
@@ -267,6 +344,7 @@ export class TuiShell implements LineInput {
 		return new Promise<boolean>((resolve) => {
 			const wasFirst = this.pendingAsks.length === 0;
 			this.pendingAsks.push({ question, resolve });
+			this.updatePlaceholder(); // a pending ask hides the hint row
 			// While a picker owns the keys the question would be unanswerable;
 			// hold it — the picker's finish() renders the queue head (M9-2 P2).
 			if (wasFirst && this.selector === null) this.showAsk(question);
@@ -360,6 +438,15 @@ export class TuiShell implements LineInput {
 		this.tui = null;
 	}
 
+	/** Dim hint row (M10): visible only while idle, the editor empty, and no
+	 *  ask pending — every driver flips it through this one gate. */
+	private updatePlaceholder(): void {
+		if (this.placeholder === null) return;
+		const visible = !this.active && this.editorText === "" && this.pendingAsks.length === 0;
+		this.placeholder.setText(visible ? PLACEHOLDER_HINT : "");
+		this.tui?.requestRender();
+	}
+
 	/** Resolve the oldest question, then show the next (if queued). */
 	private settleAsk(approved: boolean): void {
 		const oldest = this.pendingAsks.shift();
@@ -370,6 +457,7 @@ export class TuiShell implements LineInput {
 			this.showAsk(next.question);
 		} else {
 			this.removeAskLine();
+			this.updatePlaceholder(); // no ask left — the hint row may return
 			this.tui?.requestRender();
 		}
 	}
@@ -381,6 +469,7 @@ export class TuiShell implements LineInput {
 			oldest?.resolve(false);
 		}
 		this.removeAskLine();
+		this.updatePlaceholder();
 		this.tui?.requestRender();
 	}
 

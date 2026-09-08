@@ -2,21 +2,21 @@ import type { Readable } from "node:stream";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
+import { detectBinary } from "../core/tools/bin-detect.js";
+import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
-import type { Terminal } from "../tui.js";
-import { resolveShell } from "../tui.js";
-import type { CommandContext } from "./commands.js";
-import { dispatchCommand, parseCommand } from "./commands.js";
+import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
+import { COMMANDS, type CommandContext, dispatchCommand, parseCommand } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import type { LineInput } from "./line-input.js";
 import { replaySession } from "./replay.js";
-import { TuiShell } from "./shell.js";
+import { type AutocompleteOptions, TuiShell } from "./shell.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Interactive presentation shell. "legacy" is the pre-M9 readline path. */
@@ -50,6 +50,31 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
 /** Queued/steering display: cap at 80 chars, ellipsis when truncated. */
 function shorten(text: string): string {
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+/** "! cmd" lines: the shell executes them itself (M10). Blank after the
+ *  "!" is a usage hint, not a command. */
+function isBangLine(line: string): boolean {
+	return line[0] === "!" && line.slice(1).trim() !== "";
+}
+
+/** imp's COMMANDS + extension commands → pi-tui's autocomplete shape; the
+ *  panel's description line is "usage — summary" (pi-tui composes them). */
+function autocompleteCommands(
+	extraCommands: readonly RegisteredExtensionCommand[],
+): AutocompleteSlashCommand[] {
+	return [
+		...COMMANDS.map((command) => ({
+			name: command.name,
+			description: command.summary,
+			...(command.usage !== undefined && { argumentHint: command.usage }),
+		})),
+		...extraCommands.map((entry) => ({
+			name: entry.command.name,
+			description: entry.command.summary,
+			...(entry.command.usage !== undefined && { argumentHint: entry.command.usage }),
+		})),
+	];
 }
 
 /**
@@ -142,6 +167,23 @@ class ReplMachine {
 		if (line.trim() === "") {
 			this.input.refresh();
 			return;
+		}
+		// "! cmd" passthrough (M10): the shell runs it directly — never model
+		// input, never a session entry. Checked before parseCommand so "/" and
+		// "!" stay unambiguous; while a phase is active the existing queue
+		// semantics hold it (the post-run flush executes it as a bang).
+		if (line[0] === "!") {
+			const bangCommand = line.slice(1).trim();
+			if (bangCommand === "") {
+				this.renderer.note("▪ ! runs a shell command directly — e.g. ! ls -la");
+				this.input.refresh();
+				return;
+			}
+			if (this.state === "idle") {
+				void this.runBangCommand(bangCommand);
+				return;
+			}
+			// active/compacting: fall through — the shared queue path below holds it
 		}
 		const command = parseCommand(line);
 		if (command) {
@@ -284,9 +326,13 @@ class ReplMachine {
 	}
 
 	private steeringMessages(): AgentMessage[] {
-		const [next, ...rest] = this.queue;
-		this.queue = rest;
-		if (next === undefined) return [];
+		// "! cmd" entries are shell directives, never model content: hold them
+		// in place (the post-run flush executes them) and steer the next plain
+		// line — with no bang lines queued this is exactly the old head-pop.
+		const index = this.queue.findIndex((entry) => !isBangLine(entry));
+		if (index === -1) return [];
+		const [next] = this.queue.splice(index, 1);
+		if (next === undefined) return []; // unreachable (index !== -1); type guard
 		this.renderer.note(`▪ steering: ${shorten(next)}`);
 		return [{ role: "user", content: next }];
 	}
@@ -364,7 +410,53 @@ class ReplMachine {
 		}
 		this.queue = rest;
 		this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
+		// the shell, it does not open a model turn.
+		if (isBangLine(next)) {
+			await this.runBangCommand(next.slice(1).trim());
+			return;
+		}
 		await this.submitTurn(next);
+	}
+
+	/** "! cmd" (M10): run a shell command directly through the bash tool — no
+	 * model turn, nothing enters the session (warmup stays deferred: a
+	 * shell-only scripted pipe keeps zero side effects). Owns the running
+	 * state while it executes so the marker shows "+ " and Ctrl+C/Esc reuse
+	 * the interrupt path (controller.abort); queued lines flush after, like
+	 * a turn. */
+	private async runBangCommand(command: string): Promise<void> {
+		if (this.state === "exited") return;
+		const bash = this.runner.getTool("bash");
+		if (bash === undefined) {
+			this.renderer.error("imp: ! needs the bash tool, which this session's tool set does not include");
+			return;
+		}
+		this.state = "running";
+		this.input.setActive(true);
+		this.renderer.note(`! ${shorten(command)}`);
+		const controller = new AbortController();
+		this.controller = controller;
+		try {
+			const result = await bash.execute({ command }, controller.signal);
+			this.renderBangResult(result);
+		} catch (err) {
+			this.reportError(err);
+		} finally {
+			this.controller = null;
+			this.interruptCount = 0;
+			await this.flushQueue(); // drains any queue, then back to idle
+		}
+	}
+
+	/** Bang output block: the tool's own truncation stands (bash.ts); the
+	 *  trailing "Exit code: N" section becomes the dim "(exit N)" note so
+	 *  the code is never stated twice. Error text displays as-is. */
+	private renderBangResult(result: ToolExecuteResult): void {
+		const exitMatch = /(?:\n\n|^)Exit code: (\d+)$/.exec(result.output);
+		const body = exitMatch === null ? result.output : result.output.slice(0, exitMatch.index).trimEnd();
+		if (body !== "") this.renderer.writeLine(body);
+		if (exitMatch !== null) this.renderer.note(`(exit ${exitMatch[1]})`);
 	}
 
 	private returnToIdle(): void {
@@ -477,6 +569,19 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	}
 	// Narrowed once for every later use (guards don't carry into closures).
 	const tuiSink: TranscriptSink | null = useTui && transcript !== undefined ? transcript : null;
+	// Autocomplete config for the TUI shell (M10): imp's commands + extension
+	// commands, the process cwd for @ paths, and fd — probed once (cached per
+	// process); a PATH-resolvable name is all the provider's spawn needs.
+	// Without fd only the @ fuzzy search is dropped; slash completion stays.
+	let autocomplete: AutocompleteOptions | undefined;
+	if (tuiSink !== null) {
+		const fdPath = (await detectBinary("fd")) ? "fd" : null;
+		autocomplete = {
+			commands: autocompleteCommands(options.commands ?? []),
+			basePath: process.cwd(),
+			fdPath,
+		};
+	}
 	const replay = (session: SessionStore): number =>
 		replaySession(
 			{
@@ -508,6 +613,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onEof: () => machine.handleEof(),
 					transcript: tuiSink,
 					terminal: options.terminal,
+					autocomplete,
 				})
 			: new ReplInput({
 					input: stdin,

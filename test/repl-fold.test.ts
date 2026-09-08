@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFoldFromDiff, Fold } from "../src/repl/components/fold.js";
+import { buildFoldFromDiff, decorateDiffLines, Fold } from "../src/repl/components/fold.js";
 import { TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
@@ -150,6 +150,88 @@ describe("Fold", () => {
 				}
 				if (expanded) fold.toggle();
 			}
+		}
+	});
+});
+
+// ── decorateDiffLines: body coloring + new-file line numbers ────────────
+
+const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const CYAN = "\x1b[36m";
+const DIM = "\x1b[2m";
+const RESET = "\x1b[0m";
+
+describe("decorateDiffLines", () => {
+	it("colors by prefix and numbers new-file lines from the hunk header (headers themselves unnumbered)", () => {
+		expect(decorateDiffLines(["@@ line 10 @@", "- old line", "+ new line", "+ newer line"])).toEqual([
+			`${CYAN}@@ line 10 @@${RESET}`,
+			`${RED}- old line${RESET}`,
+			`${DIM}10│ ${RESET}${GREEN}+ new line${RESET}`,
+			`${DIM}11│ ${RESET}${GREEN}+ newer line${RESET}`,
+		]);
+	});
+
+	it("context lines are dim and advance the counter; numbers right-align to the widest", () => {
+		expect(decorateDiffLines(["@@ line 9 @@", "  context", "+ add"])).toEqual([
+			`${CYAN}@@ line 9 @@${RESET}`,
+			`${DIM} 9│ ${RESET}${DIM}  context${RESET}`,
+			`${DIM}10│ ${RESET}${GREEN}+ add${RESET}`,
+		]);
+	});
+
+	it("a removed line between adds gets no number and does not advance the counter", () => {
+		const body = decorateDiffLines(["@@ line 3 @@", "+ keep", "- drop", "+ next"]);
+		expect(body[1]).toBe(`${DIM}3│ ${RESET}${GREEN}+ keep${RESET}`);
+		expect(body[2]).toBe(`${RED}- drop${RESET}`);
+		expect(body[3]).toBe(`${DIM}4│ ${RESET}${GREEN}+ next${RESET}`);
+	});
+
+	it("no hunk header: colored, never numbered (tolerant degradation)", () => {
+		expect(decorateDiffLines(["+ first", "- second", "plain"])).toEqual([
+			`${GREEN}+ first${RESET}`,
+			`${RED}- second${RESET}`,
+			`${DIM}plain${RESET}`,
+		]);
+	});
+
+	it("an unparseable header turns numbering off; a parseable one re-arms it", () => {
+		const body = decorateDiffLines([
+			"@@ line 5 @@",
+			"+ a",
+			"@@ -1,3 +1,4 @@", // unified-diff style: a header, but not ours
+			"+ b",
+			"@@ line 9 @@",
+			"+ c",
+		]);
+		expect(body[0]).toBe(`${CYAN}@@ line 5 @@${RESET}`);
+		expect(body[1]).toBe(`${DIM}5│ ${RESET}${GREEN}+ a${RESET}`);
+		expect(body[2]).toBe(`${CYAN}@@ -1,3 +1,4 @@${RESET}`);
+		expect(body[3]).toBe(`${GREEN}+ b${RESET}`); // no gutter after the foreign header
+		expect(body[5]).toBe(`${DIM}9│ ${RESET}${GREEN}+ c${RESET}`);
+	});
+});
+
+// ── Fold: the decorated body in the rendered output ─────────────────────
+
+describe("Fold diff decoration", () => {
+	it("the expanded body carries colors and the number gutter; the title line stays untouched", () => {
+		const fold = new Fold("edit src/foo.ts (+1/-1)", ["@@ line 10 @@", "- old", "+ new"]);
+		fold.toggle();
+		const rendered = fold.render(80);
+		expect(rendered).toHaveLength(4);
+		expect(stripAnsi(rendered[0] ?? "")).toBe("▾ edit src/foo.ts (+1/-1)");
+		expect(rendered[1]).toBe(`${CYAN}@@ line 10 @@${RESET}`);
+		expect(rendered[2]).toBe(`${RED}- old${RESET}`);
+		expect(rendered[3]).toBe(`${DIM}10│ ${RESET}${GREEN}+ new${RESET}`);
+		expect(stripAnsi(rendered[3] ?? "")).toBe("10│ + new");
+	});
+
+	it("the gutter eats into the width budget — wide bodies still fit", () => {
+		const fold = new Fold("wide (+1/-0)", ["@@ line 1 @@", `+ ${"w".repeat(90)}`]);
+		fold.toggle();
+		for (const line of fold.render(80)) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
 		}
 	});
 });

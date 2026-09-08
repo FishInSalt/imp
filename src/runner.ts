@@ -82,9 +82,19 @@ export interface RunnerOptions {
 export interface RunTurnOptions {
 	userMessage?: string; // omit ⇒ continue existing history (not used by 3a UI)
 	signal?: AbortSignal;
-	onEvent?: (event: AgentEvent) => void;
+	/** Turn event tap. `info` is set ONLY for subagent-sourced events (the
+	 *  task tool relays its child loop's events with the child's agent name
+	 *  and cwd) — top-level events carry undefined and must stay the only
+	 *  ones fed to the Renderer (M5's zero-rendering-visibility rule). */
+	onEvent?: (event: AgentEvent, info?: AgentEventInfo) => void;
 	/** Steering: queued user input injected at turn boundaries. */
 	getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
+}
+
+/** Discriminator for subagent-sourced events on RunTurnOptions.onEvent. */
+export interface AgentEventInfo {
+	agent?: string;
+	cwd?: string;
 }
 
 export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session";
@@ -116,6 +126,10 @@ export interface Runner {
 	/** Before a force quit: close dangling tool_use in the persisted session so
 	 *  it stays resumable. Returns the number of synthesized results. */
 	persistMissingToolResults(reason: string): number;
+	/** Look up a tool in this runner's tool set by name (the REPL's !
+	 *  passthrough executes the bash tool directly; tests reach their
+	 *  createRunner-injected fakes through here). */
+	getTool(name: string): Tool | undefined;
 	close(): void; // logger.close()
 }
 
@@ -218,10 +232,12 @@ class RunnerImpl implements Runner {
 						cwd: info.cwd,
 					}),
 				// Child tool_end feeds extension observers (audit trails) with
-				// the same discriminator — and nothing else: options.onEvent
-				// (the renderer) stays untouched, keeping M5's zero-rendering
-				// visibility decision intact. tool_start is dropped by design.
+				// the same discriminator. M10: child events ALSO flow to the live
+				// turn's onEvent tap (this.turnEventTap) with their info — the REPL
+				// machine routes them to the TUI activity region and keeps the
+				// Renderer on top-level events only (M5's rule, enforced at the tap).
 				onEvent: (event, info) => {
+					this.turnEventTap?.(event, info);
 					if (event.type !== "tool_end") return;
 					const { result } = event;
 					this.options.extensions?.emitToolEnd({
@@ -342,11 +358,19 @@ class RunnerImpl implements Runner {
 		return this.runTurnInner(model, session, options);
 	}
 
+	/** The live turn's onEvent tap (M10 B): the construction-time task tool
+	 *  relays its child events through this holder — see runTurnInner. */
+	private turnEventTap: RunTurnOptions["onEvent"] | null = null;
+
 	private async runTurnInner(
 		model: string,
 		session: SessionStore | null,
 		options: RunTurnOptions,
 	): Promise<RunAgentLoopResult> {
+		// The task tool is built once at construction; its child-event relay
+		// reaches the CURRENT turn's tap through this holder (task children run
+		// strictly inside the turn, so one slot is enough; cleared in finally).
+		this.turnEventTap = options.onEvent ?? null;
 		try {
 			const result = await runAgentLoop({
 				provider: this.provider,
@@ -415,6 +439,8 @@ class RunnerImpl implements Runner {
 		} catch (err) {
 			this.logger.log("run_error", { message: err instanceof Error ? err.message : String(err) });
 			throw err;
+		} finally {
+			this.turnEventTap = null; // the holder is turn-scoped
 		}
 	}
 
@@ -488,6 +514,10 @@ class RunnerImpl implements Runner {
 			if (message.role === "toolResult") count += message.results.length;
 		}
 		return count;
+	}
+
+	getTool(name: string): Tool | undefined {
+		return this.tools.find((tool) => tool.name === name);
 	}
 
 	close(): void {

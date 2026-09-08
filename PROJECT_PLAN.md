@@ -314,7 +314,28 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **第二阶段（`219fa44`+两路 worktree 代理+审查修，444 tests）**：①footer 底部状态行（model·session·累计 tokens，机器四点推送）；②折叠 diff（Fold 组件+ctrl+o，机器 tool_end tap 把 edit 结果的 "summary:\n diff" 变成折叠——真实生产者，审查 P1 抓出的空接线即修）；③选择器（TuiShell.select：SelectList、焦点接管、Enter 选/Esc/Ctrl+C 取消、重入拒绝、ask 延迟到关闭后、SIGINT 拆卸）+ /model 无参走选择器（legacy 字节不变）；/help 补键位说明
   - **并行流程首试成功**：worktree 可靠性探针先行（上次失败根因=未传 `cwd`）；两路 worker（`context:"fresh"`+自足嘱托）真隔离、各自 424/429 tests；**worktree 分支会随运行清理——完成后须立即抢救悬空提交**（rescue/* 分支）；合并冲突 4 处全是接口并集，手工保序（键路由：release→selector→ctrl+c→ctrl+d→ctrl+o）；双路审查（语义=fix-first 2 P1、完整性=approve 9 P2）全部亲证后修（+6 回归测试：启动即 footer、命令后刷新、选择器后 Ctrl+C 复活、重入拒绝、ask 延迟、SIGINT 拆卸、dim 原始字节、编辑真工具端到端折叠）
 
-- **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把"clone 即 RCE"的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
+- **M10 交互手感三路并行（2026-09-09，第一波，500 tests，feat/m10-wave1）**：目标=对齐 Claude Code 2.1.88 交互面的 90%（对照其还源源码 144 组件实测，明确放弃语法高亮/checkpoint/transcript 检索/vim/主题/成本显示）。第一波三路 worktree 代理并行+单作者集成：
+  - **Lane A 输入手感**（`da612b3`）：**降本发现**——pi-tui 0.82 自带 `CombinedAutocompleteProvider`（行首 `/` 命令过滤+任意位置 `@` 文件模糊补全、引号路径、fd 快路径），从“造组件”降为“接线”（`tui.ts` 边界再导出+`runRepl` 映射 COMMANDS→SlashCommand）；placeholder 提示行（Editor 无 API，shell 自绘 dim 行于 ask 与 marker 间，空输入+idle+无待答时可见）；`! cmd` 直通（机器层，经 `Runner.getTool("bash")` 执行 runner 同实例——新增 4 行访问器，测试假件直达；echo dim 行+输出块+非零退出码注记；活动时排队、刷新时保持 bang 语义；单独 `!` 教学提示）；Esc 中断运行回合（键路由插在 selector 后、ctrl+c 前；已知双重消费边角=补全面板开着时 Esc 同时关面板+中断，无 API 可查面板态，接受并写进 HELP_KEYS）；HELP_KEYS 补全键位+多行回归钉住
+  - **Lane C 确认体验**（`1209dd5`）：`confirm(message, detail?, {sessionKey?})` 三参扩展（向后兼容）；宿主三选项 [Yes / Yes-session / No]+会话 Set 放行表（无 select 壳字节不变 [y/N]）；guardian 两处 confirm 透传 sessionKey（bash=命中 pattern、越界写=cwd）；/resume 无参走选择器（前 20 会话 id8·时间·条数·预览）；/sessions 尾行提示；队列可视行 `setQueue?`（ask 后 dim 行，0 行消失；push/steering 消费/flush/Ctrl+C 清队四处同步）；**trust 首跑对话框按简报退路放弃**——扩展加载在 TuiShell 构造前、重构> 40 行预算，readline [y/N] 原样保留
+  - **Lane D 独立小件**（`fbe15c8`）：`decorateDiffLines` 折叠着色（+/－/@@头/上下文四色）+新文件行号槽（`@@ line K` 推导，右对齐 dim 槽，删行不增；无头行容错降级为纯着色）——diff 原文一字不动；footer `ctx N%`（`estimateContextTokens(runner.history)` 同一活数组，`IMP_CONTEXT_WINDOW` 缺省 131072；≥80% 追加提示+一次性 note+回落重置）；终端标题 OSC2（`setTitle?` 直写 stdout 不走帧管线，start 缓冲+teardown 清空）
+  - **集成**（`05305ef`→`089c8ef`→`930ea86`，A→C→D 序）：9 处冲突全为接口/布局/测试并集型，保序决策：布局 ask→queue→hint→marker→editor；flushQueue 先 `syncQueue()` 再 bang 拦截（bang 提前 return 时队列显示仍刷新）；两处 git“共同尾部”误判丢测试收尾括号（tsc/esbuild 双道抓回）。真机 pty 冒烟：启动帧 placeholder+ctx%+title ✓、补全面板 `→ help` 实时过滤 ✓、bang echo+输出+教学提示 ✓、/exit 干净退出 ✓；**ESC 只关面板不清文本**（readline 惯例）——冒烟脚本第一版误判为 bug，修正序列后通过
+  - 代理施工质量：三路各自 469/463/456 全绿+build+biome 与基线零新增；两处越界（A 的 runner.ts/tui.ts 经 supervisor 批准、C 的 registry/loader/cli 签名级穿透 sessionKey 必需链——集成方追认）
+
+- **M10 B 批流式路径（2026-09-09，`f066b1a`+`51f0b1a` 前身修，506 tests）**：单作者实现（第二波，原 M9 清单 #2+#4）。**关键架构发现**：Renderer 的 `liveTools=false`+one-line 语义正好就是活动区模式（pending 静默登记、think() no-op、tool_end 永久写 ✓/⎿ 行）——Renderer **零改动**，print/legacy 字节契约天然无忧，cli 只改一个开关（`liveTools: interactive && transcript===undefined`）
+  - **活动区**：`LineInput.setActivity?(snapshot)`（tools/agents 纯数据行，机器每次事件推送）；壳侧 120ms ticker 拥有 spinner 动画与秒表（elapsed 由 startedAtMs 现算，机器不重推）；布局 folds→activity→ask；close() 停表
+  - **事件中继**：`RunTurnOptions.onEvent` 加 `AgentEventInfo`——task 工具构造期拿不到每回合 tap，加 `turnEventTap` 回合级持有者（finally 清空）；子事件带 {agent,cwd} 到机器、**顶层事件不带 info**（M5"渲染器零子事件"规则改在机器 tap 强制）；子 edit 折叠维持 M9 语义（仅顶层）
+  - **踩坑三连**（全被测试抓回）：①`returnToIdle` 开头清场时 state 尚为 running→快照算成 thinking、行与 ticker 不死——`clearActivity` 显式推 idle；②无名 agent 的子事件（info={agent:undefined}）掉进顶层工具分支污染工具行——分类改按 info 是否存在而非 agent 名；③脚本化子代理整个回合短于一个渲染间隔、行从未上屏——测试门控子的首个模型响应拉长窗口（帧闪断言不可靠，子事件中继另立 runner 级测试钉住）
+  - **task 行标签**：summarizeArgs 无 task 摘要器→原始 JSON 上屏；改用 `args.prompt`（shorten）作标签
+  - **真机（含一次经批准的真 API 回合，GLM）**：! bang/placeholder/footer ctx%/saved note 全过；活动区视觉链全程可见——`⠋ thinking…` 帧轮转、`⠴ bash $ echo …` 工具行、`● … ✓`+`⎿` 完成对、模型答复、footer `↑2.8k ↓19 · ctx 2%` 更新、干净退出；TUI 转录区无 pending 重绘字节（`●` 仅出现在永久完成行——正是 liveTools=false 的预期拆分）
+  - markdown 增强按计划放弃：dim 渲染已显示语言标签，真正的提升只有语法高亮（M10 明确出局项）
+
+- **M10 对抗审查闭环（2026-09-09，`c4a88bc`+修复批，512 tests）**：完整性路（无 P0/P1，6 P2 全修：legacy 低上下文 note 门控、中断 bang 弃队、picker 下藏提示行、子事件过滤/中断清场/布局顺序三处空真补钉）+ 语义路重跑（GO with notes，8 猎区全过：! 直通零模型副作用、嵌套 task 构造性排除、ctx% 无闪烁、turnEventTap 生命周期充分）
+  - **P1 抓获**：测试文件一处非 authored 内容（`<arg_value>(<b88a6f17>await settle(0))`）——vitest 擦除断言不解析名字、tsc 只查 src、biome 无类型感知，三道门全盲。修复+**新增测试类型检查门**（`tsconfig.test.json` 挂进 `typecheck` script），顺带清掉 31 个存量测试类型债——其中抓出**真封闭性破坏**：两条子代理测试传错属性名（`agentsHome`≠`agentsHomeDir`），scout 实际来自真实 `~/.imp/agents`（换机即红）；以及 fakes 里一处不存在的 `settle` 死导入
+  - **P2 修复**：stdin `end` 镜像 SIGINT 先拆选择器（死 pty 不再挂死 confirm 门）；**重入 select 从"拒绝"改"排队"**——guardian confirm 在 /model picker 开着时到达仍会被问到（旧行为静默否决、用户从未见过问题）；close() 排空队列 promise
+  - 接受不修（cosmetic）：bang 的 `(exit N)` 剥离可被 stdout 尾部伪造（构造苛刻、纯显示误标）
+  - **教训入账**：名字级损坏只有类型检查能抓（擦除式转译+无类型 linter 双盲）；并行代理的测试也要进类型检查面
+
+- **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销
   - **`/worktrees` 命令**（M6b §7 follow-up）：数据源 `git worktree list --porcelain` 过滤 `imp-worktree-*`（自有台账必然漂移，git 才是事实）；每条带 merged（`merge-base --is-ancestor` 对主检出 HEAD——merged 分支上没有可丢的工作）与变更统计（与子代理回传尾行同形）；未合并的给出 `git merge` 命令；非 git 目录=标准教学错误

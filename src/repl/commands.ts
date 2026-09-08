@@ -57,8 +57,16 @@ const HELP_KEYS = `
 Keys:
   Ctrl+C             abort the running turn (press twice to force quit);
                      at an empty prompt: press twice to exit
+  Esc                abort the running turn (same as Ctrl+C); with the
+                     autocomplete panel open, one Esc closes it and aborts
   Ctrl+D             exit
   Ctrl+O             expand/collapse the newest diff fold
+  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
+  ! prefix           run a shell command directly — e.g. ! ls -la
+  autocomplete (/ commands · @ files):
+    ↑/↓              move the selection
+    Tab / Enter      complete — Enter on a command completes and runs it
+    Esc              close the panel
   while a picker is open:
     ↑/↓              move the selection
     Enter            pick · Esc or Ctrl+C cancels (no interrupt)
@@ -128,6 +136,27 @@ function switchModel(ctx: CommandContext, id: string): void {
 	ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
 }
 
+/** /resume <id>'s body, shared by the by-arg path and the picker's pick — the
+ *  resume, replay, and note are byte-identical whichever way the id arrived. */
+function resumeById(ctx: CommandContext, id: string): CommandOutcome {
+	try {
+		const { id8, messages } = ctx.runner.resumeSession(id);
+		const session = ctx.runner.session;
+		if (session !== null && messages > 0) ctx.replay(session);
+		ctx.renderer.note(`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored`);
+	} catch (err) {
+		ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	return "handled";
+}
+
+/** Picker-row description: local time, message count, and a truncated title
+ *  preview (SessionInfo.title is the first user message — a cheap preview). */
+function sessionRowDescription(modified: Date, messageCount: number, title: string): string {
+	const preview = title.length > 40 ? `${title.slice(0, 40)}…` : title;
+	return `${formatWhen(modified)} · ${messageCount} msgs · ${preview}`;
+}
+
 export const COMMANDS: readonly SlashCommand[] = [
 	{
 		name: "help",
@@ -178,6 +207,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const hidden = sessions.length - shown.length;
 			const extra = hidden > 0 ? ` (${hidden} older hidden)` : "";
 			ctx.renderer.note(`▪ switch with /resume <id> — or restart: imp -r <id>${extra}`);
+			ctx.renderer.note("▪ use /resume (no args) to pick one");
 			return "handled";
 		},
 	},
@@ -186,20 +216,36 @@ export const COMMANDS: readonly SlashCommand[] = [
 		usage: "/resume <id>",
 		summary: "switch to a saved session (history replays on screen)",
 		allowedDuringRun: false,
-		run: (args, ctx) => {
+		run: async (args, ctx): Promise<CommandOutcome> => {
 			if (args === "") {
-				ctx.renderer.writeLine("/resume <id> — pick an id from /sessions");
-				return "handled";
+				const select = ctx.select;
+				if (select === undefined) {
+					ctx.renderer.writeLine("/resume <id> — pick an id from /sessions");
+					return "handled";
+				}
+				const sessions = ctx.runner.listSessions();
+				if (sessions.length === 0) {
+					ctx.renderer.note("▪ no saved sessions for this directory yet");
+					return "handled";
+				}
+				// The picker mirrors /sessions' top-20 listing; a pick behaves exactly
+				// like /resume <id> on the chosen row, cancelling changes nothing.
+				const shown = sessions.slice(0, 20);
+				const index = await select({
+					title: "sessions — pick one to resume",
+					items: shown.map((info) => ({
+						label: info.id.slice(0, 8),
+						description: sessionRowDescription(info.modified, info.messageCount, info.title),
+					})),
+				});
+				const picked = index === null ? undefined : shown[index];
+				if (picked === undefined) {
+					ctx.renderer.note("▪ resume cancelled");
+					return "handled";
+				}
+				return resumeById(ctx, picked.id);
 			}
-			try {
-				const { id8, messages } = ctx.runner.resumeSession(args);
-				const session = ctx.runner.session;
-				if (session !== null && messages > 0) ctx.replay(session);
-				ctx.renderer.note(`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored`);
-			} catch (err) {
-				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
-			}
-			return "handled";
+			return resumeById(ctx, args);
 		},
 	},
 	{

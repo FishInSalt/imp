@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
@@ -733,9 +734,240 @@ describe("runRepl", () => {
 		expect(fake.output()).toContain("▪ context ~200.1k tokens — compacting…");
 		expect(fake.output()).toMatch(/▪ compacted: ~200\.1k → ~\d+ tokens \(\d+ msgs kept verbatim\)/);
 		// the summarizer call got the transcript; the post-compact request starts with the summary
-		expect(requests[1]?.messages[0]?.content).toContain("## Goal");
+		const summaryMsg = requests[1]?.messages[0];
+		expect(summaryMsg !== undefined && summaryMsg.role === "user" ? summaryMsg.content : "").toContain(
+			"## Goal",
+		);
 		expect(requests[2]?.messages[0]?.role).toBe("user"); // summary message
 		fake.eof();
 		expect(await repl).toBe(0);
+	});
+});
+
+describe("! passthrough (M10)", () => {
+	/** The fake-tool injection pattern (fakes.ts style): a bash-named Tool the
+	 *  machine must reach through the runner's tool set, exactly like the
+	 *  loop would. */
+	const bashParameters = { properties: { command: { type: "string" } }, required: ["command"] };
+
+	it("runs a ! command through the bash tool directly — dim echo, plain output block, no LLM call, session untouched", async () => {
+		const executed: string[] = [];
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute(args) {
+					executed.push(String(args.command));
+					return { output: "stdout:\nhi" };
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("! echo hi\n");
+		await waitUntil(() => env.output().includes("stdout:\nhi"));
+		expect(env.output()).toContain("! echo hi"); // the dim echo line
+		expect(executed).toEqual(["echo hi"]);
+		expect(env.requests).toEqual([]); // never the model
+		expect(env.runner.history).toEqual([]); // never the session
+		env.send("hello\n"); // idle again — a normal turn still works
+		await waitUntil(() => env.requests.length === 1);
+		expect(env.requests[0]?.messages.at(-1)).toEqual({ role: "user", content: "hello" });
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("non-zero exit: the tool's tail section becomes the dim (exit N) note — the code is stated once", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute() {
+					return { output: "stdout:\nboom\n\nExit code: 3" }; // bash.ts formatOutput contract
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("! false\n");
+		await waitUntil(() => env.output().includes("(exit 3)"));
+		expect(env.output()).toContain("boom");
+		expect(env.output()).not.toContain("Exit code: 3"); // peeled into the note, not duplicated
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("isError results render their text as-is (never suppressed)", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute() {
+					return { output: "Error: failed to spawn command: nope", isError: true };
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("! nope\n");
+		await waitUntil(() => env.output().includes("Error: failed to spawn command: nope"));
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("a lone ! (or blank after it) prints the usage hint and runs nothing", async () => {
+		const executed: string[] = [];
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute(args) {
+					executed.push(String(args.command));
+					return { output: "stdout:\nx" };
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("!\n");
+		await waitUntil(() => env.output().includes("! runs a shell command directly"));
+		env.send("!   \n"); // spaces after the bang are still "no command"
+		await waitUntil(() => (env.output().match(/! runs a shell command directly/g) ?? []).length === 2);
+		expect(executed).toEqual([]);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("a ! line during an active turn queues; the post-run flush executes it as a bang — never a model turn", async () => {
+		const g = gate();
+		let toolStarted = false;
+		const executed: string[] = [];
+		const tools: Tool[] = [
+			{
+				name: "slow_tool",
+				description: "waits for the test gate",
+				parameters: { properties: { message: { type: "string" } }, required: ["message"] },
+				async execute() {
+					toolStarted = true;
+					await g.promise;
+					return { output: "slow tool done" };
+				},
+			},
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute(args) {
+					executed.push(String(args.command));
+					return { output: "stdout:\nhi" };
+				},
+			},
+		];
+		const env = await startRepl({
+			scripts: [
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "x" } }],
+					"tool_use",
+				),
+				reply("done"),
+			],
+			tools,
+		});
+		env.send("go\n");
+		await waitUntil(() => toolStarted);
+		env.send("! echo hi\n");
+		await waitUntil(() => env.output().includes("▪ queued: ! echo hi"));
+		g.resolve(); // tool finishes → steering holds the bang → final reply ends the run
+		await waitUntil(() => env.requests.length >= 2);
+		await waitUntil(() => env.output().includes("▪ continuing with queued: ! echo hi"));
+		await waitUntil(() => env.output().includes("stdout:\nhi"));
+		expect(executed).toEqual(["echo hi"]); // the bang ran after the turn
+		expect(env.requests.length).toBe(2); // and opened no third LLM call
+		const steered = env.requests[1]?.messages.filter((m) => m.role === "user") ?? [];
+		expect(steered.some((m) => m.content.startsWith("!"))).toBe(false); // never model content
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("Ctrl+C during a ! run aborts it through the shared interrupt path; the REPL stays usable", async () => {
+		let started = false;
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash, abort-aware",
+				parameters: bashParameters,
+				execute(_args, signal) {
+					started = true;
+					return new Promise((resolve) => {
+						const finish = () => resolve({ output: "Error: command aborted by user.", isError: true });
+						if (signal.aborted) {
+							finish();
+							return;
+						}
+						signal.addEventListener("abort", finish, { once: true });
+					});
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("! sleep 100\n");
+		await waitUntil(() => started);
+		env.fake.interrupt();
+		await waitUntil(() => env.output().includes("(interrupt"));
+		await waitUntil(() => env.output().includes("Error: command aborted by user."));
+		env.send("after\n"); // back to idle — a normal turn works
+		await waitUntil(() => env.requests.length === 1);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("legacy shell never prints the low-context warning — footer extras stay TUI-only (M10 review P2#1)", async () => {
+		const heavy = (): AssistantMessage => ({
+			role: "assistant",
+			blocks: [{ type: "text", text: "big context" }],
+			usage: { inputTokens: 105000, outputTokens: 5 },
+			stopReason: "end_turn",
+		});
+		const env = await startRepl({ scripts: [heavy] });
+		env.send("hi\n");
+		await waitUntil(() => env.output().includes("big context"));
+		const out = env.output();
+		expect(out).not.toContain("context 8"); // ~80% of the 131072 default — no note on legacy
+		expect(out).not.toContain("/compact");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("interrupting a ! command discards queued lines — turn semantics mirrored (M10 review P2#2)", async () => {
+		let started = false;
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "abortable stand-in",
+				parameters: Type.Object({}),
+				async execute(_args, signal) {
+					started = true;
+					return await new Promise((resolve) => {
+						const finish = () => resolve({ output: "Error: command aborted by user.", isError: true });
+						if (signal.aborted) {
+							finish();
+							return;
+						}
+						signal.addEventListener("abort", finish, { once: true });
+					});
+				},
+			},
+		];
+		const env = await startRepl({ tools, scripts: [reply("ok")] });
+		env.send("! sleep 100\n");
+		await waitUntil(() => started);
+		env.send("queued during bang\n");
+		await waitUntil(() => env.output().includes("queued"));
+		env.fake.interrupt();
+		await waitUntil(() => env.output().includes("Error: command aborted by user."));
+		await waitUntil(() => env.output().includes("discarded 1 queued"));
+		expect(env.requests.length).toBe(0); // the queued line never reached the model
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
 	});
 });

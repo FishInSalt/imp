@@ -75,6 +75,64 @@ describe("resolveRunMode", () => {
 	});
 });
 
+describe("subagent event relay (M10 B)", () => {
+	it("child tool events reach runTurn.onEvent with agent info; top-level events carry none", async () => {
+		const { baseDir, cwd } = await setup();
+		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(baseDir, "agents-home", ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		const seen: string[] = [];
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer: makeRenderer().renderer,
+			agentsHomeDir: path.join(baseDir, "agents-home"),
+			provider: scriptedProvider([
+				// parent: one task call
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "task", arguments: { prompt: "explore", agent: "scout" } }],
+					"tool_use",
+				),
+				// child: one bash call, then closing text
+				assistant(
+					[{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "echo relay-probe" } }],
+					"tool_use",
+				),
+				assistant([{ type: "text", text: "child done" }]),
+				// parent: closing text
+				assistant([{ type: "text", text: "parent done" }]),
+			]),
+			deferInit: false,
+		});
+		const result = await runner.runTurn({
+			userMessage: "go",
+			onEvent: (event, info) => {
+				if (event.type === "tool_start") {
+					seen.push(`start:${event.name}:${event.toolCallId}:${info?.agent ?? "-"}`);
+				} else if (event.type === "tool_end") {
+					seen.push(`end:${event.result.toolName}:${info?.agent ?? "-"}`);
+				}
+			},
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(seen).toContain("start:task:t1:-"); // top-level: no info
+		expect(seen).toContain("start:bash:c1:scout"); // child: relayed with the agent name
+		expect(seen).toContain("end:bash:scout"); // child end is tagged too
+		expect(seen).toContain("end:task:-"); // top-level end: no info
+		// top-level events must never carry a child tag (renderer feed filter)
+		expect(seen.filter((entry) => entry.endsWith(":-"))).toHaveLength(2);
+	});
+});
+
 describe("createRunner", () => {
 	it("resumes a pre-seeded session with the exact banner and seeded history", async () => {
 		const { baseDir, cwd } = await setup();
@@ -103,6 +161,33 @@ describe("createRunner", () => {
 		const runner = (await makeRunner({ provider, cwd, baseDir, continueRecent: true })) as RunnerWithOutput;
 		expect(runner.capturedOutput()).toBe("▪ no previous session, starting fresh\n");
 		expect(runner.session).not.toBeNull();
+	});
+
+	it("getTool looks up the live tool set by name — injected fakes included (M10 ! passthrough seam)", async () => {
+		const { baseDir, cwd } = await setup();
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);
+		const fake = {
+			name: "bash",
+			description: "fake",
+			parameters: { properties: { command: { type: "string" } }, required: ["command"] },
+			execute: async () => ({ output: "fake bash" }),
+		};
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider,
+			tools: [fake],
+		});
+		expect(runner.getTool("bash")).toBe(fake); // the exact instance the loop runs
+		expect(runner.getTool("nope")).toBeUndefined();
 	});
 
 	it("rethrows SessionNotFoundError for the caller to report", async () => {
@@ -255,7 +340,7 @@ describe("Runner.runTurn", () => {
 		// history = [summary message, retained tail ("continue"), fresh reply]
 		const first = runner.history[0];
 		expect(first?.role).toBe("user");
-		expect(first?.content).toContain("SUMMARY");
+		expect(first !== undefined && first.role === "user" ? first.content : "").toContain("SUMMARY");
 		expect(runner.history.map((m) => m.role)).toEqual(["user", "user", "assistant"]);
 	});
 

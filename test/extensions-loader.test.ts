@@ -305,6 +305,37 @@ describe("api.confirm wiring (spec part 2)", () => {
 		expect(asks).toEqual([{ message: "run ask_tool?", detail: "the detail line" }]);
 	});
 
+	it("M10: api.confirm's options bag (sessionKey) reaches the injected handler through the real wiring", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"keyed.mjs": `export default function (api) {
+	api.on("tool_call", async (event) => {
+		if (event.name !== "ask_tool") return;
+		const ok = await api.confirm("run ask_tool?", "the detail line", { sessionKey: "guardian:bash:rm" });
+		return ok ? undefined : { block: true, reason: "declined" };
+	});
+}
+`,
+		});
+		const calls: Array<[string, string | undefined, unknown]> = [];
+		const { loaded } = await load(env, {
+			confirm: async (message, detail, options) => {
+				calls.push([message, detail, options]);
+				return true;
+			},
+		});
+		await expect(
+			loaded.runtime.emitToolCall({
+				type: "tool_call",
+				toolCallId: "t1",
+				name: "ask_tool",
+				args: {},
+				cwd: env.cwd,
+			}),
+		).resolves.toBeUndefined();
+		expect(calls).toEqual([["run ask_tool?", "the detail line", { sessionKey: "guardian:bash:rm" }]]);
+	});
+
 	it("without a handler the same extension gets false and blocks — print-mode degradation, no hang", async () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, { "asker.mjs": askerFixture });

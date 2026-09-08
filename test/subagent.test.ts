@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
 import type { Tool } from "../src/core/tools/types.js";
@@ -40,7 +41,7 @@ const PARENT_SYSTEM = "You are imp (test). # Tools\n- bash: …";
 
 describe("finalAssistantText", () => {
 	it("returns the last assistant message's first non-empty text", () => {
-		const messages = [
+		const messages: AgentMessage[] = [
 			user("go"),
 			assistant([{ type: "text", text: "first" }]),
 			assistant([{ type: "toolCall", id: "t1", name: "echo", arguments: {} }]),

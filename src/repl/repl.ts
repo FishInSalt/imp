@@ -1,22 +1,30 @@
 import type { Readable } from "node:stream";
+import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
+import { detectBinary } from "../core/tools/bin-detect.js";
+import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
-import type { RegisteredExtensionCommand } from "../extensions/types.js";
-import { formatTokens, VERSION } from "../format.js";
+import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
+import { formatTokens, summarizeArgs, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
-import type { Runner } from "../runner.js";
-import type { Terminal } from "../tui.js";
-import { resolveShell } from "../tui.js";
-import type { CommandContext } from "./commands.js";
-import { dispatchCommand, parseCommand } from "./commands.js";
+import type { AgentEventInfo, Runner } from "../runner.js";
+import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
+import { COMMANDS, type CommandContext, dispatchCommand, parseCommand } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
-import type { LineInput } from "./line-input.js";
+import type {
+	ActivityAgentLine,
+	ActivitySnapshot,
+	ActivityToolLine,
+	LineInput,
+	SelectItemOption,
+	SelectOptions,
+} from "./line-input.js";
 import { replaySession } from "./replay.js";
-import { TuiShell } from "./shell.js";
+import { type AutocompleteOptions, TuiShell } from "./shell.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Interactive presentation shell. "legacy" is the pre-M9 readline path. */
@@ -52,15 +60,70 @@ function shorten(text: string): string {
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
 }
 
+/** "! cmd" lines: the shell executes them itself (M10). Blank after the
+ *  "!" is a usage hint, not a command. */
+function isBangLine(line: string): boolean {
+	return line[0] === "!" && line.slice(1).trim() !== "";
+}
+
+/** imp's COMMANDS + extension commands → pi-tui's autocomplete shape; the
+ *  panel's description line is "usage — summary" (pi-tui composes them). */
+function autocompleteCommands(
+	extraCommands: readonly RegisteredExtensionCommand[],
+): AutocompleteSlashCommand[] {
+	return [
+		...COMMANDS.map((command) => ({
+			name: command.name,
+			description: command.summary,
+			...(command.usage !== undefined && { argumentHint: command.usage }),
+		})),
+		...extraCommands.map((entry) => ({
+			name: entry.command.name,
+			description: entry.command.summary,
+			...(entry.command.usage !== undefined && { argumentHint: entry.command.usage }),
+		})),
+	];
+}
+/** TUI queue-line preview (LineInput.setQueue): cap at ~40 columns. */
+function queuePreview(text: string): string {
+	return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/** The three-option confirm picker (M10): approve, approve for the session, decline. */
+const CONFIRM_ITEMS: SelectItemOption[] = [
+	{ label: "Yes" },
+	{ label: "Yes, don't ask again this session" },
+	{ label: "No" },
+];
+
+/** Footer context window: IMP_CONTEXT_WINDOW when it parses to a positive
+ *  finite number, otherwise the same 131072 default the compaction
+ *  settings use. Read per call so env changes take effect immediately. */
+function contextWindowTokens(): number {
+	const raw = process.env.IMP_CONTEXT_WINDOW;
+	if (raw === undefined || raw === "") return 131072;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 131072;
+}
+
 /**
  * The interactive side of api.confirm: one host created before extension
  * loading (cli.ts loads extensions before the REPL exists), bound to the
- * live ReplInput once runRepl starts. Unbound (scripted mode, tests): the
+ * live input once runRepl starts. Unbound (scripted mode, tests): the
  * same never-hangs contract as the registry fallback — false + one stderr
  * teaching line.
+ *
+ * With a picker bound (TuiShell), questions render as the three-option
+ * selector and a "Yes, don't ask again this session" pick records the
+ * sessionKey in a per-process allowlist — later confirms on that key
+ * short-circuit to approval without prompting. Without a picker (readline
+ * shell, print mode) the flow is the original [y/N] ask, byte-for-byte.
  */
 export class TtyConfirm {
 	private ask: ((question: string) => Promise<boolean>) | null = null;
+	private select: ((options: SelectOptions) => Promise<number | null>) | null = null;
+	/** sessionKeys the user approved with "don't ask again this session". */
+	private readonly sessionAllowed = new Set<string>();
 	private readonly renderer: Renderer;
 
 	constructor(renderer: Renderer) {
@@ -68,13 +131,25 @@ export class TtyConfirm {
 	}
 
 	/** The confirm handler — pass to loadExtensions when interactive. */
-	readonly handler = (message: string, detail?: string): Promise<boolean> => {
+	readonly handler = async (message: string, detail?: string, options?: ConfirmOptions): Promise<boolean> => {
+		const sessionKey = options?.sessionKey;
+		if (sessionKey !== undefined && this.sessionAllowed.has(sessionKey)) {
+			this.renderer.note(`▪ confirm: ${message} — allowed for this session`);
+			return true;
+		}
 		this.renderer.note(`▪ confirm: ${message}`);
 		if (detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
+		const select = this.select;
+		if (select !== null) {
+			const choice = await select({ title: message, items: CONFIRM_ITEMS });
+			if (choice === null) return false; // cancelled picker declines, like Ctrl+C at the ask
+			if (choice === 1 && sessionKey !== undefined) this.sessionAllowed.add(sessionKey);
+			return choice !== 2;
+		}
 		const ask = this.ask;
 		if (ask === null) {
 			process.stderr.write(NO_CONFIRM_LINE);
-			return Promise.resolve(false);
+			return false;
 		}
 		return ask("proceed? [y/N] ");
 	};
@@ -82,6 +157,11 @@ export class TtyConfirm {
 	/** runRepl binds the live tty once its input exists. */
 	bind(ask: (question: string) => Promise<boolean>): void {
 		this.ask = ask;
+	}
+
+	/** runRepl binds the picker when the input shell implements select. */
+	bindSelect(select: (options: SelectOptions) => Promise<number | null>): void {
+		this.select = select;
 	}
 }
 
@@ -113,6 +193,14 @@ class ReplMachine {
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
 	private eofPending = false;
+	/** Latch for the context-low note: fires once per crossing of 80%;
+	 *  dropping back below (compaction, /new) re-arms it. */
+	private lowContextNoted = false;
+	/** Live turn activity for the TUI region (M10 B): pending top-level tools
+	 *  and running subagents. Keyed by tool_call id / agent name; pushed as a
+	 *  snapshot after every mutation (see pushActivity). */
+	private activityTools = new Map<string, ActivityToolLine>();
+	private activityAgents = new Map<string, ActivityAgentLine>();
 	private receivedLine = false;
 	private readonly runner: Runner;
 	private readonly commands: readonly RegisteredExtensionCommand[];
@@ -143,6 +231,23 @@ class ReplMachine {
 			this.input.refresh();
 			return;
 		}
+		// "! cmd" passthrough (M10): the shell runs it directly — never model
+		// input, never a session entry. Checked before parseCommand so "/" and
+		// "!" stay unambiguous; while a phase is active the existing queue
+		// semantics hold it (the post-run flush executes it as a bang).
+		if (line[0] === "!") {
+			const bangCommand = line.slice(1).trim();
+			if (bangCommand === "") {
+				this.renderer.note("▪ ! runs a shell command directly — e.g. ! ls -la");
+				this.input.refresh();
+				return;
+			}
+			if (this.state === "idle") {
+				void this.runBangCommand(bangCommand);
+				return;
+			}
+			// active/compacting: fall through — the shared queue path below holds it
+		}
 		const command = parseCommand(line);
 		if (command) {
 			void this.runCommand(line, command.name);
@@ -154,6 +259,7 @@ class ReplMachine {
 		}
 		this.queue.push(line);
 		if (this.interactive) this.renderer.note(`▪ queued: ${shorten(line)}`);
+		this.syncQueue();
 		this.input.refresh();
 	}
 
@@ -248,7 +354,8 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "running";
 		this.input.setActive(true);
-		this.renderer.think(); // live spinner until the first event arrives
+		this.renderer.think(); // live spinner until the first event arrives (print/legacy)
+		this.pushActivity(); // TUI activity region: thinking phase from the start
 		const controller = new AbortController();
 		this.controller = controller;
 		try {
@@ -256,9 +363,15 @@ class ReplMachine {
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,
-				onEvent: (event: AgentEvent) => {
-					this.renderer.event(event);
-					this.showEditFold(event);
+				onEvent: (event: AgentEvent, info?: AgentEventInfo) => {
+					// Top-level events feed the Renderer; subagent-sourced ones
+					// (info set) go to the activity region only — M5's
+					// zero-rendering-visibility rule, enforced at this tap.
+					if (info === undefined) {
+						this.renderer.event(event);
+						this.showEditFold(event); // M9 parity: top-level edits fold; child edits could later
+					}
+					this.trackActivity(event, info);
 				},
 				getSteeringMessages: () => this.steeringMessages(),
 			});
@@ -284,17 +397,23 @@ class ReplMachine {
 	}
 
 	private steeringMessages(): AgentMessage[] {
-		const [next, ...rest] = this.queue;
-		this.queue = rest;
-		if (next === undefined) return [];
+		// "! cmd" entries are shell directives, never model content: hold them
+		// in place (the post-run flush executes them) and steer the next plain
+		// line — with no bang lines queued this is exactly the old head-pop.
+		const index = this.queue.findIndex((entry) => !isBangLine(entry));
+		if (index === -1) return [];
+		const [next] = this.queue.splice(index, 1);
+		if (next === undefined) return []; // unreachable (index !== -1); type guard
 		this.renderer.note(`▪ steering: ${shorten(next)}`);
+		this.syncQueue();
 		return [{ role: "user", content: next }];
 	}
 
 	/** Bottom status line for the TUI shell (the legacy shell ignores it):
-	 *  model · session id8 · cumulative tokens. Pushed at every point any
-	 *  input changes — construction, command dispatch (/model, /new,
-	 *  /resume), and both run settle paths (session totals move). */
+	 *  model · session id8 · cumulative tokens · context fill. Pushed at
+	 *  every point any input changes — construction, command dispatch
+	 *  (/model, /new, /resume), and both run settle paths (session totals
+	 *  move) — and the terminal title rides along (TUI shells only). */
 	private refreshFooter(): void {
 		const parts: string[] = [this.runner.model];
 		const session = this.runner.session;
@@ -305,7 +424,28 @@ class ReplMachine {
 				parts.push(`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`);
 			}
 		}
+		// Context fill from the same live history the loop and auto-compaction
+		// use (estimateContextTokens anchors on the last measured usage). The
+		// estimate is O(messages) local work — fine at this low-frequency push
+		// point, but never call it from a streaming-delta path.
+		const contextPercent = Math.round(
+			(estimateContextTokens(this.runner.history).tokens / contextWindowTokens()) * 100,
+		);
+		parts.push(`ctx ${contextPercent}%`);
+		if (contextPercent >= 80) {
+			parts.push("low — /compact");
+			// The warning note rides the footer's shell gate: legacy/pipe sessions
+			// never saw context warnings before M10 and their byte contract stays
+			// that way (M10 review P2#1).
+			if (!this.lowContextNoted && this.input.setFooter !== undefined) {
+				this.lowContextNoted = true;
+				this.renderer.note(`▪ context ${contextPercent}% used — /compact to summarize older turns`);
+			}
+		} else {
+			this.lowContextNoted = false;
+		}
 		this.input.setFooter?.(parts.join(" · "));
+		this.input.setTitle?.(`imp — ${this.runner.model}`);
 	}
 
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {
@@ -364,10 +504,145 @@ class ReplMachine {
 		}
 		this.queue = rest;
 		this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+		this.syncQueue();
+		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
+		// the shell, it does not open a model turn.
+		if (isBangLine(next)) {
+			await this.runBangCommand(next.slice(1).trim());
+			return;
+		}
 		await this.submitTurn(next);
 	}
 
+	/** "! cmd" (M10): run a shell command directly through the bash tool — no
+	 * model turn, nothing enters the session (warmup stays deferred: a
+	 * shell-only scripted pipe keeps zero side effects). Owns the running
+	 * state while it executes so the marker shows "+ " and Ctrl+C/Esc reuse
+	 * the interrupt path (controller.abort); queued lines flush after, like
+	 * a turn. */
+	private async runBangCommand(command: string): Promise<void> {
+		if (this.state === "exited") return;
+		const bash = this.runner.getTool("bash");
+		if (bash === undefined) {
+			this.renderer.error("imp: ! needs the bash tool, which this session's tool set does not include");
+			return;
+		}
+		this.state = "running";
+		this.input.setActive(true);
+		this.renderer.note(`! ${shorten(command)}`);
+		const controller = new AbortController();
+		this.controller = controller;
+		try {
+			const result = await bash.execute({ command }, controller.signal);
+			this.renderBangResult(result);
+		} catch (err) {
+			this.reportError(err);
+		} finally {
+			this.controller = null;
+			this.interruptCount = 0;
+			if (controller.signal.aborted) {
+				// Mirror the turn semantics: Ctrl+C takes control — queued lines are
+				// not run. They were queued behind a shell command the user just
+				// interrupted (M10 review P2#2).
+				this.discardQueue();
+				this.returnToIdle();
+			} else {
+				await this.flushQueue(); // drains any queue, then back to idle
+			}
+		}
+	}
+
+	/** Bang output block: the tool's own truncation stands (bash.ts); the
+	 *  trailing "Exit code: N" section becomes the dim "(exit N)" note so
+	 *  the code is never stated twice. Error text displays as-is. */
+	private renderBangResult(result: ToolExecuteResult): void {
+		const exitMatch = /(?:\n\n|^)Exit code: (\d+)$/.exec(result.output);
+		const body = exitMatch === null ? result.output : result.output.slice(0, exitMatch.index).trimEnd();
+		if (body !== "") this.renderer.writeLine(body);
+		if (exitMatch !== null) this.renderer.note(`(exit ${exitMatch[1]})`);
+	}
+
+	/** Activity region (M10 B). tool_start adds a pending row; tool_end removes
+	 *  it (the ✓/⎿ completion lines stay in the transcript — the Renderer is
+	 *  unchanged); the task tool maps to a subagent row that child events
+	 *  (info.agent) keep updating until the task ends. Two parallel tasks on
+	 *  the same agent share one row (v1 — the common case is one per agent). */
+	private trackActivity(event: AgentEvent, info?: AgentEventInfo): void {
+		if (event.type === "tool_start") {
+			if (info !== undefined) {
+				// Child-sourced (info present — even without an agent name): update
+				// the agent row; never a top-level tool row.
+				const agent = info.agent ?? "task";
+				const row = this.activityAgents.get(agent);
+				if (row !== undefined) {
+					row.lastTool = `${event.name} ${summarizeArgs(event.name, event.args)}`.trimEnd();
+					row.toolCount += 1;
+				}
+			} else if (event.name === "task") {
+				const args = (event.args ?? {}) as { agent?: string; prompt?: string };
+				const agent = args.agent ?? "task";
+				this.activityAgents.set(agent, {
+					agent,
+					// the prompt IS the label (summarizeArgs has no task entry —
+					// raw JSON as a row label would be noise, not signal)
+					task: typeof args.prompt === "string" ? shorten(args.prompt) : summarizeArgs("task", event.args),
+					taskToolId: event.toolCallId,
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+				});
+			} else {
+				this.activityTools.set(event.toolCallId, {
+					id: event.toolCallId,
+					name: event.name,
+					label: summarizeArgs(event.name, event.args),
+					startedAtMs: Date.now(),
+				});
+			}
+			this.pushActivity();
+			return;
+		}
+		if (event.type === "tool_end") {
+			if (info !== undefined) return; // child ends bump nothing (v1)
+			if (event.result.toolName === "task") {
+				// Only the rows this task call created leave; a concurrent second
+				// task's row survives (keyed by taskToolId, not agent name).
+				for (const [key, row] of this.activityAgents) {
+					if (row.taskToolId === event.result.toolCallId) this.activityAgents.delete(key);
+				}
+			} else {
+				this.activityTools.delete(event.result.toolCallId);
+			}
+			this.pushActivity();
+		}
+	}
+
+	/** Push the current activity snapshot to the TUI shell (no-op elsewhere). */
+	private pushActivity(): void {
+		if (this.input.setActivity === undefined) return;
+		const working = this.activityTools.size > 0 || this.activityAgents.size > 0;
+		const snapshot: ActivitySnapshot = {
+			phase: this.state === "idle" ? "idle" : working ? "working" : "thinking",
+			tools: [...this.activityTools.values()],
+			agents: [...this.activityAgents.values()],
+		};
+		this.input.setActivity(snapshot);
+	}
+
+	/** Clear live rows (turn end, interrupt, exit) and park the region at idle. */
+	private clearActivity(): void {
+		this.activityTools.clear();
+		this.activityAgents.clear();
+		// Phase is parked at idle explicitly: callers run this at the END of a
+		// turn, when this.state may not have flipped back yet — pushActivity()
+		// would then report "thinking" and the row (and its ticker) would live on.
+		if (this.input.setActivity === undefined) return;
+		this.input.setActivity({ phase: "idle", tools: [], agents: [] });
+	}
+
 	private returnToIdle(): void {
+		this.clearActivity();
 		if (this.state === "exited") return;
 		if (this.pendingExitCode !== null) {
 			const code = this.pendingExitCode;
@@ -383,10 +658,19 @@ class ReplMachine {
 		this.input.setActive(false); // shows "> "
 	}
 
+	/** Push the queue visual (TUI shells): "N queued · next: <head>", or clear
+	 *  it when the queue empties. Called at every queue mutation — push,
+	 *  steering consumption, leftover flush, and discard. */
+	private syncQueue(): void {
+		const head = this.queue[0];
+		this.input.setQueue?.(this.queue.length, head === undefined ? null : queuePreview(head));
+	}
+
 	private discardQueue(): void {
 		if (this.queue.length === 0) return;
 		this.renderer.note(`▪ discarded ${this.queue.length} queued line(s)`);
 		this.queue = [];
+		this.syncQueue();
 	}
 
 	private requestExit(code: number): void {
@@ -477,6 +761,19 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	}
 	// Narrowed once for every later use (guards don't carry into closures).
 	const tuiSink: TranscriptSink | null = useTui && transcript !== undefined ? transcript : null;
+	// Autocomplete config for the TUI shell (M10): imp's commands + extension
+	// commands, the process cwd for @ paths, and fd — probed once (cached per
+	// process); a PATH-resolvable name is all the provider's spawn needs.
+	// Without fd only the @ fuzzy search is dropped; slash completion stays.
+	let autocomplete: AutocompleteOptions | undefined;
+	if (tuiSink !== null) {
+		const fdPath = (await detectBinary("fd")) ? "fd" : null;
+		autocomplete = {
+			commands: autocompleteCommands(options.commands ?? []),
+			basePath: process.cwd(),
+			fdPath,
+		};
+	}
 	const replay = (session: SessionStore): number =>
 		replaySession(
 			{
@@ -508,6 +805,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onEof: () => machine.handleEof(),
 					transcript: tuiSink,
 					terminal: options.terminal,
+					autocomplete,
 				})
 			: new ReplInput({
 					input: stdin,
@@ -528,8 +826,12 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		replay,
 	});
 	// api.confirm's tty side: route questions to this REPL's single readline
-	// interface (a second interface would race it for stdin bytes).
+	// interface (a second interface would race it for stdin bytes). With a
+	// picker-capable shell the host also gets select — the three-option
+	// confirm (M10) reuses the same binding path as ctx.select.
 	options.confirm?.bind((question: string) => input.ask(question));
+	const confirmSelect = input.select?.bind(input);
+	if (confirmSelect !== undefined) options.confirm?.bindSelect(confirmSelect);
 
 	input.start();
 	if (interactive) {

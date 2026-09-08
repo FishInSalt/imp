@@ -46,8 +46,54 @@ export interface LineInput {
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
 	select?(options: SelectOptions): Promise<number | null>;
+	/** Queue visual (M10, TUI only): one dim "N queued · next: <preview>" line
+	 *  below the ask region while lines wait behind the running turn. A count
+	 *  of 0 (or a null preview) removes the line entirely — the readline shell
+	 *  has no such line and keeps its "▪ queued:" notes instead. */
+	setQueue?(count: number, preview: string | null): void;
+	/** Terminal window title (TUI only — OSC 2, written outside the frame
+	 *  pipeline). The readline shell has no title and ignores it. */
+	setTitle?(title: string): void;
+	/** TUI only: live turn activity (M10 B). The machine pushes a fresh
+	 *  snapshot on every event; idle clears the region. The shell owns the
+	 *  spinner animation and elapsed-time rendering. */
+	setActivity?(snapshot: ActivitySnapshot): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
+}
+
+/** One pending top-level tool call in the TUI activity region. */
+export interface ActivityToolLine {
+	/** tool_call id — tool_end removes the row (the ⎿ summary lands in the transcript). */
+	id: string;
+	name: string;
+	/** Pre-summarized args label (summarizeArgs at event time). */
+	label: string;
+	startedAtMs: number;
+}
+
+/** One running subagent in the TUI activity region (the task tool's child). */
+export interface ActivityAgentLine {
+	/** Agent name — two parallel tasks on the same agent merge into one row (v1). */
+	agent: string;
+	task: string;
+	/** The task tool_call id that spawned it — its tool_end removes the row. */
+	taskToolId: string;
+	cwd: string | null;
+	/** Latest child tool_start, pre-summarized ("read src/foo.ts"). */
+	lastTool: string | null;
+	toolCount: number;
+	startedAtMs: number;
+}
+
+/** Snapshot of live turn activity (M10 B: the activity region replaces the
+ *  byte-stream spinner in TUI mode — print/legacy keep the Renderer's own
+ *  spinner). Elapsed times are computed shell-side from the clock captured
+ *  per entry, so the shell can animate without machine pushes. */
+export interface ActivitySnapshot {
+	phase: "idle" | "thinking" | "working";
+	tools: ActivityToolLine[];
+	agents: ActivityAgentLine[];
 }
 
 /** Event surface both shells wire into the machine. */

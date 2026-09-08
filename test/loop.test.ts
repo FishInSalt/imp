@@ -19,7 +19,7 @@ function scriptedProvider(scripts: AssistantMessage[]): LLMProvider {
 	return {
 		name: "mock",
 		async *stream() {
-			const message = scripts[Math.min(call, scripts.length - 1)];
+			const message = scripts[Math.min(call, scripts.length - 1)]!;
 			call++;
 			for (const block of message.blocks) {
 				if (block.type === "text") yield { type: "text_delta", text: block.text };

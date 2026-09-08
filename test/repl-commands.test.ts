@@ -10,6 +10,7 @@ import { setTrust } from "../src/core/trust.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
+import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
@@ -117,6 +118,7 @@ async function makeEnv(args?: {
 		output: () => output().slice(banner.length),
 		requests,
 		exitCodes,
+		replayed: [],
 		aborted: false,
 		ctx: {
 			runner,
@@ -190,8 +192,16 @@ describe("slash commands", () => {
 				"Keys:",
 				"  Ctrl+C             abort the running turn (press twice to force quit);",
 				"                     at an empty prompt: press twice to exit",
+				"  Esc                abort the running turn (same as Ctrl+C); with the",
+				"                     autocomplete panel open, one Esc closes it and aborts",
 				"  Ctrl+D             exit",
 				"  Ctrl+O             expand/collapse the newest diff fold",
+				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
+				"  ! prefix           run a shell command directly — e.g. ! ls -la",
+				"  autocomplete (/ commands · @ files):",
+				"    ↑/↓              move the selection",
+				"    Tab / Enter      complete — Enter on a command completes and runs it",
+				"    Esc              close the panel",
 				"  while a picker is open:",
 				"    ↑/↓              move the selection",
 				"    Enter            pick · Esc or Ctrl+C cancels (no interrupt)",
@@ -214,6 +224,20 @@ describe("slash commands", () => {
 		const result = await env.runner.runTurn({ userMessage: "hi" });
 		expect(env.requests[0]?.model).toBe("glm-4.6");
 		expect(result.stopReason).toBe("completed");
+	});
+
+	it("HELP_KEYS documents the M10 affordances: Esc interrupt, newline keys, ! prefix, autocomplete keys", () => {
+		const text = helpText();
+		for (const line of [
+			"  Esc                abort the running turn (same as Ctrl+C); with the",
+			"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
+			"  ! prefix           run a shell command directly — e.g. ! ls -la",
+			"  autocomplete (/ commands · @ files):",
+			"    Tab / Enter      complete — Enter on a command completes and runs it",
+			"    Esc              close the panel",
+		]) {
+			expect(text).toContain(line);
+		}
 	});
 
 	it("regression m3: /model rejects extra text after the id instead of setting a broken id", async () => {
@@ -516,6 +540,7 @@ describe("/sessions + /resume", () => {
 		expect(out).toContain("older session title line");
 		expect(out).toContain("1 msg");
 		expect(out).toContain("switch with /resume <id>");
+		expect(out).toContain("use /resume (no args) to pick one"); // M10 tail hint
 	});
 
 	it("/resume <id> swaps the live session and replays its history", async () => {
@@ -548,5 +573,58 @@ describe("/sessions + /resume", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/resume", env.ctx);
 		expect(env.output()).toContain("/resume <id> — pick an id from /sessions");
+	});
+});
+
+describe("/resume picker (M10)", () => {
+	/** A recording ctx.select that picks the row for `label` (or cancels). */
+	function pickerFor(env: TestEnv, label: string | null) {
+		const picks: SelectOptions[] = [];
+		env.ctx.select = async (options) => {
+			picks.push(options);
+			return label === null ? null : options.items.findIndex((item) => item.label === label);
+		};
+		return picks;
+	}
+
+	it("no args + a picker: rows are <id8> · local time · msgs · title; a pick resumes exactly like /resume <id>", async () => {
+		const env = await makeEnv({ seed: [userMsg("current")] });
+		const target = createSession(env.cwd, env.baseDir);
+		target.appendMessage(userMsg("target session"));
+		target.appendMessage(assistantText("answer"));
+		const target8 = target.header.id.slice(0, 8);
+		const picks = pickerFor(env, target8);
+		await dispatchCommand("/resume", env.ctx);
+		expect(picks).toHaveLength(1);
+		expect(picks[0]?.title).toBe("sessions — pick one to resume");
+		const row = picks[0]?.items.find((item) => item.label === target8);
+		expect(row?.description).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} · 2 msgs · target session/);
+		// the pick walked the SAME resume flow as /resume <id>
+		expect(env.runner.session?.header.id).toBe(target.header.id);
+		expect(env.replayed).toEqual([target.header.id]);
+		expect(env.output()).toContain("resumed");
+		expect(env.output()).toContain("2 messages restored");
+	});
+
+	it("cancelling the picker notes one line and changes nothing", async () => {
+		const env = await makeEnv({ seed: [userMsg("current")] });
+		const before = env.runner.session?.header.id;
+		pickerFor(env, null);
+		await dispatchCommand("/resume", env.ctx);
+		expect(env.output()).toContain("▪ resume cancelled");
+		expect(env.runner.session?.header.id).toBe(before);
+		expect(env.replayed).toEqual([]);
+	});
+
+	it("a picker but zero saved sessions → the /sessions empty note, no picker opened", async () => {
+		const env = await makeEnv({ noSession: true });
+		let opened = false;
+		env.ctx.select = async () => {
+			opened = true;
+			return null;
+		};
+		await dispatchCommand("/resume", env.ctx);
+		expect(opened).toBe(false);
+		expect(env.output()).toContain("no saved sessions for this directory yet");
 	});
 });

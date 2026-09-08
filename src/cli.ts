@@ -12,7 +12,7 @@ import {
 } from "./core/trust.js";
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
-import type { RegisteredExtensionCommand } from "./extensions/types.js";
+import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
 async function loadExtensionSetup(
 	opts: CliOptions,
 	renderer: Renderer,
-	confirm: ((message: string, detail?: string) => Promise<boolean>) | undefined,
+	confirm: ((message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>) | undefined,
 	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({
@@ -261,7 +261,12 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	const renderer = new Renderer({
 		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,
-		liveTools: interactive, // no in-place pending tool lines on a pipe
+		// In-place pending tool lines only on the legacy readline shell. TUI
+		// mode turns them OFF: the live activity region owns pending state
+		// (M10 B) — with liveTools=false the Renderer still writes the ✓/⎿
+		// completion lines, which is exactly the split we want. Pipes never
+		// had them.
+		liveTools: interactive && transcript === undefined,
 		toolStyle: "one-line",
 		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text
 	});

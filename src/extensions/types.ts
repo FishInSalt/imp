@@ -18,6 +18,15 @@ export type { ToolCallDecision };
 /** Where an extension was discovered (M4 design §3.1). */
 export type ExtensionOrigin = "cli" | "project" | "global";
 
+/** Options bag for api.confirm — additive, all-optional (M10). */
+export interface ConfirmOptions {
+	/** Host-side session memory: a key the user previously approved via
+	 *  "don't ask again this session" short-circuits to approval without
+	 *  prompting again. Extensions pick the key's granularity (e.g. the
+	 *  matched rule, the target directory). */
+	sessionKey?: string;
+}
+
 /**
  * The extension api: three read-only facts, three registration methods, one
  * subscriber, one ask-the-human method — eight members. Anything an extension
@@ -48,8 +57,10 @@ export interface ExtensionApi {
 	 *  prompt on the tty). Resolves true only on explicit approval; false
 	 *  covers declines, empty/EOF answers, and hosts without an interactive
 	 *  prompt (print mode, plain tests) — it never rejects and never hangs,
-	 *  so a gate can always treat false as "not allowed". */
-	confirm(message: string, detail?: string): Promise<boolean>;
+	 *  so a gate can always treat false as "not allowed". A sessionKey in
+	 *  options lets the host remember a "don't ask again this session" choice
+	 *  for that key (M10); hosts without that affordance just ignore it. */
+	confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean>;
 }
 
 /**

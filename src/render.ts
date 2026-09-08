@@ -28,7 +28,7 @@ interface PendingTool {
 	frame: number;
 }
 
-const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+export const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const THINK_DELAY_MS = 250; // below this, model latency isn't worth a flicker
 
 function formatElapsed(ms: number): string {

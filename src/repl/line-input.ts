@@ -9,6 +9,11 @@ export interface SelectOptions {
 	/** Line rendered above the items (e.g. "pick a model"). */
 	title?: string;
 	items: SelectItemOption[];
+	/** Type-to-filter while the picker is open (M11 #9): printable input
+	 *  builds a case-insensitive substring query over the labels; arrows and
+	 *  Enter keep working against the filtered rows. Pickers that pass a
+	 *  handful of items (e.g. /model) leave it off. */
+	filterable?: boolean;
 }
 
 /**

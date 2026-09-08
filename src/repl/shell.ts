@@ -17,6 +17,7 @@ import {
 	TUI,
 } from "../tui.js";
 import { Fold } from "./components/fold.js";
+import { appendInputHistory, loadInputHistory } from "./history.js";
 import type { ActivitySnapshot, LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
@@ -41,6 +42,9 @@ export interface TuiShellOptions extends LineInputEvents {
 	editorOptions?: EditorOptions;
 	/** Editor autocomplete (M10); absent leaves the editor provider-less. */
 	autocomplete?: AutocompleteOptions;
+	/** Cross-session input history file (M11 #4). Absent (tests, hermetic
+	 *  runs) disables persistence entirely — in-memory recall still works. */
+	historyPath?: string;
 }
 
 /** Identity functions throughout — the pre-M9 plain aesthetic. */
@@ -165,7 +169,7 @@ export class TuiShell implements LineInput {
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
 	/** The open selector, if any — finished on pick, cancel, or close. */
-	private selector: { teardown: () => void } | null = null;
+	private selector: { teardown: () => void; filterKey?: (data: string) => boolean } | null = null;
 	/** Pickers queued behind an open one (M10): opened when it finishes. */
 	private pendingSelects: Array<() => void> = [];
 	private footer: Text | null = null;
@@ -229,6 +233,16 @@ export class TuiShell implements LineInput {
 		};
 		editorBox.addChild(editor);
 
+		// Cross-session recall (M11 #4): seed the editor's history from the
+		// file's tail, oldest first (addToHistory appends). A broken store
+		// degrades to session-only recall inside loadInputHistory.
+		if (this.options.historyPath !== undefined) {
+			for (const line of loadInputHistory(this.options.historyPath)) {
+				this.editor?.addToHistory(line);
+				this.history.push(line);
+			}
+		}
+
 		tui.addChild(this.options.transcript);
 		tui.addChild(this.foldContainer);
 		tui.addChild(this.activityContainer); // live tool/subagent rows (M10 B)
@@ -258,6 +272,9 @@ export class TuiShell implements LineInput {
 			if (this.selector !== null) {
 				if (matchesKey(data, "ctrl+c")) return undefined;
 				if (matchesKey(data, "ctrl+d")) return { consume: true };
+				// A filterable picker eats printable input as its query (M11 #9)
+				// before the list or the editor could see it.
+				if (this.selector.filterKey?.(data) === true) return { consume: true };
 			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt
 			// path. NOT consumed: an open autocomplete panel closes too (the
@@ -330,7 +347,12 @@ export class TuiShell implements LineInput {
 			this.editor?.addToHistory(text);
 			// Mirror readline/editor semantics for the interface view: skip
 			// consecutive duplicates, cap at 100.
-			if (this.history[0] !== text) this.history.unshift(text);
+			if (this.history[0] !== text) {
+				this.history.unshift(text);
+				// New head = a fresh line worth persisting (M11 #4). The
+				// file's own dedupe rule mirrors this one.
+				if (this.options.historyPath !== undefined) appendInputHistory(this.options.historyPath, text);
+			}
 			if (this.history.length > 100) this.history.length = 100;
 		}
 		this.options.onLine(text);
@@ -485,15 +507,20 @@ export class TuiShell implements LineInput {
 			});
 		}
 		// SelectList carries string values; the row's index is the identity
-		// the caller picked (no filtering — rows can never reorder).
+		// the caller picked — the ORIGINAL index, so filtering (which hides
+		// rows) can never rewire what Enter resolves to.
 		const items = options.items.map((item, index) => ({
 			value: String(index),
 			label: item.label,
 			description: item.description,
 		}));
-		const list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
+		let list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
 		const box = new Container();
 		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title, 0, 0));
+		/** The live filter query (M11 #9): null while not filterable. */
+		let query: string | null = options.filterable === true ? "" : null;
+		const queryRow = new Text("", 0, 0);
+		if (query !== null) box.addChild(queryRow);
 		box.addChild(list);
 		return new Promise<number | null>((resolve) => {
 			let settled = false; // pick, cancel and close all funnel here — once
@@ -517,7 +544,49 @@ export class TuiShell implements LineInput {
 				const queued = this.pendingSelects.shift();
 				if (queued !== undefined) queued();
 			};
-			this.selector = { teardown: () => finish(null) };
+			const applyFilter = (): void => {
+				if (query === null) return;
+				const q = query.toLowerCase();
+				const visible =
+					q === ""
+						? items
+						: items.filter(
+								(item) =>
+									item.label.toLowerCase().includes(q) || (item.description ?? "").toLowerCase().includes(q),
+							);
+				const next = new SelectList(visible, Math.min(visible.length, 8), this.theme.selectList);
+				next.onSelect = (item) => finish(Number(item.value));
+				next.onCancel = () => finish(null);
+				box.removeChild(list);
+				list = next;
+				box.addChild(next);
+				queryRow.setText(query === "" ? dim("filter:", true) : dim(`filter: ${query}`, true));
+				tui.setFocus(next); // the fresh list owns the keys
+				tui.requestRender();
+			};
+			/** Consume printable/backspace keys as filter input (called from the
+			 *  shell's pre-focus listener). Returns true when consumed. */
+			const filterKey = (data: string): boolean => {
+				if (query === null) return false;
+				if (data === "\x7f" || data === "\b") {
+					if (query === "") return true; // nothing to erase — swallow anyway
+					query = query.slice(0, -1);
+					applyFilter();
+					return true;
+				}
+				// A plain text chunk: no escape prefix, no control bytes. Covers
+				// ASCII and committed IME/CJK input (multi-byte).
+				if (data !== "" && !data.startsWith("\x1b") && ![...data].some((ch) => ch < " ")) {
+					query += data;
+					applyFilter();
+					return true;
+				}
+				return false;
+			};
+			this.selector = {
+				teardown: () => finish(null),
+				filterKey, // the pre-focus listener consults this while open
+			};
 			this.updatePlaceholder(); // keys belong to the picker — hide the hint
 			list.onSelect = (item) => finish(Number(item.value));
 			list.onCancel = () => finish(null);

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
@@ -142,7 +142,11 @@ async function settle(extraMs = 30): Promise<void> {
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function makeShell(options?: { onLine?: (l: string) => void; autocomplete?: AutocompleteOptions }) {
+function makeShell(options?: {
+	onLine?: (l: string) => void;
+	autocomplete?: AutocompleteOptions;
+	historyPath?: string;
+}) {
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();
 	const events: string[] = [];
@@ -150,6 +154,7 @@ function makeShell(options?: { onLine?: (l: string) => void; autocomplete?: Auto
 		transcript,
 		terminal,
 		autocomplete: options?.autocomplete,
+		historyPath: options?.historyPath,
 		onLine: (line) => {
 			events.push(`line:${line}`);
 			options?.onLine?.(line);
@@ -1629,6 +1634,61 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("line-three"));
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("M11 #4: a submitted line persists and a NEW shell recalls it with up-arrow", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-hist-e2e-"));
+		const file = path.join(dir, "history.jsonl");
+		const first = makeShell({ historyPath: file });
+		first.shell.start();
+		await settle(0);
+		first.terminal.data("! echo persisted-history\r");
+		await settle(0);
+		first.terminal.data("remembered prompt\r");
+		await settle();
+		first.shell.close();
+		// fresh shell, same file: up-arrow must recall the persisted line
+		const second = makeShell({ historyPath: file });
+		second.shell.start();
+		await settle(0);
+		const mark = second.terminal.writes.length;
+		second.terminal.data("\x1b[A"); // up arrow
+		await settle(); // let the debounced repaint land
+		expect(second.terminal.frameSince(mark)).toContain("remembered prompt"); // editor shows it
+		second.terminal.data("\r"); // submit unchanged — routes to onLine
+		await settle();
+		expect(second.events.some((e) => e.startsWith("line:remembered prompt"))).toBe(true);
+		second.shell.close();
+	});
+
+	it("M11 #9: a filterable select narrows as you type; Enter picks the ORIGINAL index", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({
+			title: "sessions — pick one to resume",
+			filterable: true,
+			items: [
+				{ label: "aaaa1111", description: "9/1 · 4 msgs · fix the login bug" },
+				{ label: "bbbb2222", description: "9/2 · 8 msgs · refactor the parser" },
+				{ label: "cccc3333", description: "9/3 · 2 msgs · login screen styles" },
+			],
+		});
+		await settle();
+		expect(terminal.frameSince(0)).toContain("login bug"); // full list first
+		const filteredMark = terminal.writes.length; // the un-filtered rows live in earlier writes
+		terminal.data("l"); // query "l"
+		terminal.data("o");
+		terminal.data("g");
+		await settle();
+		const filtered = terminal.frameSince(filteredMark);
+		expect(filtered).toContain("login bug"); // both login rows match
+		expect(filtered).not.toContain("parser"); // the non-match is gone
+		expect(filtered).toContain("filter: log");
+		terminal.data("\x1b[B"); // down — to the SECOND match (cccc3333)
+		terminal.data("\r");
+		await expect(pick).resolves.toBe(2); // ORIGINAL index, not the filtered one
+		shell.close();
 	});
 
 	it("M11 (review edge): an extension tool named 'edit' without the summary contract still folds generically", async () => {

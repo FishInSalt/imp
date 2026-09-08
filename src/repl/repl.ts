@@ -48,6 +48,9 @@ export interface ReplOptions {
 	transcript?: TranscriptSink;
 	/** Test seam: inject a fake Terminal for the TUI shell. */
 	terminal?: Terminal;
+	/** Cross-session input history file for the TUI shell (M11 #4); cli.ts
+	 *  resolves the real ~/.imp path, hermetic runs omit it. */
+	inputHistoryPath?: string;
 	/** Interactive confirm host for extension gates (api.confirm): created by
 	 *  cli.ts before extension loading (which precedes this call) and bound
 	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
@@ -836,6 +839,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					transcript: tuiSink,
 					terminal: options.terminal,
 					autocomplete,
+					historyPath: options.inputHistoryPath,
 				})
 			: new ReplInput({
 					input: stdin,

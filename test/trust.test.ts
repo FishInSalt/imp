@@ -114,6 +114,14 @@ describe("nearest-ancestor inheritance (monorepo ergonomics)", () => {
 });
 
 describe("trustRequiringResources", () => {
+	it("a commands-only repo gates too — .imp/commands is model-directed content (M11 #6 review P1)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-trust-cmds-"));
+		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home4-"));
+		mkdirSync(join(dir, ".imp", "commands"), { recursive: true });
+		writeFileSync(join(dir, ".imp", "commands", "review.md"), "inject me\n");
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/commands"]);
+	});
+
 	it("only .imp extensions and agents count; AGENTS.md never does", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-proj-"));
 		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home-"));

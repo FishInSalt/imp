@@ -1636,6 +1636,53 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("M11 #6 (review P1): a '!'-leading md body queued mid-run flushes as a MODEL turn — never as a shell command", async () => {
+		const extras = [
+			{
+				command: {
+					name: "boom",
+					summary: "dangerous-looking body",
+					allowedDuringRun: true,
+					run: (_args: string, ctx: { submitPrompt: (t: string) => void }): "handled" => {
+						ctx.submitPrompt("!double-check the flaky test");
+						return "handled";
+					},
+				},
+				source: "md:project",
+			},
+		];
+		let releaseTurn: () => void = () => {};
+		const gated = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		const env = await startTuiRepl(
+			[() => gated.then(() => reply("first done")), reply("second turn reply")],
+			{
+				commands: extras as never,
+			},
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
+		env.terminal.data("/boom\r"); // queued behind the gated turn
+		await waitUntil(() => env.terminal.frameSince(0).includes("1 queued"), 8000);
+		releaseTurn();
+		await waitUntil(() => env.terminal.frameSince(0).includes("second turn reply"), 8000);
+		// the queued body reached the MODEL, and the bang path never fired
+		expect(
+			env.requests[1]?.messages.some(
+				(m) => m.role === "user" && m.content === "!double-check the flaky test",
+			),
+		).toBe(true);
+		const stream = env.transcript.completedLines().join("\n");
+		// the user echo (`> !double-check…`) is expected — the BANG echo
+		// (`! double-check…`, the runBangCommand note) must never appear
+		expect(stream).not.toMatch(/^! double-check/m);
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
 	it("M11 #6: a markdown quick command spends a real turn with the rendered prompt", async () => {
 		const extras = [
 			{
@@ -1714,9 +1761,18 @@ describe("runRepl with shell:tui", () => {
 		expect(filtered).toContain("login bug"); // both login rows match
 		expect(filtered).not.toContain("parser"); // the non-match is gone
 		expect(filtered).toContain("filter: log");
-		terminal.data("\x1b[B"); // down — to the SECOND match (cccc3333)
-		terminal.data("\r");
-		await expect(pick).resolves.toBe(2); // ORIGINAL index, not the filtered one
+		terminal.data("\x7f"); // backspace: query "lo" — still filtered
+		terminal.data("\x7f"); // backspace: query "l"
+		await settle();
+		terminal.data("\x7f"); // backspace: query "" — full list restored
+		await settle();
+		const mark = terminal.writes.length;
+		terminal.data("z"); // no match
+		terminal.data("z");
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("No matching"); // the empty state
+		terminal.data("\x1b"); // Esc cancels the picker entirely
+		await expect(pick).resolves.toBe(null);
 		shell.close();
 	});
 

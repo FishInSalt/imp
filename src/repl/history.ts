@@ -10,7 +10,7 @@
  * best-effort and silent. A broken or unwritable store must never take the
  * REPL down with it.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** Compact the file once it passes 2× the recall horizon, keeping the newest half. */
@@ -54,14 +54,15 @@ export function appendInputHistory(path: string, text: string): void {
 		mkdirSync(dirname(path), { recursive: true });
 		const existing = loadInputHistory(path, MAX_LINES);
 		if (existing[existing.length - 1] === text) return; // consecutive duplicate
-		const kept = [...existing, text];
-		const body = kept
-			.slice(-MAX_LINES)
-			.map((l) => JSON.stringify(l))
-			.join("\n");
-		// Rewrite-on-append keeps compaction and writing in one place; the file
-		// is bounded by MAX_LINES so this stays a small constant at input rates.
-		writeFileSync(path, `${body}\n`);
+		// Fast path: a single append — the concurrent-session race window is
+		// one line, not the whole file (review P2; trust.json's lock remains
+		// the stricter precedent for data that must not lose records).
+		if (existing.length < MAX_LINES) {
+			appendFileSync(path, `${JSON.stringify(text)}\n`);
+			return;
+		}
+		const kept = [...existing, text].slice(-MAX_LINES);
+		writeFileSync(path, `${kept.map((l) => JSON.stringify(l)).join("\n")}\n`);
 	} catch {
 		// unwritable home, disk full — recall for this session still works
 	}

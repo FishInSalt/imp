@@ -88,7 +88,8 @@ function autocompleteCommands(
 	];
 }
 /** TUI queue-line preview (LineInput.setQueue): cap at ~40 columns. */
-function queuePreview(text: string): string {
+function queuePreview(entry: string | { prompt: string }): string {
+	const text = typeof entry === "string" ? entry : entry.prompt;
 	return text.length > 40 ? `${text.slice(0, 40)}…` : text;
 }
 
@@ -181,7 +182,11 @@ interface ReplMachineOptions {
  */
 class ReplMachine {
 	private state: ReplState = "idle";
-	private queue: string[] = [];
+	/** Queued input. A plain string is a TYPED line — the flush re-applies
+	 *  bang/command routing on it. An { prompt } entry is markdown-command
+	 *  content (M11 #6): model input verbatim, never re-interpreted (a body
+	 *  starting with "!" must not run as a shell command — review P1). */
+	private queue: Array<string | { prompt: string }> = [];
 	private controller: AbortController | null = null;
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
@@ -271,7 +276,7 @@ class ReplMachine {
 			void this.submitTurn(trimmed);
 			return;
 		}
-		this.queue.push(trimmed);
+		this.queue.push({ prompt: trimmed });
 		if (this.interactive && this.input.setQueue === undefined) {
 			this.renderer.note(`▪ queued: ${shorten(trimmed)}`);
 		}
@@ -445,10 +450,13 @@ class ReplMachine {
 		// "! cmd" entries are shell directives, never model content: hold them
 		// in place (the post-run flush executes them) and steer the next plain
 		// line — with no bang lines queued this is exactly the old head-pop.
-		const index = this.queue.findIndex((entry) => !isBangLine(entry));
+		// Only TYPED lines steer (md prompts flush after the run by design);
+		// bang entries hold for the flush.
+		const index = this.queue.findIndex((entry) => typeof entry === "string" && !isBangLine(entry));
 		if (index === -1) return [];
-		const [next] = this.queue.splice(index, 1);
-		if (next === undefined) return []; // unreachable (index !== -1); type guard
+		const picked = this.queue.splice(index, 1)[0];
+		if (picked === undefined || typeof picked !== "string") return []; // unreachable; type guard
+		const next = picked;
 		this.renderer.note(`▪ steering: ${shorten(next)}`);
 		this.syncQueue();
 		return [{ role: "user", content: next }];
@@ -554,16 +562,19 @@ class ReplMachine {
 		// TUI: the echoed `> line` (Renderer.user) says this already; the note
 		// would double it (dogfood 2026-09-09). Legacy keeps the note.
 		if (this.input.setQueue === undefined) {
-			this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+			this.renderer.note(
+				`▪ continuing with queued: ${shorten(typeof next === "string" ? next : next.prompt)}`,
+			);
 		}
 		this.syncQueue();
 		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
-		// the shell, it does not open a model turn.
-		if (isBangLine(next)) {
+		// the shell, it does not open a model turn. An { prompt } entry is md
+		// content: straight to a turn, no re-interpretation (review P1).
+		if (typeof next === "string" && isBangLine(next)) {
 			await this.runBangCommand(next.slice(1).trim());
 			return;
 		}
-		await this.submitTurn(next);
+		await this.submitTurn(typeof next === "string" ? next : next.prompt);
 	}
 
 	/** "! cmd" (M10): run a shell command directly through the bash tool — no

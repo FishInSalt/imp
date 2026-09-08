@@ -214,6 +214,7 @@ describe("slash commands", () => {
 				"  while a picker is open:",
 				"    ↑/↓              move the selection",
 				"    Enter            pick · Esc or Ctrl+C cancels (no interrupt)",
+				"    typing           filters the list (/resume — Enter picks the original row)",
 				"",
 				"Lines typed while imp is working are queued and injected when the current turn ends.",
 			].join("\n"),
@@ -512,6 +513,29 @@ describe("markdown quick commands through dispatch (M11 #6)", () => {
 		await dispatchCommand("/help", helpEnv.ctx, extras);
 		expect(helpEnv.output()).toContain("/review");
 		expect(helpEnv.output()).toContain("Review the current diff");
+	});
+});
+
+describe("md commands during a run (review)", () => {
+	it("allowedDuringRun:false is rejected mid-run with the standard teaching line — same as extension commands", async () => {
+		const env = await makeEnv({ active: true });
+		const extras = [
+			{
+				command: {
+					name: "review",
+					summary: "review",
+					allowedDuringRun: false,
+					run: (args: string, ctx: { submitPrompt: (t: string) => void }): "handled" => {
+						ctx.submitPrompt(args);
+						return "handled";
+					},
+				},
+				source: "md:project",
+			},
+		];
+		await dispatchCommand("/review now", env.ctx, extras);
+		expect(env.submitted).toEqual([]); // never ran
+		expect(env.output()).toMatch(/waits for the running turn/); // the standard teaching line
 	});
 });
 

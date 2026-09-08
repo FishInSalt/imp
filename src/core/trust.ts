@@ -204,7 +204,10 @@ export function askTrustOnce(
 export function trustRequiringResources(cwd: string, home: string): string[] {
 	if (isWithin(cwd, home)) return []; // ~ is the user's own installation — never gated
 	const found: string[] = [];
-	for (const rel of [".imp/extensions", ".imp/agents"]) {
+	// ".imp/commands" (M11 #6) is prompt-level, not code — but it talks to
+	// the model, so it gates like the rest (review P1: a commands-only repo
+	// used to slip through the empty-resources early-exit).
+	for (const rel of [".imp/extensions", ".imp/agents", ".imp/commands"]) {
 		const target = join(cwd, rel);
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}

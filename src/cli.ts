@@ -289,7 +289,10 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			cwd: process.cwd(),
 			home: homedir(),
 			projectAllowed: projectTrusted,
-			reserved: new Set(COMMANDS.map((c) => c.name)),
+			reserved: new Set([
+				...COMMANDS.map((c) => c.name),
+				...extensions.runtime.commands.map((e) => e.command.name), // no silent shadowing (review)
+			]),
 			onDiagnostic: (line) => renderer.error(line),
 		});
 		commands = [...extensions.runtime.commands, ...md.commands];

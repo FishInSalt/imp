@@ -26,7 +26,10 @@ export interface CommandContext {
 	replay(session: SessionStore): number;
 	/** Submit a prompt as if typed — used by markdown quick commands (M11 #6).
 	 *  Idle starts a turn; a running turn queues it. Wired by repl.ts; test
-	 *  environments inject a recorder. */
+	 *  environments inject a recorder. Injection-surface note (review): the
+	 *  full ctx is handed to EVERY command run() — extension commands can
+	 *  call this too; extensions are arbitrary code by contract, so this
+	 *  adds no new capability, only a documented one. */
 	submitPrompt(text: string): void;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
@@ -77,6 +80,7 @@ Keys:
   while a picker is open:
     ↑/↓              move the selection
     Enter            pick · Esc or Ctrl+C cancels (no interrupt)
+    typing           filters the list (/resume — Enter picks the original row)
 `;
 
 /** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */

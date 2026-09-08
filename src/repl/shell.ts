@@ -1,3 +1,4 @@
+import { dim } from "../format.js";
 import {
 	Container,
 	Editor,
@@ -43,7 +44,9 @@ export function tuiEditorTheme(): EditorTheme {
  *   ├─ transcript (TranscriptSink — the Renderer's output, hosted)
  *   ├─ ask line   ([y/N] question while one is pending; hidden otherwise)
  *   ├─ marker     ("> " idle / "+ " active)
- *   └─ editor     (always last; focused)
+ *   ├─ editor     (focused)
+ *   └─ footer     (dim status line: model · session · cumulative tokens;
+ *                 pushed by the machine, pi places it below the editor too)
  *
  * Semantics are the readline shell's, byte-for-byte where bytes are visible:
  * the ask FIFO (lines answer pending questions first; Ctrl+C declines;
@@ -68,6 +71,7 @@ export class TuiShell implements LineInput {
 	private editor: Editor | null = null;
 	private askContainer = new Container();
 	private marker: Text | null = null;
+	private footer: Text | null = null;
 	private history: string[] = [];
 	private closed = false;
 	/** Terminal restore ran (close's deferred stop or the process-exit hook). */
@@ -101,6 +105,9 @@ export class TuiShell implements LineInput {
 		tui.addChild(this.askContainer);
 		tui.addChild(marker);
 		tui.addChild(editorBox);
+		const footer = new Text("");
+		this.footer = footer;
+		tui.addChild(footer); // status line below the editor (pi's placement)
 		tui.setFocus(editor);
 		tui.start();
 
@@ -169,6 +176,14 @@ export class TuiShell implements LineInput {
 	}
 
 	refresh(): void {
+		this.tui?.requestRender();
+	}
+
+	/** Bottom status line; empty string keeps the reserved row blank. */
+	setFooter(text: string): void {
+		// The TUI owns a real terminal, so ANSI is unconditional; dim keeps
+		// the status visually quiet under the editor.
+		this.footer?.setText(text === "" ? "" : dim(text, true));
 		this.tui?.requestRender();
 	}
 

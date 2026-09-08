@@ -23,6 +23,9 @@ export interface LineInput {
 	ask(question: string): Promise<boolean>;
 	/** History so far (newest first). Interactive only. */
 	getHistory(): readonly string[];
+	/** TUI shell only: persistent bottom status line (model · session ·
+	 *  cumulative tokens). The legacy shell has no such line and ignores it. */
+	setFooter?(text: string): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }

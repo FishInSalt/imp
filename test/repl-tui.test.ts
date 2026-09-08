@@ -503,6 +503,35 @@ describe("resolveShell", () => {
 	});
 });
 
+// ── footer: the bottom status line ───────────────────────────────────────
+
+describe("TuiShell footer", () => {
+	it("setFooter paints a dim status line below the editor and updates in place", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setFooter("glm-5.3 · abc12345 · ↑1.2k ↓567");
+		await settle(); // natural repaint — no forceRender
+		expect(terminal.frameSince(0)).toContain("glm-5.3 · abc12345 · ↑1.2k ↓567");
+		shell.setFooter("switched-model · abc12345");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("switched-model · abc12345");
+		shell.close();
+	});
+
+	it('setFooter("") blanks the row without breaking the layout', async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setFooter("something");
+		shell.setFooter("");
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("something");
+		expect(terminal.frameSince(0)).toContain("> "); // editor intact
+		shell.close();
+	});
+});
+
 // ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
 
 describe("runRepl with shell:tui", () => {
@@ -595,6 +624,9 @@ describe("runRepl with shell:tui", () => {
 		expect(env.requests[0]?.messages.at(-1)).toMatchObject({ role: "user", content: "hi" });
 		expect(env.transcript.completedLines().join("\n")).toContain("hello from the model");
 		expect(env.terminal.frameSince(0)).toContain("> "); // idle again after
+		// Footer: model + session id8 at startup, cumulative tokens after the run
+		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
+		expect(env.terminal.frameSince(0)).toContain("↑10 ↓5");
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);

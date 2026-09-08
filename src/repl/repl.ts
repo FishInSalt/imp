@@ -4,7 +4,7 @@ import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
-import { VERSION } from "../format.js";
+import { formatTokens, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { Terminal } from "../tui.js";
@@ -131,6 +131,7 @@ class ReplMachine {
 		this.replay = options.replay;
 		this.exit = options.exit;
 		this.finish = options.finish;
+		this.refreshFooter(); // eager warmup already knows model + session
 	}
 
 	handleLine(line: string): void {
@@ -238,6 +239,7 @@ class ReplMachine {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
 			}
+			this.refreshFooter(); // /model, /new, /resume all change footer inputs
 		}
 	}
 
@@ -270,6 +272,23 @@ class ReplMachine {
 		return [{ role: "user", content: next }];
 	}
 
+	/** Bottom status line for the TUI shell (the legacy shell ignores it):
+	 *  model · session id8 · cumulative tokens. Pushed at every point any
+	 *  input changes — construction, command dispatch (/model, /new,
+	 *  /resume), and both run settle paths (session totals move). */
+	private refreshFooter(): void {
+		const parts: string[] = [this.runner.model];
+		const session = this.runner.session;
+		if (session !== null) {
+			parts.push(session.header.id.slice(0, 8));
+			const stats = session.stats();
+			if (stats.inputTokens > 0 || stats.outputTokens > 0) {
+				parts.push(`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`);
+			}
+		}
+		this.input.setFooter?.(parts.join(" · "));
+	}
+
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {
 		this.controller = null;
 		this.interruptCount = 0;
@@ -277,6 +296,7 @@ class ReplMachine {
 		this.renderer.endRun();
 		this.runner.printRunStats(result);
 		this.runner.printSessionStats();
+		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {
 			// the user pressed Ctrl+C to take control — queued lines are not run
 			this.discardQueue();
@@ -291,6 +311,7 @@ class ReplMachine {
 		this.interruptCount = 0;
 		if (this.state === "exited") return;
 		this.renderer.endRun();
+		this.refreshFooter(); // partial usage may have landed before the failure
 		// Defensive: an AbortError racing the settle path is a user interrupt,
 		// not a provider failure (the provider should already have ended the
 		// stream cleanly — see abortSafe in anthropic.ts).

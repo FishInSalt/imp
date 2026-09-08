@@ -335,6 +335,8 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 接受不修（cosmetic）：bang 的 `(exit N)` 剥离可被 stdout 尾部伪造（构造苛刻、纯显示误标）
   - **教训入账**：名字级损坏只有类型检查能抓（擦除式转译+无类型 linter 双盲）；并行代理的测试也要进类型检查面
 
+- **M10 dogfood 修复（2026-09-09，514 tests）**：用户实测报两处——①**提交的提示词不回显**（TUI 编辑器清行后转录区只剩回答，print 模式靠 readline 终端回显所以没人发现）→ `Renderer.user()`（每物理行一个 `> ` 前缀）+ `submitTurn` 在 `setFooter !== undefined`（TUI 门）下调用，flushQueue 走同一路径故排队转正也回显；②**每回合双行统计噪声**（run 行 + session cumulative 行，而 footer 已带 cumulative）→ `printSessionStats` 改 print-only（`setFooter === undefined` 门），TUI 只留一行 turn 统计——与 CC 的单行 turn status 对齐。print 字节零变化（两处均门控）。教训：**回显类体验没有 e2e 钉子就等于不存在**——此前 512 个测试没有一个断言"问题行可见"；本次补 render 单测 + TUI e2e 双钉
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

@@ -101,6 +101,17 @@ export class Renderer {
 		this.write(`${dim(text, this.options.ansi)}\n`);
 	}
 
+	/** Submitted user prompt echo (`> …`, one `> ` per physical line).
+	 *  Only the TUI calls this: its editor clears the line on submit, so the
+	 *  transcript must gain it — print mode relies on the terminal's own
+	 *  readline echo and its byte contract stays frozen. */
+	user(text: string): void {
+		this.stopSpinner();
+		this.flushMarkdown();
+		this.ensureNewline();
+		for (const line of text.split("\n")) this.write(`> ${line}\n`);
+	}
+
 	/** Red error line. Starts on a fresh line when streaming left one open. */
 	error(text: string): void {
 		this.stopSpinner();

@@ -361,6 +361,18 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **接受不修（记录）**：历史文件与 trust.json 的锁纪律不对齐（best-effort 声明在案）；scripted REPL 也加载 md 命令（与扩展命令行为一致，非契约破坏）
   - **补钉**：!-前缀排队转正 e2e（模型收到原文+无 bang echo）；过滤退格清空/无匹配/Esc 取消；md allowedDuringRun:false 中途拒绝；commands-only 信任门；BOM/大写/扩展名冲突单测——共 550→556
 
+- **已声明设计债全量清偿（2026-09-09，565 tests，feat/debt-clearance）**：范围=A 折叠三债 + B 交互四债 + C 健壮性两项 + D 测试面两项 + #16；E（M10 出局项）与 #5/#10（需产品决策）不动
+  - **A1**：Ctrl+O 改展开/收起**全部**折叠（v1 只切最新——回合中间结果永不可达）；Fold 增 isExpanded/setExpanded，HELP_KEYS 同步
+  - **A2**：错误结果也折叠（红箭头红标题，FOLD_LINE_CAP 封顶；`● tool ✗` 行保住醒目度，红 `⎿` 预览行在 foldedResults 下取消——print/legacy 字节不变仍走 `⎿`）
+  - **A3**：`TranscriptSink.clear()` + `foldContainer.clear()`；/new 先清屏再落 note（顺序反了 note 会被清掉）；/resume 回放前清屏（原先旧会话内容+回放追加混排）；输入历史不清（是用户自己的召回）
+  - **B4**：**trust 首跑对话框 TUI 化**——`src/repl/trust-ask.ts` 一次性询问壳（start→select→close，同一 TranscriptSink），三选项 Yes/No/session-only，Esc=掉线拒绝（不记录）；legacy/print 路径字节不变；`TrustAskAnswer` 三态映射既有记录规则（session-only 新增：本会话加载不记录）
+  - **B5**：Esc 双重消费边角修复——pi-tui Editor 有 `isShowingAutocomplete()`（此前无 API），补全面板开着时首 Esc 只关面板不打断
+  - **B6**：bang `(exit N)` 伪造修复——`ToolExecuteResult.exitCode?` 结构化字段（bash 填充），注释只信结构化值、剥离只匹配真实 code；伪造行降级为普通内容
+  - **B7**：`summarizeResult` (+N) 只数内容行（空行/Exit code 行不再膨胀计数；段头保留——展开时真实可见）
+  - **C**：history 追加包进 trust.json 式文件锁（压缩重写的读-改-写竞态）；README 新增 md 快捷命令章节（含 scripted 模式规则）
+  - **D**：`frameSince` 写边界加固（跨帧粘连假阳性）；IME 组合窗口假设写进 README known limits；#16 resize 回归钉子（FakeTerminal 模拟 SIGWINCH，宽折叠重截断）
+  - **踩坑**：scripted provider 测试要喂助手消息流而非裸 tool_end；pty 里 /tmp 解析为 /private/tmp；帮助文案改 HELP_KEYS 需同步 repl-commands 字节钉；closes 时序（note 后清屏=note 消失）——/new 清屏必须在 newSession **之前**
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

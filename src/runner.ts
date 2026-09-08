@@ -128,8 +128,12 @@ export interface Runner {
 	 *  counts (#10 batch 2). */
 	branchTips(): { id: string; label: string; count: number }[];
 	/** Switch to another branch tip — summarizing the left branch into the
-	 *  new one's context unless IMP_BRANCH_SUMMARY=0 (#10 batch 2). */
-	switchSessionBranch(tipId: string): Promise<{ summarized: boolean; messages: number }>;
+	 *  new one's context unless IMP_BRANCH_SUMMARY=0 (#10 batch 2).
+	 *  `summary` reports why the context did or did not gain a frame. */
+	switchSessionBranch(tipId: string): Promise<{
+		summary: "written" | "empty" | "disabled" | "failed";
+		messages: number;
+	}>;
 	printRunStats(result: RunAgentLoopResult): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
@@ -390,33 +394,51 @@ class RunnerImpl implements Runner {
 	 *  summarize the abandoned segment (pi's BranchSummaryEntry) so the new
 	 *  branch keeps the lessons of the left one. Best-effort: a summarizer
 	 *  failure still switches, just without the summary. */
-	async switchSessionBranch(tipId: string): Promise<{ summarized: boolean; messages: number }> {
+	async switchSessionBranch(tipId: string): Promise<{
+		summary: "written" | "empty" | "disabled" | "failed";
+		messages: number;
+	}> {
 		const store = this.sessionStore;
 		if (store === null) throw new SessionNotFoundError("no session to switch (sessions disabled)");
 		const { abandoned } = store.splitBranches(tipId); // BEFORE the switch
 		store.switchBranch(tipId);
-		let summarized = false;
-		if (this.branchSummaryEnabled) {
+		let outcome: "written" | "empty" | "disabled" | "failed" = "disabled";
+		if (!this.branchSummaryEnabled) {
+			// outcome stays "disabled"
+		} else {
 			const messages = abandoned
 				.filter((entry): entry is MessageEntry => entry.type === "message")
 				.map((entry) => entry.message);
-			if (messages.length > 0) {
+			if (messages.length === 0) {
+				outcome = "empty"; // forked, never wrote, switched back — nothing to summarize
+			} else {
 				try {
 					const summary = await summarizeBranchSegment({
 						messages,
 						provider: this.provider,
 						model: this.model,
 					});
+					// Identity guard (review P1-1 defense-in-depth): if the live
+					// session was swapped while we awaited, the append and the
+					// history reload belong to whoever swapped it — not us.
+					if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
 					store.appendBranchSummary(summary);
-					summarized = true;
-				} catch {
-					// fall through: switch without the summary
+					outcome = "written";
+				} catch (err) {
+					// best-effort by contract — but never silently: the run log
+					// carries the reason (review P2-2)
+					this.logger.log("run_error", {
+						source: "branch-summary",
+						message: err instanceof Error ? err.message : String(err),
+					});
+					outcome = "failed";
 				}
 			}
 		}
+		if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages);
-		return { summarized, messages: this.history.length };
+		return { summary: outcome, messages: this.history.length };
 	}
 
 	resumeSession(id: string): { id8: string; messages: number } {

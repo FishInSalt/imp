@@ -395,6 +395,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **踩坑**：①多脚本 python 编辑中一段结果误写临时文件未回源文件（/tree 命令"消失"但测试全绿=金样没破——测试全绿≠功能落地，功能性新增必须金样先行红后绿）；②测试方向性错误（摘要在被离开侧，测试却断言目标侧）——语义断言先想清楚"谁被弃"；③TS 的 AgentMessage 联合类型上 .content 需 UserMessage 谓词收敛
   - **审查计划**：与批次 1 合并发两路对抗审查（存储语义+命令生命周期交互面）
 
+- **#10 会话树两批对抗审查闭环（2026-09-09，590 tests，fix/tree-review）**：两路（存储语义/不变量 + 命令生命周期/交互）。命令路 BLOCK（2 P1）、存储路 OK-with-notes（4 P2）——其中"写位置不落盘"两路都发现（定级 P1/P2 分歧，按 P1 处理）。全部核修：
+  - **P1-1 摘要窗口裸奔**：`/tree` 的 5-20s summarize await 期间状态机保持 idle——窗口内打字会**对陈旧 history 直接开回合**（更糟于进队列）；`/new`//resume` 可令 runner.session 与 runner.history 指向不同会话（await 返回后无条件重载把新会话 history 覆盖成旧分支）。修复：runCommand 把 tree 与 compact 同等置 "compacting" 态（setActive+isActive 拒并发命令+finally flushQueue）+ runner 侧 await 返回后 `sessionStore === store` 属主守卫（纵深防御）。e2e 钉：窗口内输入进队列（无第 5 请求）、/new 被拒、释放后队列行 flush 成新分支上的真实回合；真机复现 "1 queued · next: …"
+  - **P1-2 写位置不落盘**：fork/switch 只改内存 leafId，重启 open() 取文件末行=被弃分支；fork 后未写即退出→fork 彻底不可见（note 却承诺 "/tree switches back"）。修复：文件级 position 标记行（`{"type":"position","leafId"}`，**非树节点**）；重开规则=末位树 entry 优先于更早的 position（追加自带 leaf），position 仅在无后续追加时生效——fork/switch/切回后追加全部语义自洽；损坏 id 忽略回退末 entry；torn 末行（恰是 position）天然安全。钉子：fork-无写-重启 leaf 受位+弃枝可列、append 后 entry 胜出、null leaf、corrupt id
+  - **P2×4**：/tree 前置进度 note "▪ switching branches…"（原来 20s 死空气+Ctrl+C 提示误导退出——退出恰好踩 P1-2）；摘要结果四态（written/empty/disabled/failed）note 精确化+catch 落 run_log（原先 disabled 与 failed 同句不可诊断；空弃段曾谎报 failed）；getBranch/SUMMARY_MARK 契约注释归位×2（M10 同类踩坑再现）；tip label 改 firstLine（首行空白的多行消息曾出空标签）
+  - **F4 补钉**：branchSummary 落在 compaction 之后的 else 分支（帧序 SUMMARY→retainedTail→BRANCH→后续）此前零覆盖
+  - **接受（记录）**：巨大弃段摘要请求无总量截断（serialize 只截单条）——超窗报错被 catch 降级为无摘要切换，best-effort 声明内；switchBranch 第三重校验为防御性死代码；"N messages here" 含摘要帧（与 /resume 同口径）
+  - 踩坑：测试期望两次写错语义方向（fork 后未写的分支无 tip；重启后 otherBranchTips 为空）——**树操作的期望值要沿叶子存在性推演**，不能凭直觉
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

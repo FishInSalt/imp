@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { firstLine } from "../../format.js";
 import type { AgentMessage, Usage } from "../messages.js";
 
 /**
@@ -17,6 +18,12 @@ import type { AgentMessage, Usage } from "../messages.js";
  *    "summary":<text>,"retainedTail":[...],"tokensBefore":<n>}
  *   {"type":"branchSummary","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
  *    "summary":<text>}   #10: written when /tree switches away from a branch
+ *   {"type":"position","leafId":<id|null>}   #10 review: a file-level marker
+ *    (NOT a tree node) recording the write position when /fork or /tree
+ *    moved it without appending — otherwise a restart landed on the file's
+ *    last line, i.e. the ABANDONED branch. Reopen rule: the last tree ENTRY
+ *    wins over any earlier position (appends imply their own leaf); a
+ *    position only wins when nothing was appended after it.
  */
 
 export interface SessionHeader {
@@ -180,9 +187,26 @@ export class SessionStore {
 		}
 
 		const entries: SessionEntry[] = [];
+		let lastEntryIndex = -1;
+		let lastPosition: { leafId: string | null; index: number } | null = null;
 		for (let i = 1; i < lines.length; i++) {
+			const raw = lines[i] as string;
+			// Position markers are file-level metadata, not tree nodes (#10
+			// review P1-2): recognize them before entry parsing.
 			try {
-				entries.push(parseEntryLine(lines[i] as string, i + 1));
+				const probe = JSON.parse(raw) as { type?: unknown; leafId?: unknown };
+				if (probe.type === "position") {
+					if (probe.leafId === null || typeof probe.leafId === "string") {
+						lastPosition = { leafId: probe.leafId, index: i };
+					}
+					continue;
+				}
+			} catch {
+				// fall through to parseEntryLine for the canonical error report
+			}
+			try {
+				entries.push(parseEntryLine(raw, i + 1));
+				lastEntryIndex = i;
 			} catch (err) {
 				// A torn FINAL line (crash mid-append) must not hide the whole session;
 				// interior corruption is still fatal — something is structurally wrong.
@@ -193,7 +217,16 @@ export class SessionStore {
 				throw err;
 			}
 		}
-		return new SessionStore(filePath, header, entries);
+		const store = new SessionStore(filePath, header, entries);
+		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
+		// position implies its own leaf; otherwise the position records where
+		// /fork or /tree moved the write head. An id that no longer resolves
+		// (corrupt edit) is ignored — the last entry is the safe fallback.
+		if (lastPosition !== null && lastPosition.index > lastEntryIndex) {
+			const leafId = lastPosition.leafId;
+			if (leafId === null || store.byId.has(leafId)) store.leafId = leafId;
+		}
+		return store;
 	}
 
 	private append(entry: SessionEntry): void {
@@ -253,7 +286,6 @@ export class SessionStore {
 		return entry.id;
 	}
 
-	/** Entries from root to the given leaf (default: current leaf). */
 	/** User-message fork points on the CURRENT branch, oldest → newest
 	 *  (#10 batch 1): /fork's picker and /fork <n> both index this list. The
 	 *  latest user message is included — forking before it re-does the last
@@ -284,6 +316,7 @@ export class SessionStore {
 		}
 		const before = this.getBranch().filter((entry) => entry.type === "message").length;
 		this.leafId = target.parentId; // null targets the very first message → empty branch
+		this.persistPosition(); // review P1-2: the move must survive a restart
 		const retained = this.getBranch().filter((entry) => entry.type === "message").length;
 		return { retained, abandoned: before - retained };
 	}
@@ -302,10 +335,10 @@ export class SessionStore {
 				(e): e is MessageEntry => e.type === "message" && e.message.role === "user",
 			);
 			const first = firstUser?.message;
+			// firstLine: a multi-line message can start with a blank (shift+enter)
+			// — the label must preview actual content (review F3).
 			const label =
-				first !== undefined && first.role === "user"
-					? (first.content.split("\n")[0] ?? "")
-					: "(no user message)";
+				first !== undefined && first.role === "user" ? firstLine(first.content) : "(no user message)";
 			tips.push({
 				id: entry.id,
 				label,
@@ -339,6 +372,19 @@ export class SessionStore {
 			throw new SessionError(`branch tip ${tipId} is on the current branch`);
 		}
 		this.leafId = tipId;
+		this.persistPosition(); // review P1-2: the move must survive a restart
+	}
+
+	/** Append the file-level position marker (#10 review P1-2). Best-effort:
+	 *  an unwritable file keeps the move in memory for this session. */
+	private persistPosition(): void {
+		try {
+			appendFileSync(this.filePath, `${JSON.stringify({ type: "position", leafId: this.leafId })}\n`, {
+				encoding: "utf8",
+			});
+		} catch {
+			// position is an optimization for restarts, not a correctness gate
+		}
 	}
 
 	/** Children index for tip detection (rebuilt per call — branch counts
@@ -361,6 +407,7 @@ export class SessionStore {
 		return entry.id;
 	}
 
+	/** Entries from root to the given leaf (default: current leaf). */
 	getBranch(leafId?: string | null): SessionEntry[] {
 		const target = leafId === undefined ? this.leafId : leafId;
 		if (target === null) return [];
@@ -451,8 +498,9 @@ export class SessionStore {
 	}
 }
 
-/** Marker prefix identifying the framed summary message below (replay.ts
- *  matches on this — keep it exported so the two cannot drift silently). */
+/** Marker prefix identifying the framed BRANCH summary message below
+ *  (replay.ts matches on this — keep it exported so the two cannot drift
+ *  silently). */
 export const BRANCH_MARK = "[Branch summary —";
 
 /** #10: a branch summary as the model sees it — a framed user message, the
@@ -465,6 +513,8 @@ export function branchSummaryToMessage(summary: string): AgentMessage {
 	};
 }
 
+/** Marker prefix identifying the framed COMPACTON summary message
+ *  (replay.ts matches on this — same anti-drift contract as BRANCH_MARK). */
 export const SUMMARY_MARK = "[Conversation summary —";
 
 /** The summary is replayed into context as a framed user message. */

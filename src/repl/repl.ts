@@ -7,11 +7,19 @@ import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
+import type { Terminal } from "../tui.js";
+import { resolveShell } from "../tui.js";
 import type { CommandContext } from "./commands.js";
 import { dispatchCommand, parseCommand } from "./commands.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
+import type { LineInput } from "./line-input.js";
 import { replaySession } from "./replay.js";
+import { TuiShell } from "./shell.js";
+import type { TranscriptSink } from "./transcript.js";
+
+/** Interactive presentation shell. "legacy" is the pre-M9 readline path. */
+export type ReplShell = "tui" | "legacy";
 
 export interface ReplOptions {
 	runner: Runner;
@@ -22,6 +30,14 @@ export interface ReplOptions {
 	output?: ReplOutput; // default process.stdout
 	interactive?: boolean; // default: stdin && stdout TTY
 	exit?: (code: number) => never; // default process.exit; injected in tests
+	/** Presentation shell for interactive mode. Default: resolveShell()
+	 *  (IMP_REPL=legacy escape hatch); non-interactive is always "legacy". */
+	shell?: ReplShell;
+	/** Required with shell "tui": the sink the Renderer feeds (cli.ts owns it
+	 *  because the Renderer is constructed before runRepl). */
+	transcript?: TranscriptSink;
+	/** Test seam: inject a fake Terminal for the TUI shell. */
+	terminal?: Terminal;
 	/** Interactive confirm host for extension gates (api.confirm): created by
 	 *  cli.ts before extension loading (which precedes this call) and bound
 	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
@@ -73,7 +89,7 @@ interface ReplMachineOptions {
 	/** Extension commands (M4b): forwarded to dispatchCommand at the single dispatch site. */
 	commands: readonly RegisteredExtensionCommand[];
 	renderer: Renderer;
-	input: ReplInput;
+	input: LineInput;
 	interactive: boolean;
 	/** Replay a session on screen (shared by the startup banner and /resume). */
 	replay: (session: SessionStore) => number;
@@ -100,7 +116,7 @@ class ReplMachine {
 	private readonly runner: Runner;
 	private readonly commands: readonly RegisteredExtensionCommand[];
 	private readonly renderer: Renderer;
-	private readonly input: ReplInput;
+	private readonly input: LineInput;
 	private readonly interactive: boolean;
 	private readonly replay: (session: SessionStore) => number;
 	private readonly exit: (code: number) => never;
@@ -403,9 +419,25 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		options.interactive ?? ((stdin as { isTTY?: boolean }).isTTY === true && output.isTTY === true);
 	const runner = options.runner;
 	const renderer = runner.renderer; // one renderer, one newline state, shared with the runner
+	const shell: ReplShell = options.shell ?? resolveShell();
+	const useTui = interactive && shell === "tui";
+	const transcript = options.transcript;
+	if (useTui && transcript === undefined) {
+		// The Renderer is built before runRepl (cli.ts) and must already feed
+		// this exact sink — arriving without one is a wiring bug, not a mode.
+		throw new Error(
+			'runRepl: shell "tui" requires the transcript the Renderer feeds (ReplOptions.transcript)',
+		);
+	}
+	// Narrowed once for every later use (guards don't carry into closures).
+	const tuiSink: TranscriptSink | null = useTui && transcript !== undefined ? transcript : null;
 	const replay = (session: SessionStore): number =>
 		replaySession(
-			{ write: (text) => output.write(text), ansi: output.isTTY === true, markdown: true },
+			{
+				write: tuiSink ? tuiSink.feed : (text) => output.write(text),
+				ansi: tuiSink !== null || output.isTTY === true,
+				markdown: true,
+			},
 			session,
 		);
 
@@ -422,14 +454,23 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	};
 
 	let machine: ReplMachine;
-	const input = new ReplInput({
-		input: stdin,
-		output,
-		interactive,
-		onLine: (line) => machine.handleLine(line),
-		onInterrupt: () => machine.handleInterrupt(),
-		onEof: () => machine.handleEof(),
-	});
+	const input: LineInput =
+		tuiSink !== null
+			? new TuiShell({
+					onLine: (line) => machine.handleLine(line),
+					onInterrupt: () => machine.handleInterrupt(),
+					onEof: () => machine.handleEof(),
+					transcript: tuiSink,
+					terminal: options.terminal,
+				})
+			: new ReplInput({
+					input: stdin,
+					output,
+					interactive,
+					onLine: (line) => machine.handleLine(line),
+					onInterrupt: () => machine.handleInterrupt(),
+					onEof: () => machine.handleEof(),
+				});
 	machine = new ReplMachine({
 		runner,
 		commands: options.commands ?? [],

@@ -126,6 +126,76 @@ describe("SessionStore", () => {
 		expect(() => reopened.stats()).toThrow(/broken parentId chain/);
 	});
 
+	it("forkBefore: the leaf moves, appends grow a NEW branch, the old tail stays on disk (#10)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("first question"));
+		store.appendMessage(assistantText("first answer"));
+		const u2 = store.appendMessage(user("second question"));
+		store.appendMessage(assistantText("second answer"));
+		// fork before "second question": 2 kept, 2 abandoned
+		const { retained, abandoned } = store.forkBefore(u2);
+		expect(retained).toBe(2);
+		expect(abandoned).toBe(2);
+		// new appends grow the sibling branch — the old tail is off-path
+		store.appendMessage(user("a different second question"));
+		const onBranch = store
+			.getBranch()
+			.map((e) => (e.type === "message" && e.message.role === "user" ? e.message.content : ""));
+		expect(onBranch.join("|")).toContain("a different second");
+		expect(onBranch.join("|")).not.toContain("second answer");
+		// the abandoned entries are still in the FILE (append-only tree)
+		const raw = readFileSync(store.filePath, "utf8");
+		expect(raw).toContain("second answer");
+		// stats follow the current branch only
+		expect(store.stats().messageCount).toBe(3);
+	});
+
+	it("forkBefore the FIRST user message empties the branch (retained 0) — a legal fresh start", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("first"));
+		store.appendMessage(assistantText("answer"));
+		const { retained, abandoned } = store.forkBefore(u1);
+		expect(retained).toBe(0);
+		expect(abandoned).toBe(2);
+		expect(store.getBranch()).toEqual([]);
+		store.appendMessage(user("clean slate")); // appends at the ROOT
+		expect(store.stats().messageCount).toBe(1);
+	});
+
+	it("forkBefore rejects non-user targets and entries on OTHER branches", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		const a1 = store.appendMessage(assistantText("a1"));
+		const u2 = store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2"));
+		store.forkBefore(u2); // abandon the a2 tail
+		// an assistant entry is not a seam
+		expect(() => store.forkBefore(a1)).toThrow(/not a user message/);
+		// the abandoned branch's entries are reachable in-file but not forkable
+		expect(() => store.forkBefore(u2)).toThrow(/not on the current branch/);
+	});
+
+	it("userForkPoints lists user messages on the CURRENT branch, oldest first", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2"));
+		store.appendMessage(user("q3"));
+		const points = store.userForkPoints();
+		const texts = points.map((e) => (e.message as { role: "user"; content: string }).content);
+		expect(texts).toEqual(["q1", "q2", "q3"]);
+		store.forkBefore(points[1]!.id);
+		const after = store
+			.userForkPoints()
+			.map((e) => (e.message as { role: "user"; content: string }).content);
+		expect(after).toEqual(["q1"]); // the tail is gone from the path
+	});
+
 	it("stats() aggregates assistant usage and turns", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/p");

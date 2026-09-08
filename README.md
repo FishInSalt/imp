@@ -58,7 +58,9 @@ imp            # interactive REPL (streaming, one-line tool status)
   prompt, press twice to exit). `Ctrl+D` exits. The exit line shows how to
   resume: `imp -r <id>`.
 - Slash commands: `/help`, `/exit`, `/new` (fresh session, old one stays on
-  disk), `/sessions` (list saved sessions for this directory),
+  disk), `/fork` (branch the conversation before an earlier message — pick
+  one from the filterable list or `/fork <n>`; the old branch stays in the
+  session file), `/sessions` (list saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
   `/model [id]` (applies from the next turn), `/compact` (summarize
   older context now). Unknown commands get a hint instead of reaching the

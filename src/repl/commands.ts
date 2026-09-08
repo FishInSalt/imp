@@ -206,6 +206,59 @@ export const COMMANDS: readonly SlashCommand[] = [
 		},
 	},
 	{
+		name: "fork",
+		summary: "branch the conversation before an earlier message (the old branch stays)",
+		allowedDuringRun: false,
+		run: async (args, ctx): Promise<CommandOutcome> => {
+			const points = ctx.runner.forkPoints();
+			if (points.length === 0) {
+				ctx.renderer.note("▪ nothing to fork from — no user messages on this branch");
+				return "handled";
+			}
+			const trimmed = args.trim();
+			let entryId: string | undefined;
+			if (/^[1-9]\d*$/.test(trimmed)) {
+				const target = points[Number(trimmed) - 1];
+				if (target === undefined) {
+					ctx.renderer.error(`imp: /fork ${trimmed} — the list runs #1–#${points.length}`);
+					return "handled";
+				}
+				entryId = target.id;
+			} else if (trimmed !== "") {
+				ctx.renderer.error(
+					"imp: /fork takes no text — /fork opens the picker, /fork <n> forks before message #n",
+				);
+				return "handled";
+			} else if (ctx.select !== undefined) {
+				const pick = await ctx.select({
+					title: "Fork before which message? (it is re-typed on the new branch)",
+					items: points.map((p, i) => ({ label: p.preview, description: `#${i + 1}` })),
+					filterable: true,
+				});
+				if (pick === null) return "handled"; // cancelled — the picker closing is its own feedback
+				entryId = points[pick]?.id;
+			} else {
+				// Text fallback (legacy shell / recorders without a picker): the
+				// numbered list IS the picker — /fork <n> executes.
+				ctx.renderer.writeLine(ctx.renderer.dim("fork before which message?"));
+				points.forEach((p, i) => {
+					ctx.renderer.writeLine(ctx.renderer.dim(`  #${i + 1} `) + p.preview);
+				});
+				ctx.renderer.note(`▪ pick with /fork <n> (oldest is #1, newest is #${points.length})`);
+				return "handled";
+			}
+			if (entryId === undefined) return "handled"; // unreachable; type guard
+			const { retained, abandoned, preview } = ctx.runner.forkSessionAt(entryId);
+			ctx.clearView?.(); // the abandoned tail leaves the screen FIRST
+			const session = ctx.runner.session;
+			if (session !== null && retained > 0) ctx.replay(session); // same flow as /resume
+			ctx.renderer.note(
+				`▪ forked before “${preview}” — ${retained} message${retained === 1 ? "" : "s"} kept, ${abandoned} left on the old branch`,
+			);
+			return "handled";
+		},
+	},
+	{
 		name: "sessions",
 		summary: "list saved sessions for this directory",
 		allowedDuringRun: false,

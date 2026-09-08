@@ -25,7 +25,7 @@ import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
-import { formatTokens } from "./format.js";
+import { formatTokens, shorten } from "./format.js";
 import { createAnthropicProvider } from "./provider/anthropic.js";
 import { withLogging } from "./provider/logging.js";
 import type { LLMProvider } from "./provider/types.js";
@@ -117,6 +117,12 @@ export interface Runner {
 	/** `/resume <id>`: swap the live session to a saved one (history reloads;
 	 *  the old session stays on disk untouched). Throws SessionNotFoundError. */
 	resumeSession(id: string): { id8: string; messages: number };
+	/** `/fork` candidates: user messages on the current branch with
+	 *  previews (#10 batch 1). Empty when sessions are disabled. */
+	forkPoints(): { id: string; preview: string }[];
+	/** Branch before a user message: the store's leaf moves, history
+	 *  reloads from the new path (same wiring as resumeSession). */
+	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string };
 	printRunStats(result: RunAgentLoopResult): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
@@ -335,6 +341,32 @@ class RunnerImpl implements Runner {
 		return listSessions(this.options.cwd, this.options.sessionBaseDir);
 	}
 
+	/** `/fork` candidates: user messages on the current branch with previews
+	 *  (#10 batch 1). Empty when sessions are disabled or the branch has no
+	 *  earlier user messages. */
+	forkPoints(): { id: string; preview: string }[] {
+		if (this.sessionStore === null) return [];
+		return this.sessionStore.userForkPoints().map((entry) => ({
+			id: entry.id,
+			preview: shorten(userText(entry.message)),
+		}));
+	}
+
+	/** `/fork <n>` / picker pick: branch before a user message — the store's
+	 *  leaf moves, the in-memory history reloads from the new path (same
+	 *  wiring as resumeSession). The abandoned tail stays on disk. */
+	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string } {
+		const store = this.sessionStore;
+		if (store === null) throw new SessionNotFoundError("no session to fork (sessions disabled)");
+		const target = store.userForkPoints().find((entry) => entry.id === entryId);
+		if (target === undefined) throw new SessionNotFoundError(`fork target ${entryId} not found`);
+		const preview = shorten(userText(target.message));
+		const { retained, abandoned } = store.forkBefore(entryId);
+		this.history.length = 0;
+		this.history.push(...store.buildContext().messages); // same wiring as warmup()/resumeSession()
+		return { retained, abandoned, preview };
+	}
+
 	resumeSession(id: string): { id8: string; messages: number } {
 		// Same matching as --resume: UUID, unique prefix, or file name.
 		const store = resolveSession(this.options.cwd, {
@@ -523,4 +555,12 @@ class RunnerImpl implements Runner {
 	close(): void {
 		this.logger.close();
 	}
+}
+
+/** User-message text for fork previews: plain string, or the joined text
+ *  blocks of a block-content message (steering frames, extensions). */
+function userText(message: AgentMessage): string {
+	// imp's UserMessage.content is always a string (slim format — no block
+	// content on user turns).
+	return message.role === "user" ? message.content : "";
 }

@@ -1683,6 +1683,37 @@ describe("runRepl with shell:tui", () => {
 		shell.close();
 	});
 
+	it("/fork (#10): picker flow — the model's next request excludes the abandoned tail", async () => {
+		const env = await startTuiRepl([reply("first answer"), reply("second answer"), reply("third answer")]);
+		await settle();
+		env.terminal.data("q1 hello\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("first answer"), 8000);
+		env.terminal.data("q2 world\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("second answer"), 8000);
+		env.terminal.data("/fork\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("Fork before which message?"), 8000);
+		env.terminal.data("q2"); // filter narrows to the second message
+		await settle();
+		env.terminal.data("\r"); // fork before "q2 world"
+		await waitUntil(() => env.terminal.frameSince(0).includes("forked before"), 8000);
+		expect(env.terminal.frameSince(0)).toContain("2 messages kept, 2 left on the old branch");
+		// the abandoned tail left the screen — post-fork frames only
+		const forkMark = env.terminal.writes.length;
+		await settle();
+		expect(env.terminal.frameSince(forkMark)).not.toContain("second answer");
+		env.terminal.data("q2 again differently\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("third answer"), 8000);
+		// the provider sees q1 + the NEW question, never the abandoned q2/answer
+		const last = env.requests[env.requests.length - 1];
+		expect(last).toBeDefined();
+		const userTexts = (last?.messages ?? []).filter((m) => m.role === "user").map((m) => m.content);
+		expect(userTexts).toContain("q1 hello");
+		expect(userTexts).toContain("q2 again differently");
+		expect(userTexts).not.toContain("q2 world");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("debt clearance: error results fold too — no red ⎿ line, the ● ✗ line stays, expand works", async () => {
 		const failing: Tool = {
 			name: "bash",

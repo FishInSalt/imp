@@ -189,6 +189,7 @@ describe("slash commands", () => {
 				"  /help              show this help",
 				"  /exit              exit (Ctrl+D works too)",
 				"  /new               start a fresh session (the old one stays on disk)",
+				"  /fork              branch the conversation before an earlier message (the old branch stays)",
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
@@ -370,7 +371,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -589,6 +590,74 @@ describe("/trust (M8)", () => {
 		const outcome = await dispatchCommand("/trust", env.ctx);
 		expect(outcome).toBe("handled");
 		expect(env.output()).toContain("failed to read the trust store");
+	});
+});
+
+describe("/fork (#10 batch 1)", () => {
+	const user = (content: string): AgentMessage => ({ role: "user", content });
+	const seeded = (): AgentMessage[] => [
+		user("fix the login bug"),
+		assistantText("fixed it"),
+		user("also add tests"),
+		assistantText("added"),
+	];
+
+	it("with no picker: numbered list + teaching line; /fork <n> executes", async () => {
+		const env = await makeEnv({ seed: seeded() });
+		await dispatchCommand("/fork", env.ctx);
+		let out = env.output();
+		expect(out).toContain("#1 fix the login bug");
+		expect(out).toContain("#2 also add tests");
+		expect(out).toContain("/fork <n>");
+		await dispatchCommand("/fork 2", env.ctx);
+		out = env.output();
+		expect(out).toContain("forked before “also add tests”");
+		expect(out).toContain("2 messages kept, 2 left on the old branch");
+		expect(env.replayed).toHaveLength(1); // the retained path replayed
+	});
+
+	it("/fork <n> reloads the runner history from the new branch", async () => {
+		const env = await makeEnv({ seed: seeded() });
+		await dispatchCommand("/fork 2", env.ctx);
+		expect(env.runner.history.map((m) => (m.role === "user" ? m.content : ""))).toEqual([
+			"fix the login bug",
+			"",
+		]);
+	});
+
+	it("out-of-range and non-numeric args teach; empty branches and no-session note", async () => {
+		const env = await makeEnv({ seed: seeded() });
+		await dispatchCommand("/fork 3", env.ctx);
+		expect(env.output()).toContain("#1–#2");
+		await dispatchCommand("/fork xyz", env.ctx);
+		expect(env.output()).toContain("/fork takes no text");
+		const bare = await makeEnv({ noSession: true });
+		await dispatchCommand("/fork", bare.ctx);
+		expect(bare.output()).toContain("nothing to fork from");
+	});
+
+	it("with a picker: cancel changes nothing; a pick forks", async () => {
+		const env = await makeEnv({ seed: seeded() });
+		const calls: Array<{ title?: string; filterable?: boolean }> = [];
+		let answer: number | null = 1;
+		(env.ctx as { select?: unknown }).select = async (options: { title?: string; filterable?: boolean }) => {
+			calls.push(options);
+			return answer;
+		};
+		answer = null;
+		await dispatchCommand("/fork", env.ctx);
+		expect(env.output()).toBe("");
+		answer = 0;
+		await dispatchCommand("/fork", env.ctx);
+		expect(calls[0]?.filterable).toBe(true);
+		expect(env.output()).toContain("forked before “fix the login bug”");
+		expect(env.output()).toContain("0 messages kept, 4 left on the old branch");
+	});
+
+	it("/fork during a run is rejected with the standard teaching line", async () => {
+		const env = await makeEnv({ seed: seeded(), active: true });
+		await dispatchCommand("/fork 1", env.ctx);
+		expect(env.output()).toMatch(/waits for the running turn/);
 	});
 });
 

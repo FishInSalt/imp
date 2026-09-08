@@ -228,6 +228,48 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 // ============================================================================
+// Branch summaries (#10 /tree) — the abandoned branch's memory, carried into
+// the new branch's context. Same streaming pattern as compactHistory.
+// ============================================================================
+
+const BRANCH_SUMMARY_PROMPT = `The messages above are one branch of a conversation that the user has now LEFT for a different direction. Summarize what that branch tried and learned, so the agent continuing on the new branch keeps the memory.
+
+Use this EXACT format:
+
+## What was tried
+- [The approach(es) taken on this branch]
+
+## Outcome & learnings
+- [What worked, what failed, key facts discovered]
+
+## Worth carrying over
+- [Anything the new direction should account for — or "(none)"]
+
+Keep it under ~200 words. Preserve exact file paths, function names, and error messages.`;
+
+export async function summarizeBranchSegment(args: {
+	messages: AgentMessage[];
+	provider: LLMProvider;
+	model: string;
+	signal?: AbortSignal;
+}): Promise<string> {
+	const transcript = serializeForSummary(args.messages);
+	let summary = "";
+	for await (const event of args.provider.stream({
+		system: SUMMARIZATION_SYSTEM_PROMPT,
+		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}` }],
+		tools: [],
+		model: args.model,
+		maxTokens: 1024,
+		signal: args.signal,
+	})) {
+		if (event.type === "text_delta") summary += event.text;
+	}
+	if (summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
+	return summary.trim();
+}
+
+// ============================================================================
 // Compaction runner
 // ============================================================================
 

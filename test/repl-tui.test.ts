@@ -4,7 +4,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
-import type { AssistantMessage } from "../src/core/messages.js";
+import type { AssistantMessage, UserMessage } from "../src/core/messages.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -1681,6 +1681,53 @@ describe("runRepl with shell:tui", () => {
 		}
 		expect(sawBody).toBe(true); // the fold body is still there, just clipped
 		shell.close();
+	});
+
+	it("/tree (#10 batch 2): switch back — the left branch is summarized into the next request", async () => {
+		const env = await startTuiRepl([
+			reply("answer one"),
+			reply("answer two"),
+			reply("answer three"), // q3 on the NEW branch
+			reply("BRANCHES: the new direction was tried"), // the summary call
+			reply("answer four"),
+		]);
+		await settle();
+		env.terminal.data("q1 trunk\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer one"), 8000);
+		env.terminal.data("q2 old direction\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer two"), 8000);
+		// fork before q2 and write on the new branch
+		env.terminal.data("/fork 2\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("forked before"), 8000);
+		env.terminal.data("q3 new direction\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer three"), 8000);
+		// switch back to the old branch — summarizes the abandoned q3 branch
+		env.terminal.data("/tree\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("Switch to which branch?"), 8000);
+		env.terminal.data("\r"); // first tip = the old branch
+		await waitUntil(() => env.terminal.frameSince(0).includes("summarized in context"), 8000);
+		// the screen shows the OLD branch again
+		expect(env.terminal.frameSince(0)).toContain("answer two");
+		// the summary request covered the abandoned segment only
+		const summaryReq = env.requests[3];
+		expect(String(summaryReq?.system ?? "")).toContain("summarization");
+		const summaryFirst = summaryReq?.messages[0] as UserMessage | undefined;
+		expect(summaryFirst?.content ?? "").toContain("q3 new direction");
+		expect(summaryFirst?.content ?? "").not.toContain("q1 trunk");
+		// the next turn's request carries the framed summary + old branch
+		env.terminal.data("q4 continue\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer four"), 8000);
+		const last = env.requests[4];
+		const userTexts = (last?.messages ?? [])
+			.filter((m): m is UserMessage => m.role === "user")
+			.map((m) => m.content);
+		expect(userTexts.some((t) => t.includes("q2 old direction"))).toBe(true);
+		expect(userTexts.some((t) => t.startsWith("[Branch summary \u2014") && t.includes("BRANCHES:"))).toBe(
+			true,
+		);
+		expect(userTexts.includes("q3 new direction")).toBe(false); // only via the summary frame
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
 	});
 
 	it("/fork (#10): picker flow — the model's next request excludes the abandoned tail", async () => {

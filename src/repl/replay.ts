@@ -1,6 +1,6 @@
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
-import { SUMMARY_MARK } from "../core/session/store.js";
+import { BRANCH_MARK, SUMMARY_MARK } from "../core/session/store.js";
 import { firstLine, summarizeArgs } from "../format.js";
 import { Renderer } from "../render.js";
 
@@ -56,6 +56,12 @@ function renderMessage(
 		case "user": {
 			if (message.content.startsWith(SUMMARY_MARK)) {
 				renderer.note("▪ conversation summary (earlier messages were compacted):");
+				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
+				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
+				return;
+			}
+			if (message.content.startsWith(BRANCH_MARK)) {
+				renderer.note("▪ branch summary (a direction you left, kept for context):");
 				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
 				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
 				return;

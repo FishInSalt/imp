@@ -253,7 +253,65 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const session = ctx.runner.session;
 			if (session !== null && retained > 0) ctx.replay(session); // same flow as /resume
 			ctx.renderer.note(
-				`▪ forked before “${preview}” — ${retained} message${retained === 1 ? "" : "s"} kept, ${abandoned} left on the old branch`,
+				`▪ forked before “${preview}” — ${retained} message${retained === 1 ? "" : "s"} kept, ${abandoned} left on the old branch (/tree switches back)`,
+			);
+			return "handled";
+		},
+	},
+	{
+		name: "tree",
+		summary: "switch to another branch of this conversation (the left one is summarized in)",
+		allowedDuringRun: false,
+		run: async (args, ctx): Promise<CommandOutcome> => {
+			const tips = ctx.runner.branchTips();
+			if (tips.length === 0) {
+				ctx.renderer.note("▪ only one branch — /fork creates others");
+				return "handled";
+			}
+			const trimmed = args.trim();
+			let tipId: string | undefined;
+			if (/^[1-9]\d*$/.test(trimmed)) {
+				const target = tips[Number(trimmed) - 1];
+				if (target === undefined) {
+					ctx.renderer.error(`imp: /tree ${trimmed} — the list runs #1–#${tips.length}`);
+					return "handled";
+				}
+				tipId = target.id;
+			} else if (trimmed !== "") {
+				ctx.renderer.error(
+					"imp: /tree takes no text — /tree opens the picker, /tree <n> switches to branch #n",
+				);
+				return "handled";
+			} else if (ctx.select !== undefined) {
+				const pick = await ctx.select({
+					title: "Switch to which branch? (the current one is summarized into the new context)",
+					items: tips.map((t, i) => ({
+						label: t.label,
+						description: `#${i + 1} · ${t.count} message${t.count === 1 ? "" : "s"}`,
+					})),
+					filterable: true,
+				});
+				if (pick === null) return "handled"; // cancelled
+				tipId = tips[pick]?.id;
+			} else {
+				ctx.renderer.writeLine(ctx.renderer.dim("switch to which branch?"));
+				tips.forEach((t, i) => {
+					ctx.renderer.writeLine(
+						ctx.renderer.dim(`  #${i + 1} · ${t.count} message${t.count === 1 ? "" : "s"} `) + t.label,
+					);
+				});
+				ctx.renderer.note(`▪ pick with /tree <n> (1–${tips.length})`);
+				return "handled";
+			}
+			if (tipId === undefined) return "handled"; // unreachable; type guard
+			const { summarized, messages } = await ctx.runner.switchSessionBranch(tipId);
+			ctx.clearView?.();
+			const session = ctx.runner.session;
+			if (session !== null && messages > 0) ctx.replay(session);
+			ctx.renderer.note(
+				summarized
+					? `▪ switched branches — ${messages} messages here; the left one is summarized in context`
+					: `▪ switched branches — ${messages} messages here (no summary: disabled or failed)`,
 			);
 			return "handled";
 		},

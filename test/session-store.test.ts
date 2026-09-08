@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
-import { SessionStore } from "../src/core/session/store.js";
+import { BRANCH_MARK, SessionStore } from "../src/core/session/store.js";
 
 function mkpath(): Promise<string> {
 	return mkdtemp(path.join(tmpdir(), "imp-session-"));
@@ -190,10 +190,67 @@ describe("SessionStore", () => {
 		const texts = points.map((e) => (e.message as { role: "user"; content: string }).content);
 		expect(texts).toEqual(["q1", "q2", "q3"]);
 		store.forkBefore(points[1]!.id);
-		const after = store
-			.userForkPoints()
-			.map((e) => (e.message as { role: "user"; content: string }).content);
+		const after = store.userForkPoints().map((e) => (e.message as { role: "user"; content: string }).content);
 		expect(after).toEqual(["q1"]); // the tail is gone from the path
+	});
+
+	it("/tree ops: otherBranchTips, splitBranches, switchBranch (#10 batch 2)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		const u2 = store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2-old")); // abandoned tip
+		store.forkBefore(u2);
+		store.appendMessage(user("q2-new"));
+		store.appendMessage(assistantText("a2-new")); // current tip
+		// one other tip: the abandoned branch, labeled by its first user message
+		const tips = store.otherBranchTips();
+		expect(tips).toHaveLength(1);
+		expect(tips[0]?.label).toBe("q2");
+		expect(tips[0]?.count).toBe(2); // q2 + a2-old
+		// the split: each side holds exactly its divergent segment
+		const split = store.splitBranches(tips[0]!.id);
+		expect(split.other).toHaveLength(2);
+		expect(split.abandoned).toHaveLength(2); // q2-new + a2-new
+		// switch: leaf moves; the old tip is back on the current path
+		store.switchBranch(tips[0]!.id);
+		const texts = store
+			.getBranch()
+			.map((e) => (e.type === "message" && e.message.role === "user" ? e.message.content : ""))
+			.filter((t) => t !== "");
+		expect(texts).toEqual(["q1", "q2"]);
+	});
+
+	it("switchBranch rejects the current tip, interior nodes, and off-file ids", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		const a1 = store.appendMessage(assistantText("a1"));
+		const u2 = store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2"));
+		expect(() => store.switchBranch(store.getLeafId() ?? "")).toThrow(/already on that branch/);
+		expect(() => store.switchBranch(a1)).toThrow(/has children/); // interior
+		store.forkBefore(u2);
+		expect(() => store.switchBranch("deadbeef")).toThrow(/not found/);
+	});
+
+	it("branchSummary entries round-trip, join the context, and skip stats (#10 batch 2)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendBranchSummary("tried X, failed with EACCES");
+		store.appendMessage(user("q2"));
+		// round-trip
+		const reopened = SessionStore.open(store.filePath);
+		const { messages, compacted } = reopened.buildContext();
+		expect(compacted).toBe(false);
+		expect(messages).toHaveLength(3); // q1 + framed summary + q2
+		const framed = messages[1] as { role: string; content: string } | undefined;
+		expect(framed?.content ?? "").toContain("tried X, failed with EACCES");
+		expect(framed?.content ?? "").toContain(BRANCH_MARK);
+		// stats: only real messages count
+		expect(reopened.stats().messageCount).toBe(2);
 	});
 
 	it("stats() aggregates assistant usage and turns", async () => {

@@ -63,21 +63,25 @@ export function tuiEditorTheme(): EditorTheme {
  *   TUI
  *   ├─ transcript (TranscriptSink — the Renderer's output, hosted)
  *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
+ *   ├─ activity   (live tool/subagent rows while a turn runs; zero rows idle)
  *   ├─ ask line   ([y/N] question while one is pending; an item selector
  *   │              while one is open; hidden otherwise)
  *   ├─ queue line (dim "N queued · next: …" while lines wait; hidden at 0)
  *   ├─ hint row   (dim placeholder while idle with an empty editor and no
  *   │              pending ask: the "/ @ ! newline" cheat sheet; zero
  *   │              rows otherwise)
- *   ├─ marker     ("> " idle / "+ " active)
- *   ├─ editor     (focused except while a selector is open; its autocomplete
+ *   ├─ editor     (a bordered box — it alone marks "type here", CC-style;
+ *   │              focused except while a selector is open; its autocomplete
  *   │              panel — slash commands, @ files — renders in place)
  *   └─ footer     (dim status line: model · session · cumulative tokens;
  *                 pushed by the machine, pi places it below the editor too)
  *
  * Semantics are the readline shell's, byte-for-byte where bytes are visible:
  * the ask FIFO (lines answer pending questions first; Ctrl+C declines;
- * EOF declines all), interrupt routing, and the "> "/"+ " markers. Known
+ * EOF declines all) and interrupt routing. The readline-era "> "/"+ " marker
+ * row is gone (dogfood 2026-09-09): the editor's box marks the input, the
+ * activity region marks a running turn, and the hint row's idle-only rule
+ * already encodes the same bit. Known
  * deviations (parity ledger, to revisit as M9 polishes):
  *  - Ctrl+D with text in the editor goes to the editor (readline would
  *    delete-forward); Ctrl+D on an empty editor stays EOF — with or
@@ -160,9 +164,8 @@ export class TuiShell implements LineInput {
 	private selector: { teardown: () => void } | null = null;
 	/** Pickers queued behind an open one (M10): opened when it finishes. */
 	private pendingSelects: Array<() => void> = [];
-	private marker: Text | null = null;
 	private footer: Text | null = null;
-	/** The dim hint row between the ask line and the marker (M10). */
+	/** The dim hint row above the editor (M10). */
 	private placeholder: Text | null = null;
 	/** Marker-side mirror of the machine's active flag (setActive). */
 	private active = false;
@@ -197,9 +200,7 @@ export class TuiShell implements LineInput {
 		this.tui = tui;
 		this.options.transcript.onUpdate = () => tui.requestRender();
 
-		const marker = new Text("> ");
-		this.marker = marker;
-		const placeholder = new Text(""); // empty Text renders zero rows
+		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
 		const editorBox = new Container();
 		const editor = new Editor(tui, this.theme, this.options.editorOptions);
@@ -228,13 +229,12 @@ export class TuiShell implements LineInput {
 		tui.addChild(this.foldContainer);
 		tui.addChild(this.activityContainer); // live tool/subagent rows (M10 B)
 		tui.addChild(this.askContainer);
-		const queueLine = new Text(this.queueText);
+		const queueLine = new Text(this.queueText, 0, 0);
 		this.queueLine = queueLine;
 		tui.addChild(queueLine); // queue visual sits between the ask line and the hint row
-		tui.addChild(placeholder); // hint row: after the queue line, before the marker
-		tui.addChild(marker);
+		tui.addChild(placeholder); // hint row: after the queue line, right above the editor
 		tui.addChild(editorBox);
-		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true));
+		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true), 0, 0);
 		this.footer = footer;
 		tui.addChild(footer); // status line below the editor (pi's placement)
 		tui.setFocus(editor);
@@ -334,7 +334,6 @@ export class TuiShell implements LineInput {
 
 	setActive(active: boolean): void {
 		this.active = active;
-		this.marker?.setText(active ? "+ " : "> ");
 		this.updatePlaceholder();
 		this.tui?.requestRender();
 	}
@@ -408,12 +407,12 @@ export class TuiShell implements LineInput {
 			return seconds === 0 ? "" : ` ${seconds}s`;
 		};
 		if (this.activity.phase === "thinking") {
-			this.activityContainer.addChild(new Text(dim(`${frame} thinking…`, true)));
+			this.activityContainer.addChild(new Text(dim(`${frame} thinking…`, true), 0, 0));
 		}
 		for (const tool of this.activity.tools) {
 			const label = tool.label === "" ? "" : ` ${tool.label}`;
 			this.activityContainer.addChild(
-				new Text(dim(`${frame} ${tool.name}${label}${elapsed(tool.startedAtMs)}`, true)),
+				new Text(dim(`${frame} ${tool.name}${label}${elapsed(tool.startedAtMs)}`, true), 0, 0),
 			);
 		}
 		for (const agent of this.activity.agents) {
@@ -422,7 +421,7 @@ export class TuiShell implements LineInput {
 			const last = agent.lastTool !== null ? `last: ${agent.lastTool}` : null;
 			const tail = [tools, last].filter((part) => part !== null).join(" · ");
 			const row = tail === "" ? parts.join(" · ") : `${parts.join(" · ")} · ${tail}`;
-			this.activityContainer.addChild(new Text(dim(`└─ ${row}${elapsed(agent.startedAtMs)}`, true)));
+			this.activityContainer.addChild(new Text(dim(`└─ ${row}${elapsed(agent.startedAtMs)}`, true), 0, 0));
 		}
 		this.tui?.requestRender();
 	}
@@ -490,7 +489,7 @@ export class TuiShell implements LineInput {
 		}));
 		const list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
 		const box = new Container();
-		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title));
+		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title, 0, 0));
 		box.addChild(list);
 		return new Promise<number | null>((resolve) => {
 			let settled = false; // pick, cancel and close all funnel here — once
@@ -604,7 +603,7 @@ export class TuiShell implements LineInput {
 
 	private showAsk(question: string): void {
 		this.removeAskLine();
-		const line = new Text(question);
+		const line = new Text(question, 0, 0);
 		this.askLine = line;
 		this.askContainer.addChild(line);
 		this.tui?.requestRender();

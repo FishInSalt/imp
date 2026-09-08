@@ -139,7 +139,7 @@ describe("Renderer", () => {
 			"Let me check" +
 				"\n\x1b[2m● bash $ ls\x1b[0m\n" +
 				"\x1b[2m  → a.ts\x1b[0m\n" +
-				'\n\x1b[2m● read {"path":"x.ts"}\x1b[0m\n' +
+				"\n\x1b[2m● read x.ts\x1b[0m\n" +
 				"\x1b[31m  ✗ boom\x1b[0m\n" +
 				"\n",
 		);
@@ -232,7 +232,7 @@ describe("concurrent live tools (M5b design §7)", () => {
 		r.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "scout A" } });
 		// first pending: today's single-slot line
 		expect(out.output()).toBe(
-			'\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{"prompt":"scout A"}\x1b[0m\x1b[2m ⠋\x1b[0m',
+			"\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2mscout A\x1b[0m\x1b[2m ⠋\x1b[0m",
 		);
 		// second pending: collapse to the aggregate line
 		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "scout B" } });
@@ -245,12 +245,10 @@ describe("concurrent live tools (M5b design §7)", () => {
 		now = 12400;
 		r.event({ type: "tool_end", result: okResult("A found 3 files", "a") });
 		const afterA = out.output();
-		expect(afterA).toContain('"scout A"}\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n');
+		expect(afterA).toContain("scout A\x1b[0m \x1b[32m✓\x1b[0m \x1b[2m12.4s\x1b[0m\n");
 		expect(afterA).toContain("\x1b[2m  ⎿  A found 3 files\x1b[0m\n");
 		expect(
-			afterA.endsWith(
-				'\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2m{"prompt":"scout B"}\x1b[0m\x1b[2m ⠙\x1b[0m',
-			),
+			afterA.endsWith("\r\x1b[2K\x1b[2m● \x1b[0m\x1b[1mtask\x1b[0m \x1b[2mscout B\x1b[0m\x1b[2m ⠙\x1b[0m"),
 		).toBe(true);
 		// sole survivor ticks in single-pending format (started at 0)
 		now = 20000;
@@ -284,9 +282,7 @@ describe("concurrent live tools (M5b design §7)", () => {
 		r.event({ type: "tool_start", toolCallId: "b", name: "task", args: { prompt: "B" } });
 		r.event({ type: "tool_end", result: okResult("ra", "a") });
 		r.event({ type: "tool_end", result: okResult("rb", "b") });
-		expect(out.output()).toBe(
-			'\n● task {"prompt":"A"}\n' + '\n● task {"prompt":"B"}\n' + "  → ra\n" + "  → rb\n",
-		);
+		expect(out.output()).toBe("\n● task A\n" + "\n● task B\n" + "  → ra\n" + "  → rb\n");
 	});
 });
 

@@ -269,21 +269,23 @@ describe("TranscriptSink", () => {
 // ── TuiShell: the readline-era semantics on the pi-tui shell ─────────────
 
 describe("TuiShell", () => {
-	it("shows the idle marker; a submitted line routes to onLine exactly once", async () => {
+	it("idle: the hint row sits above the editor box; a submitted line routes to onLine exactly once", async () => {
 		const { terminal, shell, events } = makeShell();
 		shell.start();
 		await settle();
 		const mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("> ");
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("(/ for commands"); // hint marks the input area
+		expect(frame).toMatch(/^\(\/ for commands/m); // flush-left: Text padding is (0,0), not pi-tui's (1,1) default
 		terminal.data("hello\r");
 		await settle();
 		expect(events).toEqual(["line:hello"]);
 		shell.close();
 	});
 
-	it('marker switches "> " ↔ "+ " with setActive; clearPending wipes editor text once', async () => {
+	it("setActive toggles the hint row (the idle cue); clearPending wipes editor text once", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
@@ -293,14 +295,14 @@ describe("TuiShell", () => {
 		let mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("+ ");
+		expect(terminal.frameSince(mark)).not.toContain("(/ for commands"); // hidden while active
 		expect(shell.clearPending()).toBe(true); // had text
 		expect(shell.clearPending()).toBe(false); // now empty
 		shell.setActive(false);
 		mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("> ");
+		expect(terminal.frameSince(mark)).toContain("(/ for commands"); // back when idle
 		shell.close();
 	});
 
@@ -449,7 +451,7 @@ describe("TuiShell", () => {
 		mark = terminal.writes.length;
 		shell.setActive(true);
 		await settle();
-		expect(terminal.frameSince(mark)).toContain("+ ");
+		expect(terminal.frameSince(mark)).not.toContain("(/ for commands"); // hidden while active
 		terminal.data("n\r");
 		await settle();
 		await expect(question).resolves.toBe(false);
@@ -650,7 +652,7 @@ describe("TuiShell footer", () => {
 		shell.setFooter("");
 		await settle();
 		expect(terminal.frameSince(0)).not.toContain("something");
-		expect(terminal.frameSince(0)).toContain("> "); // editor intact
+		expect(terminal.frameSince(0)).toContain("(/ for commands"); // layout intact
 		shell.close();
 	});
 });
@@ -672,7 +674,7 @@ describe("TuiShell queue line (setQueue)", () => {
 		await settle(0);
 		const frame = terminal.frameSince(mark);
 		expect(frame).toContain("1 queued · next: queued A");
-		expect(frame.indexOf("1 queued · next: queued A")).toBeLessThan(frame.indexOf("> ")); // above the marker
+		expect(frame.indexOf("1 queued · next: queued A")).toBeLessThan(frame.indexOf("(/ for commands")); // above the hint
 		// an update repaints in place
 		shell.setQueue(2, "queued B");
 		await settle();
@@ -1100,7 +1102,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("runs a full turn through the TUI shell: banner, streamed reply, prompt restored", async () => {
-		// A gated turn keeps the run in flight so the "+ " marker actually
+		// A gated turn keeps the run in flight so the activity row actually
 		// paints (an instant scripted reply would coalesce to one diff frame).
 		let releaseTurn: () => void = () => {};
 		const gated = new Promise<void>((resolve) => {
@@ -1115,7 +1117,7 @@ describe("runRepl with shell:tui", () => {
 		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
 		env.terminal.data("hi\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("+ "); // active while the turn runs
+		expect(env.terminal.frameSince(0)).toContain("thinking"); // activity row while the turn runs
 		releaseTurn();
 		await settle();
 		await settle();
@@ -1334,7 +1336,8 @@ describe("runRepl with shell:tui", () => {
 		const mark = env.terminal.writes.length;
 		await settle();
 		const runFrame = env.terminal.frameSince(mark); // the run's own repaint only
-		expect(runFrame).toContain("+ "); // active while gated
+		expect(runFrame).toContain("thinking"); // activity row while gated
+		expect(runFrame).toContain("> hi"); // the echoed prompt rides the same frame
 		expect(runFrame).not.toContain("(/ for commands"); // hidden while running
 		releaseTurn();
 		const mark2 = env.terminal.writes.length;
@@ -1675,7 +1678,7 @@ describe("TuiShell activity region (M10 B)", () => {
 });
 
 describe("M10 review regressions (wave 1 + B)", () => {
-	it("layout order: transcript < folds < activity < ask, and queue < hint < marker (P2#6)", async () => {
+	it("layout order: transcript < folds < activity < ask, and queue < hint < editor box (P2#6)", async () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();
 		await settle(0);
@@ -1710,10 +1713,10 @@ describe("M10 review regressions (wave 1 + B)", () => {
 		const frameB = terminal.frameSince(mark);
 		const q = frameB.indexOf("ORDER-QUEUE");
 		const h = frameB.indexOf("(/ for commands");
-		const m = frameB.lastIndexOf(" > ");
-		expect([q, h, m].every((i) => i >= 0)).toBe(true);
+		const e = frameB.indexOf("─────"); // the editor box's top border
+		expect([q, h, e].every((i) => i >= 0)).toBe(true);
 		expect(q).toBeLessThan(h);
-		expect(h).toBeLessThan(m);
+		expect(h).toBeLessThan(e);
 		shell.close();
 	});
 });

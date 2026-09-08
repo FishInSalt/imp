@@ -40,7 +40,7 @@ describe("replaySession", () => {
 		]);
 		expect(out).toContain("> fix the bug in login.ts");
 		expect(out).toContain("I'll look at the file first.\n\n");
-		expect(out).toContain('● read {"path":"src/login.ts"} ✓');
+		expect(out).toContain("● read src/login.ts ✓");
 		expect(out).toContain("⎿  line 1 (+2 lines)");
 		expect(out).toContain("Found it — off-by-one on line 2.");
 	});

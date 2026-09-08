@@ -7,7 +7,7 @@ import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
-import { formatTokens, summarizeArgs, VERSION } from "../format.js";
+import { formatTokens, shorten, summarizeArgs, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
@@ -54,11 +54,6 @@ export interface ReplOptions {
 }
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
-
-/** Queued/steering display: cap at 80 chars, ellipsis when truncated. */
-function shorten(text: string): string {
-	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
-}
 
 /** "! cmd" lines: the shell executes them itself (M10). Blank after the
  *  "!" is a usage hint, not a command. */

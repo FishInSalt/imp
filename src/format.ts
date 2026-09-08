@@ -21,13 +21,67 @@ export function firstLine(text: string, max = 160): string {
 }
 
 /** One-line tool argument summary: bash renders `$ <command>`, others compact JSON. */
+/** Queued/steering/tool-label display: cap at 80 chars, ellipsis when truncated. */
+export function shorten(text: string): string {
+	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+/** Human-readable one-line summary of a tool call's arguments.
+ *  One funnel for every surface — print tool lines, TUI transcript lines,
+ *  replay, and the activity region — so the label reads the same everywhere.
+ *  Built-ins get a friendly form; anything else (extension tools) keeps the
+ *  compact JSON, which is honest for schemas we do not know. */
 export function summarizeArgs(name: string, args: unknown): string {
-	if (name === "bash") {
-		const cmd = (args as { command?: string })?.command;
-		return cmd !== undefined ? `$ ${cmd}` : JSON.stringify(args);
+	const a = (args ?? {}) as Record<string, unknown>;
+	const str = (k: string): string | undefined => {
+		const v = a[k];
+		return typeof v === "string" && v !== "" ? v : undefined;
+	};
+	const fallback = JSON.stringify(args) ?? "";
+	switch (name) {
+		case "bash": {
+			const cmd = (args as { command?: string })?.command;
+			return cmd !== undefined ? `$ ${cmd}` : JSON.stringify(args);
+		}
+		case "read": {
+			const path = str("path");
+			if (path === undefined) return fallback;
+			let label = path;
+			if (typeof a.offset === "number") label += ` · from line ${a.offset}`;
+			if (typeof a.limit === "number") label += ` · limit ${a.limit}`;
+			return label;
+		}
+		case "write":
+		case "edit":
+			return str("path") ?? fallback;
+		case "grep": {
+			const pattern = str("pattern");
+			if (pattern === undefined) return fallback;
+			let label = `"${pattern}"`;
+			const scope = str("path");
+			if (scope !== undefined) label += ` in ${scope}`;
+			const glob = str("glob");
+			if (glob !== undefined) label += ` (${glob})`;
+			return label;
+		}
+		case "find": {
+			const pattern = str("pattern");
+			if (pattern === undefined) return fallback;
+			let label = pattern;
+			const scope = str("path");
+			if (scope !== undefined) label += ` in ${scope}`;
+			if (a.type === "file" || a.type === "directory") label += ` · ${a.type}s`;
+			return label;
+		}
+		case "task": {
+			const prompt = str("prompt");
+			if (prompt === undefined) return fallback;
+			const agent = str("agent");
+			return agent !== undefined ? `(${agent}) ${shorten(prompt)}` : shorten(prompt);
+		}
+		default:
+			return fallback.length > 120 ? `${fallback.slice(0, 120)}…` : fallback;
 	}
-	const json = JSON.stringify(args) ?? "";
-	return json.length > 120 ? `${json.slice(0, 120)}…` : json;
 }
 
 /** 1234 -> "1.2k"; 567 -> "567". */

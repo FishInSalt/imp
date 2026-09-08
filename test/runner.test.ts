@@ -105,6 +105,33 @@ describe("createRunner", () => {
 		expect(runner.session).not.toBeNull();
 	});
 
+	it("getTool looks up the live tool set by name — injected fakes included (M10 ! passthrough seam)", async () => {
+		const { baseDir, cwd } = await setup();
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);
+		const fake = {
+			name: "bash",
+			description: "fake",
+			parameters: { properties: { command: { type: "string" } }, required: ["command"] },
+			execute: async () => ({ output: "fake bash" }),
+		};
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider,
+			tools: [fake],
+		});
+		expect(runner.getTool("bash")).toBe(fake); // the exact instance the loop runs
+		expect(runner.getTool("nope")).toBeUndefined();
+	});
+
 	it("rethrows SessionNotFoundError for the caller to report", async () => {
 		const { baseDir, cwd } = await setup();
 		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);

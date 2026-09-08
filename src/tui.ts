@@ -10,13 +10,22 @@
  * parity with the pre-M9 plain aesthetic. Theming is a later milestone.
  */
 
+// pi-tui's autocomplete command shape (name/description/argumentHint).
+// Aliased: imp's own SlashCommand (commands.ts) is the dispatch shape —
+// the alias keeps the two from blurring at this boundary.
+export type { SlashCommand as AutocompleteSlashCommand } from "@earendil-works/pi-tui";
 // Splits stdin bursts into per-key sequences (escape-aware) — the fake
 // terminal reuses the production splitter so tests feed realistic chunks
 // Core runtime — what the REPL shell composes with
 // Test seam: production uses ProcessTerminal; tests inject a fake
+// Autocomplete: the combined slash/@ provider the editor's panel runs on
+// Autocomplete: item shapes the provider and the panel exchange
 // Layout math for the width contract (pi-tui's own components use these;
 // its renderer THROWS on component lines wider than the terminal)
 export {
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	CombinedAutocompleteProvider,
 	type Component,
 	Container,
 	Editor,

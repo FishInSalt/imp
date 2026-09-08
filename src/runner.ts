@@ -5,6 +5,7 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	shouldCompact,
+	summarizeBranchSegment,
 } from "./core/compaction.js";
 import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
@@ -13,7 +14,7 @@ import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
-import type { SessionStore } from "./core/session/store.js";
+import type { MessageEntry, SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -123,6 +124,12 @@ export interface Runner {
 	/** Branch before a user message: the store's leaf moves, history
 	 *  reloads from the new path (same wiring as resumeSession). */
 	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string };
+	/** `/tree` candidates: other branch tips with previews and message
+	 *  counts (#10 batch 2). */
+	branchTips(): { id: string; label: string; count: number }[];
+	/** Switch to another branch tip — summarizing the left branch into the
+	 *  new one's context unless IMP_BRANCH_SUMMARY=0 (#10 batch 2). */
+	switchSessionBranch(tipId: string): Promise<{ summarized: boolean; messages: number }>;
 	printRunStats(result: RunAgentLoopResult): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
@@ -168,6 +175,7 @@ class RunnerImpl implements Runner {
 	private readonly provider: LLMProvider; // wrapped with logging once, reused everywhere
 	private readonly tools: Tool[];
 	private readonly autoCompact: boolean;
+	private readonly branchSummaryEnabled: boolean;
 	private readonly settings = DEFAULT_COMPACTION_SETTINGS;
 	private system: string;
 	private sessionStore: SessionStore | null = null;
@@ -260,6 +268,7 @@ class RunnerImpl implements Runner {
 			}),
 		);
 		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+		this.branchSummaryEnabled = process.env.IMP_BRANCH_SUMMARY !== "0"; // #10: /tree keeps the left branch’s lessons
 		this.system = "";
 		if (!options.deferInit) this.warmup();
 	}
@@ -365,6 +374,49 @@ class RunnerImpl implements Runner {
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()/resumeSession()
 		return { retained, abandoned, preview };
+	}
+
+	/** `/tree` candidates (#10 batch 2): other tips as the picker sees them. */
+	branchTips(): { id: string; label: string; count: number }[] {
+		if (this.sessionStore === null) return [];
+		return this.sessionStore.otherBranchTips().map((tip) => ({
+			id: tip.id,
+			label: shorten(tip.label),
+			count: tip.count,
+		}));
+	}
+
+	/** `/tree` switch (#10 batch 2): move to another tip; unless disabled,
+	 *  summarize the abandoned segment (pi's BranchSummaryEntry) so the new
+	 *  branch keeps the lessons of the left one. Best-effort: a summarizer
+	 *  failure still switches, just without the summary. */
+	async switchSessionBranch(tipId: string): Promise<{ summarized: boolean; messages: number }> {
+		const store = this.sessionStore;
+		if (store === null) throw new SessionNotFoundError("no session to switch (sessions disabled)");
+		const { abandoned } = store.splitBranches(tipId); // BEFORE the switch
+		store.switchBranch(tipId);
+		let summarized = false;
+		if (this.branchSummaryEnabled) {
+			const messages = abandoned
+				.filter((entry): entry is MessageEntry => entry.type === "message")
+				.map((entry) => entry.message);
+			if (messages.length > 0) {
+				try {
+					const summary = await summarizeBranchSegment({
+						messages,
+						provider: this.provider,
+						model: this.model,
+					});
+					store.appendBranchSummary(summary);
+					summarized = true;
+				} catch {
+					// fall through: switch without the summary
+				}
+			}
+		}
+		this.history.length = 0;
+		this.history.push(...store.buildContext().messages);
+		return { summarized, messages: this.history.length };
 	}
 
 	resumeSession(id: string): { id8: string; messages: number } {

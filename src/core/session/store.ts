@@ -15,6 +15,8 @@ import type { AgentMessage, Usage } from "../messages.js";
  *   {"type":"message","id":<8hex>,"parentId":<id|null>,"timestamp":<iso>,"message":{...}}
  *   {"type":"compaction","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
  *    "summary":<text>,"retainedTail":[...],"tokensBefore":<n>}
+ *   {"type":"branchSummary","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
+ *    "summary":<text>}   #10: written when /tree switches away from a branch
  */
 
 export interface SessionHeader {
@@ -40,6 +42,15 @@ export interface MessageEntry extends EntryBase {
 	message: AgentMessage;
 }
 
+/** #10: an LLM summary of the branch LEFT by a /tree switch, appended at the
+ *  new tip — the model keeps the memory of what the abandoned path tried
+ *  (pi's BranchSummaryEntry, slimmed). Participates in context as one
+ *  framed user message (branchSummaryToMessage); never counted in stats. */
+export interface BranchSummaryEntry extends EntryBase {
+	type: "branchSummary";
+	summary: string;
+}
+
 export interface CompactionEntry extends EntryBase {
 	type: "compaction";
 	summary: string;
@@ -51,7 +62,7 @@ export interface CompactionEntry extends EntryBase {
 	usage?: Usage;
 }
 
-export type SessionEntry = MessageEntry | CompactionEntry;
+export type SessionEntry = MessageEntry | CompactionEntry | BranchSummaryEntry;
 
 export interface SessionStats {
 	messageCount: number;
@@ -107,6 +118,10 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 	} else if (entry.type === "compaction") {
 		if (typeof entry.summary !== "string") {
 			throw new SessionError(`session line ${lineNo}: compaction entry missing summary`);
+		}
+	} else if (entry.type === "branchSummary") {
+		if (typeof entry.summary !== "string") {
+			throw new SessionError(`session line ${lineNo}: branchSummary entry missing summary`);
 		}
 	} else {
 		throw new SessionError(`session line ${lineNo}: unknown entry type "${String(entry.type)}"`);
@@ -273,6 +288,79 @@ export class SessionStore {
 		return { retained, abandoned: before - retained };
 	}
 
+	/** All OTHER branch tips with their picker metadata (#10 /tree): each
+	 *  leaf that is not on the current path, labeled by the first user
+	 *  message of its divergent segment, with that segment's message count. */
+	otherBranchTips(): { id: string; label: string; count: number }[] {
+		const currentPathIds = new Set(this.getBranch().map((entry) => entry.id));
+		const tips: { id: string; label: string; count: number }[] = [];
+		for (const entry of this.entries) {
+			if (this.childrenOf(entry.id).length > 0) continue; // not a tip
+			if (currentPathIds.has(entry.id)) continue; // the current branch's own tip
+			const { other } = this.splitBranches(entry.id);
+			const firstUser = other.find(
+				(e): e is MessageEntry => e.type === "message" && e.message.role === "user",
+			);
+			const first = firstUser?.message;
+			const label =
+				first !== undefined && first.role === "user"
+					? (first.content.split("\n")[0] ?? "")
+					: "(no user message)";
+			tips.push({
+				id: entry.id,
+				label,
+				count: other.filter((e) => e.type === "message").length,
+			});
+		}
+		return tips;
+	}
+
+	/** Split the current path and another branch at their longest common
+	 *  PREFIX (the shared trunk) — what each holds beyond it (#10 /tree). */
+	splitBranches(otherLeafId: string): { abandoned: SessionEntry[]; other: SessionEntry[] } {
+		const current = this.getBranch();
+		const other = this.getBranch(otherLeafId);
+		let i = 0;
+		while (i < current.length && i < other.length && current[i]?.id === other[i]?.id) i++;
+		return { abandoned: current.slice(i), other: other.slice(i) };
+	}
+
+	/** Switch the write position to another branch's TIP (#10 /tree). The
+	 *  current branch is abandoned in place (append-only; its entries stay).
+	 *  Targets must be leaves — an interior node would strand its children. */
+	switchBranch(tipId: string): void {
+		const target = this.byId.get(tipId);
+		if (target === undefined) throw new SessionError(`branch tip ${tipId} not found`);
+		if (tipId === this.leafId) throw new SessionError("already on that branch");
+		if (this.childrenOf(tipId).length > 0) {
+			throw new SessionError(`branch tip ${tipId} has children — not a tip`);
+		}
+		if (this.getBranch().some((entry) => entry.id === tipId)) {
+			throw new SessionError(`branch tip ${tipId} is on the current branch`);
+		}
+		this.leafId = tipId;
+	}
+
+	/** Children index for tip detection (rebuilt per call — branch counts
+	 *  stay tiny; the append-only file means no invalidation is needed). */
+	private childrenOf(id: string): SessionEntry[] {
+		return this.entries.filter((entry) => entry.parentId === id);
+	}
+
+	/** Append a branch summary at the current leaf (#10): the memory of the
+	 *  branch just left, carried into the new one's context. */
+	appendBranchSummary(summary: string): string {
+		const entry: BranchSummaryEntry = {
+			type: "branchSummary",
+			id: this.nextId(),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			summary,
+		};
+		this.append(entry);
+		return entry.id;
+	}
+
 	getBranch(leafId?: string | null): SessionEntry[] {
 		const target = leafId === undefined ? this.leafId : leafId;
 		if (target === null) return [];
@@ -315,6 +403,7 @@ export class SessionStore {
 		if (lastCompactionIndex === -1) {
 			for (const entry of branch) {
 				if (entry.type === "message") messages.push(entry.message);
+				else if (entry.type === "branchSummary") messages.push(branchSummaryToMessage(entry.summary));
 			}
 		} else {
 			compacted = true;
@@ -324,6 +413,7 @@ export class SessionStore {
 			for (let i = lastCompactionIndex + 1; i < branch.length; i++) {
 				const entry = branch[i];
 				if (entry?.type === "message") messages.push(entry.message);
+				else if (entry?.type === "branchSummary") messages.push(branchSummaryToMessage(entry.summary));
 			}
 		}
 		return { messages, compacted };
@@ -363,6 +453,18 @@ export class SessionStore {
 
 /** Marker prefix identifying the framed summary message below (replay.ts
  *  matches on this — keep it exported so the two cannot drift silently). */
+export const BRANCH_MARK = "[Branch summary —";
+
+/** #10: a branch summary as the model sees it — a framed user message, the
+ *  same convention as compaction's summaryToMessage (replay detects the
+ *  mark and renders the body dim instead of echoing a `> ` line). */
+export function branchSummaryToMessage(summary: string): AgentMessage {
+	return {
+		role: "user",
+		content: `${BRANCH_MARK} this context was explored on a branch you later left; keep its lessons. Treat this as established context, not as a new request.]\n\n${summary}`,
+	};
+}
+
 export const SUMMARY_MARK = "[Conversation summary —";
 
 /** The summary is replayed into context as a framed user message. */

@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
-import type { AgentMessage } from "../src/core/messages.js";
+import type { AgentMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import { setTrust } from "../src/core/trust.js";
-import type { LLMRequest } from "../src/provider/types.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
@@ -86,6 +86,7 @@ async function makeEnv(args?: {
 	seed?: AgentMessage[];
 	noSession?: boolean;
 	active?: boolean;
+	provider?: LLMProvider;
 }): Promise<TestEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-cmds-"));
 	const cwd = path.join(baseDir, "proj");
@@ -107,7 +108,7 @@ async function makeEnv(args?: {
 		resume: store ? store.header.id : undefined,
 		sessionBaseDir: baseDir,
 		renderer,
-		provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
+		provider: args?.provider ?? scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
 	});
 	const replayed: string[] = [];
 	const submitted: string[] = [];
@@ -190,6 +191,7 @@ describe("slash commands", () => {
 				"  /exit              exit (Ctrl+D works too)",
 				"  /new               start a fresh session (the old one stays on disk)",
 				"  /fork              branch the conversation before an earlier message (the old branch stays)",
+				"  /tree              switch to another branch of this conversation (the left one is summarized in)",
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
@@ -371,7 +373,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -658,6 +660,111 @@ describe("/fork (#10 batch 1)", () => {
 		const env = await makeEnv({ seed: seeded(), active: true });
 		await dispatchCommand("/fork 1", env.ctx);
 		expect(env.output()).toMatch(/waits for the running turn/);
+	});
+});
+
+describe("/tree (#10 batch 2)", () => {
+	const user = (content: string): AgentMessage => ({ role: "user", content });
+	// A session with two branches: trunk q1/a1, then q2-old/a2-old abandoned
+	// by a fork; current = the post-fork tip. Built through the real ops.
+	async function branchedEnv() {
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old
+		return env;
+	}
+
+	it("with no other branches: teaching note", async () => {
+		const env = await makeEnv({ seed: [user("q1"), assistantText("a1")] });
+		await dispatchCommand("/tree", env.ctx);
+		expect(env.output()).toContain("only one branch");
+	});
+
+	it("text fallback lists tips; /tree <n> switches and replays (summary off)", async () => {
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		const env = await branchedEnv();
+		await dispatchCommand("/tree", env.ctx);
+		let out = env.output();
+		expect(out).toContain("q2-old");
+		expect(out).toContain("/tree <n>");
+		await dispatchCommand("/tree 1", env.ctx);
+		out = env.output();
+		expect(out).toContain("switched branches");
+		expect(out).toContain("no summary: disabled or failed");
+		// history is the OLD branch again
+		const texts = env.runner.history.map((m) => (m.role === "user" ? m.content : ""));
+		expect(texts).toContain("q2-old");
+		expect(texts).not.toContain("q2-new");
+		expect(env.replayed.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("bad args teach; running is rejected", async () => {
+		const env = await branchedEnv();
+		await dispatchCommand("/tree 5", env.ctx);
+		expect(env.output()).toContain("#1–#1");
+		await dispatchCommand("/tree zzz", env.ctx);
+		expect(env.output()).toContain("/tree takes no text");
+	});
+
+	it("summary ON (default): the left branch is summarized into the new context", async () => {
+		// A provider that answers summarization calls with a marker text.
+		const requests: LLMRequest[] = [];
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream(request) {
+				requests.push({ ...request, messages: [...request.messages] });
+				const isSummary = (request.system ?? "").includes("summarization");
+				const text = isSummary ? "SUMMARY: the abandoned branch tried q3-work" : "ok";
+				yield { type: "text_delta", text };
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+				};
+			},
+		};
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+			provider,
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old
+		// write on the NEW branch (what will be abandoned by the switch)
+		const store = env.runner.session;
+		store?.appendMessage(user("q3-new direction"));
+		store?.appendMessage(assistantText("a3-new"));
+		// the summarizer call captured the abandoned segment
+		await dispatchCommand("/tree 1", env.ctx);
+		expect(env.output()).toContain("summarized in context");
+		expect(requests).toHaveLength(1); // exactly one call — the summary
+		const firstMsg = requests[0]?.messages[0] as UserMessage | undefined;
+		const summaryText = firstMsg?.content ?? "";
+		expect(summaryText).toContain("q3-new direction"); // the LEFT branch's content
+		expect(summaryText).not.toContain("q1"); // the shared trunk is not re-summarized
+		// the new context carries the framed summary
+		const framed = env.runner.history.find(
+			(m): m is UserMessage => m.role === "user" && m.content.startsWith("[Branch summary \u2014"),
+		);
+		expect(framed?.content).toContain("tried q3-work");
+	});
+
+	it("picker cancel is silent; a pick switches", async () => {
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		const env = await branchedEnv();
+		let answer: number | null = null;
+		(env.ctx as { select?: unknown }).select = async () => answer;
+		const base = env.output().length; // ignore the setup fork's note
+		await dispatchCommand("/tree", env.ctx);
+		expect(env.output().slice(base)).toBe("");
+		answer = 0;
+		await dispatchCommand("/tree", env.ctx);
+		expect(env.output().slice(base)).toContain("switched branches");
 	});
 });
 

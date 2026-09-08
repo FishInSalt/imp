@@ -428,7 +428,7 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 		env.send("/nope\n");
 		await waitUntil(() => env.output().includes('imp: unknown command "/nope"'));
 		expect(env.output()).toContain(
-			"known: /help /exit /new /fork /sessions /resume /model /worktrees /trust /status /compact /extcmd — /help shows what they do",
+			"known: /help /exit /new /fork /tree /sessions /resume /model /worktrees /trust /status /compact /extcmd — /help shows what they do",
 		);
 		// the provider was never called — teaching errors never reach the model
 		expect(env.requests).toHaveLength(0);

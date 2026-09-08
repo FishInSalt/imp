@@ -386,6 +386,15 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：store 4 例（分叉/首条前清空/非用户与他枝拒绝/分叉点枚举）+ 命令 5 例 + e2e（真 picker 过滤选点→fork 后**下一个模型请求**不含弃尾内容、屏幕清除需 post-fork mark）+ /help 金样与 known 行同步；pty 真机：GLM 冷启动下时序放宽后全链路通过
   - **流程**：批次 2（/tree+branch_summary）落地后**合并为一轮对抗审查**覆盖两批交互面（存储核心已在批次 1 自查+钉子覆盖）
 
+- **#10 会话树 批次 2：/tree + branch_summary（2026-09-09，585 tests，feat/tree-batch2）**：pi 的 BranchSummaryEntry 思想落地——切走时给被弃分支生成 LLM 摘要写进新分支上下文（"换思路不丢教训"）
+  - **存储**：`BranchSummaryEntry`（type/parentId/summary，参与上下文不进 stats）；`otherBranchTips()`（叶子枚举=分叉目标，label=分歧段首条用户消息+消息数）；`splitBranches()`（最长公共**前缀**拆分两侧分歧段——初版误写为后缀剥离，单测当场抓回）；`switchBranch()`（目标必须是叶子且不在当前路径）；`appendBranchSummary()`
+  - **摘要**：`summarizeBranchSegment`（复用 serializeForSummary+流式收集，独立 prompt：What was tried/Outcome & learnings/Worth carrying over，≤200 词）；runner `switchSessionBranch`（切换前取 abandoned 段→摘要→追加在新 tip 上→history 重载）；`IMP_BRANCH_SUMMARY=0` 关（对齐 IMP_AUTOCOMPACT 先例）；失败 best-effort（照切不摘要）
+  - **上下文与回放**：`branchSummaryToMessage` 框架消息（`[Branch summary — …]` 惯例同 SUMMARY_MARK）；buildContext 两个分支（有无 compaction）都展开它；replay 检测 BRANCH_MARK 渲染为 dim 块（note 引导行"a direction you left, kept for context"）
+  - **命令**：`/tree` picker（filterable，条目=`label · #N · M messages`）+ `/tree <n>` 文本回退 + 无分支教学行；切换后 note 报告 summarized 与否；/fork 的 note 追加"(/tree switches back)"
+  - 钉子：store 3 例（tips/split/switch 拒绝面、branchSummary 往返+stats 跳过）、命令 6 例（含摘要方向性：**摘要覆盖被离开的分支**、共享主干不重摘、摘要请求恰一次）、e2e（fork→新枝写→/tree 切回→摘要请求只含弃段→下一请求携带 `[Branch summary —` 框架+旧枝内容、q3 原文仅经摘要进入）；/help 金样与 known 行同步
+  - **踩坑**：①多脚本 python 编辑中一段结果误写临时文件未回源文件（/tree 命令"消失"但测试全绿=金样没破——测试全绿≠功能落地，功能性新增必须金样先行红后绿）；②测试方向性错误（摘要在被离开侧，测试却断言目标侧）——语义断言先想清楚"谁被弃"；③TS 的 AgentMessage 联合类型上 .content 需 UserMessage 谓词收敛
+  - **审查计划**：与批次 1 合并发两路对抗审查（存储语义+命令生命周期交互面）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

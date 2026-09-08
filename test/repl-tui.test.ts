@@ -1131,6 +1131,23 @@ describe("runRepl with shell:tui", () => {
 		expect(code).toBe(0);
 	});
 
+	it("a submitted prompt echoes into the transcript, and the turn settles to ONE stats line (no cumulative)", async () => {
+		const env = await startTuiRepl([reply("the answer")]);
+		await settle();
+		env.terminal.data("hello there\r");
+		await settle();
+		const lines = env.transcript.completedLines();
+		expect(lines).toContain("> hello there"); // the question is visible above the answer
+		expect(lines).toContain("the answer");
+		// exactly one status line per turn: the run stats; the session
+		// cumulative line moved to the TUI footer (dogfood 2026-09-09)
+		expect(lines.some((l) => l.startsWith("— test-model ·"))).toBe(true);
+		expect(lines.filter((l) => l.includes("msgs total")).length).toBe(0);
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
 	it("Ctrl+C routes through the machine: the quit hint lands in the transcript", async () => {
 		const env = await startTuiRepl([reply("ok")]);
 		await settle();

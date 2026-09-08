@@ -354,6 +354,11 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "running";
 		this.input.setActive(true);
+		// The TUI editor clears the line on submit — echo it into the
+		// transcript so the conversation reads as a conversation (dogfood
+		// report 2026-09-09: answers appeared with no question above them).
+		// Print keeps the terminal's own readline echo; bytes unchanged.
+		if (this.input.setFooter !== undefined) this.renderer.user(line);
 		this.renderer.think(); // live spinner until the first event arrives (print/legacy)
 		this.pushActivity(); // TUI activity region: thinking phase from the start
 		const controller = new AbortController();
@@ -454,7 +459,10 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.renderer.endRun();
 		this.runner.printRunStats(result);
-		this.runner.printSessionStats();
+		// Cumulative session tokens live in the TUI footer — printing the
+		// per-turn session line there too doubled every answer's status noise
+		// (dogfood report 2026-09-09). Print keeps both lines; bytes unchanged.
+		if (this.input.setFooter === undefined) this.runner.printSessionStats();
 		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {
 			// the user pressed Ctrl+C to take control — queued lines are not run

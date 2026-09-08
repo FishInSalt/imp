@@ -167,6 +167,13 @@ describe("Renderer", () => {
 		expect(out.output()).not.toContain("\x1b");
 	});
 
+	it("user() echoes one `> `-prefixed line per physical line, plain (not dim)", () => {
+		const out = collector();
+		const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "one-line" });
+		r.user("hello\nworld");
+		expect(out.output()).toBe("> hello\n> world\n");
+	});
+
 	it("note mid-stream inserts onto a fresh line and streaming continues after it", () => {
 		const out = collector();
 		const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "one-line" });

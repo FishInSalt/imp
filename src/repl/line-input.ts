@@ -23,6 +23,9 @@ export interface LineInput {
 	ask(question: string): Promise<boolean>;
 	/** History so far (newest first). Interactive only. */
 	getHistory(): readonly string[];
+	/** Append a collapsed fold (expandable body) below the transcript — a
+	 *  TUI-shell-only affordance; the readline shell has no folds. */
+	addFold?(title: string, lines: string[]): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }

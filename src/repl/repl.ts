@@ -412,13 +412,14 @@ class ReplMachine {
 	 *  fold (M11: `⎿ stdout: (+22 lines)` told the reader nothing and hid the
 	 *  content with no way in — dogfood 2026-09-09); edits keep their
 	 *  decorated diff fold, everything else previews via summarizeResult and
-	 *  carries the full content. Errors do not fold: the red `⎿` line stays,
-	 *  expanded and salient. Child-sourced results never reach this tap. */
+	 *  carries the full content. Errors fold with a red arrow (debt
+	 *  clearance); the `● ✗` line above keeps the failure salient.
+	 *  Child-sourced results never reach this tap. */
 	private showResultFold(event: AgentEvent): void {
-		if (event.type !== "tool_end" || event.result.isError) return;
+		if (event.type !== "tool_end") return;
 		if (this.input.addFold === undefined) return;
 		const result = event.result;
-		if (result.toolName === "edit") {
+		if (!result.isError && result.toolName === "edit") {
 			const content = result.content;
 			const split = content.indexOf(":\n");
 			if (split !== -1) {
@@ -443,7 +444,7 @@ class ReplMachine {
 		if (rawLines.length > FOLD_LINE_CAP) {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
-		this.input.addFold(summarizeResult(result.toolName, result.content), capped, false);
+		this.input.addFold(summarizeResult(result.toolName, result.content), capped, false, result.isError === true);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -786,6 +787,7 @@ class ReplMachine {
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string) => this.enqueuePrompt(text),
+			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
 			abortActive: () => {
 				if (this.controller !== null) {
 					this.controller.abort();
@@ -840,6 +842,8 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			fdPath,
 		};
 	}
+	// /resume clears the view first (see the command) — replay itself never
+	// clears, because the startup banner is already on screen when it runs.
 	const replay = (session: SessionStore): number =>
 		replaySession(
 			{

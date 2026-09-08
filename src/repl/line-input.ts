@@ -47,7 +47,10 @@ export interface LineInput {
 	setFooter?(text: string): void;
 	/** Append a collapsed fold (expandable body) below the transcript — a
 	 *  TUI-shell-only affordance; the readline shell has no folds. */
-	addFold?(title: string, lines: string[], decorate?: boolean): void;
+	addFold?(title: string, lines: string[], decorate?: boolean, error?: boolean): void;
+	/** TUI shells: wipe transcript + folds (/new, /resume). Optional —
+	 *  the readline shell has no persistent screen state to clear. */
+	clearConversation?(): void;
 	/** Item picker (M9 phase 2, TUI only — the readline shell has none, so
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */

@@ -210,15 +210,17 @@ describe("footer context percentage", () => {
 		await waitUntil(() => count(env.transcript.completedLines().join("\n"), RUN_STATS) === 2);
 		expect(count(env.transcript.completedLines().join("\n"), LOW_NOTE)).toBe(1);
 
-		// /new empties the live history: ctx drops to 0, the hint leaves the footer
+		// /new empties the live history: ctx drops to 0, the hint leaves the
+		// footer — and (debt clearance) the transcript itself starts over
 		const mark = env.terminal.writes.length;
 		env.terminal.data("/new\r");
 		await waitUntil(() => env.terminal.frameSince(mark).includes("ctx 0%"));
 		expect(env.terminal.frameSince(mark)).not.toContain("low — /compact");
+		expect(count(env.transcript.completedLines().join("\n"), LOW_NOTE)).toBe(0); // wiped with the view
 
-		// crossing the threshold again fires the note a second time
+		// crossing the threshold again fires the note — the latch re-armed
 		env.terminal.data("hi\r");
-		await waitUntil(() => count(env.transcript.completedLines().join("\n"), LOW_NOTE) === 2);
+		await waitUntil(() => count(env.transcript.completedLines().join("\n"), LOW_NOTE) === 1);
 		env.terminal.data("/exit\r");
 		await env.repl;
 	});

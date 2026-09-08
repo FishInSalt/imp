@@ -298,13 +298,16 @@ export class TuiShell implements LineInput {
 				this.options.onEof();
 				return { consume: true };
 			}
-			// Fold affordance (TUI-only; see the parity ledger): toggle the
-			// newest fold. With none present the key passes through to the
-			// editor — which has no Ctrl+O binding, so effectively a no-op.
+			// Fold affordance (TUI-only; see the parity ledger): expand/collapse
+			// ALL folds — v1 toggled only the newest, which left mid-turn
+			// results permanently unexpandable (declared debt, cleared):
+			// any-collapsed → expand all; all-expanded → collapse all. With
+			// none present the key passes through to the editor — which has
+			// no Ctrl+O binding, so effectively a no-op.
 			if (matchesKey(data, "ctrl+o")) {
-				const newest = this.folds.at(-1);
-				if (newest === undefined) return undefined;
-				newest.toggle();
+				if (this.folds.length === 0) return undefined;
+				const expand = this.folds.some((f) => !f.isExpanded());
+				for (const fold of this.folds) fold.setExpanded(expand);
 				this.tui?.requestRender();
 				return { consume: true };
 			}
@@ -483,8 +486,8 @@ export class TuiShell implements LineInput {
 	 * Append a collapsed fold below the transcript text (v1 ordering: the
 	 * stream renders first, folds after — see the parity ledger).
 	 */
-	addFold(title: string, lines: string[], decorate = true): void {
-		const fold = new Fold(title, lines, decorate);
+	addFold(title: string, lines: string[], decorate = true, error = false): void {
+		const fold = new Fold(title, lines, decorate, error);
 		this.folds.push(fold);
 		this.foldContainer.addChild(fold);
 		this.tui?.requestRender();
@@ -492,6 +495,17 @@ export class TuiShell implements LineInput {
 
 	getHistory(): readonly string[] {
 		return this.history;
+	}
+
+	/** Wipe the conversation view: transcript lines AND folds (debt
+	 *  clearance — /new used to leave the old session's screen behind and
+	 *  the fold container grew without bound). Input history stays: it is
+	 *  the user's own recall, not this conversation. */
+	clearConversation(): void {
+		this.options.transcript.clear();
+		this.folds.length = 0;
+		this.foldContainer.clear();
+		this.tui?.requestRender();
 	}
 
 	select(options: SelectOptions): Promise<number | null> {

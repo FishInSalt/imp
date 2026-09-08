@@ -1636,6 +1636,70 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("debt clearance: error results fold too — no red ⎿ line, the ● ✗ line stays, expand works", async () => {
+		const failing: Tool = {
+			name: "bash",
+			description: "test bash stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return {
+					output: "Error: command timed out after 5s and was killed. Partial output:\nline one\nline two",
+					isError: true,
+				};
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "sleep 99" } }], "tool_use"),
+				reply("done"),
+			],
+			{ tools: [failing] },
+		);
+		await settle();
+		env.terminal.data("run it\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("● bash $ sleep 99 ✗"); // the salient failure line stays
+		expect(frame).not.toContain("⎿"); // the red ⎿ preview is gone — folded instead
+		expect(frame).toContain("▸ Error: command timed out"); // the error fold's collapsed title
+		// expand-all reveals the partial output
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.terminal.frameSince(0).includes("line one"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("debt clearance: /new clears the transcript and folds", async () => {
+		const chatty: Tool = {
+			name: "bash",
+			description: "test bash stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return { output: "stdout:\nsome long output line that should vanish\n" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "seq 99" } }], "tool_use"),
+				reply("done"),
+				reply("fresh turn"),
+			],
+			{ tools: [chatty] },
+		);
+		await settle();
+		env.terminal.data("run it\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("should vanish"), 8000);
+		env.terminal.data("/new\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("new session"), 8000);
+		const mark = env.terminal.writes.length;
+		env.terminal.data("hello\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("fresh turn"), 8000);
+		// the old content and its fold are gone from the CURRENT screen
+		expect(env.terminal.frameSince(mark)).not.toContain("should vanish");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("M11 #6 (review P1): a '!'-leading md body queued mid-run flushes as a MODEL turn — never as a shell command", async () => {
 		const extras = [
 			{

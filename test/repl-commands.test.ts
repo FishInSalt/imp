@@ -204,7 +204,7 @@ describe("slash commands", () => {
 				"  Esc                abort the running turn (same as Ctrl+C); with the",
 				"                     autocomplete panel open, one Esc closes it and aborts",
 				"  Ctrl+D             exit",
-				"  Ctrl+O             expand/collapse the newest diff fold",
+				"  Ctrl+O             expand/collapse all folds (results, errors, diffs)",
 				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
 				"  ! prefix           run a shell command directly — e.g. ! ls -la",
 				"  autocomplete (/ commands · @ files):",

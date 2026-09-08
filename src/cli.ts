@@ -17,6 +17,7 @@ import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/ty
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
+import { askTrustViaTui, type TrustAskAnswer } from "./repl/trust-ask.js"
 import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
 import { TranscriptSink } from "./repl/transcript.js";
@@ -280,7 +281,16 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
 	try {
-		const projectTrusted = await resolveProjectTrust(opts, renderer, interactive);
+		const projectTrusted = await resolveProjectTrust(
+			opts,
+			renderer,
+			interactive,
+			// One-shot ask shell over the SAME transcript (debt clearance) —
+			// only when the session itself will be a TUI.
+			shell === "tui" && transcript !== undefined
+				? (cwd, resources) => askTrustViaTui({ transcript: transcript, cwd, resources })
+				: undefined,
+		);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
 		// Markdown quick commands (M11 #6) ride the same pipeline as extension
 		// commands: /help listing, conflict rules, dispatch. Project tier is
@@ -381,6 +391,7 @@ async function resolveProjectTrust(
 	opts: CliOptions,
 	renderer: Renderer,
 	interactive: boolean,
+	askTui?: (cwd: string, resources: readonly string[]) => Promise<TrustAskAnswer | null>,
 ): Promise<boolean> {
 	const cwd = process.cwd();
 	const resources = trustRequiringResources(cwd, homedir()).filter(
@@ -408,24 +419,36 @@ async function resolveProjectTrust(
 		return entry.trusted;
 	}
 	if (interactive) {
-		const answer = await askTrustOnTty(cwd, resources);
+		// The TUI shell asks with a picker (debt clearance); the legacy shell
+		// keeps the readline [y/N]. Both map onto the same recording rules.
+		const answer: TrustAskAnswer | null | boolean =
+			askTui !== undefined ? await askTui(cwd, resources) : await askTrustOnTty(cwd, resources);
 		if (answer === null) {
-			// cancelled (EOF/Ctrl+C/Ctrl+D): deny for THIS session only — a
-			// dropped terminal must not become a permanent record (M8 review)
+			// cancelled (picker Esc/Ctrl+C, or readline EOF): deny for THIS
+			// session only — a dropped terminal must not become a permanent
+			// record (M8 review)
 			renderer.note(
 				dim(`▪ trust: no answer — skipping ${resources.join(", ")} for this session (asked again next open)`),
 			);
 			return false;
 		}
-		setTrust(store, cwd, answer);
-		if (!answer) {
+		if (answer === "session") {
+			// load now, record nothing — asked again next open
+			renderer.note(
+				dim(`▪ trust: project resources loaded for this session only (nothing recorded)`),
+			);
+			return true;
+		}
+		const trusted = answer === true || answer === "yes";
+		setTrust(store, cwd, trusted);
+		if (!trusted) {
 			renderer.note(
 				dim(
 					`▪ trust: recorded “do not trust” for ${cwd} — skipping ${resources.join(", ")} (re-enable with: imp --trust)`,
 				),
 			);
 		}
-		return answer;
+		return trusted;
 	}
 	// print mode / pipes: deny without recording, with the teaching line
 	process.stderr.write(

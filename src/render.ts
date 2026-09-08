@@ -149,6 +149,10 @@ export class Renderer {
 	/** Ends a run's output. `always` reproduces print mode's unconditional "\n". */
 	endRun(always = false): void {
 		this.stopSpinner();
+		// Run boundary: TUI pendings that never completed (aborted tools)
+		// belong to this run only — drop them so they cannot leak into the
+		// next one's bookkeeping.
+		if (!this.options.liveTools) this.pendingTools = [];
 		this.flushMarkdown();
 		if (always) {
 			this.write("\n");
@@ -233,7 +237,11 @@ export class Renderer {
 	private stopSpinner(): void {
 		this.clearThinkTimer();
 		if (!this.options.liveTools) {
-			this.pendingTools = [];
+			// TUI: no live line exists (the activity region owns pending
+			// state) and the pendings ARE the completion bookkeeping (base
+			// label + duration). A mid-run note (e.g. /status, allowedDuringRun
+			// since M11) must not eat them (review P1) — endRun clears at the
+			// run boundary instead.
 			return;
 		}
 		if (this.spinnerLabel === null && this.pendingTools.length === 0) return;

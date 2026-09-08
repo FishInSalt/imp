@@ -461,8 +461,8 @@ export class TuiShell implements LineInput {
 	 * Append a collapsed fold below the transcript text (v1 ordering: the
 	 * stream renders first, folds after — see the parity ledger).
 	 */
-	addFold(title: string, lines: string[]): void {
-		const fold = new Fold(title, lines);
+	addFold(title: string, lines: string[], decorate = true): void {
+		const fold = new Fold(title, lines, decorate);
 		this.folds.push(fold);
 		this.foldContainer.addChild(fold);
 		this.tui?.requestRender();

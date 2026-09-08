@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -490,6 +490,111 @@ describe("TuiShell", () => {
 	});
 });
 
+// ── TuiShell.select: the M9 phase-2 item picker ─────────────────────────
+
+describe("TuiShell selector", () => {
+	it("renders title and items (first row preselected); Enter confirms index 0", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "pick a model",
+			items: [
+				{ label: "alpha", description: "first" },
+				{ label: "beta", description: "second" },
+			],
+		});
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("pick a model");
+		expect(frame).toContain("alpha");
+		expect(frame).toContain("beta");
+		expect(frame).toContain("→ alpha"); // row 0 carries the selection marker
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("Down moves the selection; Enter confirms the moved-to index", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "alpha" }, { label: "beta" }, { label: "gamma" }] });
+		await settle();
+		terminal.data("\x1b[B"); // Down
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).toContain("→ beta"); // marker moved
+		expect(terminal.frameSince(mark)).not.toContain("→ alpha");
+		terminal.data("\x1b[B"); // Down again → gamma
+		terminal.data("\r"); // confirm
+		await settle();
+		await expect(chosen).resolves.toBe(2);
+		shell.close();
+	});
+
+	it("Esc and Ctrl+C cancel to null — the machine interrupt never fires", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const viaEsc = shell.select({ items: [{ label: "alpha" }, { label: "beta" }] });
+		await settle();
+		terminal.data("\x1b"); // Esc
+		await expect(viaEsc).resolves.toBeNull();
+		const viaCtrlC = shell.select({ items: [{ label: "alpha" }, { label: "beta" }] });
+		await settle();
+		terminal.data("\x03");
+		await expect(viaCtrlC).resolves.toBeNull();
+		expect(events).toEqual([]); // positive control: no interrupt leaked out
+		shell.close();
+	});
+
+	it("Ctrl+D is swallowed while a selector is open; close() settles it to null", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "alpha" }] });
+		await settle();
+		terminal.data("\x04");
+		await settle();
+		expect(events).toEqual([]); // no eof — the selector outranks EOF
+		shell.close();
+		await expect(chosen).resolves.toBeNull();
+	});
+
+	it("after resolution the ask region is empty and keys reach the editor again", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ title: "pick", items: [{ label: "alpha" }, { label: "beta" }] });
+		await settle();
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		expect(frame).not.toContain("pick");
+		expect(frame).not.toContain("alpha");
+		expect(frame).not.toContain("beta"); // the ask region is empty again
+		terminal.data("hello\r");
+		await settle();
+		expect(events).toEqual(["line:hello"]); // the editor owns keys again
+		shell.close();
+	});
+
+	it("an empty item list resolves to null without mounting anything", async () => {
+		const { shell } = makeShell();
+		shell.start();
+		await settle(0);
+		await expect(shell.select({ items: [] })).resolves.toBeNull();
+		shell.close();
+	});
+});
+
 // ── resolveShell: the documented escape hatch ────────────────────────────
 
 describe("resolveShell", () => {
@@ -502,6 +607,116 @@ describe("resolveShell", () => {
 		vi.unstubAllEnvs();
 	});
 });
+
+// ── footer: the bottom status line ───────────────────────────────────────
+
+describe("TuiShell footer", () => {
+	it("setFooter paints a dim status line below the editor and updates in place", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setFooter("glm-5.3 · abc12345 · ↑1.2k ↓567");
+		await settle(); // natural repaint — no forceRender
+		expect(terminal.frameSince(0)).toContain("glm-5.3 · abc12345 · ↑1.2k ↓567");
+		shell.setFooter("switched-model · abc12345");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("switched-model · abc12345");
+		shell.close();
+	});
+
+	it('setFooter("") blanks the row without breaking the layout', async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setFooter("something");
+		shell.setFooter("");
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("something");
+		expect(terminal.frameSince(0)).toContain("> "); // editor intact
+		shell.close();
+	});
+});
+
+// ── M9-2 review regressions ──────────────────────────────────────────────
+
+describe("M9-2 review regressions", () => {
+	it("Ctrl+C interrupts again after a picker resolved — selector state cleared", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({ items: [{ label: "a" }, { label: "b" }] });
+		await settle(0);
+		terminal.data("\r"); // pick row 0 — resolves and unmounts
+		await expect(pick).resolves.toBe(0);
+		terminal.data("\x03"); // mutation pin: without `selector = null` this is swallowed
+		await settle();
+		expect(events).toEqual(["interrupt"]);
+		shell.close();
+	});
+
+	it("a second select() while one is open declines to null — the first stays live", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const first = shell.select({ items: [{ label: "a" }, { label: "b" }] });
+		await settle();
+		await expect(shell.select({ items: [{ label: "x" }] })).resolves.toBe(null);
+		await settle(0);
+		expect(terminal.frameSince(0)).toContain("→ a"); // the FIRST list is still mounted
+		terminal.data("\x1b[B");
+		terminal.data("\r");
+		await expect(first).resolves.toBe(1);
+		shell.close();
+	});
+
+	it("a question queued while a picker is open renders only after the picker resolves", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({ items: [{ label: "a" }] });
+		await settle(0);
+		const question = shell.ask("proceed? [y/N] ");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("→ a"); // positive control: picker rendered
+		expect(terminal.frameSince(0)).not.toContain("proceed?"); // held, not shown under the list
+		terminal.data("\x1b"); // cancel the picker
+		await settle();
+		await expect(pick).resolves.toBe(null);
+		expect(terminal.frameSince(0)).toContain("proceed? [y/N] "); // flushed on finish
+		terminal.data("y\r");
+		await expect(question).resolves.toBe(true);
+		shell.close();
+	});
+
+	it("SIGINT while a picker is open tears it down, then interrupts", async () => {
+		const { shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({ items: [{ label: "a" }] });
+		await settle(0);
+		process.emit("SIGINT");
+		await expect(pick).resolves.toBe(null);
+		expect(events).toEqual(["interrupt"]);
+		shell.close();
+	});
+
+	it("the footer is dim in the raw byte stream and sits below the editor box", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setFooter("glm-5.3 · abc12345");
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\x1b[2mglm-5.3"); // dim is really emitted (not just stripped away)
+		const frame = terminal.frameSince(0);
+		const footerAt = frame.lastIndexOf("glm-5.3");
+		const borderAt = frame.lastIndexOf("────"); // the editor box's bottom border
+		expect(footerAt).toBeGreaterThan(borderAt); // placement pin: below the editor
+		shell.close();
+	});
+});
+
+// ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
 
 // ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
 
@@ -585,6 +800,10 @@ describe("runRepl with shell:tui", () => {
 		const env = await startTuiRepl([() => gated.then(() => reply("hello from the model"))]);
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("/help for commands"); // banner painted
+		// P1 regression: the footer is live at STARTUP — the machine's
+		// constructor push arrives before input.start() and must be buffered,
+		// not dropped (no turn has run yet).
+		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
 		env.terminal.data("hi\r");
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("+ "); // active while the turn runs
@@ -595,6 +814,9 @@ describe("runRepl with shell:tui", () => {
 		expect(env.requests[0]?.messages.at(-1)).toMatchObject({ role: "user", content: "hi" });
 		expect(env.transcript.completedLines().join("\n")).toContain("hello from the model");
 		expect(env.terminal.frameSince(0)).toContain("> "); // idle again after
+		// Footer: model + session id8 at startup, cumulative tokens after the run
+		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
+		expect(env.terminal.frameSince(0)).toContain("↑10 ↓5");
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
@@ -610,6 +832,51 @@ describe("runRepl with shell:tui", () => {
 		await env.repl;
 	});
 
+	it("/model with no args opens the selector; Down+Enter switches like /model <id>", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("/model\r");
+		await settle();
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("models — switch applies from the next turn"); // title
+		expect(frame).toContain("→ test-model"); // current id first, preselected
+		expect(frame).toContain("claude-sonnet-4-5");
+		expect(frame).toContain("glm-4.6"); // README-documented candidates listed
+		expect(frame).toContain("current"); // the current row is marked
+		env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
+		await settle();
+		env.terminal.data("\r"); // pick
+		await settle();
+		expect(env.runner.model).toBe("claude-sonnet-4-5");
+		expect(env.transcript.completedLines().join("\n")).toContain(
+			"▪ model: test-model → claude-sonnet-4-5 (applies from the next turn)",
+		);
+		// Mutation pin: the footer refreshes after a COMMAND (no turn ran) —
+		// runCommand's finally push is what makes this green.
+		expect(env.terminal.frameSince(0)).toContain("claude-sonnet-4-5 · ");
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	it("/model selector: Esc cancels — no switch, no note, editor keeps keys", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("/model\r");
+		await settle();
+		// Positive control (review P2): the picker must actually be open —
+		// without ctx.select, /model silently falls back to the legacy text
+		// path and every later assertion would still pass.
+		expect(env.terminal.frameSince(0)).toContain("models — switch applies from the next turn");
+		env.terminal.data("\x1b"); // Esc — cancel
+		await settle();
+		expect(env.runner.model).toBe("test-model");
+		expect(env.transcript.completedLines().join("\n")).not.toContain("▪ model:");
+		env.terminal.data("/exit\r"); // keys still reach the editor
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
 	it("EOF on an empty editor exits gracefully with the session-saved note", async () => {
 		const env = await startTuiRepl([reply("ok")]);
 		await settle();
@@ -618,5 +885,35 @@ describe("runRepl with shell:tui", () => {
 		expect(code).toBe(0);
 		await settle(80); // deferred stop paints the final note
 		expect(env.terminal.frameSince(0)).toContain("saved");
+	});
+
+	it("an edit tool result becomes a collapsed fold; Ctrl+O expands the diff (producer wiring)", async () => {
+		const env = await startTuiRepl([
+			{
+				role: "assistant",
+				blocks: [
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "edit",
+						arguments: { path: "fold.txt", edits: [{ oldText: "hello", newText: "goodbye" }] },
+					},
+				],
+				usage: { inputTokens: 10, outputTokens: 5 },
+				stopReason: "tool_use",
+			},
+			reply("done"),
+		]);
+		await writeFile(path.join(env.baseDir, "fold.txt"), "hello\n", "utf-8");
+		env.terminal.data("edit it\r");
+		await settle();
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("▸ Edited fold.txt (1 edit applied) (+1/-1)");
+		env.terminal.data("\x0f"); // Ctrl+O — expand the newest fold
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("+ goodbye");
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
 	});
 });

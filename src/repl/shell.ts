@@ -1,3 +1,4 @@
+import { dim } from "../format.js";
 import {
 	Container,
 	Editor,
@@ -7,11 +8,13 @@ import {
 	isYes,
 	matchesKey,
 	ProcessTerminal,
+	SelectList,
 	type Terminal,
 	Text,
 	TUI,
 } from "../tui.js";
-import type { LineInput, LineInputEvents } from "./line-input.js";
+import { Fold } from "./components/fold.js";
+import type { LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
 export interface TuiShellOptions extends LineInputEvents {
@@ -41,9 +44,13 @@ export function tuiEditorTheme(): EditorTheme {
  *
  *   TUI
  *   ├─ transcript (TranscriptSink — the Renderer's output, hosted)
- *   ├─ ask line   ([y/N] question while one is pending; hidden otherwise)
+ *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
+ *   ├─ ask line   ([y/N] question while one is pending; an item selector
+ *   │              while one is open; hidden otherwise)
  *   ├─ marker     ("> " idle / "+ " active)
- *   └─ editor     (always last; focused)
+ *   ├─ editor     (focused except while a selector is open)
+ *   └─ footer     (dim status line: model · session · cumulative tokens;
+ *                 pushed by the machine, pi places it below the editor too)
  *
  * Semantics are the readline shell's, byte-for-byte where bytes are visible:
  * the ask FIFO (lines answer pending questions first; Ctrl+C declines;
@@ -57,17 +64,52 @@ export function tuiEditorTheme(): EditorTheme {
  *    Kitty key-RELEASE events are filtered first — one press is one
  *    interrupt (M9 review P0: press+release double-fired).
  *  - Submissions are trim()-ed by the editor (readline delivered raw).
+ *  - Folds (addFold) are a TUI-only affordance with no readline
+ *    counterpart: collapsed "▸ title" lines render between the
+ *    transcript and the ask line — the text stream first, folds after,
+ *    in insertion order (v1; folds never interleave with streamed
+ *    text). The producer is the machine's tool_end tap: every successful
+ *    edit result ("<summary>:\n<diff>") becomes one fold, so Ctrl+O is
+ *    live in real sessions; Ctrl+O toggles the most recently added fold
+ *    only; with no fold present the key falls through to the editor,
+ *    which has no Ctrl+O binding (a no-op).
  *  - Multi-line editor submits arrive as ONE line event with embedded
  *    newlines (readline split them into separate events); a multi-line
  *    answer to an [y/N] ask is judged on the whole text, so "y\nfootnote"
  *    declines and loses the footnote.
+ *  - While an item selector is open (select — /model with no args): the
+ *    list takes focus, so keystrokes steer the selection instead of the
+ *    editor; Ctrl+C cancels it (the readline-era interrupt NEVER fires —
+ *    the selector outranks both interrupt and a pending ask), and Ctrl+D
+ *    is swallowed (no EOF, no delete-forward) until it resolves. A second
+ *    select() while one is open declines to null (the first stays live);
+ *    a question queued by ask() while a picker owns the keys is held and
+ *    rendered by the picker's finish(); SIGINT tears the picker down
+ *    before interrupting. The readline shell has no selector — its /model
+ *    keeps printing text.
  */
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
+	/** One theme for every pi-tui component (editor AND select lists). */
+	private readonly theme: EditorTheme = tuiEditorTheme();
 	private tui: TUI | null = null;
 	private editor: Editor | null = null;
 	private askContainer = new Container();
+	/** Hosts the Fold children — sits between transcript and ask line. */
+	private readonly foldContainer = new Container();
+	/** Newest last; Ctrl+O toggles the last one only. */
+	private readonly folds: Fold[] = [];
+	/** The ask line's Text child, tracked so a selector sharing the ask
+	 *  region can never remove (or be removed by) the question line. */
+	private askLine: Text | null = null;
+	/** The open selector, if any — finished on pick, cancel, or close. */
+	private selector: { teardown: () => void } | null = null;
 	private marker: Text | null = null;
+	private footer: Text | null = null;
+	/** Buffered setFooter text — pushes may arrive before start() (the
+	 *  machine's constructor runs first) and must not be dropped (M9-2
+	 *  review P1: the startup footer was silently blank). */
+	private footerText = "";
 	private history: string[] = [];
 	private closed = false;
 	/** Terminal restore ran (close's deferred stop or the process-exit hook). */
@@ -92,15 +134,19 @@ export class TuiShell implements LineInput {
 		const marker = new Text("> ");
 		this.marker = marker;
 		const editorBox = new Container();
-		const editor = new Editor(tui, tuiEditorTheme(), this.options.editorOptions);
+		const editor = new Editor(tui, this.theme, this.options.editorOptions);
 		this.editor = editor;
 		editor.onSubmit = (text) => this.submit(text);
 		editorBox.addChild(editor);
 
 		tui.addChild(this.options.transcript);
+		tui.addChild(this.foldContainer);
 		tui.addChild(this.askContainer);
 		tui.addChild(marker);
 		tui.addChild(editorBox);
+		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true));
+		this.footer = footer;
+		tui.addChild(footer); // status line below the editor (pi's placement)
 		tui.setFocus(editor);
 		tui.start();
 
@@ -111,6 +157,13 @@ export class TuiShell implements LineInput {
 			// Kitty protocol reports key RELEASES as their own sequences; a
 			// release must not count as a second press (M9 review P0).
 			if (isKeyRelease(data)) return undefined;
+			// An open selector outranks the machine's key semantics: Ctrl+C
+			// flows on to the focused list (its cancel binding — never the
+			// interrupt), and Ctrl+D is swallowed (no EOF mid-selection).
+			if (this.selector !== null) {
+				if (matchesKey(data, "ctrl+c")) return undefined;
+				if (matchesKey(data, "ctrl+d")) return { consume: true };
+			}
 			if (matchesKey(data, "ctrl+c")) {
 				if (this.pendingAsks.length > 0) this.settleAsk(false);
 				else this.options.onInterrupt();
@@ -124,11 +177,22 @@ export class TuiShell implements LineInput {
 				this.options.onEof();
 				return { consume: true };
 			}
+			// Fold affordance (TUI-only; see the parity ledger): toggle the
+			// newest fold. With none present the key passes through to the
+			// editor — which has no Ctrl+O binding, so effectively a no-op.
+			if (matchesKey(data, "ctrl+o")) {
+				const newest = this.folds.at(-1);
+				if (newest === undefined) return undefined;
+				newest.toggle();
+				this.tui?.requestRender();
+				return { consume: true };
+			}
 			return undefined;
 		});
 
 		// `kill -INT` and a closing stdin: same drains as the readline shell.
 		this.onProcessSigint = () => {
+			this.selector?.teardown(); // a live picker dies with the interrupt, not after
 			this.drainAsks();
 			this.options.onInterrupt();
 		};
@@ -172,6 +236,17 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
+	/** Bottom status line. Empty text renders ZERO rows (pi-tui Text) — the
+	 *  layout grows by the padded rows once text arrives; callers always
+	 *  send non-empty (model is always present). */
+	setFooter(text: string): void {
+		// The TUI owns a real terminal, so ANSI is unconditional; dim keeps
+		// the status visually quiet under the editor.
+		this.footerText = text; // buffered: start() seeds from this
+		this.footer?.setText(text === "" ? "" : dim(text, true));
+		this.tui?.requestRender();
+	}
+
 	/** Test seam: force one full repaint — differential renders may leave
 	 *  unchanged lines out of the write log assertions depend on. */
 	forceRender(): void {
@@ -192,12 +267,66 @@ export class TuiShell implements LineInput {
 		return new Promise<boolean>((resolve) => {
 			const wasFirst = this.pendingAsks.length === 0;
 			this.pendingAsks.push({ question, resolve });
-			if (wasFirst) this.showAsk(question);
+			// While a picker owns the keys the question would be unanswerable;
+			// hold it — the picker's finish() renders the queue head (M9-2 P2).
+			if (wasFirst && this.selector === null) this.showAsk(question);
 		});
+	}
+
+	/**
+	 * Append a collapsed fold below the transcript text (v1 ordering: the
+	 * stream renders first, folds after — see the parity ledger).
+	 */
+	addFold(title: string, lines: string[]): void {
+		const fold = new Fold(title, lines);
+		this.folds.push(fold);
+		this.foldContainer.addChild(fold);
+		this.tui?.requestRender();
 	}
 
 	getHistory(): readonly string[] {
 		return this.history;
+	}
+
+	select(options: SelectOptions): Promise<number | null> {
+		const tui = this.tui;
+		if (tui === null || this.closed || this.selector !== null || options.items.length === 0)
+			return Promise.resolve(null); // unstarted/closed, or a picker is already open (M9-2 review P2: the reentrant call declines instead of orphaning the first)
+		// SelectList carries string values; the row's index is the identity
+		// the caller picked (no filtering — rows can never reorder).
+		const items = options.items.map((item, index) => ({
+			value: String(index),
+			label: item.label,
+			description: item.description,
+		}));
+		const list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
+		const box = new Container();
+		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title));
+		box.addChild(list);
+		return new Promise<number | null>((resolve) => {
+			let settled = false; // pick, cancel and close all funnel here — once
+			const finish = (index: number | null): void => {
+				if (settled) return;
+				settled = true;
+				this.selector = null;
+				this.askContainer.removeChild(box);
+				tui.setFocus(this.editor); // the editor owns keys again
+				tui.requestRender();
+				// A question queued while the picker owned the keys renders now
+				// (M9-2 review P2: it was visible-but-unanswerable under the list).
+				if (this.askLine === null) {
+					const next = this.pendingAsks[0];
+					if (next !== undefined) this.showAsk(next.question);
+				}
+				resolve(index);
+			};
+			this.selector = { teardown: () => finish(null) };
+			list.onSelect = (item) => finish(Number(item.value));
+			list.onCancel = () => finish(null);
+			this.askContainer.addChild(box);
+			tui.setFocus(list);
+			tui.requestRender();
+		});
 	}
 
 	close(): void {
@@ -210,6 +339,7 @@ export class TuiShell implements LineInput {
 		if (this.onStdinEnd !== null) process.stdin.off("end", this.onStdinEnd);
 		this.onStdinEnd = null;
 		this.drainAsks();
+		this.selector?.teardown(); // an open picker dies with the shell, not the promise
 		const tui = this.tui;
 		if (tui !== null) {
 			// Graceful-exit notes ("session … saved") feed the sink on this very
@@ -256,12 +386,15 @@ export class TuiShell implements LineInput {
 
 	private showAsk(question: string): void {
 		this.removeAskLine();
-		this.askContainer.addChild(new Text(question));
+		const line = new Text(question);
+		this.askLine = line;
+		this.askContainer.addChild(line);
 		this.tui?.requestRender();
 	}
 
 	private removeAskLine(): void {
-		const first = this.askContainer.children[0];
-		if (first !== undefined) this.askContainer.removeChild(first);
+		if (this.askLine === null) return;
+		this.askContainer.removeChild(this.askLine);
+		this.askLine = null;
 	}
 }

@@ -11,6 +11,7 @@ import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
+import type { SelectOptions } from "./line-input.js";
 
 export interface CommandContext {
 	runner: Runner;
@@ -20,6 +21,11 @@ export interface CommandContext {
 	abortActive(): boolean; // abort controller if active
 	/** Replay a session's history on screen (wired in repl.ts; records in tests). */
 	replay(session: SessionStore): number;
+	/** Item picker, bound in repl.ts ONLY when the input shell implements it
+	 *  (TuiShell; the readline shell has none). Commands must keep a text
+	 *  fallback for a missing select. Resolves the chosen index, or null on
+	 *  cancel. */
+	select?: (options: SelectOptions) => Promise<number | null>;
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
 	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
@@ -52,6 +58,10 @@ Keys:
   Ctrl+C             abort the running turn (press twice to force quit);
                      at an empty prompt: press twice to exit
   Ctrl+D             exit
+  Ctrl+O             expand/collapse the newest diff fold
+  while a picker is open:
+    ↑/↓              move the selection
+    Enter            pick · Esc or Ctrl+C cancels (no interrupt)
 `;
 
 /** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */
@@ -97,6 +107,25 @@ export function helpText(
 function formatWhen(date: Date): string {
 	const p = (n: number) => String(n).padStart(2, "0");
 	return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
+/** v1 selector candidates for /model: no model registry exists, so this is
+ *  the README-documented set (claude-sonnet-4-5 default; the GLM coding-plan
+ *  ids) with the runner's current id prepended when it is not among them — a
+ *  custom IMP_MODEL / -m id must stay pickable. Replace when a real model
+ *  registry lands. */
+const MODEL_CANDIDATES: readonly string[] = ["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"];
+
+function modelCandidates(current: string): string[] {
+	return MODEL_CANDIDATES.includes(current) ? [...MODEL_CANDIDATES] : [current, ...MODEL_CANDIDATES];
+}
+
+/** The switch itself, shared by "/model <id>" and the picker's pick — the
+ *  write and the note are byte-identical whichever way the id arrived. */
+function switchModel(ctx: CommandContext, id: string): void {
+	const previous = ctx.runner.model;
+	ctx.runner.model = id;
+	ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
 }
 
 export const COMMANDS: readonly SlashCommand[] = [
@@ -178,21 +207,36 @@ export const COMMANDS: readonly SlashCommand[] = [
 		usage: "/model [id]",
 		summary: "show the current model, or switch (applies next turn)",
 		allowedDuringRun: true,
-		run: (args, ctx) => {
+		run: async (args, ctx): Promise<CommandOutcome> => {
 			if (args === "") {
-				ctx.renderer.writeLine(`model: ${ctx.runner.model}`);
-				ctx.renderer.writeLine(
-					"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)",
-				);
+				const select = ctx.select;
+				if (select === undefined) {
+					// Legacy readline shell: the text flow, byte-for-byte.
+					ctx.renderer.writeLine(`model: ${ctx.runner.model}`);
+					ctx.renderer.writeLine(
+						"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)",
+					);
+					return "handled";
+				}
+				// TUI shell: a pick behaves exactly like /model <id> on the chosen
+				// row; cancelling changes nothing and notes nothing.
+				const candidates = modelCandidates(ctx.runner.model);
+				const index = await select({
+					title: "models — switch applies from the next turn",
+					items: candidates.map((id) => ({
+						label: id,
+						description: id === ctx.runner.model ? "current" : undefined,
+					})),
+				});
+				const id = index === null ? undefined : candidates[index];
+				if (id !== undefined) switchModel(ctx, id);
 				return "handled";
 			}
-			const previous = ctx.runner.model;
 			const id = args.trim();
 			if (/\s/.test(id)) {
 				throw new Error(`/model takes one id — got extra text. Usage: /model <id>, e.g. /model glm-4.6`);
 			}
-			ctx.runner.model = id;
-			ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
+			switchModel(ctx, id);
 			return "handled";
 		},
 	},

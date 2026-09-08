@@ -191,6 +191,10 @@ describe("slash commands", () => {
 				"  Ctrl+C             abort the running turn (press twice to force quit);",
 				"                     at an empty prompt: press twice to exit",
 				"  Ctrl+D             exit",
+				"  Ctrl+O             expand/collapse the newest diff fold",
+				"  while a picker is open:",
+				"    ↑/↓              move the selection",
+				"    Enter            pick · Esc or Ctrl+C cancels (no interrupt)",
 				"",
 				"Lines typed while imp is working are queued and injected when the current turn ends.",
 			].join("\n"),
@@ -216,6 +220,54 @@ describe("slash commands", () => {
 		const env = await makeEnv();
 		await expect(dispatchCommand("/model glm-4.6 extra", env.ctx)).rejects.toThrow(/takes one id/);
 		expect(env.runner.model).toBe("claude-sonnet-4-5"); // unchanged — no delayed 404 next turn
+	});
+
+	it("M9-2: /model without args uses ctx.select when present — a pick switches like /model <id>", async () => {
+		const env = await makeEnv();
+		const calls: Array<{ title?: string; items: Array<{ label: string; description?: string }> }> = [];
+		env.ctx.select = async (options) => {
+			calls.push(options);
+			return options.items.findIndex((item) => item.label === "glm-4.6");
+		};
+		await dispatchCommand("/model", env.ctx);
+		expect(calls).toHaveLength(1);
+		const labels = calls[0]?.items.map((item) => item.label);
+		expect(labels).toEqual(["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"]); // v1 candidates
+		expect(calls[0]?.title).toContain("model");
+		expect(env.runner.model).toBe("glm-4.6");
+		expect(env.output()).toBe("▪ model: claude-sonnet-4-5 → glm-4.6 (applies from the next turn)\n");
+	});
+
+	it("M9-2: a custom current model leads the candidate list (it must stay pickable)", async () => {
+		const env = await makeEnv();
+		env.runner.model = "my-own-model";
+		let labels: string[] | undefined;
+		env.ctx.select = async (options) => {
+			labels = options.items.map((item) => item.label);
+			return 0; // pick the custom id itself
+		};
+		await dispatchCommand("/model", env.ctx);
+		expect(labels?.[0]).toBe("my-own-model");
+		expect(env.runner.model).toBe("my-own-model");
+		expect(env.output()).toBe("▪ model: my-own-model → my-own-model (applies from the next turn)\n"); // identical to /model <id> on the same id
+	});
+
+	it("M9-2: a cancelled selector changes nothing and notes nothing", async () => {
+		const env = await makeEnv();
+		env.ctx.select = async () => null;
+		await dispatchCommand("/model", env.ctx);
+		expect(env.runner.model).toBe("claude-sonnet-4-5");
+		expect(env.output()).toBe("");
+	});
+
+	it("M9-2: without ctx.select the legacy text path prints, byte-for-byte", async () => {
+		const env = await makeEnv();
+		expect(env.ctx.select).toBeUndefined(); // the readline shell wires no picker
+		await dispatchCommand("/model", env.ctx);
+		expect(env.output()).toBe(
+			"model: claude-sonnet-4-5\n" +
+				"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)\n",
+		);
 	});
 
 	it("/new swaps the session, empties history, keeps the old file, prints the banner", async () => {

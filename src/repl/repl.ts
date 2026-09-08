@@ -4,13 +4,14 @@ import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
-import { VERSION } from "../format.js";
+import { formatTokens, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { Terminal } from "../tui.js";
 import { resolveShell } from "../tui.js";
 import type { CommandContext } from "./commands.js";
 import { dispatchCommand, parseCommand } from "./commands.js";
+import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import type { LineInput } from "./line-input.js";
@@ -131,6 +132,7 @@ class ReplMachine {
 		this.replay = options.replay;
 		this.exit = options.exit;
 		this.finish = options.finish;
+		this.refreshFooter(); // eager warmup already knows model + session
 	}
 
 	handleLine(line: string): void {
@@ -238,6 +240,7 @@ class ReplMachine {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
 			}
+			this.refreshFooter(); // /model, /new, /resume all change footer inputs
 		}
 	}
 
@@ -253,13 +256,31 @@ class ReplMachine {
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,
-				onEvent: (event: AgentEvent) => this.renderer.event(event),
+				onEvent: (event: AgentEvent) => {
+					this.renderer.event(event);
+					this.showEditFold(event);
+				},
 				getSteeringMessages: () => this.steeringMessages(),
 			});
 			await this.settleSuccess(result);
 		} catch (err) {
 			this.settleFailure(err);
 		}
+	}
+
+	/** Edit results carry "<summary>:\n<diff>" — on the TUI shell the diff
+	 *  becomes a collapsed fold (Ctrl+O expands; the ⎿ summary line stays
+	 *  in the stream). The legacy shell has no addFold and skips this.
+	 *  Presentation-agnostic: consumes plain data, no pi-tui types. */
+	private showEditFold(event: AgentEvent): void {
+		if (event.type !== "tool_end" || event.result.isError) return;
+		if (event.result.toolName !== "edit") return; // write carries no diff
+		if (this.input.addFold === undefined) return;
+		const content = event.result.content;
+		const split = content.indexOf(":\n");
+		if (split === -1) return; // not the "summary: diff" contract
+		const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
+		this.input.addFold(title, lines);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -270,6 +291,23 @@ class ReplMachine {
 		return [{ role: "user", content: next }];
 	}
 
+	/** Bottom status line for the TUI shell (the legacy shell ignores it):
+	 *  model · session id8 · cumulative tokens. Pushed at every point any
+	 *  input changes — construction, command dispatch (/model, /new,
+	 *  /resume), and both run settle paths (session totals move). */
+	private refreshFooter(): void {
+		const parts: string[] = [this.runner.model];
+		const session = this.runner.session;
+		if (session !== null) {
+			parts.push(session.header.id.slice(0, 8));
+			const stats = session.stats();
+			if (stats.inputTokens > 0 || stats.outputTokens > 0) {
+				parts.push(`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`);
+			}
+		}
+		this.input.setFooter?.(parts.join(" · "));
+	}
+
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {
 		this.controller = null;
 		this.interruptCount = 0;
@@ -277,6 +315,7 @@ class ReplMachine {
 		this.renderer.endRun();
 		this.runner.printRunStats(result);
 		this.runner.printSessionStats();
+		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {
 			// the user pressed Ctrl+C to take control — queued lines are not run
 			this.discardQueue();
@@ -291,6 +330,7 @@ class ReplMachine {
 		this.interruptCount = 0;
 		if (this.state === "exited") return;
 		this.renderer.endRun();
+		this.refreshFooter(); // partial usage may have landed before the failure
 		// Defensive: an AbortError racing the settle path is a user interrupt,
 		// not a provider failure (the provider should already have ended the
 		// stream cleanly — see abortSafe in anthropic.ts).
@@ -390,7 +430,7 @@ class ReplMachine {
 	}
 
 	private commandContext(authorizedCompact = false): CommandContext {
-		return {
+		const ctx: CommandContext = {
 			runner: this.runner,
 			renderer: this.renderer,
 			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
@@ -404,6 +444,12 @@ class ReplMachine {
 				return false;
 			},
 		};
+		// The item picker exists only on shells that implement it (TuiShell —
+		// M9 phase 2); binding it to the input keeps the method's `this`.
+		// Commands without it keep their text fallbacks.
+		const select = this.input.select?.bind(this.input);
+		if (select !== undefined) ctx.select = select;
+		return ctx;
 	}
 }
 

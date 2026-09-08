@@ -1,0 +1,278 @@
+import { describe, expect, it } from "vitest";
+import { buildFoldFromDiff, Fold } from "../src/repl/components/fold.js";
+import { TuiShell } from "../src/repl/shell.js";
+import { TranscriptSink } from "../src/repl/transcript.js";
+import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
+
+// ── fakes (the repl-tui.test.ts harness, repeated for this suite) ─────────
+
+/** The pi-tui Terminal contract, captured: writes logged, input injectable
+ *  through the real splitter. */
+class FakeTerminal implements Terminal {
+	private buffer: StdinBuffer | null = null;
+	private readonly columnCount: number;
+	private readonly rowCount: number;
+	readonly writes: string[] = [];
+
+	constructor(columnCount = 80, rowCount = 24) {
+		this.columnCount = columnCount;
+		this.rowCount = rowCount;
+	}
+
+	start(onInput: (data: string) => void, _onResize: () => void): void {
+		const buffer = new StdinBuffer();
+		buffer.on("data", (sequence: string) => onInput(sequence));
+		buffer.on("paste", (content: string) => onInput(`\x1b[200~${content}\x1b[201~`));
+		this.buffer = buffer;
+	}
+
+	stop(): void {
+		this.buffer = null;
+	}
+
+	async drainInput(): Promise<void> {}
+
+	write(data: string): void {
+		this.writes.push(data);
+	}
+
+	get columns(): number {
+		return this.columnCount;
+	}
+
+	get rows(): number {
+		return this.rowCount;
+	}
+
+	get kittyProtocolActive(): boolean {
+		return false;
+	}
+
+	moveBy(): void {}
+	hideCursor(): void {}
+	showCursor(): void {}
+	clearLine(): void {}
+	clearFromCursor(): void {}
+	clearScreen(): void {}
+	setTitle(): void {}
+	setProgress(): void {}
+
+	/** Inject keystrokes through the real splitter (like stdin bursts). */
+	data(text: string): void {
+		this.buffer?.process(text);
+	}
+
+	/** Everything written since `mark`, ANSI/control-stripped. */
+	frameSince(mark: number): string {
+		return stripAnsi(this.writes.slice(mark).join(""));
+	}
+}
+
+/** Remove escape sequences (CSI/OSC/APC), cursor markers, and \r. */
+function stripAnsi(text: string): string {
+	let out = "";
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (ch !== "\x1b") {
+			if (ch !== "\r" && ch !== "\x07") out += ch;
+			continue;
+		}
+		const next = text[i + 1];
+		if (next === "[") {
+			i += 2;
+			while (i < text.length && !/[A-Za-z]/.test(text[i] ?? "")) i++;
+		} else if (next === "]") {
+			i += 2;
+			while (i < text.length && text[i] !== "\x07" && text[i] !== "\x1b") i++;
+			if (text[i] === "\x1b" && text[i + 1] === "\\") i++;
+		} else {
+			i += 1;
+		}
+	}
+	return out;
+}
+
+/** Settle TUI renders: nextTick + the 16ms minimum render interval. */
+async function settle(extraMs = 30): Promise<void> {
+	await new Promise<void>((resolve) => setTimeout(resolve, extraMs));
+	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function makeShell() {
+	const terminal = new FakeTerminal();
+	const transcript = new TranscriptSink();
+	const events: string[] = [];
+	const shell = new TuiShell({
+		transcript,
+		terminal,
+		onLine: (line) => events.push(`line:${line}`),
+		onInterrupt: () => events.push("interrupt"),
+		onEof: () => events.push("eof"),
+	});
+	return { terminal, transcript, shell, events };
+}
+
+// ── Fold: the component contract ──────────────────────────────────────────
+
+describe("Fold", () => {
+	it("collapsed is ONE dimmed-arrow line; toggle() shows/hides the body", () => {
+		const fold = new Fold("edit src/foo.ts (+12/-3)", ["+ hello", "- old"]);
+		const collapsed = fold.render(40);
+		expect(collapsed).toHaveLength(1);
+		expect(stripAnsi(collapsed[0] ?? "")).toBe("▸ edit src/foo.ts (+12/-3)");
+
+		fold.toggle();
+		const expanded = fold.render(40);
+		expect(expanded).toHaveLength(3);
+		expect(stripAnsi(expanded[0] ?? "")).toBe("▾ edit src/foo.ts (+12/-3)");
+		expect(stripAnsi(expanded[1] ?? "")).toBe("+ hello");
+		expect(stripAnsi(expanded[2] ?? "")).toBe("- old");
+
+		fold.toggle();
+		const again = fold.render(40);
+		expect(again).toHaveLength(1);
+		expect(stripAnsi(again[0] ?? "")).toBe("▸ edit src/foo.ts (+12/-3)");
+	});
+
+	it("every rendered line fits the width budget in either state — 200-column content truncates", () => {
+		const fold = new Fold("a long fold title that alone exceeds the narrow widths", [
+			"x".repeat(200),
+			"",
+			"ok",
+		]);
+		for (const width of [80, 40, 8, 3]) {
+			for (const expanded of [false, true]) {
+				if (expanded) fold.toggle();
+				const rendered = fold.render(width);
+				if (!expanded) expect(rendered).toHaveLength(1); // collapsed: one line, always
+				for (const line of rendered) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+				if (expanded) fold.toggle();
+			}
+		}
+	});
+});
+
+// ── buildFoldFromDiff: unified-diff tallies in the title ──────────────────
+
+describe("buildFoldFromDiff", () => {
+	const DIFF = [
+		"--- a/src/foo.ts",
+		"+++ b/src/foo.ts",
+		"@@ -1,3 +1,4 @@",
+		" context line",
+		"-old line",
+		"+new line",
+		"+newer line",
+		"",
+	].join("\n");
+
+	it("counts +/− content lines into the title (+++/--- headers excluded); body keeps the diff", () => {
+		const { title, lines } = buildFoldFromDiff("edit src/foo.ts", DIFF);
+		const fold = new Fold(title, lines);
+		expect(stripAnsi(fold.render(80)[0] ?? "")).toBe("▸ edit src/foo.ts (+2/-1)");
+
+		fold.toggle();
+		const body = fold.render(80).map(stripAnsi);
+		// The trailing "\n" is an artifact, not a blank body line — the fold drops it.
+		const diffLines = DIFF.split("\n");
+		diffLines.pop();
+		expect(body.slice(1)).toEqual(diffLines);
+		expect(body).toContain("-old line");
+		expect(body).toContain("+new line");
+		expect(body).toContain("+newer line");
+		expect(body).toContain("@@ -1,3 +1,4 @@");
+		expect(body).toContain("+++ b/src/foo.ts"); // headers stay visible, just uncounted
+	});
+});
+
+// ── TuiShell.addFold: the shell integration ───────────────────────────────
+
+describe("TuiShell.addFold", () => {
+	it("renders collapsed below the streamed text — v1 ordering: stream first, fold after", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feed("streamed note\n");
+		shell.addFold("edit a.ts (+1/-0)", ["+ one"]);
+		await settle(); // paints without forceRender, like the transcript
+		expect(terminal.frameSince(0)).toContain("▸ edit a.ts (+1/-0)");
+		expect(terminal.frameSince(0)).not.toContain("+ one"); // body hidden while collapsed
+
+		const mark = terminal.writes.length; // full repaint: relative order is readable
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		expect(frame.indexOf("streamed note")).toBeLessThan(frame.indexOf("▸ edit a.ts (+1/-0)"));
+		shell.close();
+	});
+
+	it("ctrl+o expands the newest fold — content appears, then disappears on the second press", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle();
+		terminal.data("\x0f"); // no fold yet: falls through, no-op
+		await settle(0);
+		expect(events).toEqual([]);
+
+		shell.addFold("edit a.ts (+1/-0)", ["+ visible body"]);
+		await settle();
+		let mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).not.toContain("+ visible body");
+
+		terminal.data("\x0f"); // ctrl+o → expand
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("+ visible body");
+		expect(terminal.frameSince(mark)).toContain("▾ edit a.ts (+1/-0)");
+
+		terminal.data("\x0f"); // ctrl+o → collapse again
+		await settle();
+		mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).not.toContain("+ visible body");
+		expect(terminal.frameSince(mark)).toContain("▸ edit a.ts (+1/-0)");
+		shell.close();
+	});
+
+	it("two folds: ctrl+o toggles the LAST one only — the first stays collapsed", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle();
+		shell.addFold("fold a (+1/-0)", ["+ alpha"]);
+		await settle();
+		shell.addFold("fold b (+1/-0)", ["+ beta"]);
+		await settle();
+		expect(terminal.frameSince(0)).toContain("▸ fold a (+1/-0)");
+		expect(terminal.frameSince(0)).toContain("▸ fold b (+1/-0)");
+
+		terminal.data("\x0f"); // only fold b expands
+		await settle();
+		expect(terminal.frameSince(0)).toContain("+ beta");
+		expect(terminal.frameSince(0)).not.toContain("+ alpha");
+
+		terminal.data("\x0f"); // fold b collapses; fold a never opened
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).not.toContain("+ beta");
+		expect(terminal.frameSince(mark)).not.toContain("+ alpha");
+		shell.close();
+	});
+
+	it("a 200-column body line renders through the TUI at 80 columns without throwing", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle();
+		shell.addFold("wide (+1/-0)", ["w".repeat(200)]);
+		await settle();
+		terminal.data("\x0f"); // expand — the widest state
+		await settle();
+		expect(terminal.writes.length).toBeGreaterThan(0); // the TUI kept rendering, no width throw
+		shell.close();
+	});
+});

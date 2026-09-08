@@ -16,7 +16,9 @@ import type { RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
+import { TranscriptSink } from "./repl/transcript.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
+import { resolveShell } from "./tui.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
@@ -251,8 +253,13 @@ async function loadExtensionSetup(
  */
 async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+	// M9: interactive sessions render through the pi-tui shell — the
+	// Renderer's bytes feed a TranscriptSink component instead of stdout.
+	// IMP_REPL=legacy selects the pre-M9 readline path byte-for-byte.
+	const shell = interactive ? resolveShell() : "legacy";
+	const transcript = shell === "tui" ? new TranscriptSink() : undefined;
 	const renderer = new Renderer({
-		write: (text) => process.stdout.write(text),
+		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,
 		liveTools: interactive, // no in-place pending tool lines on a pipe
 		toolStyle: "one-line",
@@ -280,7 +287,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	let code: number;
 	try {
-		code = await runRepl({ runner, commands, confirm });
+		code = await runRepl({ runner, commands, confirm, shell, transcript });
 	} catch (err) {
 		reportStartupError(err);
 		runner.close();

@@ -98,6 +98,9 @@ async function startRepl(args: StartArgs): Promise<Env> {
 		input: fake.stdin,
 		output: fake.stdout,
 		interactive: true,
+		// readline shell: these scenarios pin the legacy path (M9; the pi-tui
+		// shell has its own suite in repl-tui.test.ts)
+		shell: "legacy",
 		exit: (code) => {
 			throw new Error(`force-exit:${code}`);
 		},

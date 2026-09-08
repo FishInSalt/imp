@@ -75,6 +75,9 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		input: fake.stdin,
 		output: fake.stdout,
 		interactive: args.tty ?? true,
+		// These scenarios pin the readline shell (the IMP_REPL=legacy escape
+		// hatch path). The pi-tui shell has its own suite (repl-tui.test.ts).
+		shell: "legacy",
 		exit: (code) => {
 			exitCodes.push(code);
 			throw new Error(`force-exit:${code}`);

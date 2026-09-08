@@ -348,6 +348,12 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **接受不修（记录）**：错误结果不折叠（bash timeout 的 Partial output 长错误无展开途径——v1 对称性缺口，后续批次）；foldContainer 与 transcript 同为无上限且 /new 不清（pre-existing 债务）；Ctrl+O 只切最新折叠（v1 声明的设计债，候选做循环导航）；bash 预览 `(+N)` 含段间空行与 Exit code 行（显示口径，无害）
   - **审查质量注**：两路各自独立发现了 P2 级共同项（diff 误染、尾换行、/status 容错、陈旧文案）——双路交叉印证有效；reviewer 只读无 shell 的约束下报告 file:line 精度可用
 
+- **M11 收尾批 #4/#9/#6（2026-09-09，550 tests，两分支两合入）**：
+  - **#4 输入历史跨会话持久化**：`~/.imp/history.jsonl` 全局单文件（bash 惯例），连续去重、2000 行压缩、全部 fs 尽力而为（历史绝不拖垮 REPL）；TuiShell 启动时取尾部 100 条播种编辑器召回；`historyPath` 选项注入（挂具缺省=不持久化，封闭性保持）；cli 仅 tui shell 传真实路径
+  - **#9 选择器打字过滤**：`SelectOptions.filterable`——打开期间可打印键累积为大小写不敏感子串查询（匹配 label+description，含 IME/中文提交块），退格编辑；Enter 解析**原始索引**（过滤永不改接线）；键消费走 shell 预聚焦监听器（选择器优先级链内）；/resume 启用、/model 不启用（行数少）
+  - **#6 markdown 快捷命令（CC parity）**：`~/.imp/commands/*.md`（全局）+ `<cwd>/.imp/commands/*.md`（项目，过 M8 信任门——"clone 即多出会跟模型说话的命令"不可接受）；文件名=命令名（`[a-z0-9][a-z0-9_-]*`，与内置同名拒绝）；frontmatter description/allowedDuringRun；`$ARGUMENTS` 替换（无占位符则参数追加成段）；经 `CommandContext.submitPrompt`→机器 `enqueuePrompt`（idle 开回合/运行中排队，不经 handleLine 重路由——正文以 `/`/`!` 开头仍是模型内容）；项目级覆盖全局级；/help 带 `md:project`/`md:global` 层级标签；复用扩展命令管道（冲突规则/列表自动生效）
+  - **踩坑记录**：①select 重写时漏 `box.addChild(list)`——6 测试齐红（选择器内容断言类全挂、取消类照过=空洞安全的旧问题再现）；②pi-tui `readFileSync` 不在 node:fs/promises、Editor 历史导航要求编辑器空/首行+空条件——上箭头召回用 DBG 钉子逐步定位（文件✓/getHistory✓/帧✓）；③差分帧断言纪律再确认：过滤后消失断言必须 post-mount mark
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

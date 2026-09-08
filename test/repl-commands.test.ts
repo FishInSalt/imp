@@ -4,6 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import { setTrust } from "../src/core/trust.js";
@@ -32,6 +33,8 @@ const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
 
 interface TestEnv {
 	replayed: string[];
+	/** submitPrompt recorder (M11 #6 md commands). */
+	submitted: string[];
 	/** Hermetic test paths (create extra sessions with these). */
 	cwd: string;
 	baseDir: string;
@@ -107,6 +110,7 @@ async function makeEnv(args?: {
 		provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
 	});
 	const replayed: string[] = [];
+	const submitted: string[] = [];
 	const exitCodes: number[] = [];
 	const banner = output(); // ▪ resumed … line from seeding, if any
 	const trustStore = path.join(baseDir, "trust.json");
@@ -119,6 +123,7 @@ async function makeEnv(args?: {
 		requests,
 		exitCodes,
 		replayed: [],
+		submitted,
 		aborted: false,
 		ctx: {
 			runner,
@@ -132,6 +137,9 @@ async function makeEnv(args?: {
 			replay: (session) => {
 				replayed.push(session.header.id);
 				return session.stats().messageCount;
+			},
+			submitPrompt: (text: string) => {
+				submitted.push(text);
 			},
 			trustStorePath: trustStore,
 		},
@@ -477,6 +485,33 @@ describe("/worktrees (M6b §7 follow-up)", () => {
 		env.ctx.worktreeCwd = repo.root;
 		await dispatchCommand("/worktrees", env.ctx);
 		expect(env.output()).toContain("no kept worktrees");
+	});
+});
+
+describe("markdown quick commands through dispatch (M11 #6)", () => {
+	it("runs an md command: the rendered prompt reaches submitPrompt, /help lists it with its tier tag", async () => {
+		const env = await makeEnv();
+		const extras = [
+			{
+				command: {
+					name: "review",
+					summary: "Review the current diff",
+					allowedDuringRun: false,
+					run: (args: string, ctx: { submitPrompt: (t: string) => void }): "handled" => {
+						ctx.submitPrompt(renderMdPrompt("Review the diff. $ARGUMENTS", args));
+						return "handled";
+					},
+				},
+				source: "md:project",
+			},
+		];
+		await dispatchCommand("/review focus concurrency", env.ctx, extras);
+		expect(env.submitted).toEqual(["Review the diff. focus concurrency"]);
+		expect(env.requests).toHaveLength(0); // the command itself spends no model turn
+		const helpEnv = await makeEnv();
+		await dispatchCommand("/help", helpEnv.ctx, extras);
+		expect(helpEnv.output()).toContain("/review");
+		expect(helpEnv.output()).toContain("Review the current diff");
 	});
 });
 

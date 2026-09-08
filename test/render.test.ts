@@ -138,7 +138,7 @@ describe("Renderer", () => {
 		expect(out.output()).toBe(
 			"Let me check" +
 				"\n\x1b[2m● bash $ ls\x1b[0m\n" +
-				"\x1b[2m  → a.ts\x1b[0m\n" +
+				"\x1b[2m  → a.ts (+1 lines)\x1b[0m\n" +
 				"\n\x1b[2m● read x.ts\x1b[0m\n" +
 				"\x1b[31m  ✗ boom\x1b[0m\n" +
 				"\n",
@@ -150,7 +150,7 @@ describe("Renderer", () => {
 		p.event({ type: "tool_start", toolCallId: "t1", name: "bash", args: { command: "ls" } });
 		p.event({ type: "tool_end", result: okResult("a.ts\nb.ts") });
 		p.endRun(true);
-		expect(plain.output()).toBe("Let me check\n● bash $ ls\n  → a.ts\n\n");
+		expect(plain.output()).toBe("Let me check\n● bash $ ls\n  → a.ts (+1 lines)\n\n");
 	});
 
 	it("non-TTY: no \\r, no pending line, no ANSI; note/error/writeLine track newline state", () => {

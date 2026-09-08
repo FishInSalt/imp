@@ -1045,6 +1045,7 @@ describe("runRepl with shell:tui", () => {
 			liveTools: false, // no spinner timers; the byte path is what matters
 			toolStyle: "one-line",
 			markdown: false,
+			foldedResults: true, // mirrors cli.ts's TUI wiring (M11 #1)
 		});
 		const runner = await createRunner({
 			cwd: baseDir,
@@ -1477,7 +1478,8 @@ describe("runRepl with shell:tui", () => {
 		expect(pending).not.toContain("●"); // no byte-stream pending line in TUI mode
 		const mark = env.terminal.writes.length;
 		g.resolve();
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("⎿"));
+		// M11: success results fold — the ⎿ preview is replaced by a ▸ fold title
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("✓"));
 		await settle();
 		// the pending row is gone — spinner+name only ever appeared in the
 		// activity region (the completion line uses ●, not a spinner frame)
@@ -1486,7 +1488,8 @@ describe("runRepl with shell:tui", () => {
 		);
 		const stream = env.transcript.completedLines().join("\n");
 		expect(stream).toContain("✓"); // the completion line (Renderer, unchanged)
-		expect(stream).toContain("⎿"); // the result summary
+		expect(stream).not.toContain("⎿"); // M11: folded — the preview moved to the fold title
+		expect(env.terminal.frameSince(0)).toContain("▸"); // the fold itself
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -1531,8 +1534,9 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
 		await settle();
 		expect(env.terminal.frameSince(mark)).not.toContain("└─ scout"); // row left with the task call
-		const stream = env.transcript.completedLines().join("\n");
-		expect(stream).toContain("scout done"); // the child's report reached the parent's tool result
+		// M11: the task result folds — the report is the fold body/title now
+		expect(env.terminal.frameSince(0)).toContain("▸");
+		expect(env.terminal.frameSince(0)).toContain("scout done");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -1578,14 +1582,69 @@ describe("runRepl with shell:tui", () => {
 		await writeFile(path.join(env.baseDir, "alpha.txt"), "one\ntwo\nthree\n", "utf-8");
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
+		await waitUntil(() => env.terminal.frameSince(0).includes("all done"), 8000);
 		const stream = env.transcript.completedLines().join("\n");
-		// exactly ONE ⎿ — the top-level task result; a child edit fed to the
-		// Renderer would add its own ✓/⎿ pair
-		expect(stream.match(/⎿/g) ?? []).toHaveLength(1);
+		// M11: the top-level task result folds (no ⎿, one ▸); a child edit fed
+		// to the Renderer would add its own ✓/⎿ pair
+		expect(stream.match(/⎿/g) ?? []).toHaveLength(0);
 		expect(stream).not.toContain("✓ edit");
-		// and no fold from the child's edit (top-level-only fold rule)
-		expect(env.terminal.frameSince(0)).not.toContain("▸");
+		// and no fold from the child's edit (top-level-only fold rule): the one
+		// ▸ is the task result's, never "edit alpha.txt"
+		expect(env.terminal.frameSince(0)).toContain("▸");
+		expect(env.terminal.frameSince(0)).not.toContain("▸ edit alpha.txt");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("M11: a bash-style result folds and Ctrl+O expands the full output; no ⎿ line (dogfood #1/#2)", async () => {
+		const bashLike: Tool = {
+			name: "bash",
+			description: "test bash stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return { output: "stdout:\nline-one\nline-two\nline-three" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "seq 3" } }],
+					"tool_use",
+				),
+				reply("done"),
+			],
+			{ tools: [bashLike] },
+		);
+		await settle();
+		env.terminal.data("run it\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		// the preview shows the first OUTPUT line (not "stdout:") and folds
+		expect(env.terminal.frameSince(0)).toContain("▸ line-one (+2 lines)");
+		const stream = env.transcript.completedLines().join("\n");
+		expect(stream).not.toContain("⎿");
+		expect(stream).not.toContain("stdout:");
+		// Ctrl+O expands the full content
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.terminal.frameSince(0).includes("line-three"));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("M11: a queued line shows the queue row only — no ▪ queued note (dogfood #3); the hint row carries the interrupt affordance while active (dogfood #8)", async () => {
+		const g = gate();
+		const env = await startTuiRepl([() => g.promise.then(() => reply("ok"))]);
+		await settle();
+		env.terminal.data("first\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
+		const activeMark = env.terminal.writes.length;
+		env.terminal.data("second line\r");
+		await waitUntil(() => env.terminal.frameSince(activeMark).includes("1 queued · next: second line"), 8000);
+		const stream = env.transcript.completedLines().join("\n");
+		expect(stream).not.toContain("▪ queued:"); // TUI: the row replaces the note
+		// idle hint swapped out (frameSince(0) still holds the startup text)
+		expect(env.terminal.frameSince(activeMark)).not.toContain("(/ for commands");
+		g.resolve();
+		await waitUntil(() => env.terminal.frameSince(0).includes("> second line"), 8000); // flushed: echoed
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

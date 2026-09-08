@@ -25,6 +25,7 @@ export {
 	isKeyRelease,
 	matchesKey,
 	ProcessTerminal,
+	SelectList,
 	StdinBuffer,
 	type Terminal,
 	Text,

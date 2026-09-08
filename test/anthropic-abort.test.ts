@@ -46,6 +46,7 @@ describe("anthropic provider abort mid-stream", () => {
 		// soon as the first delta arrives — the exact interrupt scenario.
 		await (async () => {
 			for await (const event of provider.stream({
+				system: "",
 				model: "test-model",
 				messages: [{ role: "user", content: "hi" }],
 				tools: [],
@@ -87,6 +88,7 @@ describe("anthropic provider abort mid-stream", () => {
 		await expect(
 			(async () => {
 				for await (const _event of provider.stream({
+					system: "",
 					model: "test-model",
 					messages: [{ role: "user", content: "hi" }],
 					tools: [],
@@ -133,6 +135,7 @@ describe("anthropic provider abort mid-stream", () => {
 		const provider = createAnthropicProvider({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "k" });
 		const events: LLMEvent[] = [];
 		for await (const event of provider.stream({
+			system: "",
 			model: "m",
 			messages: [{ role: "user", content: "hi" }],
 			tools: [],
@@ -177,6 +180,7 @@ describe("anthropic provider abort mid-stream", () => {
 		const drain = async () => {
 			const events: LLMEvent[] = [];
 			for await (const event of provider.stream({
+				system: "",
 				model: "m",
 				messages: [{ role: "user", content: "hi" }],
 				tools: [],

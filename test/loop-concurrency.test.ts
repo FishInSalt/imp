@@ -258,7 +258,6 @@ describe("tool concurrency (M5b design §6)", () => {
 					description: "serial by default",
 					parameters: Type.Object({ message: Type.String() }),
 					async execute() {
-						events.push("serial:start");
 						return { output: "serial" };
 					},
 				},

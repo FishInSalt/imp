@@ -734,7 +734,10 @@ describe("runRepl", () => {
 		expect(fake.output()).toContain("▪ context ~200.1k tokens — compacting…");
 		expect(fake.output()).toMatch(/▪ compacted: ~200\.1k → ~\d+ tokens \(\d+ msgs kept verbatim\)/);
 		// the summarizer call got the transcript; the post-compact request starts with the summary
-		expect(requests[1]?.messages[0]?.content).toContain("## Goal");
+		const summaryMsg = requests[1]?.messages[0];
+		expect(summaryMsg !== undefined && summaryMsg.role === "user" ? summaryMsg.content : "").toContain(
+			"## Goal",
+		);
 		expect(requests[2]?.messages[0]?.role).toBe("user"); // summary message
 		fake.eof();
 		expect(await repl).toBe(0);

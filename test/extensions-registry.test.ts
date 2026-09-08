@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { Tool } from "../src/core/tools/types.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
-import type { ExtensionSummary } from "../src/extensions/types.js";
+import type { ExtensionSummary, RunEndEvent, ToolCallEvent, ToolEndEvent } from "../src/extensions/types.js";
 import type { SlashCommand } from "../src/repl/commands.js";
 import { assistant, ticks } from "./helpers/fakes.js";
 
@@ -163,7 +163,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			registry.subscribe("tool_end", () => {
 				throw new Error("kaboom");
 			});
-			registry.subscribe("tool_end", (event) => {
+			registry.subscribe("tool_end", (event: ToolEndEvent) => {
 				calls.push(event.name);
 			});
 		});
@@ -196,7 +196,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
 		const seen: string[] = [];
 		loadOne(registry, "gate", () => {
-			registry.subscribe("tool_call", (event) => {
+			registry.subscribe("tool_call", (event: ToolCallEvent) => {
 				seen.push(`one:${event.name}`);
 			});
 			registry.subscribe("tool_call", () => ({ block: true, reason: "not allowed" }));
@@ -237,7 +237,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
 		const seen: unknown[] = [];
 		loadOne(registry, "audit", () => {
-			registry.subscribe("run_end", (event) => {
+			registry.subscribe("run_end", (event: RunEndEvent) => {
 				seen.push({ stopReason: event.stopReason, turns: event.turns });
 			});
 		});

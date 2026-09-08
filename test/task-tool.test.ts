@@ -411,7 +411,10 @@ describe("named agents (M5c)", () => {
 		const gateCalls: Array<{ agent?: string }> = [];
 		const { task } = agentTask([], {
 			provider,
-			onToolCall: (_call, info) => {
+			onToolCall: (
+				_call: { toolCallId: string; name: string; args: Record<string, unknown> },
+				info: { agent?: string; cwd?: string },
+			) => {
 				gateCalls.push({ agent: info.agent });
 			},
 		});
@@ -1043,7 +1046,7 @@ describe("task tool roster under the trust gate (M8 review tierScope F1)", () =>
 			agents: [], // the post-gate state: .imp/agents exists but was skipped
 			agentsProjectGated: true,
 		});
-		const result = await task.execute({ prompt: "x", agent: "scout" }, undefined);
+		const result = await task.execute({ prompt: "x", agent: "scout" }, new AbortController().signal);
 		if (!("output" in result)) throw new Error("expected tool result");
 		expect(result.output).toContain("No agents are loaded");
 		expect(result.output).toContain("not trusted");

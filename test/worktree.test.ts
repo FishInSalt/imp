@@ -105,7 +105,7 @@ describe("worktree isolation (M6b)", () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
 		const wt = await createChildWorktree(state, "t4", baseDir());
-		const notice = buildWorktreeNotice(wt, root);
+		const notice = buildWorktreeNotice(wt, root, root);
 		expect(notice).toContain(wt.path);
 		expect(notice).toContain("translate them");
 		expect(notice).toContain(`commit them on the current branch (${wt.branch})`);

@@ -329,6 +329,12 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **真机（含一次经批准的真 API 回合，GLM）**：! bang/placeholder/footer ctx%/saved note 全过；活动区视觉链全程可见——`⠋ thinking…` 帧轮转、`⠴ bash $ echo …` 工具行、`● … ✓`+`⎿` 完成对、模型答复、footer `↑2.8k ↓19 · ctx 2%` 更新、干净退出；TUI 转录区无 pending 重绘字节（`●` 仅出现在永久完成行——正是 liveTools=false 的预期拆分）
   - markdown 增强按计划放弃：dim 渲染已显示语言标签，真正的提升只有语法高亮（M10 明确出局项）
 
+- **M10 对抗审查闭环（2026-09-09，`c4a88bc`+修复批，512 tests）**：完整性路（无 P0/P1，6 P2 全修：legacy 低上下文 note 门控、中断 bang 弃队、picker 下藏提示行、子事件过滤/中断清场/布局顺序三处空真补钉）+ 语义路重跑（GO with notes，8 猎区全过：! 直通零模型副作用、嵌套 task 构造性排除、ctx% 无闪烁、turnEventTap 生命周期充分）
+  - **P1 抓获**：测试文件一处非 authored 内容（`<arg_value>(<b88a6f17>await settle(0))`）——vitest 擦除断言不解析名字、tsc 只查 src、biome 无类型感知，三道门全盲。修复+**新增测试类型检查门**（`tsconfig.test.json` 挂进 `typecheck` script），顺带清掉 31 个存量测试类型债——其中抓出**真封闭性破坏**：两条子代理测试传错属性名（`agentsHome`≠`agentsHomeDir`），scout 实际来自真实 `~/.imp/agents`（换机即红）；以及 fakes 里一处不存在的 `settle` 死导入
+  - **P2 修复**：stdin `end` 镜像 SIGINT 先拆选择器（死 pty 不再挂死 confirm 门）；**重入 select 从"拒绝"改"排队"**——guardian confirm 在 /model picker 开着时到达仍会被问到（旧行为静默否决、用户从未见过问题）；close() 排空队列 promise
+  - 接受不修（cosmetic）：bang 的 `(exit N)` 剥离可被 stdout 尾部伪造（构造苛刻、纯显示误标）
+  - **教训入账**：名字级损坏只有类型检查能抓（擦除式转译+无类型 linter 双盲）；并行代理的测试也要进类型检查面
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

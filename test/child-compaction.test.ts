@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { CompactionSettings } from "../src/core/compaction.js";
 import { compactHistory } from "../src/core/compaction.js";
+import type { AgentMessage } from "../src/core/messages.js";
 import { createSession, sessionsDirFor } from "../src/core/session/manager.js";
 import { SessionStore, SUMMARY_MARK } from "../src/core/session/store.js";
 import { runSubagent } from "../src/core/subagent.js";
@@ -79,7 +80,7 @@ function routingProvider(steps: ScriptStep[], summary: string, failSummaryAttemp
 				return;
 			}
 			loopRequests.push({ ...request, messages: [...request.messages] });
-			const s = steps[Math.min(step, steps.length - 1)];
+			const s = steps[Math.min(step, steps.length - 1)]!;
 			step++;
 			const message = typeof s === "function" ? await s() : s;
 			for (const block of message.blocks) {
@@ -111,8 +112,8 @@ describe("compactHistory (pure computation)", () => {
 	};
 
 	it("summarizes the prefix and returns the retained tail — no session involved", async () => {
-		const messages = [
-			{ role: "user", content: "old question" } as const,
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "old question" },
 			assistant([{ type: "text", text: "old answer" }]),
 			{
 				role: "toolResult",

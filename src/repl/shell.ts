@@ -158,6 +158,8 @@ export class TuiShell implements LineInput {
 	private queueText = "";
 	/** The open selector, if any — finished on pick, cancel, or close. */
 	private selector: { teardown: () => void } | null = null;
+	/** Pickers queued behind an open one (M10): opened when it finishes. */
+	private pendingSelects: Array<() => void> = [];
 	private marker: Text | null = null;
 	private footer: Text | null = null;
 	/** The dim hint row between the ask line and the marker (M10). */
@@ -296,6 +298,10 @@ export class TuiShell implements LineInput {
 		};
 		process.on("SIGINT", this.onProcessSigint);
 		this.onStdinEnd = () => {
+			// Mirror SIGINT (M10 semantic review P2): a dead pty must not leave a
+			// confirm picker hanging — the gate would never settle, the process
+			// would never exit.
+			this.selector?.teardown();
 			this.drainAsks();
 			this.options.onEof();
 		};
@@ -465,8 +471,16 @@ export class TuiShell implements LineInput {
 
 	select(options: SelectOptions): Promise<number | null> {
 		const tui = this.tui;
-		if (tui === null || this.closed || this.selector !== null || options.items.length === 0)
-			return Promise.resolve(null); // unstarted/closed, or a picker is already open (M9-2 review P2: the reentrant call declines instead of orphaning the first)
+		if (tui === null || this.closed || options.items.length === 0) return Promise.resolve(null); // unstarted/closed, or nothing to pick
+		if (this.selector !== null) {
+			// Queued, not declined (M10 semantic review P2): a guardian confirm
+			// arriving while e.g. the /model picker is open still gets asked —
+			// a silent decline would veto the tool without the user ever seeing
+			// the question.
+			return new Promise<number | null>((resolve) => {
+				this.pendingSelects.push(() => resolve(this.select(options)));
+			});
+		}
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked (no filtering — rows can never reorder).
 		const items = options.items.map((item, index) => ({
@@ -495,6 +509,10 @@ export class TuiShell implements LineInput {
 					if (next !== undefined) this.showAsk(next.question);
 				}
 				resolve(index);
+				// The next queued picker (if any) opens now — its own promise chain
+				// takes over; close() drains the rest as null.
+				const queued = this.pendingSelects.shift();
+				if (queued !== undefined) queued();
 			};
 			this.selector = { teardown: () => finish(null) };
 			this.updatePlaceholder(); // keys belong to the picker — hide the hint
@@ -516,8 +534,14 @@ export class TuiShell implements LineInput {
 		this.onProcessSigint = null;
 		if (this.onStdinEnd !== null) process.stdin.off("end", this.onStdinEnd);
 		this.onStdinEnd = null;
-		this.drainAsks();
 		this.selector?.teardown(); // an open picker dies with the shell, not the promise
+		// Queued pickers resolve null through their own re-entry (select() sees
+		// closed); drain them so nothing hangs past the terminal stop.
+		while (this.pendingSelects.length > 0) {
+			const queued = this.pendingSelects.shift();
+			queued?.();
+		}
+		this.drainAsks();
 		const tui = this.tui;
 		if (tui !== null) {
 			// Graceful-exit notes ("session … saved") feed the sink on this very
@@ -547,10 +571,7 @@ export class TuiShell implements LineInput {
 		// An open selector hides the hint too: keys go to the picker while it
 		// owns focus, so "you can type" would be a lie (M10 review P2#5).
 		const visible =
-			!this.active &&
-			this.editorText === "" &&
-			this.pendingAsks.length === 0 &&
-			this.selector === null;
+			!this.active && this.editorText === "" && this.pendingAsks.length === 0 && this.selector === null;
 		this.placeholder.setText(visible ? PLACEHOLDER_HINT : "");
 		this.tui?.requestRender();
 	}

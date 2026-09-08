@@ -340,7 +340,7 @@ describe("Runner.runTurn", () => {
 		// history = [summary message, retained tail ("continue"), fresh reply]
 		const first = runner.history[0];
 		expect(first?.role).toBe("user");
-		expect(first?.content).toContain("SUMMARY");
+		expect(first !== undefined && first.role === "user" ? first.content : "").toContain("SUMMARY");
 		expect(runner.history.map((m) => m.role)).toEqual(["user", "user", "assistant"]);
 	});
 

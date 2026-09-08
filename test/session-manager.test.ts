@@ -90,12 +90,12 @@ describe("session manager", () => {
 		const { mkdirSync } = await import("node:fs");
 		mkdirSync(dir, { recursive: true });
 		// two sessions whose ids share the first 8 chars
-		SessionStore.create(path.join(dir, "a.jsonl"), cwd, "deadbeef-0001");
-		SessionStore.create(path.join(dir, "b.jsonl"), cwd, "deadbeef-0002");
+		SessionStore.create(path.join(dir, "a.jsonl"), cwd, "deadbeef-0001-0000-0000-0000");
+		SessionStore.create(path.join(dir, "b.jsonl"), cwd, "deadbeef-0002-0000-0000-0000");
 		expect(() => resolveSession(cwd, { resume: "deadbeef", baseDir })).toThrow(/matches 2 sessions/);
 		// a longer prefix disambiguates
-		const resumed = resolveSession(cwd, { resume: "deadbeef-0001", baseDir });
-		expect(resumed?.header.id).toBe("deadbeef-0001");
+		const resumed = resolveSession(cwd, { resume: "deadbeef-0001-0000-0000-0000", baseDir });
+		expect(resumed?.header.id).toBe("deadbeef-0001-0000-0000-0000");
 	});
 
 	it("listing a forked session counts only the head branch", async () => {
@@ -125,7 +125,11 @@ describe("session manager", () => {
 		const { baseDir, cwd } = await setup();
 		seed(baseDir, cwd, [user("good"), assistantText("one")]);
 		const dir = sessionsDirFor(cwd, baseDir);
-		const broken = SessionStore.create(path.join(dir, "broken-chain.jsonl"), cwd, "cccc0000-0000");
+		const broken = SessionStore.create(
+			path.join(dir, "broken-chain.jsonl"),
+			cwd,
+			"cccc0000-0000-0000-0000-0000",
+		);
 		broken.appendMessage(user("q"));
 		broken.appendMessage(assistantText("a"));
 		// Dangle the last entry's parentId: open() still loads it, but stats()

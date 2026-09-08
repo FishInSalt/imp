@@ -84,7 +84,9 @@ describe("onToolCall gate (M4c, design §8.3)", () => {
 			onEvent: (event) => {
 				if (event.type === "tool_start" || event.type === "tool_end") order.push(event.type);
 			},
-			onToolCall: (gate) => order.push(`gate:${gate.toolCallId}:${JSON.stringify(gate.args)}`),
+			onToolCall: (gate) => {
+				order.push(`gate:${gate.toolCallId}:${JSON.stringify(gate.args)}`);
+			},
 		});
 		// the gate sees exactly the one call that passed validation — schema-validated
 		// args (the object execute() would receive), gated after its tool_start and
@@ -201,7 +203,7 @@ describe("onToolCall gate (M4c, design §8.3)", () => {
 			tools: [echoTool],
 			history,
 			userMessage: "go",
-			onToolCall: (call) => registry.emitToolCall(call),
+			onToolCall: (call) => registry.emitToolCall({ type: "tool_call", ...call }),
 		});
 		expect(seen).toEqual([]);
 		expect(toolResultsOf(history)[0]?.content).toBe(
@@ -237,7 +239,7 @@ describe("onToolCall gate (M4c, design §8.3)", () => {
 			],
 			history,
 			userMessage: "go",
-			onToolCall: (call) => registry.emitToolCall(call),
+			onToolCall: (call) => registry.emitToolCall({ type: "tool_call", ...call }),
 		});
 		expect(executed).toBe(false);
 		expect(toolResultsOf(history)[0]?.content).toBe(

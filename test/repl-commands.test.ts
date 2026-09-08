@@ -118,6 +118,7 @@ async function makeEnv(args?: {
 		output: () => output().slice(banner.length),
 		requests,
 		exitCodes,
+		replayed: [],
 		aborted: false,
 		ctx: {
 			runner,

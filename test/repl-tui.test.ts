@@ -22,7 +22,6 @@ import {
 	visibleWidth,
 } from "../src/tui.js";
 import {
-	settle as _settle,
 	assistant,
 	gate,
 	gatedTool,
@@ -31,8 +30,6 @@ import {
 	ticks,
 	waitUntil,
 } from "./helpers/fakes.js";
-
-void _settle;
 
 // ── fakes ────────────────────────────────────────────────────────────────
 
@@ -503,8 +500,8 @@ describe("TuiShell", () => {
 		const { shell } = makeShell();
 		shell.start();
 		await settle(0);
-		expect(onSpy.mock.calls.some(([event]) => event === "SIGINT")).toBe(true);
-		expect(stdinSpy.mock.calls.some(([event]) => event === "end")).toBe(true);
+		expect(onSpy.mock.calls.some(([event]) => (event as string) === "SIGINT")).toBe(true);
+		expect(stdinSpy.mock.calls.some(([event]) => (event as string) === "end")).toBe(true);
 		onSpy.mockRestore();
 		stdinSpy.mockRestore();
 		shell.close();
@@ -717,19 +714,43 @@ describe("M9-2 review regressions", () => {
 		shell.close();
 	});
 
-	it("a second select() while one is open declines to null — the first stays live", async () => {
+	it("a second select() while one is open QUEUES — it opens when the first finishes (M10: the reentrant decline silently vetoed guardian confirms)", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
 		const first = shell.select({ items: [{ label: "a" }, { label: "b" }] });
 		await settle();
-		await expect(shell.select({ items: [{ label: "x" }] })).resolves.toBe(null);
+		let secondSettled: (value: number | null) => void = () => {};
+		const second = new Promise<number | null>((resolve) => {
+			secondSettled = resolve;
+		});
+		void shell.select({ items: [{ label: "x" }] }).then(secondSettled);
 		await settle(0);
 		expect(terminal.frameSince(0)).toContain("→ a"); // the FIRST list is still mounted
+		expect(terminal.frameSince(0)).not.toContain("→ x"); // the second is queued, not stacked
 		terminal.data("\x1b[B");
 		terminal.data("\r");
 		await expect(first).resolves.toBe(1);
+		await settle();
+		expect(terminal.frameSince(0)).toContain("→ x"); // now the queued picker opened
+		terminal.data("\r");
+		await expect(second).resolves.toBe(0);
 		shell.close();
+	});
+
+	it("close() drains a queued picker to null (no hang past the terminal stop)", async () => {
+		const { shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const first = shell.select({ items: [{ label: "a" }] });
+		let secondSettled: (value: number | null) => void = () => {};
+		const second = new Promise<number | null>((resolve) => {
+			secondSettled = resolve;
+		});
+		void shell.select({ items: [{ label: "x" }] }).then(secondSettled);
+		shell.close(); // tears the first down, drains the queued one
+		await expect(first).resolves.toBe(null);
+		await expect(second).resolves.toBe(null);
 	});
 
 	it("a question queued while a picker is open renders only after the picker resolves", async () => {
@@ -956,7 +977,7 @@ describe("TuiShell Esc routing (M10)", () => {
 	it("Esc with a selector open cancels the selector — the interrupt never fires", async () => {
 		const { terminal, shell, events } = makeShell();
 		shell.start();
-		<arg_value>(<b88a6f17>await settle(0));
+		await settle(0);
 		shell.setActive(true); // a run is live while the picker is open
 		const pick = shell.select({ items: [{ label: "alpha" }, { label: "beta" }] });
 		await settle(0);
@@ -1479,7 +1500,7 @@ describe("runRepl with shell:tui", () => {
 				// parent: closing text
 				reply("all done"),
 			],
-			{ agentsHome },
+			{ agentsHomeDir: agentsHome },
 		);
 		await settle();
 		env.terminal.data("go\r");
@@ -1532,7 +1553,7 @@ describe("runRepl with shell:tui", () => {
 				reply("child report done"),
 				reply("all done"),
 			],
-			{ agentsHome },
+			{ agentsHomeDir: agentsHome },
 		);
 		await writeFile(path.join(env.baseDir, "alpha.txt"), "one\ntwo\nthree\n", "utf-8");
 		await settle();

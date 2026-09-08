@@ -133,6 +133,7 @@ export class TuiShell implements LineInput {
 	/** One theme for every pi-tui component (editor AND select lists). */
 	private readonly theme: EditorTheme = tuiEditorTheme();
 	private tui: TUI | null = null;
+	private terminal: Terminal | null = null;
 	private editor: Editor | null = null;
 	private askContainer = new Container();
 	/** Hosts the Fold children — sits between transcript and ask line. */
@@ -161,6 +162,9 @@ export class TuiShell implements LineInput {
 	 *  machine's constructor runs first) and must not be dropped (M9-2
 	 *  review P1: the startup footer was silently blank). */
 	private footerText = "";
+	/** Buffered OSC title — the machine's first setTitle may arrive before
+	 *  start() (its constructor-time footer push); start() paints it. */
+	private titleText = "";
 	private history: string[] = [];
 	private closed = false;
 	/** Terminal restore ran (close's deferred stop or the process-exit hook). */
@@ -178,6 +182,7 @@ export class TuiShell implements LineInput {
 	start(): void {
 		if (this.tui !== null || this.closed) return;
 		const terminal = this.options.terminal ?? new ProcessTerminal();
+		this.terminal = terminal;
 		const tui = new TUI(terminal, true); // hardware cursor: IME candidate positioning
 		this.tui = tui;
 		this.options.transcript.onUpdate = () => tui.requestRender();
@@ -223,6 +228,7 @@ export class TuiShell implements LineInput {
 		tui.addChild(footer); // status line below the editor (pi's placement)
 		tui.setFocus(editor);
 		tui.start();
+		if (this.titleText !== "") terminal.write(`\x1b]2;${this.titleText}\x07`);
 
 		// Pre-focus routing (runs before the editor sees the key): the
 		// machine's interrupt/EOF semantics own Ctrl+C / Ctrl+D outright,
@@ -342,6 +348,14 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
+	/** Terminal window title (OSC 2), straight to the terminal — never
+	 *  through the TUI's frame pipeline, so it cannot disturb the
+	 *  differential render. Buffered until start() paints it. */
+	setTitle(title: string): void {
+		this.titleText = title;
+		this.terminal?.write(`\x1b]2;${title}\x07`);
+	}
+
 	/** Test seam: force one full repaint — differential renders may leave
 	 *  unchanged lines out of the write log assertions depend on. */
 	forceRender(): void {
@@ -452,6 +466,8 @@ export class TuiShell implements LineInput {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.options.transcript.onUpdate = null;
+		this.terminal?.write("\x1b]2;\x07"); // hand the window its own title back
+		this.terminal = null;
 		this.tui?.stop();
 		this.tui = null;
 	}

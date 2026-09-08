@@ -1,4 +1,5 @@
 import type { Readable } from "node:stream";
+import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
@@ -88,6 +89,16 @@ const CONFIRM_ITEMS: SelectItemOption[] = [
 	{ label: "No" },
 ];
 
+/** Footer context window: IMP_CONTEXT_WINDOW when it parses to a positive
+ *  finite number, otherwise the same 131072 default the compaction
+ *  settings use. Read per call so env changes take effect immediately. */
+function contextWindowTokens(): number {
+	const raw = process.env.IMP_CONTEXT_WINDOW;
+	if (raw === undefined || raw === "") return 131072;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 131072;
+}
+
 /**
  * The interactive side of api.confirm: one host created before extension
  * loading (cli.ts loads extensions before the REPL exists), bound to the
@@ -175,6 +186,9 @@ class ReplMachine {
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
 	private eofPending = false;
+	/** Latch for the context-low note: fires once per crossing of 80%;
+	 *  dropping back below (compaction, /new) re-arms it. */
+	private lowContextNoted = false;
 	private receivedLine = false;
 	private readonly runner: Runner;
 	private readonly commands: readonly RegisteredExtensionCommand[];
@@ -377,9 +391,10 @@ class ReplMachine {
 	}
 
 	/** Bottom status line for the TUI shell (the legacy shell ignores it):
-	 *  model · session id8 · cumulative tokens. Pushed at every point any
-	 *  input changes — construction, command dispatch (/model, /new,
-	 *  /resume), and both run settle paths (session totals move). */
+	 *  model · session id8 · cumulative tokens · context fill. Pushed at
+	 *  every point any input changes — construction, command dispatch
+	 *  (/model, /new, /resume), and both run settle paths (session totals
+	 *  move) — and the terminal title rides along (TUI shells only). */
 	private refreshFooter(): void {
 		const parts: string[] = [this.runner.model];
 		const session = this.runner.session;
@@ -390,7 +405,25 @@ class ReplMachine {
 				parts.push(`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`);
 			}
 		}
+		// Context fill from the same live history the loop and auto-compaction
+		// use (estimateContextTokens anchors on the last measured usage). The
+		// estimate is O(messages) local work — fine at this low-frequency push
+		// point, but never call it from a streaming-delta path.
+		const contextPercent = Math.round(
+			(estimateContextTokens(this.runner.history).tokens / contextWindowTokens()) * 100,
+		);
+		parts.push(`ctx ${contextPercent}%`);
+		if (contextPercent >= 80) {
+			parts.push("low — /compact");
+			if (!this.lowContextNoted) {
+				this.lowContextNoted = true;
+				this.renderer.note(`▪ context ${contextPercent}% used — /compact to summarize older turns`);
+			}
+		} else {
+			this.lowContextNoted = false;
+		}
 		this.input.setFooter?.(parts.join(" · "));
+		this.input.setTitle?.(`imp — ${this.runner.model}`);
 	}
 
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {

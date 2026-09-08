@@ -46,6 +46,9 @@ export interface LineInput {
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
 	select?(options: SelectOptions): Promise<number | null>;
+	/** Terminal window title (TUI only — OSC 2, written outside the frame
+	 *  pipeline). The readline shell has no title and ignores it. */
+	setTitle?(title: string): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }

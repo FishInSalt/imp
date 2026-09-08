@@ -37,7 +37,9 @@ export interface MdCommandLoadOptions {
 	home: string;
 	/** M8 trust decision for the project tier; false loads global files only. */
 	projectAllowed: boolean;
-	/** Built-in command names — reserved, always rejected as md names. */
+	/** Names that may not be shadowed: built-ins AND already-loaded
+	 *  extension commands (cli passes both — a silent shadow plus a doubled
+	 *  /help row was the review finding). */
 	reserved: ReadonlySet<string>;
 	/** Teaching lines for rejected files (mirrors the extension diagnostics). */
 	onDiagnostic?: (message: string) => void;
@@ -55,16 +57,21 @@ interface ParsedFrontmatter {
 	body: string;
 }
 
-const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+// Lowercase only: dispatch matches names case-sensitively, so an uppercase
+// file would register a command nobody can type (review P2).
+const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 /** Parse `--- key: value ---` frontmatter; every field optional (the whole
  *  frontmatter block is). Returns an error string for malformed blocks. */
 export function parseMdFrontmatter(content: string, source: string): ParsedFrontmatter | string {
-	if (!content.startsWith("---")) return { allowedDuringRun: false, body: content.trim() };
-	const end = content.indexOf("\n---", 3);
+	// Windows editors prepend a BOM — strip it or the frontmatter check fails
+	// and the whole file silently becomes the prompt body (review P2).
+	const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
+	if (!text.startsWith("---")) return { allowedDuringRun: false, body: text.trim() };
+	const end = text.indexOf("\n---", 3);
 	if (end === -1) return `${source}: unterminated frontmatter — close it with a "---" line`;
 	const fields = new Map<string, string>();
-	for (const line of content.slice(4, end).split("\n")) {
+	for (const line of text.slice(4, end).split("\n")) {
 		if (line.trim() === "") continue;
 		const colon = line.indexOf(":");
 		if (colon === -1) continue;
@@ -84,7 +91,7 @@ export function parseMdFrontmatter(content: string, source: string): ParsedFront
 	return {
 		description: fields.get("description"),
 		allowedDuringRun,
-		body: content.slice(end + 4).trim(),
+		body: text.slice(end + 4).trim(),
 	};
 }
 

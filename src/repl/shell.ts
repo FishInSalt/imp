@@ -238,8 +238,8 @@ export class TuiShell implements LineInput {
 		// degrades to session-only recall inside loadInputHistory.
 		if (this.options.historyPath !== undefined) {
 			for (const line of loadInputHistory(this.options.historyPath)) {
-				this.editor?.addToHistory(line);
-				this.history.push(line);
+				this.editor?.addToHistory(line); // append order: oldest → newest
+				this.history.unshift(line); // shell contract: newest first (review P2 — the dedupe reads [0])
 			}
 		}
 
@@ -571,6 +571,16 @@ export class TuiShell implements LineInput {
 				if (data === "\x7f" || data === "\b") {
 					if (query === "") return true; // nothing to erase — swallow anyway
 					query = query.slice(0, -1);
+					applyFilter();
+					return true;
+				}
+				// Bracketed paste arrives as one ESC-wrapped chunk (review P2) —
+				// unwrap and take the first line; a multi-line paste is not a query.
+				const paste = /^\x1b\[200~([^\x1b]*)\x1b\[201~$/.exec(data);
+				if (paste !== null) {
+					const firstLine = (paste[1] ?? "").split("\n")[0] ?? "";
+					if (firstLine === "") return true; // swallowed, nothing usable
+					query += firstLine;
 					applyFilter();
 					return true;
 				}

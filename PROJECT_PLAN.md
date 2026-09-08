@@ -354,6 +354,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **#6 markdown 快捷命令（CC parity）**：`~/.imp/commands/*.md`（全局）+ `<cwd>/.imp/commands/*.md`（项目，过 M8 信任门——"clone 即多出会跟模型说话的命令"不可接受）；文件名=命令名（`[a-z0-9][a-z0-9_-]*`，与内置同名拒绝）；frontmatter description/allowedDuringRun；`$ARGUMENTS` 替换（无占位符则参数追加成段）；经 `CommandContext.submitPrompt`→机器 `enqueuePrompt`（idle 开回合/运行中排队，不经 handleLine 重路由——正文以 `/`/`!` 开头仍是模型内容）；项目级覆盖全局级；/help 带 `md:project`/`md:global` 层级标签；复用扩展命令管道（冲突规则/列表自动生效）
   - **踩坑记录**：①select 重写时漏 `box.addChild(list)`——6 测试齐红（选择器内容断言类全挂、取消类照过=空洞安全的旧问题再现）；②pi-tui `readFileSync` 不在 node:fs/promises、Editor 历史导航要求编辑器空/首行+空条件——上箭头召回用 DBG 钉子逐步定位（文件✓/getHistory✓/帧✓）；③差分帧断言纪律再确认：过滤后消失断言必须 post-mount mark
 
+- **M11 收尾批对抗审查闭环（2026-09-09，556 tests）**：两路（字节契约/边界 + 语义/生命周期），无 P0，2 P1 + 一批 P2 全核修。**流程注**：本批交付时先漏跑了独立审查（用户追问"有没有独立审查过"后补上）——此后每批交付显式给出审查评估结论
+  - **P1-1（两路交叉命中）**：`.imp/commands` 不在 `trustRequiringResources` 清单——commands-only 仓库走空资源早退，项目级 md 命令零门槛加载（含已记录不信任/--no-trust 的目录），违背模块自述"cloned repo must not grow commands that talk to the model"→ 清单加一项（一行）
+  - **P1-2**：`enqueuePrompt` 排队的 md 正文以 `!` 开头时，flush 被 `isBangLine` 命中→**当 bash 执行**（违背三处自述"body starting with '/' or '!' must stay model content"；idle 路径正确、仅排队路径错）→ 队列改联合类型 `string | { prompt }`：打字行保持旧路由、prompt 项 flush 直达 submitTurn 且**不参与 steering**（按文档语义排队在回合后）；steering/flush/preview/discard 四处适配
+  - **P2 修复**：历史文件改 append 快路径（并发竞态窗口从整文件缩到一行；超限才压缩重写）+MAX_LINES 注释改真；shell.history 播种改 unshift（newest-first 契约——原 push 让连续去重比对最旧行、可跳过一次持久化）；filterKey 识别 bracketed paste 剥壳取首行（原方案整块丢弃）；md 解析剥 BOM（Windows 编辑器）；NAME_RE 去 `/i`（大小写敏感派发下大写文件名=没人敲得出的命令）；扩展命令名并入 reserved（同名静默遮蔽+/help 双行→诊断行）；HELP_KEYS 补 type-to-filter；submitPrompt 对扩展命令可见性注释记录
+  - **接受不修（记录）**：历史文件与 trust.json 的锁纪律不对齐（best-effort 声明在案）；scripted REPL 也加载 md 命令（与扩展命令行为一致，非契约破坏）
+  - **补钉**：!-前缀排队转正 e2e（模型收到原文+无 bang echo）；过滤退格清空/无匹配/Esc 取消；md allowedDuringRun:false 中途拒绝；commands-only 信任门；BOM/大写/扩展名冲突单测——共 550→556
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

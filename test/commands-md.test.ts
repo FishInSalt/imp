@@ -85,6 +85,44 @@ describe("loadMdCommands", () => {
 		expect(prompts).toEqual(["project body"]);
 	});
 
+	it("a BOM-prefixed file parses frontmatter, not body (review)", async () => {
+		const parsed = parseMdFrontmatter("\uFEFF---\ndescription: bombed\n---\nbody text", "x.md");
+		expect(parsed).toEqual({ description: "bombed", allowedDuringRun: false, body: "body text" });
+	});
+
+	it("uppercase filenames are rejected — dispatch is case-sensitive (review)", async () => {
+		const { home, reserved } = await scaffold();
+		const dir = path.join(home, ".imp", "commands");
+		await put(dir, "Fix.md", "nope");
+		const diags: string[] = [];
+		const loaded = await loadMdCommands({
+			cwd: "/tmp",
+			home,
+			projectAllowed: true,
+			reserved,
+			onDiagnostic: (m) => diags.push(m),
+		});
+		expect(loaded.commands).toEqual([]);
+		expect(diags.join("\n")).toContain("[a-z0-9]");
+	});
+
+	it("extension command names join the reserved set — no silent shadowing (review)", async () => {
+		const { home, reserved } = await scaffold();
+		const dir = path.join(home, ".imp", "commands");
+		await put(dir, "deploy.md", "deploy it");
+		const diags: string[] = [];
+		const withExt = new Set([...reserved, "deploy"]);
+		const loaded = await loadMdCommands({
+			cwd: "/tmp",
+			home,
+			projectAllowed: true,
+			reserved: withExt,
+			onDiagnostic: (m) => diags.push(m),
+		});
+		expect(loaded.commands).toEqual([]);
+		expect(diags.join("\n")).toContain("deploy");
+	});
+
 	it("reserved and malformed names are rejected with diagnostics; empty bodies are rejected", async () => {
 		const { home, reserved } = await scaffold();
 		const dir = path.join(home, ".imp", "commands");

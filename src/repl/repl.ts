@@ -367,8 +367,10 @@ class ReplMachine {
 					// Top-level events feed the Renderer; subagent-sourced ones
 					// (info set) go to the activity region only — M5's
 					// zero-rendering-visibility rule, enforced at this tap.
-					if (info === undefined) this.renderer.event(event);
-					this.showEditFold(event);
+					if (info === undefined) {
+						this.renderer.event(event);
+						this.showEditFold(event); // M9 parity: top-level edits fold; child edits could later
+					}
 					this.trackActivity(event, info);
 				},
 				getSteeringMessages: () => this.steeringMessages(),

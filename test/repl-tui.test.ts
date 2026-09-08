@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
@@ -25,6 +25,7 @@ import {
 	settle as _settle,
 	assistant,
 	gate,
+	gatedTool,
 	type ScriptStep,
 	scriptedProvider,
 	ticks,
@@ -1002,7 +1003,12 @@ describe("runRepl with shell:tui", () => {
 
 	async function startTuiRepl(
 		scripts: ScriptStep[],
-		options?: { commands?: RegisteredExtensionCommand[]; tools?: Tool[]; confirm?: boolean },
+		options?: {
+			commands?: RegisteredExtensionCommand[];
+			tools?: Tool[];
+			confirm?: boolean;
+			agentsHomeDir?: string;
+		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
 		const requests: LLMRequest[] = [];
@@ -1028,6 +1034,7 @@ describe("runRepl with shell:tui", () => {
 			renderer,
 			provider,
 			tools: options?.tools,
+			agentsHomeDir: options?.agentsHomeDir,
 			deferInit: false,
 		});
 		// cli.ts's confirm wiring: one renderer (the transcript's), one host —
@@ -1387,5 +1394,150 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
+	});
+
+	// ── activity region (M10 B): thinking/tool/subagent rows replace the
+	// byte-stream spinner in TUI mode ──
+
+	it("thinking phase paints a spinner row while the model is gated; it clears on settle", async () => {
+		const g = gate();
+		const env = await startTuiRepl([() => g.promise.then(() => reply("hello"))]);
+		await settle();
+		env.terminal.data("go\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("thinking"); // the activity row, not a byte-stream spinner
+		const mark = env.terminal.writes.length;
+		g.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("hello"));
+		await settle();
+		expect(env.terminal.frameSince(mark)).not.toContain("thinking"); // row cleared on settle
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("a pending tool paints a live row; the ✓/⎿ completion stays in the transcript", async () => {
+		const g = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "gated", arguments: { message: "slow" } }],
+					"tool_use",
+				),
+				reply("done"),
+			],
+			{ tools: [gatedTool(g)] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("gated"));
+		const pending = env.terminal.frameSince(0);
+		expect(pending).toContain("gated"); // the live activity row
+		expect(pending).not.toContain("●"); // no byte-stream pending line in TUI mode
+		const mark = env.terminal.writes.length;
+		g.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("⎿"));
+		await settle();
+		// the pending row is gone — spinner+name only ever appeared in the
+		// activity region (the completion line uses ●, not a spinner frame)
+		expect(env.terminal.frameSince(mark)).not.toMatch(
+			/[\u280b\u2819\u28b9\u28b8\u287c\u2834\u2826\u2867\u2807\u283f] gated/,
+		);
+		const stream = env.transcript.completedLines().join("\n");
+		expect(stream).toContain("✓"); // the completion line (Renderer, unchanged)
+		expect(stream).toContain("⎿"); // the result summary
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("a subagent paints a tree row held on screen; it leaves with the task", async () => {
+		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		const childHold = gate();
+		const env = await startTuiRepl(
+			[
+				// parent: call the task tool (instant — the row appears at once)
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "t1",
+							name: "task",
+							arguments: { prompt: "explore the tree", agent: "scout" },
+						},
+					],
+					"tool_use",
+				),
+				// child: first response HELD — a fully-scripted child finishes inside
+				// one render interval and the row would never paint
+				() => childHold.promise.then(() => reply("scout done")),
+				// parent: closing text
+				reply("all done"),
+			],
+			{ agentsHome },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("└─ scout"), 8000);
+		expect(env.terminal.frameSince(0)).toContain("└─ scout · explore the tree"); // agent + task label
+		const mark = env.terminal.writes.length;
+		childHold.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
+		await settle();
+		expect(env.terminal.frameSince(mark)).not.toContain("└─ scout"); // row left with the task call
+		const stream = env.transcript.completedLines().join("\n");
+		expect(stream).toContain("scout done"); // the child's report reached the parent's tool result
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+});
+
+describe("TuiShell activity region (M10 B)", () => {
+	it("thinking paints a spinner row that ticks, then clears on idle", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setActivity({ phase: "thinking", tools: [], agents: [] });
+		await settle(30); // first paint (16ms render interval), before any 120ms tick
+		const first = terminal.frameSince(0);
+		expect(first).toContain("thinking");
+		await settle(300); // ≥2 ticker frames
+		const ticked = terminal.frameSince(0);
+		expect(ticked).toContain("thinking");
+		expect(ticked).not.toBe(first); // the spinner frame advanced
+		const mark = terminal.writes.length;
+		shell.setActivity({ phase: "idle", tools: [], agents: [] });
+		await settle(30);
+		expect(terminal.frameSince(mark)).not.toContain("thinking");
+	});
+
+	it("working rows render pending tools and subagent tree lines", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+			agents: [
+				{
+					agent: "scout",
+					task: "explore the tree",
+					taskToolId: "t9",
+					cwd: null,
+					lastTool: "bash echo deep",
+					toolCount: 3,
+					startedAtMs: Date.now(),
+				},
+			],
+		});
+		await settle(30);
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("bash echo hi");
+		expect(frame).toContain("└─ scout · explore the tree · 3 tools · last: bash echo deep");
+		shell.close();
 	});
 });

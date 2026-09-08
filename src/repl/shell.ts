@@ -1,4 +1,5 @@
 import { dim } from "../format.js";
+import { SPINNER_FRAMES } from "../render.js";
 import {
 	type AutocompleteSlashCommand,
 	CombinedAutocompleteProvider,
@@ -16,7 +17,7 @@ import {
 	TUI,
 } from "../tui.js";
 import { Fold } from "./components/fold.js";
-import type { LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
+import type { ActivitySnapshot, LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Autocomplete wiring for the editor (M10): slash commands at line start
@@ -145,6 +146,13 @@ export class TuiShell implements LineInput {
 	private askLine: Text | null = null;
 	/** The queue visual line, below the ask region (empty = zero rows). */
 	private queueLine: Text | null = null;
+	/** Activity region (M10 B): live tool/subagent rows between the folds
+	 *  and the ask line. Owns the spinner animation so elapsed seconds tick
+	 *  without machine pushes. */
+	private readonly activityContainer = new Container();
+	private activity: ActivitySnapshot = { phase: "idle", tools: [], agents: [] };
+	private activityTimer: ReturnType<typeof setInterval> | null = null;
+	private activityFrame = 0;
 	/** Buffered setQueue text — pushes may arrive before start() and must not
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
@@ -216,6 +224,7 @@ export class TuiShell implements LineInput {
 
 		tui.addChild(this.options.transcript);
 		tui.addChild(this.foldContainer);
+		tui.addChild(this.activityContainer); // live tool/subagent rows (M10 B)
 		tui.addChild(this.askContainer);
 		const queueLine = new Text(this.queueText);
 		this.queueLine = queueLine;
@@ -356,6 +365,62 @@ export class TuiShell implements LineInput {
 		this.terminal?.write(`\x1b]2;${title}\x07`);
 	}
 
+	/** Activity region (M10 B): rebuild rows from the snapshot; the ticker
+	 *  (120ms, only while live) advances the spinner frame and re-renders so
+	 *  elapsed seconds tick without machine pushes. */
+	setActivity(snapshot: ActivitySnapshot): void {
+		this.activity = snapshot;
+		this.renderActivity();
+		if (snapshot.phase === "idle") {
+			if (this.activityTimer !== null) {
+				clearInterval(this.activityTimer);
+				this.activityTimer = null;
+			}
+			return;
+		}
+		if (this.activityTimer === null) {
+			this.activityTimer = setInterval(() => {
+				this.activityFrame = (this.activityFrame + 1) % SPINNER_FRAMES.length;
+				this.renderActivity();
+			}, 120);
+			this.activityTimer.unref?.();
+		}
+	}
+
+	/** Rebuild the activity rows (dim; the ✓/⎿ completion lives in the
+	 *  transcript — this region is pending state only). */
+	private renderActivity(): void {
+		this.activityContainer.clear();
+		if (this.activity.phase === "idle") {
+			this.tui?.requestRender();
+			return;
+		}
+		const now = Date.now();
+		const frame = SPINNER_FRAMES[this.activityFrame] ?? "⠋";
+		const elapsed = (startedAtMs: number): string => {
+			const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1000));
+			return seconds === 0 ? "" : ` ${seconds}s`;
+		};
+		if (this.activity.phase === "thinking") {
+			this.activityContainer.addChild(new Text(dim(`${frame} thinking…`, true)));
+		}
+		for (const tool of this.activity.tools) {
+			const label = tool.label === "" ? "" : ` ${tool.label}`;
+			this.activityContainer.addChild(
+				new Text(dim(`${frame} ${tool.name}${label}${elapsed(tool.startedAtMs)}`, true)),
+			);
+		}
+		for (const agent of this.activity.agents) {
+			const parts = [agent.agent, agent.task].filter((part) => part !== "");
+			const tools = agent.toolCount > 0 ? `${agent.toolCount} tools` : null;
+			const last = agent.lastTool !== null ? `last: ${agent.lastTool}` : null;
+			const tail = [tools, last].filter((part) => part !== null).join(" · ");
+			const row = tail === "" ? parts.join(" · ") : `${parts.join(" · ")} · ${tail}`;
+			this.activityContainer.addChild(new Text(dim(`└─ ${row}${elapsed(agent.startedAtMs)}`, true)));
+		}
+		this.tui?.requestRender();
+	}
+
 	/** Test seam: force one full repaint — differential renders may leave
 	 *  unchanged lines out of the write log assertions depend on. */
 	forceRender(): void {
@@ -442,6 +507,7 @@ export class TuiShell implements LineInput {
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.setActivity({ phase: "idle", tools: [], agents: [] }); // stop the ticker
 		this.detachInput?.();
 		this.detachInput = null;
 		if (this.onProcessSigint !== null) process.off("SIGINT", this.onProcessSigint);

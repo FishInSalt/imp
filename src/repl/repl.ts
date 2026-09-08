@@ -7,15 +7,22 @@ import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
-import { formatTokens, VERSION } from "../format.js";
+import { formatTokens, summarizeArgs, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
-import type { Runner } from "../runner.js";
+import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
 import { COMMANDS, type CommandContext, dispatchCommand, parseCommand } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
-import type { LineInput, SelectItemOption, SelectOptions } from "./line-input.js";
+import type {
+	ActivityAgentLine,
+	ActivitySnapshot,
+	ActivityToolLine,
+	LineInput,
+	SelectItemOption,
+	SelectOptions,
+} from "./line-input.js";
 import { replaySession } from "./replay.js";
 import { type AutocompleteOptions, TuiShell } from "./shell.js";
 import type { TranscriptSink } from "./transcript.js";
@@ -189,6 +196,11 @@ class ReplMachine {
 	/** Latch for the context-low note: fires once per crossing of 80%;
 	 *  dropping back below (compaction, /new) re-arms it. */
 	private lowContextNoted = false;
+	/** Live turn activity for the TUI region (M10 B): pending top-level tools
+	 *  and running subagents. Keyed by tool_call id / agent name; pushed as a
+	 *  snapshot after every mutation (see pushActivity). */
+	private activityTools = new Map<string, ActivityToolLine>();
+	private activityAgents = new Map<string, ActivityAgentLine>();
 	private receivedLine = false;
 	private readonly runner: Runner;
 	private readonly commands: readonly RegisteredExtensionCommand[];
@@ -342,7 +354,8 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "running";
 		this.input.setActive(true);
-		this.renderer.think(); // live spinner until the first event arrives
+		this.renderer.think(); // live spinner until the first event arrives (print/legacy)
+		this.pushActivity(); // TUI activity region: thinking phase from the start
 		const controller = new AbortController();
 		this.controller = controller;
 		try {
@@ -350,9 +363,13 @@ class ReplMachine {
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,
-				onEvent: (event: AgentEvent) => {
-					this.renderer.event(event);
+				onEvent: (event: AgentEvent, info?: AgentEventInfo) => {
+					// Top-level events feed the Renderer; subagent-sourced ones
+					// (info set) go to the activity region only — M5's
+					// zero-rendering-visibility rule, enforced at this tap.
+					if (info === undefined) this.renderer.event(event);
 					this.showEditFold(event);
+					this.trackActivity(event, info);
 				},
 				getSteeringMessages: () => this.steeringMessages(),
 			});
@@ -532,7 +549,87 @@ class ReplMachine {
 		if (exitMatch !== null) this.renderer.note(`(exit ${exitMatch[1]})`);
 	}
 
+	/** Activity region (M10 B). tool_start adds a pending row; tool_end removes
+	 *  it (the ✓/⎿ completion lines stay in the transcript — the Renderer is
+	 *  unchanged); the task tool maps to a subagent row that child events
+	 *  (info.agent) keep updating until the task ends. Two parallel tasks on
+	 *  the same agent share one row (v1 — the common case is one per agent). */
+	private trackActivity(event: AgentEvent, info?: AgentEventInfo): void {
+		if (event.type === "tool_start") {
+			if (info !== undefined) {
+				// Child-sourced (info present — even without an agent name): update
+				// the agent row; never a top-level tool row.
+				const agent = info.agent ?? "task";
+				const row = this.activityAgents.get(agent);
+				if (row !== undefined) {
+					row.lastTool = `${event.name} ${summarizeArgs(event.name, event.args)}`.trimEnd();
+					row.toolCount += 1;
+				}
+			} else if (event.name === "task") {
+				const args = (event.args ?? {}) as { agent?: string; prompt?: string };
+				const agent = args.agent ?? "task";
+				this.activityAgents.set(agent, {
+					agent,
+					// the prompt IS the label (summarizeArgs has no task entry —
+					// raw JSON as a row label would be noise, not signal)
+					task: typeof args.prompt === "string" ? shorten(args.prompt) : summarizeArgs("task", event.args),
+					taskToolId: event.toolCallId,
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+				});
+			} else {
+				this.activityTools.set(event.toolCallId, {
+					id: event.toolCallId,
+					name: event.name,
+					label: summarizeArgs(event.name, event.args),
+					startedAtMs: Date.now(),
+				});
+			}
+			this.pushActivity();
+			return;
+		}
+		if (event.type === "tool_end") {
+			if (info !== undefined) return; // child ends bump nothing (v1)
+			if (event.result.toolName === "task") {
+				// Only the rows this task call created leave; a concurrent second
+				// task's row survives (keyed by taskToolId, not agent name).
+				for (const [key, row] of this.activityAgents) {
+					if (row.taskToolId === event.result.toolCallId) this.activityAgents.delete(key);
+				}
+			} else {
+				this.activityTools.delete(event.result.toolCallId);
+			}
+			this.pushActivity();
+		}
+	}
+
+	/** Push the current activity snapshot to the TUI shell (no-op elsewhere). */
+	private pushActivity(): void {
+		if (this.input.setActivity === undefined) return;
+		const working = this.activityTools.size > 0 || this.activityAgents.size > 0;
+		const snapshot: ActivitySnapshot = {
+			phase: this.state === "idle" ? "idle" : working ? "working" : "thinking",
+			tools: [...this.activityTools.values()],
+			agents: [...this.activityAgents.values()],
+		};
+		this.input.setActivity(snapshot);
+	}
+
+	/** Clear live rows (turn end, interrupt, exit) and park the region at idle. */
+	private clearActivity(): void {
+		this.activityTools.clear();
+		this.activityAgents.clear();
+		// Phase is parked at idle explicitly: callers run this at the END of a
+		// turn, when this.state may not have flipped back yet — pushActivity()
+		// would then report "thinking" and the row (and its ticker) would live on.
+		if (this.input.setActivity === undefined) return;
+		this.input.setActivity({ phase: "idle", tools: [], agents: [] });
+	}
+
 	private returnToIdle(): void {
+		this.clearActivity();
 		if (this.state === "exited") return;
 		if (this.pendingExitCode !== null) {
 			const code = this.pendingExitCode;

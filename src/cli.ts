@@ -261,7 +261,12 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	const renderer = new Renderer({
 		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,
-		liveTools: interactive, // no in-place pending tool lines on a pipe
+		// In-place pending tool lines only on the legacy readline shell. TUI
+		// mode turns them OFF: the live activity region owns pending state
+		// (M10 B) — with liveTools=false the Renderer still writes the ✓/⎿
+		// completion lines, which is exactly the split we want. Pipes never
+		// had them.
+		liveTools: interactive && transcript === undefined,
 		toolStyle: "one-line",
 		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text
 	});

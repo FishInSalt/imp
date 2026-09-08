@@ -444,7 +444,12 @@ class ReplMachine {
 		if (rawLines.length > FOLD_LINE_CAP) {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
-		this.input.addFold(summarizeResult(result.toolName, result.content), capped, false, result.isError === true);
+		this.input.addFold(
+			summarizeResult(result.toolName, result.content),
+			capped,
+			false,
+			result.isError === true,
+		);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -617,13 +622,18 @@ class ReplMachine {
 	}
 
 	/** Bang output block: the tool's own truncation stands (bash.ts); the
-	 *  trailing "Exit code: N" section becomes the dim "(exit N)" note so
-	 *  the code is never stated twice. Error text displays as-is. */
+	 *  exit status comes from the STRUCTURED field — the trailing
+	 *  "Exit code: N" section is stripped only when it matches the real
+	 *  code, so the code is stated exactly once and a command's own output
+	 *  can no longer forge the annotation (debt clearance). */
 	private renderBangResult(result: ToolExecuteResult): void {
-		const exitMatch = /(?:\n\n|^)Exit code: (\d+)$/.exec(result.output);
-		const body = exitMatch === null ? result.output : result.output.slice(0, exitMatch.index).trimEnd();
+		let body = result.output;
+		if (result.exitCode !== undefined && result.exitCode !== 0) {
+			const real = new RegExp(`(?:\n\n|^)Exit code: ${result.exitCode}$`).exec(result.output);
+			if (real !== null) body = result.output.slice(0, real.index).trimEnd();
+			this.renderer.note(`(exit ${result.exitCode})`);
+		}
 		if (body !== "") this.renderer.writeLine(body);
-		if (exitMatch !== null) this.renderer.note(`(exit ${exitMatch[1]})`);
 	}
 
 	/** Activity region (M10 B). tool_start adds a pending row; tool_end removes

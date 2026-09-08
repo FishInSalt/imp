@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StdinBuffer, type Terminal } from "../src/tui.js";
-import { askTrustViaTui } from "../src/repl/trust-ask.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptSink } from "../src/repl/transcript.js";
+import { askTrustViaTui } from "../src/repl/trust-ask.js";
+import { StdinBuffer, type Terminal } from "../src/tui.js";
 
 /** Mirrors the FakeTerminal in repl-tui.test.ts — that one is file-local. */
 class AskTerminal implements Terminal {
@@ -46,6 +46,8 @@ class AskTerminal implements Terminal {
 	clearLine(): void {}
 	clearFromCursor(): void {}
 	clearScreen(): void {}
+	setTitle(): void {}
+	setProgress(): void {}
 
 	data(text: string): void {
 		this.buffer?.process(text);

@@ -67,6 +67,41 @@ imp            # interactive REPL (streaming, one-line tool status)
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).
 
+Known limits (declared, not bugs):
+
+- The `/resume` picker's type-to-filter consumes committed text only — IME
+  composition windows emit no keys mid-composition (kitty protocol), so
+  CJK input filters once committed. A pasted block takes its first line.
+
+
+## Markdown quick commands
+
+Drop a `.md` file into `~/.imp/commands/` (global) or `<project>/.imp/commands/`
+(project — behind the same trust gate as extensions and agents: a cloned repo
+must not grow commands that talk to the model) and its filename becomes a
+slash command:
+
+```bash
+mkdir -p ~/.imp/commands
+cat > ~/.imp/commands/review.md <<'EOF'
+---
+description: review the current diff against the plan
+allowedDuringRun: false
+---
+Review the working tree diff against PROJECT_PLAN.md. Focus on contract
+drift. $ARGUMENTS
+EOF
+```
+
+- `/review focus on tests` spends a real model turn with the file body
+  (`$ARGUMENTS` is replaced by everything after the command name; without
+  the placeholder the arguments append as a trailing paragraph).
+- Project files override global ones with the same name; built-in names and
+  already-loaded extension command names are rejected with a diagnostic.
+- `/help` lists them with `md:global` / `md:project` tags.
+- Scripted (piped) REPLs load them too when the directory is trusted — the
+  same rule extension commands follow; print mode (`-p`) never loads them.
+
 ## Subagents
 
 The `task` tool delegates a self-contained job to a fresh subagent with its

@@ -202,7 +202,7 @@ describe("slash commands", () => {
 				"  Ctrl+C             abort the running turn (press twice to force quit);",
 				"                     at an empty prompt: press twice to exit",
 				"  Esc                abort the running turn (same as Ctrl+C); with the",
-				"                     autocomplete panel open, one Esc closes it and aborts",
+				"                     autocomplete panel open, one Esc closes the panel only",
 				"  Ctrl+D             exit",
 				"  Ctrl+O             expand/collapse all folds (results, errors, diffs)",
 				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",

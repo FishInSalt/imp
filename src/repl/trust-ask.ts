@@ -1,7 +1,7 @@
 import { describeTrustResources } from "../core/trust.js";
+import type { Terminal } from "../tui.js";
 import { TuiShell } from "./shell.js";
 import type { TranscriptSink } from "./transcript.js";
-import type { Terminal } from "../tui.js";
 
 /** The TUI trust ask's verdict (debt clearance: this used to be a readline
  *  [y/N] even on the TUI shell, because extension loading ran before the

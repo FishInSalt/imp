@@ -17,10 +17,10 @@ import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/ty
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
-import { askTrustViaTui, type TrustAskAnswer } from "./repl/trust-ask.js"
 import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
 import { TranscriptSink } from "./repl/transcript.js";
+import { askTrustViaTui, type TrustAskAnswer } from "./repl/trust-ask.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
 import { resolveShell } from "./tui.js";
 
@@ -434,9 +434,7 @@ async function resolveProjectTrust(
 		}
 		if (answer === "session") {
 			// load now, record nothing — asked again next open
-			renderer.note(
-				dim(`▪ trust: project resources loaded for this session only (nothing recorded)`),
-			);
+			renderer.note(dim(`▪ trust: project resources loaded for this session only (nothing recorded)`));
 			return true;
 		}
 		const trusted = answer === true || answer === "yes";

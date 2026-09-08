@@ -64,7 +64,16 @@ class FakeTerminal implements Terminal {
 
 	/** Everything written since `mark`, ANSI/control-stripped. */
 	frameSince(mark: number): string {
-		return stripAnsi(this.writes.slice(mark).join(""));
+		// Write-boundary safe (debt clearance): joining raw writes could glue
+		// the tail of one frame to the head of the next into a phantom line —
+		// a boundary break is inserted when neither side ends a line.
+		let out = "";
+		for (const write of this.writes.slice(mark)) {
+			const text = stripAnsi(write);
+			if (out !== "" && !out.endsWith("\n") && !text.startsWith("\n")) out += "\n";
+			out += text;
+		}
+		return out;
 	}
 }
 

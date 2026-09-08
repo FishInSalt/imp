@@ -277,10 +277,17 @@ export class TuiShell implements LineInput {
 				if (this.selector.filterKey?.(data) === true) return { consume: true };
 			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt
-			// path. NOT consumed: an open autocomplete panel closes too (the
-			// known dual-consumer edge, see the ledger above). While a selector
-			// is open Esc stays the selector's cancel — never an interrupt.
-			if (this.active && this.selector === null && matchesKey(data, "escape")) {
+			// path — UNLESS the editor's autocomplete panel is open: then the
+			// first Esc only closes the panel (debt clearance — pi-tui grew
+			// isShowingAutocomplete(), the dual-consumer edge is gone). While
+			// a selector is open Esc stays the selector's cancel — never an
+			// interrupt.
+			if (
+				this.active &&
+				this.selector === null &&
+				matchesKey(data, "escape") &&
+				editor?.isShowingAutocomplete() !== true
+			) {
 				if (this.pendingAsks.length > 0) this.settleAsk(false);
 				else this.options.onInterrupt();
 				return undefined;

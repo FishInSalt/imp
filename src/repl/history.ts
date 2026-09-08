@@ -10,7 +10,16 @@
  * best-effort and silent. A broken or unwritable store must never take the
  * REPL down with it.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 /** Compact the file once it passes 2× the recall horizon, keeping the newest half. */
@@ -52,19 +61,58 @@ export function appendInputHistory(path: string, text: string): void {
 	if (text === "") return;
 	try {
 		mkdirSync(dirname(path), { recursive: true });
-		const existing = loadInputHistory(path, MAX_LINES);
-		if (existing[existing.length - 1] === text) return; // consecutive duplicate
-		// Fast path: a single append — the concurrent-session race window is
-		// one line, not the whole file (review P2; trust.json's lock remains
-		// the stricter precedent for data that must not lose records).
-		if (existing.length < MAX_LINES) {
-			appendFileSync(path, `${JSON.stringify(text)}\n`);
-			return;
-		}
-		const kept = [...existing, text].slice(-MAX_LINES);
-		writeFileSync(path, `${kept.map((l) => JSON.stringify(l)).join("\n")}\n`);
+		withHistoryLock(path, () => {
+			const existing = loadInputHistory(path, MAX_LINES);
+			if (existing[existing.length - 1] === text) return; // consecutive duplicate
+			// Fast path: a single append — the concurrent-session race window
+			// is one line, not the whole file (review P2). The lock below
+			// guards the compaction rewrite, where a parallel read-modify-
+			// write could drop the other session's lines (debt clearance —
+			// same discipline as trust.json's store lock).
+			if (existing.length < MAX_LINES) {
+				appendFileSync(path, `${JSON.stringify(text)}\n`);
+				return;
+			}
+			const kept = [...existing, text].slice(-MAX_LINES);
+			writeFileSync(path, `${kept.map((l) => JSON.stringify(l)).join("\n")}\n`);
+		});
 	} catch {
 		// unwritable home, disk full — recall for this session still works
+	}
+}
+
+/** Same-file mutual exclusion for two imp processes appending at once —
+ *  mirrors core/trust.ts's withStoreLock (busy-wait + degrade-to-unlocked
+ *  after ~1s rather than bricking on a stale lock file). */
+function withHistoryLock(path: string, fn: () => void): void {
+	const lockPath = `${path}.lock`;
+	for (let attempt = 0; ; attempt++) {
+		let fd: number | undefined;
+		try {
+			fd = openSync(lockPath, "wx");
+		} catch {
+			if (attempt >= 50) {
+				try {
+					unlinkSync(lockPath); // stale lock: break the deadlock
+				} catch {
+					/* already gone */
+				}
+				fn(); // degraded: proceed unlocked rather than brick
+				return;
+			}
+			const started = Date.now();
+			while (Date.now() - started < 20) {
+				/* busy-wait 20ms — sync context */
+			}
+			continue;
+		}
+		try {
+			fn();
+		} finally {
+			closeSync(fd);
+			unlinkSync(lockPath);
+		}
+		return;
 	}
 }
 

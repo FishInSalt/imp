@@ -92,12 +92,14 @@ function withHistoryLock(path: string, fn: () => void): void {
 			fd = openSync(lockPath, "wx");
 		} catch {
 			if (attempt >= 50) {
-				try {
-					unlinkSync(lockPath); // stale lock: break the deadlock
-				} catch {
-					/* already gone */
-				}
-				fn(); // degraded: proceed unlocked rather than brick
+				// Degraded EXACTLY like trust.ts: proceed unlocked, but do NOT
+				// unlink — deleting a live holder's lock breaks mutual
+				// exclusion for whoever acquires next, and the holder's own
+				// finally would then unlink a successor's lock (cascade,
+				// review P2). A truly stale lock (SIGKILL) self-heals the same
+				// way: every contender degrades after ~1s of busy-wait and
+				// moves on — same trade trust.json already makes.
+				fn();
 				return;
 			}
 			const started = Date.now();

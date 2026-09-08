@@ -54,5 +54,8 @@ export async function askTrustViaTui(options: {
 	const title = `Trust ${options.cwd}? It wants to load: ${described}`;
 	const pick = await shell.select({ title, items: [...TRUST_ITEMS] });
 	shell.close();
+	// The delayed terminal stop (40ms) must RUN before the real shell binds
+	// stdin — otherwise it pauses the stream under the successor (review P0).
+	await shell.whenSettled();
 	return pick === null ? null : (ANSWERS[pick] ?? null);
 }

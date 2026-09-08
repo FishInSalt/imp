@@ -31,9 +31,10 @@ export interface CommandContext {
 	 *  call this too; extensions are arbitrary code by contract, so this
 	 *  adds no new capability, only a documented one. */
 	submitPrompt(text: string): void;
-	/** TUI shells only: wipe transcript + folds. /new calls it after
-	 *  newSession (debt clearance — the old session's screen used to stay);
-	 *  wired in repl.ts, absent in test recorders unless injected. */
+	/** TUI shells only: wipe transcript + folds. /new calls it BEFORE
+	 *  newSession so the "▪ new session" note lands on the fresh screen
+	 *  (debt clearance); wired in repl.ts, absent in test recorders unless
+	 *  injected. */
 	clearView?: () => void;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text

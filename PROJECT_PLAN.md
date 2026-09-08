@@ -373,6 +373,11 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **D**：`frameSince` 写边界加固（跨帧粘连假阳性）；IME 组合窗口假设写进 README known limits；#16 resize 回归钉子（FakeTerminal 模拟 SIGWINCH，宽折叠重截断）
   - **踩坑**：scripted provider 测试要喂助手消息流而非裸 tool_end；pty 里 /tmp 解析为 /private/tmp；帮助文案改 HELP_KEYS 需同步 repl-commands 字节钉；closes 时序（note 后清屏=note 消失）——/new 清屏必须在 newSession **之前**
 
+- **设计债清偿批对抗审查闭环（2026-09-09，566 tests）**：两路（字节/边界 + 语义/生命周期），**P0/P1 同一条两路独立命中**（第三次交叉印证）+4 P2 全核修
+  - **P0（ask 壳交接竞态）**：trust-ask close() 的 40ms 延迟 stopTerminal 与真壳 start 无屏障竞态——热缓存下真壳 40ms 内起完，随后 ask 的停机在真壳脚下 pause process.stdin（输入死）+清共享 sink 的 onUpdate（流式不重绘）。修复：`TuiShell.whenSettled()`（停机真跑完才 resolve；未启动壳立即 resolve）+trust-ask await 之；加固：stopTerminal 只在 onUpdate 仍指向**本壳闭包**时才置 null（boundOnUpdate 属主校验）。钉子：ask promise resolve 时 terminal.stop 必已发生；pty 冒烟=选择后 0.3s 即输入仍存活
+  - **P2**：bang 截断场景 exit code 双显（截断段在 Exit code 段之后→正则不匹配→正文+note 各一次）→ note 只在真正剥离时发；history 锁 degraded 分支 unlink 活锁可级联破坏互斥（A 的 finally 删掉 C 的新锁）→ 与 trust 完全对齐（降级不删锁）；Esc 注释过度声明（debounce 窗口内仍会中断+迟弹面板，上游 cancel API 未公开）→ 措辞修正；clearView 接口文档"after"与实现"before"相反→修正；transcript.ts clear() 插在 feed 文档注释与 feed 之间→注释归位；frameSince 第三份副本（repl-status）漏加固→同步+两份已加固处补"合成换行不得跨 write 断言"文档
+  - **报告级接受**：Ctrl+O 全展开的单帧 O(总行数) 截断计算（展开全部的固有代价）；summarizeResult 对所有工具滤 `Exit code: N` 行（read 日志含此行时 +N 少计——与"status-y 行"框定一致）；ask 壳 close 后 ≤40ms typed-ahead 被吞（与 M8 F9 同类 cosmetic）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

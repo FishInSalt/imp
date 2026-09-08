@@ -484,6 +484,7 @@ export class TuiShell implements LineInput {
 				if (settled) return;
 				settled = true;
 				this.selector = null;
+				this.updatePlaceholder(); // the hint may come back with the picker gone
 				this.askContainer.removeChild(box);
 				tui.setFocus(this.editor); // the editor owns keys again
 				tui.requestRender();
@@ -496,6 +497,7 @@ export class TuiShell implements LineInput {
 				resolve(index);
 			};
 			this.selector = { teardown: () => finish(null) };
+			this.updatePlaceholder(); // keys belong to the picker — hide the hint
 			list.onSelect = (item) => finish(Number(item.value));
 			list.onCancel = () => finish(null);
 			this.askContainer.addChild(box);
@@ -542,7 +544,13 @@ export class TuiShell implements LineInput {
 	 *  ask pending — every driver flips it through this one gate. */
 	private updatePlaceholder(): void {
 		if (this.placeholder === null) return;
-		const visible = !this.active && this.editorText === "" && this.pendingAsks.length === 0;
+		// An open selector hides the hint too: keys go to the picker while it
+		// owns focus, so "you can type" would be a lie (M10 review P2#5).
+		const visible =
+			!this.active &&
+			this.editorText === "" &&
+			this.pendingAsks.length === 0 &&
+			this.selector === null;
 		this.placeholder.setText(visible ? PLACEHOLDER_HINT : "");
 		this.tui?.requestRender();
 	}

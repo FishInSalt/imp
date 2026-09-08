@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
@@ -913,6 +914,56 @@ describe("! passthrough (M10)", () => {
 		await waitUntil(() => env.output().includes("Error: command aborted by user."));
 		env.send("after\n"); // back to idle — a normal turn works
 		await waitUntil(() => env.requests.length === 1);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("legacy shell never prints the low-context warning — footer extras stay TUI-only (M10 review P2#1)", async () => {
+		const heavy = (): AssistantMessage => ({
+			role: "assistant",
+			blocks: [{ type: "text", text: "big context" }],
+			usage: { inputTokens: 105000, outputTokens: 5 },
+			stopReason: "end_turn",
+		});
+		const env = await startRepl({ scripts: [heavy] });
+		env.send("hi\n");
+		await waitUntil(() => env.output().includes("big context"));
+		const out = env.output();
+		expect(out).not.toContain("context 8"); // ~80% of the 131072 default — no note on legacy
+		expect(out).not.toContain("/compact");
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("interrupting a ! command discards queued lines — turn semantics mirrored (M10 review P2#2)", async () => {
+		let started = false;
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "abortable stand-in",
+				parameters: Type.Object({}),
+				async execute(_args, signal) {
+					started = true;
+					return await new Promise((resolve) => {
+						const finish = () => resolve({ output: "Error: command aborted by user.", isError: true });
+						if (signal.aborted) {
+							finish();
+							return;
+						}
+						signal.addEventListener("abort", finish, { once: true });
+					});
+				},
+			},
+		];
+		const env = await startRepl({ tools, scripts: [reply("ok")] });
+		env.send("! sleep 100\n");
+		await waitUntil(() => started);
+		env.send("queued during bang\n");
+		await waitUntil(() => env.output().includes("queued"));
+		env.fake.interrupt();
+		await waitUntil(() => env.output().includes("Error: command aborted by user."));
+		await waitUntil(() => env.output().includes("discarded 1 queued"));
+		expect(env.requests.length).toBe(0); // the queued line never reached the model
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

@@ -1008,11 +1008,12 @@ describe("runRepl with shell:tui", () => {
 			tools?: Tool[];
 			confirm?: boolean;
 			agentsHomeDir?: string;
+			provider?: LLMProvider; // inject an abort-aware hold stream when needed
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
 		const requests: LLMRequest[] = [];
-		const provider: LLMProvider = scriptedProvider(scripts, requests);
+		const provider: LLMProvider = options?.provider ?? scriptedProvider(scripts, requests);
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
@@ -1494,6 +1495,99 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+
+	it("child edit results never reach the Renderer or fold — one ⎿, no ▸ (P2#3)", async () => {
+		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "t1",
+							name: "task",
+							arguments: { prompt: "edit the file", agent: "scout" },
+						},
+					],
+					"tool_use",
+				),
+				// child: one edit call, then closing text
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "c1",
+							name: "edit",
+							arguments: { path: "alpha.txt", edits: [{ oldText: "two", newText: "TWO" }] },
+						},
+					],
+					"tool_use",
+				),
+				reply("child report done"),
+				reply("all done"),
+			],
+			{ agentsHome },
+		);
+		await writeFile(path.join(env.baseDir, "alpha.txt"), "one\ntwo\nthree\n", "utf-8");
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
+		const stream = env.transcript.completedLines().join("\n");
+		// exactly ONE ⎿ — the top-level task result; a child edit fed to the
+		// Renderer would add its own ✓/⎿ pair
+		expect(stream.match(/⎿/g) ?? []).toHaveLength(1);
+		expect(stream).not.toContain("✓ edit");
+		// and no fold from the child's edit (top-level-only fold rule)
+		expect(env.terminal.frameSince(0)).not.toContain("▸");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("an aborted turn clears the activity rows — the interrupt path (P2#4)", async () => {
+		const g = gate();
+		const env = await startTuiRepl([], {
+			provider: {
+				name: "abort-hold",
+				async *stream(request) {
+					const aborted = () => request.signal?.aborted ?? false;
+					yield { type: "text_delta", text: "partial" };
+					// Mid-stream hold — a real provider's fetch REJECTS on abort, so the
+					// hold must lose the race the same way (otherwise the loop blocks).
+					await new Promise<void>((resolve) => {
+						const onAbort = () => resolve();
+						request.signal?.addEventListener("abort", onAbort, { once: true });
+						g.promise.then(() => {
+							request.signal?.removeEventListener("abort", onAbort);
+							resolve();
+						});
+					});
+					if (aborted()) return;
+					yield { type: "message_end", message: reply("never") };
+				},
+			},
+		});
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("thinking"));
+		env.terminal.data("\x03");
+		// zero-turn aborts skip run stats — the interrupt note plus the restored
+		// placeholder (idle marker repaint) are the settle signal
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("(interrupt"), 5000);
+		await waitUntil(() => env.terminal.frameSince(0).includes("(/ for commands"), 5000);
+		const mark = env.terminal.writes.length;
+		env.terminal.data("x"); // editor change → repaint; the row is gone if cleared
+		await settle(30);
+		expect(env.terminal.frameSince(mark)).not.toContain("thinking");
+		env.terminal.data("\x15"); // clear the draft (ctrl+u) before exiting cleanly
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
 });
 
 describe("TuiShell activity region (M10 B)", () => {
@@ -1538,6 +1632,50 @@ describe("TuiShell activity region (M10 B)", () => {
 		const frame = terminal.frameSince(0);
 		expect(frame).toContain("bash echo hi");
 		expect(frame).toContain("└─ scout · explore the tree · 3 tools · last: bash echo deep");
+		shell.close();
+	});
+});
+
+describe("M10 review regressions (wave 1 + B)", () => {
+	it("layout order: transcript < folds < activity < ask, and queue < hint < marker (P2#6)", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.feed("ORDER-TRANSCRIPT\n");
+		shell.addFold("ORDER-FOLD", ["+ a", "- b"]);
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "ORDER-TOOL", startedAtMs: Date.now() }],
+			agents: [],
+		});
+		const asked = shell.ask("ORDER-ASK");
+		let mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(30);
+		const frameA = terminal.frameSince(mark);
+		const t = frameA.indexOf("ORDER-TRANSCRIPT");
+		const f = frameA.indexOf("ORDER-FOLD");
+		const a = frameA.indexOf("ORDER-TOOL");
+		const k = frameA.indexOf("ORDER-ASK");
+		expect([t, f, a, k].every((i) => i >= 0)).toBe(true);
+		expect(t).toBeLessThan(f);
+		expect(f).toBeLessThan(a);
+		expect(a).toBeLessThan(k);
+		// settle the ask, then queue + hint + marker in one full repaint
+		terminal.data("y\r");
+		await expect(asked).resolves.toBe(true);
+		shell.setQueue(1, "ORDER-QUEUE");
+		await settle(30);
+		mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(30);
+		const frameB = terminal.frameSince(mark);
+		const q = frameB.indexOf("ORDER-QUEUE");
+		const h = frameB.indexOf("(/ for commands");
+		const m = frameB.lastIndexOf(" > ");
+		expect([q, h, m].every((i) => i >= 0)).toBe(true);
+		expect(q).toBeLessThan(h);
+		expect(h).toBeLessThan(m);
 		shell.close();
 	});
 });

@@ -434,7 +434,10 @@ class ReplMachine {
 		parts.push(`ctx ${contextPercent}%`);
 		if (contextPercent >= 80) {
 			parts.push("low — /compact");
-			if (!this.lowContextNoted) {
+			// The warning note rides the footer's shell gate: legacy/pipe sessions
+			// never saw context warnings before M10 and their byte contract stays
+			// that way (M10 review P2#1).
+			if (!this.lowContextNoted && this.input.setFooter !== undefined) {
 				this.lowContextNoted = true;
 				this.renderer.note(`▪ context ${contextPercent}% used — /compact to summarize older turns`);
 			}
@@ -537,7 +540,15 @@ class ReplMachine {
 		} finally {
 			this.controller = null;
 			this.interruptCount = 0;
-			await this.flushQueue(); // drains any queue, then back to idle
+			if (controller.signal.aborted) {
+				// Mirror the turn semantics: Ctrl+C takes control — queued lines are
+				// not run. They were queued behind a shell command the user just
+				// interrupted (M10 review P2#2).
+				this.discardQueue();
+				this.returnToIdle();
+			} else {
+				await this.flushQueue(); // drains any queue, then back to idle
+			}
 		}
 	}
 

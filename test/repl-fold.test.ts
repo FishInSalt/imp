@@ -169,7 +169,8 @@ describe("buildFoldFromDiff", () => {
 	].join("\n");
 
 	it("counts +/− content lines into the title (+++/--- headers excluded); body keeps the diff", () => {
-		const fold = buildFoldFromDiff("edit src/foo.ts", DIFF);
+		const { title, lines } = buildFoldFromDiff("edit src/foo.ts", DIFF);
+		const fold = new Fold(title, lines);
 		expect(stripAnsi(fold.render(80)[0] ?? "")).toBe("▸ edit src/foo.ts (+2/-1)");
 
 		fold.toggle();

@@ -68,9 +68,11 @@ export function tuiEditorTheme(): EditorTheme {
  *    counterpart: collapsed "▸ title" lines render between the
  *    transcript and the ask line — the text stream first, folds after,
  *    in insertion order (v1; folds never interleave with streamed
- *    text). Ctrl+O toggles the most recently added fold only; with no
- *    fold present the key falls through to the editor, which has no
- *    Ctrl+O binding (a no-op).
+ *    text). The producer is the machine's tool_end tap: every successful
+ *    edit result ("<summary>:\n<diff>") becomes one fold, so Ctrl+O is
+ *    live in real sessions; Ctrl+O toggles the most recently added fold
+ *    only; with no fold present the key falls through to the editor,
+ *    which has no Ctrl+O binding (a no-op).
  *  - Multi-line editor submits arrive as ONE line event with embedded
  *    newlines (readline split them into separate events); a multi-line
  *    answer to an [y/N] ask is judged on the whole text, so "y\nfootnote"
@@ -79,8 +81,12 @@ export function tuiEditorTheme(): EditorTheme {
  *    list takes focus, so keystrokes steer the selection instead of the
  *    editor; Ctrl+C cancels it (the readline-era interrupt NEVER fires —
  *    the selector outranks both interrupt and a pending ask), and Ctrl+D
- *    is swallowed (no EOF, no delete-forward) until it resolves. The
- *    readline shell has no selector — its /model keeps printing text.
+ *    is swallowed (no EOF, no delete-forward) until it resolves. A second
+ *    select() while one is open declines to null (the first stays live);
+ *    a question queued by ask() while a picker owns the keys is held and
+ *    rendered by the picker's finish(); SIGINT tears the picker down
+ *    before interrupting. The readline shell has no selector — its /model
+ *    keeps printing text.
  */
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
@@ -100,6 +106,10 @@ export class TuiShell implements LineInput {
 	private selector: { teardown: () => void } | null = null;
 	private marker: Text | null = null;
 	private footer: Text | null = null;
+	/** Buffered setFooter text — pushes may arrive before start() (the
+	 *  machine's constructor runs first) and must not be dropped (M9-2
+	 *  review P1: the startup footer was silently blank). */
+	private footerText = "";
 	private history: string[] = [];
 	private closed = false;
 	/** Terminal restore ran (close's deferred stop or the process-exit hook). */
@@ -134,7 +144,7 @@ export class TuiShell implements LineInput {
 		tui.addChild(this.askContainer);
 		tui.addChild(marker);
 		tui.addChild(editorBox);
-		const footer = new Text("");
+		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true));
 		this.footer = footer;
 		tui.addChild(footer); // status line below the editor (pi's placement)
 		tui.setFocus(editor);
@@ -182,6 +192,7 @@ export class TuiShell implements LineInput {
 
 		// `kill -INT` and a closing stdin: same drains as the readline shell.
 		this.onProcessSigint = () => {
+			this.selector?.teardown(); // a live picker dies with the interrupt, not after
 			this.drainAsks();
 			this.options.onInterrupt();
 		};
@@ -225,10 +236,13 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
-	/** Bottom status line; empty string keeps the reserved row blank. */
+	/** Bottom status line. Empty text renders ZERO rows (pi-tui Text) — the
+	 *  layout grows by the padded rows once text arrives; callers always
+	 *  send non-empty (model is always present). */
 	setFooter(text: string): void {
 		// The TUI owns a real terminal, so ANSI is unconditional; dim keeps
 		// the status visually quiet under the editor.
+		this.footerText = text; // buffered: start() seeds from this
 		this.footer?.setText(text === "" ? "" : dim(text, true));
 		this.tui?.requestRender();
 	}
@@ -253,7 +267,9 @@ export class TuiShell implements LineInput {
 		return new Promise<boolean>((resolve) => {
 			const wasFirst = this.pendingAsks.length === 0;
 			this.pendingAsks.push({ question, resolve });
-			if (wasFirst) this.showAsk(question);
+			// While a picker owns the keys the question would be unanswerable;
+			// hold it — the picker's finish() renders the queue head (M9-2 P2).
+			if (wasFirst && this.selector === null) this.showAsk(question);
 		});
 	}
 
@@ -274,7 +290,8 @@ export class TuiShell implements LineInput {
 
 	select(options: SelectOptions): Promise<number | null> {
 		const tui = this.tui;
-		if (tui === null || this.closed || options.items.length === 0) return Promise.resolve(null);
+		if (tui === null || this.closed || this.selector !== null || options.items.length === 0)
+			return Promise.resolve(null); // unstarted/closed, or a picker is already open (M9-2 review P2: the reentrant call declines instead of orphaning the first)
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked (no filtering — rows can never reorder).
 		const items = options.items.map((item, index) => ({
@@ -295,6 +312,12 @@ export class TuiShell implements LineInput {
 				this.askContainer.removeChild(box);
 				tui.setFocus(this.editor); // the editor owns keys again
 				tui.requestRender();
+				// A question queued while the picker owned the keys renders now
+				// (M9-2 review P2: it was visible-but-unanswerable under the list).
+				if (this.askLine === null) {
+					const next = this.pendingAsks[0];
+					if (next !== undefined) this.showAsk(next.question);
+				}
 				resolve(index);
 			};
 			this.selector = { teardown: () => finish(null) };

@@ -47,12 +47,14 @@ export class Fold implements Component {
 }
 
 /**
- * Build a fold from a unified diff: count the +/− content lines into the
- * title — "edit src/foo.ts (+12/-3)" — and keep the diff itself verbatim
- * as the body. The +++/--- file headers never count as changes; they stay
- * visible in the body. v1 adds no syntax coloring — lines land as-is.
+ * Fold data from a diff: count the +/− content lines into the title —
+ * "edit src/foo.ts (+12/-3)" — and keep the diff itself verbatim as the
+ * body. The +++/--- file headers never count as changes; they stay visible
+ * in the body. v1 adds no syntax coloring — lines land as-is. Returns plain
+ * data (no pi-tui types) so the presentation-agnostic machine can consume
+ * it; the shell folds it into a Fold via addFold.
  */
-export function buildFoldFromDiff(title: string, diff: string): Fold {
+export function buildFoldFromDiff(title: string, diff: string): { title: string; lines: string[] } {
 	const lines = diff.split("\n");
 	if (lines.at(-1) === "") lines.pop(); // a trailing newline, not a blank line
 	let added = 0;
@@ -61,5 +63,5 @@ export function buildFoldFromDiff(title: string, diff: string): Fold {
 		if (line.startsWith("+") && !line.startsWith("+++")) added += 1;
 		else if (line.startsWith("-") && !line.startsWith("---")) deleted += 1;
 	}
-	return new Fold(`${title} (+${added}/-${deleted})`, lines);
+	return { title: `${title} (+${added}/-${deleted})`, lines };
 }

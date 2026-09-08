@@ -11,6 +11,7 @@ import type { Terminal } from "../tui.js";
 import { resolveShell } from "../tui.js";
 import type { CommandContext } from "./commands.js";
 import { dispatchCommand, parseCommand } from "./commands.js";
+import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import type { LineInput } from "./line-input.js";
@@ -255,13 +256,31 @@ class ReplMachine {
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,
-				onEvent: (event: AgentEvent) => this.renderer.event(event),
+				onEvent: (event: AgentEvent) => {
+					this.renderer.event(event);
+					this.showEditFold(event);
+				},
 				getSteeringMessages: () => this.steeringMessages(),
 			});
 			await this.settleSuccess(result);
 		} catch (err) {
 			this.settleFailure(err);
 		}
+	}
+
+	/** Edit results carry "<summary>:\n<diff>" — on the TUI shell the diff
+	 *  becomes a collapsed fold (Ctrl+O expands; the ⎿ summary line stays
+	 *  in the stream). The legacy shell has no addFold and skips this.
+	 *  Presentation-agnostic: consumes plain data, no pi-tui types. */
+	private showEditFold(event: AgentEvent): void {
+		if (event.type !== "tool_end" || event.result.isError) return;
+		if (event.result.toolName !== "edit") return; // write carries no diff
+		if (this.input.addFold === undefined) return;
+		const content = event.result.content;
+		const split = content.indexOf(":\n");
+		if (split === -1) return; // not the "summary: diff" contract
+		const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
+		this.input.addFold(title, lines);
 	}
 
 	private steeringMessages(): AgentMessage[] {

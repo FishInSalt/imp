@@ -58,6 +58,10 @@ Keys:
   Ctrl+C             abort the running turn (press twice to force quit);
                      at an empty prompt: press twice to exit
   Ctrl+D             exit
+  Ctrl+O             expand/collapse the newest diff fold
+  while a picker is open:
+    ↑/↓              move the selection
+    Enter            pick · Esc or Ctrl+C cancels (no interrupt)
 `;
 
 /** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */

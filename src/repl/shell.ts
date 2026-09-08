@@ -3,6 +3,7 @@ import {
 	Editor,
 	type EditorOptions,
 	type EditorTheme,
+	isKeyRelease,
 	isYes,
 	matchesKey,
 	ProcessTerminal,
@@ -49,11 +50,17 @@ export function tuiEditorTheme(): EditorTheme {
  * EOF declines all), interrupt routing, and the "> "/"+ " markers. Known
  * deviations (parity ledger, to revisit as M9 polishes):
  *  - Ctrl+D with text in the editor goes to the editor (readline would
- *    delete-forward); Ctrl+D on an empty editor stays EOF.
+ *    delete-forward); Ctrl+D on an empty editor stays EOF — with or
+ *    without a pending ask (a typed draft always wins over drain+EOF).
  *  - Ctrl+C always interrupts (the editor's selection-copy binding is
  *    unreachable while an ask is pending; plain interrupt otherwise).
+ *    Kitty key-RELEASE events are filtered first — one press is one
+ *    interrupt (M9 review P0: press+release double-fired).
+ *  - Submissions are trim()-ed by the editor (readline delivered raw).
  *  - Multi-line editor submits arrive as ONE line event with embedded
- *    newlines (readline split them into separate events).
+ *    newlines (readline split them into separate events); a multi-line
+ *    answer to an [y/N] ask is judged on the whole text, so "y\nfootnote"
+ *    declines and loses the footnote.
  */
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
@@ -63,6 +70,8 @@ export class TuiShell implements LineInput {
 	private marker: Text | null = null;
 	private history: string[] = [];
 	private closed = false;
+	/** Terminal restore ran (close's deferred stop or the process-exit hook). */
+	private stopped = false;
 	private detachInput: (() => void) | null = null;
 	private onProcessSigint: (() => void) | null = null;
 	private onStdinEnd: (() => void) | null = null;
@@ -99,21 +108,21 @@ export class TuiShell implements LineInput {
 		// machine's interrupt/EOF semantics own Ctrl+C / Ctrl+D outright,
 		// except Ctrl+D with text, which stays an editing key.
 		this.detachInput = tui.addInputListener((data) => {
+			// Kitty protocol reports key RELEASES as their own sequences; a
+			// release must not count as a second press (M9 review P0).
+			if (isKeyRelease(data)) return undefined;
 			if (matchesKey(data, "ctrl+c")) {
 				if (this.pendingAsks.length > 0) this.settleAsk(false);
 				else this.options.onInterrupt();
 				return { consume: true };
 			}
 			if (matchesKey(data, "ctrl+d")) {
-				if (this.pendingAsks.length > 0) {
-					this.drainAsks();
-					this.options.onEof();
-					return { consume: true };
-				}
-				if (editor.getText() === "") {
-					this.options.onEof();
-					return { consume: true };
-				}
+				// A typed draft always wins: Ctrl+D stays an editing key while
+				// there is text, even with a pending ask (readline parity).
+				if (editor.getText() !== "") return undefined;
+				if (this.pendingAsks.length > 0) this.drainAsks();
+				this.options.onEof();
+				return { consume: true };
 			}
 			return undefined;
 		});
@@ -129,14 +138,28 @@ export class TuiShell implements LineInput {
 			this.options.onEof();
 		};
 		process.stdin.on("end", this.onStdinEnd);
+		// Force-exit (process.exit) never runs close(): restore the terminal
+		// from the exit hook instead of leaving raw mode + hidden cursor on
+		// the user's shell (M9 review P2). Registered for the process
+		// lifetime; stopTerminal() is idempotent.
+		process.on("exit", () => this.stopTerminal());
 	}
 
 	private submit(text: string): void {
+		if (this.closed) return; // a submit racing shutdown must not start a turn
 		if (this.pendingAsks.length > 0) {
 			this.settleAsk(isYes(text));
 			return;
 		}
-		if (text !== "") this.history.unshift(text);
+		if (text !== "") {
+			// Feed the editor's own history — up-arrow recall reads it (M9
+			// review P1: recall was dead while getHistory() reported data).
+			this.editor?.addToHistory(text);
+			// Mirror readline/editor semantics for the interface view: skip
+			// consecutive duplicates, cap at 100.
+			if (this.history[0] !== text) this.history.unshift(text);
+			if (this.history.length > 100) this.history.length = 100;
+		}
 		this.options.onLine(text);
 	}
 
@@ -187,6 +210,21 @@ export class TuiShell implements LineInput {
 		if (this.onStdinEnd !== null) process.stdin.off("end", this.onStdinEnd);
 		this.onStdinEnd = null;
 		this.drainAsks();
+		const tui = this.tui;
+		if (tui !== null) {
+			// Graceful-exit notes ("session … saved") feed the sink on this very
+			// tick; the pending render lands nextTick/setTimeout(≤16ms). Stopping
+			// now would kill the final frame (M9 review P1) — 40ms clears
+			// pi-tui's MIN_RENDER_INTERVAL_MS = 16.
+			tui.requestRender();
+			setTimeout(() => this.stopTerminal(), 40);
+		}
+	}
+
+	/** Restore the terminal exactly once; idempotent. */
+	private stopTerminal(): void {
+		if (this.stopped) return;
+		this.stopped = true;
 		this.options.transcript.onUpdate = null;
 		this.tui?.stop();
 		this.tui = null;

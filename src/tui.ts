@@ -14,18 +14,24 @@
 // terminal reuses the production splitter so tests feed realistic chunks
 // Core runtime — what the REPL shell composes with
 // Test seam: production uses ProcessTerminal; tests inject a fake
+// Layout math for the width contract (pi-tui's own components use these;
+// its renderer THROWS on component lines wider than the terminal)
 export {
 	type Component,
 	Container,
 	Editor,
 	type EditorOptions,
 	type EditorTheme,
+	isKeyRelease,
 	matchesKey,
 	ProcessTerminal,
 	StdinBuffer,
 	type Terminal,
 	Text,
 	TUI,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
 /** pi-tui's input-listener contract (the type itself is not exported upstream). */

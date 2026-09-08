@@ -1,13 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../src/core/messages.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
+import { Renderer } from "../src/render.js";
+import { runRepl } from "../src/repl/repl.js";
 import { TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
-import { StdinBuffer, type Terminal } from "../src/tui.js";
+import { createRunner, type Runner } from "../src/runner.js";
+import { resolveShell, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
+import { settle as _settle, type ScriptStep, scriptedProvider, ticks } from "./helpers/fakes.js";
+
+void _settle;
 
 // ── fakes ────────────────────────────────────────────────────────────────
 
-/** The pi-tui Terminal contract, captured: writes logged, input injectable. */
+/**
+ * The pi-tui Terminal contract, captured: writes logged, input injectable
+ * both through the real splitter and (post-stop) through the raw handler.
+ */
 class FakeTerminal implements Terminal {
 	private buffer: StdinBuffer | null = null;
+	private rawInput: ((data: string) => void) | null = null;
 	private readonly columnCount: number;
 	private readonly rowCount: number;
 	readonly writes: string[] = [];
@@ -18,15 +33,18 @@ class FakeTerminal implements Terminal {
 	}
 
 	start(onInput: (data: string) => void, _onResize: () => void): void {
-		// The production terminal splits stdin bursts into per-key sequences
-		// before TUI.handleInput — reuse the real splitter (escape-aware).
+		// Production splits stdin bursts into per-key sequences and re-wraps
+		// paste events (terminal.ts binds both) — mirror it exactly.
 		const buffer = new StdinBuffer();
 		buffer.on("data", (sequence: string) => onInput(sequence));
+		buffer.on("paste", (content: string) => onInput(`\x1b[200~${content}\x1b[201~`));
 		this.buffer = buffer;
+		this.rawInput = onInput;
 	}
 
 	stop(): void {
 		this.buffer = null;
+		this.rawInput = null;
 	}
 
 	async drainInput(): Promise<void> {}
@@ -56,29 +74,53 @@ class FakeTerminal implements Terminal {
 	setTitle(): void {}
 	setProgress(): void {}
 
-	/** Inject keystrokes — split into per-key sequences like real stdin. */
+	/** Inject keystrokes through the real splitter (like stdin bursts). */
 	data(text: string): void {
 		this.buffer?.process(text);
 	}
 
-	/** Everything written since `mark`, ANSI/control-stripped, as lines. */
+	/** Inject bytes past the splitter straight into the TUI handler —
+	 *  observable even after stop(), which is what close() tests need. */
+	rawData(text: string): void {
+		this.rawInput?.(text);
+	}
+
+	/** Everything written since `mark`, ANSI/control-stripped. */
 	frameSince(mark: number): string {
 		return stripAnsi(this.writes.slice(mark).join(""));
 	}
 }
 
-/** Remove escape sequences, cursor markers, and lone \r the TUI emits. */
+/** Remove escape sequences (CSI/OSC/APC), cursor markers, and \r —
+ *  hand-rolled scanner: no regex, so nothing trips lint, and OSC-8
+ *  hyperlinks are skipped to their BEL/ST terminator. */
 function stripAnsi(text: string): string {
-	return text
-		.replaceAll("\x1b_pi:c\x07", "") // hardware-cursor marker
-		.replace(new RegExp("\\u001b\\[[0-9;?]*[A-Za-z]", "g"), "")
-		.replace(new RegExp("\\u001b[()][A-B0-9]", "g"), "")
-		.replaceAll("\\r\\n", "\n")
-		.replaceAll("\r", "");
+	let out = "";
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (ch !== "\x1b") {
+			if (ch !== "\r" && ch !== "\x07") out += ch;
+			continue;
+		}
+		const next = text[i + 1];
+		if (next === "[") {
+			// CSI: parameters/intermediates until the final letter
+			i += 2;
+			while (i < text.length && !/[A-Za-z]/.test(text[i] ?? "")) i++;
+		} else if (next === "]") {
+			// OSC: skip to BEL or ST
+			i += 2;
+			while (i < text.length && text[i] !== "\x07" && text[i] !== "\x1b") i++;
+			if (text[i] === "\x1b" && text[i + 1] === "\\") i++;
+		} else {
+			i += 1; // two-character escape
+		}
+	}
+	return out;
 }
 
-/** Settle TUI renders (requestRender is nextTick / 16ms-min-interval based). */
-async function settle(extraMs = 25): Promise<void> {
+/** Settle TUI renders: nextTick + the 16ms minimum render interval. */
+async function settle(extraMs = 30): Promise<void> {
 	await new Promise<void>((resolve) => setTimeout(resolve, extraMs));
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -113,7 +155,7 @@ describe("TranscriptSink", () => {
 		expect(sink.render(80)).toEqual(["hello", "world"]); // current line included
 	});
 
-	it("\\r\\x1b[2K rewrites the current line (spinner contract), erase-only leaves it empty", () => {
+	it("\\r\\x1b[2K rewrites the current line (spinner contract), erase-only leaves nothing", () => {
 		const sink = new TranscriptSink();
 		sink.feed("⠋ Thinking…");
 		sink.feed("\r\x1b[2K⠙ Thinking… 1s");
@@ -124,13 +166,23 @@ describe("TranscriptSink", () => {
 		expect(sink.completedLines()).toEqual([]);
 	});
 
-	it("a reset marker split across chunks is held, not written as text", () => {
+	it("a reset marker is recognized MID-chunk, not only at chunk heads (merge safety)", () => {
 		const sink = new TranscriptSink();
-		sink.feed("⠋ a");
-		sink.feed("\r");
-		sink.feed("\x1b[2K");
-		sink.feed("⠙ b\n");
-		expect(sink.completedLines()).toEqual(["⠙ b"]);
+		sink.feed("a\r\x1b[2Kb\n");
+		expect(sink.completedLines()).toEqual(["b"]); // terminal would show "b"
+		sink.feed("\r\x1b[2Kabc\r\x1b[2Kdef\n");
+		expect(sink.completedLines()).toEqual(["b", "def"]);
+	});
+
+	it("a trailing \\r is held back — a split marker still resolves; a lone \\r stays content", () => {
+		const sink = new TranscriptSink();
+		sink.feed("abc");
+		sink.feed("\r"); // may be a marker head or content — undecided
+		sink.feed("\x1b[2Kdef\n"); // it was a marker
+		expect(sink.completedLines()).toEqual(["def"]);
+		const lone = new TranscriptSink();
+		lone.feed("a\rb\n");
+		expect(lone.completedLines()).toEqual(["a\rb"]);
 	});
 
 	it("a lone \\r that is not followed by the erase sequence stays content", () => {
@@ -150,6 +202,49 @@ describe("TranscriptSink", () => {
 		expect(calls).toBe(2);
 		sink.feed("\r\x1b[2Kz"); // one rewrite, one call
 		expect(calls).toBe(3);
+	});
+
+	// ── width contract (M9 review P0: pi-tui throws on over-wide lines) ──
+
+	it("wraps every rendered line to the viewport width — no line exceeds it", () => {
+		const sink = new TranscriptSink();
+		sink.feed(`${"x".repeat(200)}\n`);
+		sink.feed("done\n");
+		const rendered = sink.render(80);
+		expect(rendered.length).toBeGreaterThan(2); // it wrapped, not truncated away
+		for (const line of rendered) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		}
+	});
+
+	it("wraps a realistic Renderer stream (bash tool-start + ⎿ summary + paragraph)", () => {
+		const sink = new TranscriptSink();
+		sink.feed("\r\x1b[2K● bash ");
+		sink.feed(`{"command":"${"e".repeat(130)}}`);
+		sink.feed("\n");
+		sink.feed(`  ⎿  ${"r".repeat(90)} (+3 lines)\n`);
+		sink.feed(`${"p".repeat(143)}\n`);
+		for (const line of sink.render(80)) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		}
+	});
+
+	it("CJK content wraps by columns, not characters", () => {
+		const sink = new TranscriptSink();
+		sink.feed(`${"汉".repeat(100)}\n`);
+		for (const line of sink.render(80)) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		}
+	});
+
+	it("resize rewraps: a width change rebuilds the cache", () => {
+		const sink = new TranscriptSink();
+		sink.feed(`${"y".repeat(100)}\n`);
+		const wide = sink.render(120);
+		expect(wide).toHaveLength(1);
+		const narrow = sink.render(50);
+		expect(narrow.length).toBeGreaterThan(1);
+		for (const line of narrow) expect(visibleWidth(line)).toBeLessThanOrEqual(50);
 	});
 });
 
@@ -203,23 +298,35 @@ describe("TuiShell", () => {
 		shell.close();
 	});
 
-	it("ask FIFO: lines answer pending questions first; y/yes only; next question shows", async () => {
+	it("up-arrow recalls the last submission (editor history is fed)", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("one\r");
+		terminal.data("two\r");
+		await settle();
+		terminal.data("\x1b[A"); // Up
+		await settle(0);
+		terminal.data("\r"); // submits the recalled text
+		await settle();
+		expect(events).toEqual(["line:one", "line:two", "line:two"]);
+		shell.close();
+	});
+
+	it("ask FIFO: lines answer pending questions first; y/yes only; exactly one visible", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
 		const first = shell.ask("proceed? [y/N] ");
 		const second = shell.ask("also? [y/N] ");
-		let mark = terminal.writes.length;
-		shell.forceRender();
-		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("proceed? [y/N] ");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("proceed? [y/N] ");
+		expect(terminal.frameSince(0)).not.toContain("also?"); // one at a time
 		terminal.data("y\r"); // answers the FIRST question
 		await settle();
 		await expect(first).resolves.toBe(true);
-		mark = terminal.writes.length;
-		shell.forceRender();
-		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("also? [y/N] "); // FIFO: second now visible
+		await settle();
+		expect(terminal.frameSince(0)).toContain("also? [y/N] "); // FIFO: second now visible
 		terminal.data("nope\r");
 		await settle();
 		await expect(second).resolves.toBe(false);
@@ -236,7 +343,21 @@ describe("TuiShell", () => {
 		terminal.data("\x03");
 		await settle();
 		await expect(question).resolves.toBe(false);
-		expect(events).toEqual([]); // no interrupt event
+		expect(events).toEqual([]); // positive control: no interrupt event
+		terminal.data("\x03"); // and plain Ctrl+C DOES interrupt (same shell)
+		await settle();
+		expect(events).toEqual(["interrupt"]);
+		shell.close();
+	});
+
+	it("kitty key-RELEASE sequences never count as a second press (P0)", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("\x03"); // press
+		terminal.rawData("\x1b[99;5:3u"); // release sequence (kitty CSI-u)
+		await settle();
+		expect(events).toEqual(["interrupt"]); // exactly one, not two
 		shell.close();
 	});
 
@@ -249,6 +370,27 @@ describe("TuiShell", () => {
 		terminal.data("\x04");
 		await settle();
 		expect(events).toEqual(["interrupt", "eof"]);
+		shell.close();
+	});
+
+	it("Ctrl+D with a typed draft stays an editing key — no EOF, text kept (with or without an ask)", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const question = shell.ask("proceed? [y/N] ");
+		await settle(0);
+		terminal.data("y"); // typed draft answering the ask
+		await settle(0);
+		terminal.data("\x04"); // must NOT drain+EOF while a draft exists
+		await settle();
+		expect(events).toEqual([]);
+		expect(shell.clearPending()).toBe(true); // draft survived
+		terminal.data("\x7f"); // backspace the draft away
+		await settle(0);
+		terminal.data("\x04"); // now empty: decline + EOF
+		await settle();
+		await expect(question).resolves.toBe(false);
+		expect(events).toEqual(["eof"]);
 		shell.close();
 	});
 
@@ -267,31 +409,214 @@ describe("TuiShell", () => {
 		shell.close();
 	});
 
-	it("the transcript sink renders into the frame (Renderer bytes hosted)", async () => {
+	it("the transcript renders into the frame WITHOUT forceRender (natural repaint pipeline)", async () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		transcript.feed("▪ session abc — note line\n");
-		await settle();
 		const mark = terminal.writes.length;
-		shell.forceRender();
-		await settle(0);
+		transcript.feed("▪ session abc — note line\n");
+		await settle(); // no forceRender: the sink's onUpdate must paint it
 		expect(terminal.frameSince(mark)).toContain("▪ session abc — note line");
 		shell.close();
 	});
 
-	it("close() settles pending asks as declines and stops the terminal", async () => {
+	it("an ask appears without forceRender; setActive repaints on its own", async () => {
 		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		let mark = terminal.writes.length;
+		const question = shell.ask("proceed? [y/N] ");
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("proceed? [y/N] ");
+		mark = terminal.writes.length;
+		shell.setActive(true);
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("+ ");
+		terminal.data("n\r");
+		await settle();
+		await expect(question).resolves.toBe(false);
+		shell.close();
+	});
+
+	it("a wide transcript line renders wrapped — no crash, width honored", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.feed(`${"w".repeat(160)}\n`);
+		await settle();
+		expect(terminal.writes.length).toBeGreaterThan(0); // the TUI kept rendering
+		shell.close();
+	});
+
+	it("close() settles pending asks, stops the terminal, and routes no further input", async () => {
+		const { terminal, shell, events } = makeShell();
 		shell.start();
 		await settle(0);
 		const question = shell.ask("proceed? [y/N] ");
 		await settle(0);
 		shell.close();
 		await expect(question).resolves.toBe(false);
-		expect(terminal.writes.length).toBe(terminal.writes.length); // stopped: no further renders
-		const before = terminal.writes.length;
-		terminal.data("y\r"); // input no longer routed
+		await settle(80); // past the deferred terminal stop
+		const writesAtClose = terminal.writes.length;
+		const eventsAtClose = [...events];
+		terminal.rawData("y\r"); // bytes past stop: the raw handler, if any
+		terminal.rawData("\x03");
 		await settle(0);
-		expect(terminal.writes.length).toBe(before);
+		expect(terminal.writes.length).toBe(writesAtClose); // nothing painted
+		expect(events).toEqual(eventsAtClose); // no line/interrupt leaked to the machine
+	});
+
+	it("the final frame before exit is painted — graceful-exit notes are not lost (P1)", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.feed("▪ session abc — saved, resume with: imp -r abc\n");
+		shell.close(); // same-tick close, exactly like gracefulExit → finish()
+		await settle(80); // deferred stop must let the pending paint land first
+		expect(terminal.frameSince(0)).toContain("resume with: imp -r abc");
+	});
+
+	it("SIGINT (kill -INT) and stdin-end handlers are registered on start", async () => {
+		const onSpy = vi.spyOn(process, "on");
+		const stdinSpy = vi.spyOn(process.stdin, "on");
+		const { shell } = makeShell();
+		shell.start();
+		await settle(0);
+		expect(onSpy.mock.calls.some(([event]) => event === "SIGINT")).toBe(true);
+		expect(stdinSpy.mock.calls.some(([event]) => event === "end")).toBe(true);
+		onSpy.mockRestore();
+		stdinSpy.mockRestore();
+		shell.close();
+	});
+});
+
+// ── resolveShell: the documented escape hatch ────────────────────────────
+
+describe("resolveShell", () => {
+	it("defaults to the tui shell; IMP_REPL=legacy selects the readline path", async () => {
+		const { resolveShell: rs } = await import("../src/tui.js");
+		vi.stubEnv("IMP_REPL", "legacy");
+		expect(rs()).toBe("legacy");
+		vi.stubEnv("IMP_REPL", "");
+		expect(rs()).toBe("tui");
+		vi.unstubAllEnvs();
+	});
+});
+
+// ── runRepl ↔ TuiShell integration (the production wiring) ────────────────
+
+describe("runRepl with shell:tui", () => {
+	const reply = (text: string): AssistantMessage => ({
+		role: "assistant",
+		blocks: [{ type: "text", text }],
+		usage: { inputTokens: 10, outputTokens: 5 },
+		stopReason: "end_turn",
+	});
+
+	async function startTuiRepl(scripts: ScriptStep[]) {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
+		const requests: LLMRequest[] = [];
+		const provider: LLMProvider = scriptedProvider(scripts, requests);
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink();
+		const renderer = new Renderer({
+			write: transcript.feed,
+			ansi: false,
+			liveTools: false, // no spinner timers; the byte path is what matters
+			toolStyle: "one-line",
+			markdown: false,
+		});
+		const runner = await createRunner({
+			cwd: baseDir,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider,
+			deferInit: false,
+		});
+		const repl = runRepl({
+			runner,
+			commands: [],
+			shell: "tui",
+			transcript,
+			terminal,
+			interactive: true,
+			exit: (code: number) => {
+				throw new Error(`force-exit:${code}`);
+			},
+		});
+		await ticks(2);
+		return { runner, terminal, transcript, repl, requests, baseDir };
+	}
+
+	it("rejects a tui shell without the transcript (wiring guard)", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-guard-"));
+		const renderer = new Renderer({ write: () => {}, ansi: false, liveTools: false, toolStyle: "one-line" });
+		const runner = await createRunner({
+			cwd: baseDir,
+			argv: [],
+			model: "m",
+			maxTokens: 8,
+			maxTurns: 2,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider: scriptedProvider([reply("x")]),
+			deferInit: false,
+		});
+		await expect(runRepl({ runner, commands: [], shell: "tui", interactive: true })).rejects.toThrow(
+			/requires the transcript/,
+		);
+	});
+
+	it("runs a full turn through the TUI shell: banner, streamed reply, prompt restored", async () => {
+		// A gated turn keeps the run in flight so the "+ " marker actually
+		// paints (an instant scripted reply would coalesce to one diff frame).
+		let releaseTurn: () => void = () => {};
+		const gated = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		const env = await startTuiRepl([() => gated.then(() => reply("hello from the model"))]);
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("/help for commands"); // banner painted
+		env.terminal.data("hi\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("+ "); // active while the turn runs
+		releaseTurn();
+		await settle();
+		await settle();
+		expect(env.requests.length).toBe(1);
+		expect(env.requests[0]?.messages.at(-1)).toMatchObject({ role: "user", content: "hi" });
+		expect(env.transcript.completedLines().join("\n")).toContain("hello from the model");
+		expect(env.terminal.frameSince(0)).toContain("> "); // idle again after
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	it("Ctrl+C routes through the machine: the quit hint lands in the transcript", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("\x03");
+		await settle();
+		expect(env.transcript.completedLines().join("\n")).toContain("press Ctrl+C again to quit");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("EOF on an empty editor exits gracefully with the session-saved note", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		env.terminal.data("\x04");
+		const code = await env.repl;
+		expect(code).toBe(0);
+		await settle(80); // deferred stop paints the final note
+		expect(env.terminal.frameSince(0)).toContain("saved");
 	});
 });

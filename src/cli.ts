@@ -298,7 +298,12 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		// zero-line piped stdin — preserves the old "forgot -p" HELP guard
 		process.stdout.write(HELP);
 	}
-	process.exit(code);
+	// NOT process.exit(code): the TUI shell paints the graceful-exit frame
+	// ("session … saved") on pending render timers and restores the terminal
+	// ~40ms after close() — an immediate exit kills both (M9 review P1).
+	// Setting the code and returning lets the loop drain naturally; the
+	// force-exit paths (double Ctrl+C) keep their explicit process.exit.
+	process.exitCode = code;
 }
 
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {

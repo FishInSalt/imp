@@ -24,6 +24,10 @@ export interface CommandContext {
 	abortActive(): boolean; // abort controller if active
 	/** Replay a session's history on screen (wired in repl.ts; records in tests). */
 	replay(session: SessionStore): number;
+	/** Submit a prompt as if typed — used by markdown quick commands (M11 #6).
+	 *  Idle starts a turn; a running turn queues it. Wired by repl.ts; test
+	 *  environments inject a recorder. */
+	submitPrompt(text: string): void;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
 	 *  fallback for a missing select. Resolves the chosen index, or null on

@@ -260,6 +260,25 @@ class ReplMachine {
 		this.input.refresh();
 	}
 
+	/** Submit a prompt as if typed, without command/bang re-routing (M11 #6):
+	 *  idle starts a turn, otherwise it queues behind the running one —
+	 *  exactly the typed-line semantics minus interpretation. */
+	enqueuePrompt(text: string): void {
+		if (this.state === "exited") return;
+		const trimmed = text.trim();
+		if (trimmed === "") return;
+		if (this.state === "idle") {
+			void this.submitTurn(trimmed);
+			return;
+		}
+		this.queue.push(trimmed);
+		if (this.interactive && this.input.setQueue === undefined) {
+			this.renderer.note(`▪ queued: ${shorten(trimmed)}`);
+		}
+		this.syncQueue();
+		this.input.refresh();
+	}
+
 	handleInterrupt(): void {
 		if (this.state === "exited") return;
 		switch (this.state) {
@@ -753,6 +772,9 @@ class ReplMachine {
 			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
 			replay: this.replay,
 			requestExit: (code: number) => this.requestExit(code),
+			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
+			// line — body text starting with "/" or "!" must stay model content.
+			submitPrompt: (text: string) => this.enqueuePrompt(text),
 			abortActive: () => {
 				if (this.controller !== null) {
 					this.controller.abort();

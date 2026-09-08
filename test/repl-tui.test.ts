@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AssistantMessage } from "../src/core/messages.js";
-
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -1634,6 +1634,35 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("line-three"));
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("M11 #6: a markdown quick command spends a real turn with the rendered prompt", async () => {
+		const extras = [
+			{
+				command: {
+					name: "review",
+					summary: "Review the current diff",
+					allowedDuringRun: false,
+					run: (args: string, ctx: { submitPrompt: (t: string) => void }): "handled" => {
+						ctx.submitPrompt(renderMdPrompt("Review the diff. $ARGUMENTS", args));
+						return "handled";
+					},
+				},
+				source: "md:project",
+			},
+		];
+		const env = await startTuiRepl([reply("reviewed")], { commands: extras as never });
+		await settle();
+		env.terminal.data("/review the parser\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("reviewed"), 8000);
+		expect(
+			env.requests[0]?.messages.some(
+				(m) => m.role === "user" && m.content.includes("Review the diff. the parser"),
+			),
+		).toBe(true);
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
 	});
 
 	it("M11 #4: a submitted line persists and a NEW shell recalls it with up-arrow", async () => {

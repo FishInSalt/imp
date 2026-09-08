@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { loadMdCommands } from "./core/commands-md.js";
 import { listSessions } from "./core/session/manager.js";
 import {
 	askTrustOnce,
@@ -15,6 +16,7 @@ import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
+import { COMMANDS } from "./repl/commands.js";
 import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
 import { TranscriptSink } from "./repl/transcript.js";
@@ -280,7 +282,17 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	try {
 		const projectTrusted = await resolveProjectTrust(opts, renderer, interactive);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
-		commands = extensions.runtime.commands;
+		// Markdown quick commands (M11 #6) ride the same pipeline as extension
+		// commands: /help listing, conflict rules, dispatch. Project tier is
+		// behind the same trust gate.
+		const md = await loadMdCommands({
+			cwd: process.cwd(),
+			home: homedir(),
+			projectAllowed: projectTrusted,
+			reserved: new Set(COMMANDS.map((c) => c.name)),
+			onDiagnostic: (line) => renderer.error(line),
+		});
+		commands = [...extensions.runtime.commands, ...md.commands];
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,

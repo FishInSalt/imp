@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { firstLine, VERSION } from "../format.js";
 import { ExtensionRegistry } from "./registry.js";
 import type {
+	ConfirmOptions,
 	ExtensionApi,
 	ExtensionEventHandlerMap,
 	ExtensionEventName,
@@ -30,7 +31,7 @@ export interface LoadExtensionsOptions {
 	/** Interactive confirm handler (the REPL's tty prompt), forwarded to the
 	 *  registry's api.confirm. Absent (print mode, tests): api.confirm resolves
 	 *  false with one stderr teaching line — never hangs. */
-	confirm?: (message: string, detail?: string) => Promise<boolean>;
+	confirm?: (message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>;
 }
 
 export interface LoadedExtensions {
@@ -213,7 +214,7 @@ function extensionApi(
 		},
 		// confirm works at RUNTIME (gates call it mid-run), unlike the
 		// registrations above — plain delegation, no factory-window guard.
-		confirm: (message, detail) => registry.confirm(message, detail),
+		confirm: (message, detail, options) => registry.confirm(message, detail, options),
 	};
 }
 

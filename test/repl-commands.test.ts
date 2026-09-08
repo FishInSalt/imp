@@ -10,6 +10,7 @@ import { setTrust } from "../src/core/trust.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
+import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
@@ -516,6 +517,7 @@ describe("/sessions + /resume", () => {
 		expect(out).toContain("older session title line");
 		expect(out).toContain("1 msg");
 		expect(out).toContain("switch with /resume <id>");
+		expect(out).toContain("use /resume (no args) to pick one"); // M10 tail hint
 	});
 
 	it("/resume <id> swaps the live session and replays its history", async () => {
@@ -548,5 +550,58 @@ describe("/sessions + /resume", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/resume", env.ctx);
 		expect(env.output()).toContain("/resume <id> — pick an id from /sessions");
+	});
+});
+
+describe("/resume picker (M10)", () => {
+	/** A recording ctx.select that picks the row for `label` (or cancels). */
+	function pickerFor(env: TestEnv, label: string | null) {
+		const picks: SelectOptions[] = [];
+		env.ctx.select = async (options) => {
+			picks.push(options);
+			return label === null ? null : options.items.findIndex((item) => item.label === label);
+		};
+		return picks;
+	}
+
+	it("no args + a picker: rows are <id8> · local time · msgs · title; a pick resumes exactly like /resume <id>", async () => {
+		const env = await makeEnv({ seed: [userMsg("current")] });
+		const target = createSession(env.cwd, env.baseDir);
+		target.appendMessage(userMsg("target session"));
+		target.appendMessage(assistantText("answer"));
+		const target8 = target.header.id.slice(0, 8);
+		const picks = pickerFor(env, target8);
+		await dispatchCommand("/resume", env.ctx);
+		expect(picks).toHaveLength(1);
+		expect(picks[0]?.title).toBe("sessions — pick one to resume");
+		const row = picks[0]?.items.find((item) => item.label === target8);
+		expect(row?.description).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} · 2 msgs · target session/);
+		// the pick walked the SAME resume flow as /resume <id>
+		expect(env.runner.session?.header.id).toBe(target.header.id);
+		expect(env.replayed).toEqual([target.header.id]);
+		expect(env.output()).toContain("resumed");
+		expect(env.output()).toContain("2 messages restored");
+	});
+
+	it("cancelling the picker notes one line and changes nothing", async () => {
+		const env = await makeEnv({ seed: [userMsg("current")] });
+		const before = env.runner.session?.header.id;
+		pickerFor(env, null);
+		await dispatchCommand("/resume", env.ctx);
+		expect(env.output()).toContain("▪ resume cancelled");
+		expect(env.runner.session?.header.id).toBe(before);
+		expect(env.replayed).toEqual([]);
+	});
+
+	it("a picker but zero saved sessions → the /sessions empty note, no picker opened", async () => {
+		const env = await makeEnv({ noSession: true });
+		let opened = false;
+		env.ctx.select = async () => {
+			opened = true;
+			return null;
+		};
+		await dispatchCommand("/resume", env.ctx);
+		expect(opened).toBe(false);
+		expect(env.output()).toContain("no saved sessions for this directory yet");
 	});
 });

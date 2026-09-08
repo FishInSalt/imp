@@ -295,6 +295,18 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 		]);
 	});
 
+	it("M10: the options bag (sessionKey) reaches the handler untouched", async () => {
+		const calls: Array<[string, string | undefined, unknown]> = [];
+		const registry = new ExtensionRegistry({
+			confirm: async (message, detail, options) => {
+				calls.push([message, detail, options]);
+				return false;
+			},
+		});
+		await expect(registry.confirm("m", "d", { sessionKey: "guardian:write:/proj" })).resolves.toBe(false);
+		expect(calls).toEqual([["m", "d", { sessionKey: "guardian:write:/proj" }]]);
+	});
+
 	it("no handler: resolves false promptly (bounded) and writes one stderr teaching line — never hangs", async () => {
 		const registry = new ExtensionRegistry();
 		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);

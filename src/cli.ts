@@ -12,7 +12,7 @@ import {
 } from "./core/trust.js";
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
-import type { RegisteredExtensionCommand } from "./extensions/types.js";
+import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
 async function loadExtensionSetup(
 	opts: CliOptions,
 	renderer: Renderer,
-	confirm: ((message: string, detail?: string) => Promise<boolean>) | undefined,
+	confirm: ((message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>) | undefined,
 	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({

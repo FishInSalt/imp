@@ -1,16 +1,26 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
+import type { Tool } from "../src/core/tools/types.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
-import { runRepl } from "../src/repl/repl.js";
+import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { resolveShell, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
-import { settle as _settle, type ScriptStep, scriptedProvider, ticks } from "./helpers/fakes.js";
+import {
+	settle as _settle,
+	assistant,
+	gate,
+	type ScriptStep,
+	scriptedProvider,
+	ticks,
+	waitUntil,
+} from "./helpers/fakes.js";
 
 void _settle;
 
@@ -637,6 +647,48 @@ describe("TuiShell footer", () => {
 	});
 });
 
+// ── queue visual: the M10 queue line ────────────────────────────────────
+
+describe("TuiShell queue line (setQueue)", () => {
+	it("paints a dim 'N queued · next:' row between the ask region and the marker", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setQueue(1, "queued A");
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\x1b[2m1 queued · next: queued A"); // dim is really emitted
+		// placement: one full repaint, then read layout order out of that window
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("1 queued · next: queued A");
+		expect(frame.indexOf("1 queued · next: queued A")).toBeLessThan(frame.indexOf("> ")); // above the marker
+		// an update repaints in place
+		shell.setQueue(2, "queued B");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("2 queued · next: queued B");
+		shell.close();
+	});
+
+	it("count 0 (or a null preview) collapses the row to zero lines", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setQueue(1, "queued A");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("1 queued · next: queued A");
+		shell.setQueue(0, null);
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		expect(terminal.frameSince(mark)).not.toContain("queued · next:");
+		shell.close();
+	});
+});
+
 // ── M9-2 review regressions ──────────────────────────────────────────────
 
 describe("M9-2 review regressions", () => {
@@ -728,7 +780,7 @@ describe("runRepl with shell:tui", () => {
 		stopReason: "end_turn",
 	});
 
-	async function startTuiRepl(scripts: ScriptStep[]) {
+	async function startTuiRepl(scripts: ScriptStep[], options?: { tools?: Tool[]; confirm?: boolean }) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
 		const requests: LLMRequest[] = [];
 		const provider: LLMProvider = scriptedProvider(scripts, requests);
@@ -752,8 +804,12 @@ describe("runRepl with shell:tui", () => {
 			sessionBaseDir: baseDir,
 			renderer,
 			provider,
+			tools: options?.tools,
 			deferInit: false,
 		});
+		// cli.ts's confirm wiring: one renderer (the transcript's), one host —
+		// runRepl binds its picker to the shell's select once it exists
+		const confirm = options?.confirm === true ? new TtyConfirm(renderer) : undefined;
 		const repl = runRepl({
 			runner,
 			commands: [],
@@ -761,12 +817,13 @@ describe("runRepl with shell:tui", () => {
 			transcript,
 			terminal,
 			interactive: true,
+			confirm,
 			exit: (code: number) => {
 				throw new Error(`force-exit:${code}`);
 			},
 		});
 		await ticks(2);
-		return { runner, terminal, transcript, repl, requests, baseDir };
+		return { runner, terminal, transcript, repl, requests, baseDir, confirm };
 	}
 
 	it("rejects a tui shell without the transcript (wiring guard)", async () => {
@@ -912,6 +969,124 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("\x0f"); // Ctrl+O — expand the newest fold
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("+ goodbye");
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	// ── M10: the three-option confirm on the real shell ──
+
+	it("confirm with a sessionKey opens the real three-option picker; 'don't ask again' short-circuits the next ask", async () => {
+		const env = await startTuiRepl([reply("ok")], { confirm: true });
+		const confirm = env.confirm;
+		if (confirm === undefined) throw new Error("confirm host not wired");
+		const first = confirm.handler("[guardian] allow this bash command?", "rm -rf node_modules", {
+			sessionKey: "guardian:bash:rm",
+		});
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("Yes, don't ask again this session"); // the picker is live
+		env.terminal.data("\x1b[B"); // Down → "Yes, don't ask again this session"
+		env.terminal.data("\r"); // pick it
+		await expect(first).resolves.toBe(true);
+		// same key again: approved WITHOUT a picker — the promise settles with no keypress
+		const second = confirm.handler("[guardian] allow this bash command?", "rm -rf again", {
+			sessionKey: "guardian:bash:rm",
+		});
+		await expect(second).resolves.toBe(true);
+		await settle();
+		expect(env.transcript.completedLines().join("\n")).toContain(
+			"▪ confirm: [guardian] allow this bash command? — allowed for this session",
+		);
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	// ── queue visual (M10): the machine pushes it, the shell paints it ──
+
+	it("queue visual: queued lines paint 'N queued · next:', drain via steering/flush, then clear", async () => {
+		const g = gate();
+		const g2 = gate();
+		let toolStarted = false;
+		const slow: Tool = {
+			name: "slow_tool",
+			description: "waits for the test gate",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute() {
+				toolStarted = true;
+				await g.promise;
+				return { output: "done" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "x" } }],
+					"tool_use",
+				),
+				() => g2.promise.then(() => reply("turn one done")), // held: keeps the post-steering frame on screen
+				reply("turn two done"),
+			],
+			{ tools: [slow] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => toolStarted);
+		env.terminal.data("queued A\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("1 queued · next: queued A");
+		env.terminal.data("queued B\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("2 queued · next: queued A"); // the head stays the preview
+		g.resolve();
+		await waitUntil(() => env.requests.length >= 2); // steering poll consumed A; request 2 held open
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("1 queued · next: queued B");
+		const mark = env.terminal.writes.length;
+		g2.resolve(); // the run settles; leftover B flushes as its own turn → count 0
+		await waitUntil(() => env.requests.length >= 3);
+		await settle();
+		expect(env.terminal.frameSince(mark)).not.toContain("queued · next:"); // the row cleared
+		env.terminal.data("/exit\r");
+		const code = await env.repl;
+		expect(code).toBe(0);
+	});
+
+	it("queue visual: an abort discards the queue and clears the row", async () => {
+		const g = gate();
+		let toolStarted = false;
+		const slow: Tool = {
+			name: "slow_tool",
+			description: "waits for the test gate",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute() {
+				toolStarted = true;
+				await g.promise;
+				return { output: "never" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "x" } }],
+					"tool_use",
+				),
+			],
+			{ tools: [slow] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => toolStarted);
+		env.terminal.data("queued A\r");
+		env.terminal.data("queued B\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("2 queued · next: queued A");
+		const mark = env.terminal.writes.length;
+		env.terminal.data("\x03"); // abort — the user takes control, the queue is discarded
+		g.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("discarded 2 queued"));
+		await settle();
+		expect(env.terminal.frameSince(mark)).not.toContain("queued · next:");
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);

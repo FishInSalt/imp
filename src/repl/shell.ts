@@ -47,6 +47,7 @@ export function tuiEditorTheme(): EditorTheme {
  *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
  *   ├─ ask line   ([y/N] question while one is pending; an item selector
  *   │              while one is open; hidden otherwise)
+ *   ├─ queue line (dim "N queued · next: …" while lines wait; hidden at 0)
  *   ├─ marker     ("> " idle / "+ " active)
  *   ├─ editor     (focused except while a selector is open)
  *   └─ footer     (dim status line: model · session · cumulative tokens;
@@ -102,6 +103,11 @@ export class TuiShell implements LineInput {
 	/** The ask line's Text child, tracked so a selector sharing the ask
 	 *  region can never remove (or be removed by) the question line. */
 	private askLine: Text | null = null;
+	/** The queue visual line, below the ask region (empty = zero rows). */
+	private queueLine: Text | null = null;
+	/** Buffered setQueue text — pushes may arrive before start() and must not
+	 *  be dropped (same contract as the footer). */
+	private queueText = "";
 	/** The open selector, if any — finished on pick, cancel, or close. */
 	private selector: { teardown: () => void } | null = null;
 	private marker: Text | null = null;
@@ -142,6 +148,9 @@ export class TuiShell implements LineInput {
 		tui.addChild(this.options.transcript);
 		tui.addChild(this.foldContainer);
 		tui.addChild(this.askContainer);
+		const queueLine = new Text(this.queueText);
+		this.queueLine = queueLine;
+		tui.addChild(queueLine); // queue visual sits between the ask line and the marker
 		tui.addChild(marker);
 		tui.addChild(editorBox);
 		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true));
@@ -244,6 +253,15 @@ export class TuiShell implements LineInput {
 		// the status visually quiet under the editor.
 		this.footerText = text; // buffered: start() seeds from this
 		this.footer?.setText(text === "" ? "" : dim(text, true));
+		this.tui?.requestRender();
+	}
+
+	/** Queue visual line (LineInput.setQueue): dim "N queued · next: <preview>"
+	 *  while lines wait behind the running turn. Empty text renders ZERO rows
+	 *  (pi-tui Text) — a count of 0 collapses the line away entirely. */
+	setQueue(count: number, preview: string | null): void {
+		this.queueText = count > 0 && preview !== null ? dim(`${count} queued · next: ${preview}`, true) : "";
+		this.queueLine?.setText(this.queueText);
 		this.tui?.requestRender();
 	}
 

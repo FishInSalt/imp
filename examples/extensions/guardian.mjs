@@ -179,7 +179,13 @@ export default function (api) {
 			const splitFlagRm = !rule && rmForceRecursive(command) ? rmRule : undefined;
 			const effective = rule ?? splitFlagRm;
 			if (effective) {
-				const approved = await api.confirm("[guardian] allow this bash command?", `${command}\nwhy it matched: ${effective.reason}`);
+				// sessionKey "guardian:bash:<pattern>" — one remembered decision per
+				// matched pattern, so "don't ask again" covers this shape, not all bash
+				const approved = await api.confirm(
+					"[guardian] allow this bash command?",
+					`${command}\nwhy it matched: ${effective.reason}`,
+					{ sessionKey: `guardian:bash:${effective.test.source}` },
+				);
 				if (approved) return undefined; // the human said yes — run it
 				return { block: true, reason: effective.reason }; // declined: same teaching text as before
 			}
@@ -189,7 +195,11 @@ export default function (api) {
 			const floor = floorOf(path.resolve(cwd, event.args.path));
 			if (floor !== undefined) return { block: true, reason: floorReason(floor) };
 			if (!insideDir(event.args.path, cwd)) {
-				const approved = await api.confirm(`[guardian] allow writing outside ${cwd}?`, event.args.path);
+				// sessionKey "guardian:write:<cwd>" — one remembered decision per
+				// caller directory (outside writes for the same tree share it)
+				const approved = await api.confirm(`[guardian] allow writing outside ${cwd}?`, event.args.path, {
+					sessionKey: `guardian:write:${cwd}`,
+				});
 				if (approved) return undefined; // the human said yes — run it
 				return {
 					block: true,

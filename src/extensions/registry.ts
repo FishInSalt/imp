@@ -4,6 +4,7 @@ import type { Tool } from "../core/tools/types.js";
 import { firstLine } from "../format.js";
 import type { SlashCommand } from "../repl/commands.js";
 import type {
+	ConfirmOptions,
 	ContextSection,
 	ExtensionEventHandlerMap,
 	ExtensionEventName,
@@ -51,7 +52,7 @@ export interface ExtensionRegistryOptions {
 	/** Interactive confirm (the REPL's tty prompt). Absent — print mode, plain
 	 *  tests — api.confirm resolves false after one stderr teaching line and
 	 *  never hangs (spec part 2 item 5). */
-	confirm?: (message: string, detail?: string) => Promise<boolean>;
+	confirm?: (message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>;
 }
 
 /** The one stderr line written when api.confirm runs without an interactive host. */
@@ -79,7 +80,9 @@ export class ExtensionRegistry {
 	readonly contextSections: ContextSection[] = [];
 
 	private readonly report: (line: string) => void;
-	private readonly confirmHandler: ((message: string, detail?: string) => Promise<boolean>) | undefined;
+	private readonly confirmHandler:
+		| ((message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>)
+		| undefined;
 	/** The no-handler stderr line has been written once already. */
 	private noConfirmWarned = false;
 	/** Committed name → owning extension name (conflict policy, design §9). */
@@ -281,7 +284,7 @@ export class ExtensionRegistry {
 	 * prompt or a throwing handler resolves false (with a teaching line), so
 	 * an extension gate can never hang a run on a question nobody can answer.
 	 */
-	async confirm(message: string, detail?: string): Promise<boolean> {
+	async confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean> {
 		if (this.confirmHandler === undefined) {
 			// once per registry: a chatty gate in print mode (a model retrying a
 			// blocked call in a loop) must not spam one stderr line per attempt
@@ -292,7 +295,7 @@ export class ExtensionRegistry {
 			return false;
 		}
 		try {
-			return await this.confirmHandler(message, detail);
+			return await this.confirmHandler(message, detail, options);
 		} catch (err) {
 			this.report(`imp: extension confirm handler error — ${firstLine(errorText(err), 160)}`);
 			return false;

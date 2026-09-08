@@ -1,3 +1,16 @@
+/** One picker row: a label (shown) plus an optional dimmed description. */
+export interface SelectItemOption {
+	label: string;
+	description?: string;
+}
+
+/** Options for LineInput.select — an interactive item picker. */
+export interface SelectOptions {
+	/** Line rendered above the items (e.g. "pick a model"). */
+	title?: string;
+	items: SelectItemOption[];
+}
+
 /**
  * The input-side contract the REPL state machine (repl.ts) consumes.
  *
@@ -29,6 +42,10 @@ export interface LineInput {
 	/** Append a collapsed fold (expandable body) below the transcript — a
 	 *  TUI-shell-only affordance; the readline shell has no folds. */
 	addFold?(title: string, lines: string[]): void;
+	/** Item picker (M9 phase 2, TUI only — the readline shell has none, so
+	 *  callers must fall back to a text flow when absent). Enter confirms,
+	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
+	select?(options: SelectOptions): Promise<number | null>;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }

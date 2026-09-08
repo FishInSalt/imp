@@ -411,7 +411,7 @@ class ReplMachine {
 	}
 
 	private commandContext(authorizedCompact = false): CommandContext {
-		return {
+		const ctx: CommandContext = {
 			runner: this.runner,
 			renderer: this.renderer,
 			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
@@ -425,6 +425,12 @@ class ReplMachine {
 				return false;
 			},
 		};
+		// The item picker exists only on shells that implement it (TuiShell —
+		// M9 phase 2); binding it to the input keeps the method's `this`.
+		// Commands without it keep their text fallbacks.
+		const select = this.input.select?.bind(this.input);
+		if (select !== undefined) ctx.select = select;
+		return ctx;
 	}
 }
 

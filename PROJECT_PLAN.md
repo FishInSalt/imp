@@ -321,6 +321,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **集成**（`05305ef`→`089c8ef`→`930ea86`，A→C→D 序）：9 处冲突全为接口/布局/测试并集型，保序决策：布局 ask→queue→hint→marker→editor；flushQueue 先 `syncQueue()` 再 bang 拦截（bang 提前 return 时队列显示仍刷新）；两处 git“共同尾部”误判丢测试收尾括号（tsc/esbuild 双道抓回）。真机 pty 冒烟：启动帧 placeholder+ctx%+title ✓、补全面板 `→ help` 实时过滤 ✓、bang echo+输出+教学提示 ✓、/exit 干净退出 ✓；**ESC 只关面板不清文本**（readline 惯例）——冒烟脚本第一版误判为 bug，修正序列后通过
   - 代理施工质量：三路各自 469/463/456 全绿+build+biome 与基线零新增；两处越界（A 的 runner.ts/tui.ts 经 supervisor 批准、C 的 registry/loader/cli 签名级穿透 sessionKey 必需链——集成方追认）
 
+- **M10 B 批流式路径（2026-09-09，`f066b1a`+`51f0b1a` 前身修，506 tests）**：单作者实现（第二波，原 M9 清单 #2+#4）。**关键架构发现**：Renderer 的 `liveTools=false`+one-line 语义正好就是活动区模式（pending 静默登记、think() no-op、tool_end 永久写 ✓/⎿ 行）——Renderer **零改动**，print/legacy 字节契约天然无忧，cli 只改一个开关（`liveTools: interactive && transcript===undefined`）
+  - **活动区**：`LineInput.setActivity?(snapshot)`（tools/agents 纯数据行，机器每次事件推送）；壳侧 120ms ticker 拥有 spinner 动画与秒表（elapsed 由 startedAtMs 现算，机器不重推）；布局 folds→activity→ask；close() 停表
+  - **事件中继**：`RunTurnOptions.onEvent` 加 `AgentEventInfo`——task 工具构造期拿不到每回合 tap，加 `turnEventTap` 回合级持有者（finally 清空）；子事件带 {agent,cwd} 到机器、**顶层事件不带 info**（M5"渲染器零子事件"规则改在机器 tap 强制）；子 edit 折叠维持 M9 语义（仅顶层）
+  - **踩坑三连**（全被测试抓回）：①`returnToIdle` 开头清场时 state 尚为 running→快照算成 thinking、行与 ticker 不死——`clearActivity` 显式推 idle；②无名 agent 的子事件（info={agent:undefined}）掉进顶层工具分支污染工具行——分类改按 info 是否存在而非 agent 名；③脚本化子代理整个回合短于一个渲染间隔、行从未上屏——测试门控子的首个模型响应拉长窗口（帧闪断言不可靠，子事件中继另立 runner 级测试钉住）
+  - **task 行标签**：summarizeArgs 无 task 摘要器→原始 JSON 上屏；改用 `args.prompt`（shorten）作标签
+  - **真机**：! bang/placeholder/footer ctx%/saved note 全过；活动区视觉需真实模型回合（待用户批准一次真 API 调用后补验）
+  - markdown 增强按计划放弃：dim 渲染已显示语言标签，真正的提升只有语法高亮（M10 明确出局项）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

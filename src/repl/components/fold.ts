@@ -30,9 +30,12 @@ export class Fold implements Component {
 	private readonly body: string[];
 	private expanded = false;
 
-	constructor(title: string, lines: string[] = []) {
+	/** `decorate=false` keeps the body verbatim — for result folds whose
+	 *  content merely RESEMBLES a diff (ls -l's "-rw…", npm trees, markdown
+	 *  "+ item"): diff coloring there would lie (review P2). */
+	constructor(title: string, lines: string[] = [], decorate = true) {
 		this.title = title;
-		this.body = decorateDiffLines(lines);
+		this.body = decorate ? decorateDiffLines(lines) : lines;
 	}
 
 	/** Flip collapsed ⇄ expanded; the shell repaints. */

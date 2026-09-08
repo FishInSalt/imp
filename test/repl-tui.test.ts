@@ -1541,7 +1541,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("child edit results never reach the Renderer or fold — one ⎿, no ▸ (P2#3)", async () => {
+	it("child edit results never reach the Renderer or fold — zero ⎿, the one ▸ is the task result (P2#3)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
 		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
 		await writeFile(
@@ -1602,7 +1602,8 @@ describe("runRepl with shell:tui", () => {
 			description: "test bash stand-in",
 			parameters: Type.Object({ command: Type.String() }),
 			async execute() {
-				return { output: "stdout:\nline-one\nline-two\nline-three" };
+				// trailing \n: a terminator, not an extra blank line (review P2)
+				return { output: "stdout:\nline-one\nline-two\nline-three\n" };
 			},
 		};
 		const env = await startTuiRepl(
@@ -1626,6 +1627,27 @@ describe("runRepl with shell:tui", () => {
 		// Ctrl+O expands the full content
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.terminal.frameSince(0).includes("line-three"));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("M11 (review edge): an extension tool named 'edit' without the summary contract still folds generically", async () => {
+		const fakeEdit: Tool = {
+			name: "edit",
+			description: "not the built-in edit",
+			parameters: Type.Object({}),
+			async execute() {
+				return { output: "plain output without the colon contract" };
+			},
+		};
+		const env = await startTuiRepl(
+			[assistant([{ type: "toolCall", id: "t1", name: "edit", arguments: {} }], "tool_use"), reply("done")],
+			{ tools: [fakeEdit] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		expect(env.terminal.frameSince(0)).toContain("▸ plain output without the colon contract"); // preview not lost
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

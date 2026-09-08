@@ -20,7 +20,6 @@ export function firstLine(text: string, max = 160): string {
 	return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
-/** One-line tool argument summary: bash renders `$ <command>`, others compact JSON. */
 /** Queued/steering/tool-label display: cap at 80 chars, ellipsis when truncated. */
 export function shorten(text: string): string {
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
@@ -34,6 +33,10 @@ export function shorten(text: string): string {
  *  their first line as before. */
 export function summarizeResult(name: string, content: string): string {
 	const lines = content.split("\n");
+	// A trailing newline is a terminator, not a blank line — count it out so
+	// the (+N) never advertises a phantom line (review P2; the fold body
+	// applies the same rule).
+	if (lines[lines.length - 1] === "") lines.pop();
 	let start = 0;
 	if (name === "bash") {
 		while (start < lines.length) {
@@ -42,8 +45,12 @@ export function summarizeResult(name: string, content: string): string {
 			else break;
 		}
 	}
-	if (start >= lines.length || (lines[start] ?? "").trim() === "") return "(no output)";
-	const head = firstLine(lines[start] ?? "", 80);
+	// firstLine finds the first NON-EMPTY line of the remainder — the
+	// historical ⎿ semantics for non-bash results (review P1: a file whose
+	// first line is blank must preview its first content line, not
+	// "(no output)").
+	const head = firstLine(lines.slice(start).join("\n"), 80);
+	if (head === "") return "(no output)";
 	const more = lines.length - start - 1;
 	return more > 0 ? `${head} (+${more} lines)` : head;
 }
@@ -59,7 +66,10 @@ export function summarizeArgs(name: string, args: unknown): string {
 		const v = a[k];
 		return typeof v === "string" && v !== "" ? v : undefined;
 	};
-	const fallback = JSON.stringify(args) ?? "";
+	const raw = JSON.stringify(args) ?? "";
+	// The 120-char cap applies to every branch (review P2: built-in fallbacks
+	// skipped it and could emit unbounded labels on malformed args).
+	const fallback = raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
 	switch (name) {
 		case "bash": {
 			const cmd = (args as { command?: string })?.command;
@@ -102,7 +112,7 @@ export function summarizeArgs(name: string, args: unknown): string {
 			return agent !== undefined ? `(${agent}) ${shorten(prompt)}` : shorten(prompt);
 		}
 		default:
-			return fallback.length > 120 ? `${fallback.slice(0, 120)}…` : fallback;
+			return fallback;
 	}
 }
 

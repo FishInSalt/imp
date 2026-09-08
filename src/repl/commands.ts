@@ -422,16 +422,21 @@ export const COMMANDS: readonly SlashCommand[] = [
 			ctx.renderer.note(
 				`▪ context ~${formatTokens(contextTokens)} tokens · ${contextPercent}% of window${contextPercent >= 80 ? " — /compact to summarize older turns" : ""}`,
 			);
-			const storePath = ctx.trustStorePath ?? defaultTrustStorePath(homedir());
-			const cwd = session?.header.cwd ?? process.cwd();
-			const entry = nearestTrustEntry(readTrustFile(storePath), canonicalizeDir(cwd));
-			const state =
-				entry === null
-					? "no entry for this tree"
-					: entry.trusted
-						? `granted at ${entry.path}`
-						: `revoked at ${entry.path}`;
-			ctx.renderer.note(`▪ project trust ${state}`);
+			// A corrupt store degrades to "unreadable", not a thrown command
+			// (the /trust command's own contract — review P2).
+			try {
+				const storePath = ctx.trustStorePath ?? defaultTrustStorePath(homedir());
+				const entry = nearestTrustEntry(readTrustFile(storePath), canonicalizeDir(process.cwd()));
+				const state =
+					entry === null
+						? "no entry for this tree"
+						: entry.trusted
+							? `granted at ${entry.path}`
+							: `revoked at ${entry.path}`;
+				ctx.renderer.note(`▪ project trust ${state}`);
+			} catch {
+				ctx.renderer.note("▪ project trust (store unreadable — /trust shows details)");
+			}
 			return "handled";
 		},
 	},

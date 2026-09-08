@@ -25,7 +25,8 @@ export interface SelectOptions {
 export interface LineInput {
 	/** Arm the input source and show the idle prompt. */
 	start(): void;
-	/** Prompt becomes "+ " while a run/compaction is active, "> " when idle. */
+	/** Flags a run/compaction in flight. The TUI hint row swaps to the
+	 *  interrupt affordance while active; the readline shell ignores it. */
 	setActive(active: boolean): void;
 	/** Redraw the prompt line (after status notes, queue changes). */
 	refresh(): void;
@@ -41,7 +42,7 @@ export interface LineInput {
 	setFooter?(text: string): void;
 	/** Append a collapsed fold (expandable body) below the transcript — a
 	 *  TUI-shell-only affordance; the readline shell has no folds. */
-	addFold?(title: string, lines: string[]): void;
+	addFold?(title: string, lines: string[], decorate?: boolean): void;
 	/** Item picker (M9 phase 2, TUI only — the readline shell has none, so
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */

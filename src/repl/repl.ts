@@ -58,7 +58,7 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
 
 /** Defensive cap on a non-edit fold body (tools truncate their own output
  *  already — this only bounds pathological results). */
-const FOLD_LINE_CAP = 400;
+const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
 
 /** "! cmd" lines: the shell executes them itself (M10). Blank after the
  *  "!" is a usage hint, not a command. */
@@ -380,10 +380,6 @@ class ReplMachine {
 		}
 	}
 
-	/** Edit results carry "<summary>:\n<diff>" — on the TUI shell the diff
-	 *  becomes a collapsed fold (Ctrl+O expands; the ⎿ summary line stays
-	 *  in the stream). The legacy shell has no addFold and skips this.
-	 *  Presentation-agnostic: consumes plain data, no pi-tui types. */
 	/** Fold a finished top-level tool result (TUI only — the legacy shell has
 	 *  no addFold and keeps its `⎿` line). Successful results of EVERY tool
 	 *  fold (M11: `⎿ stdout: (+22 lines)` told the reader nothing and hid the
@@ -398,20 +394,29 @@ class ReplMachine {
 		if (result.toolName === "edit") {
 			const content = result.content;
 			const split = content.indexOf(":\n");
-			if (split === -1) return; // not the "summary: diff" contract
-			const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
-			this.input.addFold(title, lines);
-			return;
+			if (split !== -1) {
+				// the built-in contract: "<summary>:\n<diff>" gets the decorated
+				// diff fold. Anything else (an extension tool also named "edit")
+				// falls through to the generic fold — the ⎿ is suppressed under
+				// foldedResults, so returning would lose the preview entirely
+				// (review: edit-contract edge).
+				const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
+				this.input.addFold(title, lines);
+				return;
+			}
 		}
-		const lines = result.content.split("\n");
-		// The tools truncate their own output (bash/read caps), so the fold body
-		// is already bounded; a defensive cap keeps a pathological result from
-		// swelling the fold container.
-		const capped = lines.slice(0, FOLD_LINE_CAP);
-		if (lines.length > FOLD_LINE_CAP) {
-			capped.push(dim(`… (${lines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
+		const rawLines = result.content.split("\n");
+		// A trailing newline is a terminator, not a (blank) line — count it out
+		// (review P2: 400 physical lines + "\n" lied about one more).
+		if (rawLines[rawLines.length - 1] === "") rawLines.pop();
+		// The tools truncate their own output (bash caps 500 lines, read 2000),
+		// so the fold body is already bounded; the defensive cap only stops a
+		// pathological result from swelling the fold container.
+		const capped = rawLines.slice(0, FOLD_LINE_CAP);
+		if (rawLines.length > FOLD_LINE_CAP) {
+			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
-		this.input.addFold(summarizeResult(result.toolName, result.content), capped);
+		this.input.addFold(summarizeResult(result.toolName, result.content), capped, false);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -680,7 +685,7 @@ class ReplMachine {
 			return;
 		}
 		this.state = "idle";
-		this.input.setActive(false); // shows "> "
+		this.input.setActive(false); // TUI: the hint row returns to its idle text
 	}
 
 	/** Push the queue visual (TUI shells): "N queued · next: <head>", or clear

@@ -56,6 +56,17 @@ describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay,
 		expect(summarizeResult("task", "single")).toBe("single");
 	});
 
+	it("summarizeResult (review P1): a blank FIRST line previews the first content line, not '(no output)'", () => {
+		expect(summarizeResult("read", "\nfoo\nbar")).toBe("foo (+2 lines)");
+		expect(summarizeResult("task", "\n\nchild report")).toBe("child report (+2 lines)"); // physical-line count, as before
+	});
+
+	it("summarizeArgs (review P2): built-in fallbacks keep the 120-char cap", () => {
+		const blob = { extra: "x".repeat(200) }; // no path -> the JSON fallback path
+		const json = JSON.stringify(blob);
+		expect(summarizeArgs("read", blob)).toBe(`${json.slice(0, 120)}…`);
+	});
+
 	it("shorten: 80-char cap with ellipsis", () => {
 		expect(shorten("short")).toBe("short");
 		expect(shorten(`${"z".repeat(81)}`)).toBe(`${"z".repeat(80)}…`);

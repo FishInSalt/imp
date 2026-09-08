@@ -167,6 +167,21 @@ describe("Renderer", () => {
 		expect(out.output()).not.toContain("\x1b");
 	});
 
+	it("TUI (review P1): a mid-tool note keeps the pending's label for the completion line", () => {
+		const out = collector();
+		const r = new Renderer({
+			write: out.write,
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+			foldedResults: true,
+		});
+		r.event({ type: "tool_start", toolCallId: "t1", name: "bash", args: { command: "npm test" } });
+		r.note("▪ /status line"); // allowedDuringRun note arriving while t1 is in flight
+		r.event({ type: "tool_end", result: okResult("stdout:\nok", "t1") });
+		expect(out.output()).toContain("● bash $ npm test ✓"); // label survived the note
+	});
+
 	it("user() echoes one `> `-prefixed line per physical line, plain (not dim)", () => {
 		const out = collector();
 		const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "one-line" });

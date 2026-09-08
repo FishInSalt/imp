@@ -326,7 +326,7 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **事件中继**：`RunTurnOptions.onEvent` 加 `AgentEventInfo`——task 工具构造期拿不到每回合 tap，加 `turnEventTap` 回合级持有者（finally 清空）；子事件带 {agent,cwd} 到机器、**顶层事件不带 info**（M5"渲染器零子事件"规则改在机器 tap 强制）；子 edit 折叠维持 M9 语义（仅顶层）
   - **踩坑三连**（全被测试抓回）：①`returnToIdle` 开头清场时 state 尚为 running→快照算成 thinking、行与 ticker 不死——`clearActivity` 显式推 idle；②无名 agent 的子事件（info={agent:undefined}）掉进顶层工具分支污染工具行——分类改按 info 是否存在而非 agent 名；③脚本化子代理整个回合短于一个渲染间隔、行从未上屏——测试门控子的首个模型响应拉长窗口（帧闪断言不可靠，子事件中继另立 runner 级测试钉住）
   - **task 行标签**：summarizeArgs 无 task 摘要器→原始 JSON 上屏；改用 `args.prompt`（shorten）作标签
-  - **真机**：! bang/placeholder/footer ctx%/saved note 全过；活动区视觉需真实模型回合（待用户批准一次真 API 调用后补验）
+  - **真机（含一次经批准的真 API 回合，GLM）**：! bang/placeholder/footer ctx%/saved note 全过；活动区视觉链全程可见——`⠋ thinking…` 帧轮转、`⠴ bash $ echo …` 工具行、`● … ✓`+`⎿` 完成对、模型答复、footer `↑2.8k ↓19 · ctx 2%` 更新、干净退出；TUI 转录区无 pending 重绘字节（`●` 仅出现在永久完成行——正是 liveTools=false 的预期拆分）
   - markdown 增强按计划放弃：dim 渲染已显示语言标签，真正的提升只有语法高亮（M10 明确出局项）
 
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。

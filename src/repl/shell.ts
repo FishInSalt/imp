@@ -12,6 +12,7 @@ import {
 	Text,
 	TUI,
 } from "../tui.js";
+import { Fold } from "./components/fold.js";
 import type { LineInput, LineInputEvents } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
@@ -42,6 +43,7 @@ export function tuiEditorTheme(): EditorTheme {
  *
  *   TUI
  *   ├─ transcript (TranscriptSink — the Renderer's output, hosted)
+ *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
  *   ├─ ask line   ([y/N] question while one is pending; hidden otherwise)
  *   ├─ marker     ("> " idle / "+ " active)
  *   ├─ editor     (focused)
@@ -60,6 +62,13 @@ export function tuiEditorTheme(): EditorTheme {
  *    Kitty key-RELEASE events are filtered first — one press is one
  *    interrupt (M9 review P0: press+release double-fired).
  *  - Submissions are trim()-ed by the editor (readline delivered raw).
+ *  - Folds (addFold) are a TUI-only affordance with no readline
+ *    counterpart: collapsed "▸ title" lines render between the
+ *    transcript and the ask line — the text stream first, folds after,
+ *    in insertion order (v1; folds never interleave with streamed
+ *    text). Ctrl+O toggles the most recently added fold only; with no
+ *    fold present the key falls through to the editor, which has no
+ *    Ctrl+O binding (a no-op).
  *  - Multi-line editor submits arrive as ONE line event with embedded
  *    newlines (readline split them into separate events); a multi-line
  *    answer to an [y/N] ask is judged on the whole text, so "y\nfootnote"
@@ -70,6 +79,10 @@ export class TuiShell implements LineInput {
 	private tui: TUI | null = null;
 	private editor: Editor | null = null;
 	private askContainer = new Container();
+	/** Hosts the Fold children — sits between transcript and ask line. */
+	private readonly foldContainer = new Container();
+	/** Newest last; Ctrl+O toggles the last one only. */
+	private readonly folds: Fold[] = [];
 	private marker: Text | null = null;
 	private footer: Text | null = null;
 	private history: string[] = [];
@@ -102,6 +115,7 @@ export class TuiShell implements LineInput {
 		editorBox.addChild(editor);
 
 		tui.addChild(this.options.transcript);
+		tui.addChild(this.foldContainer);
 		tui.addChild(this.askContainer);
 		tui.addChild(marker);
 		tui.addChild(editorBox);
@@ -129,6 +143,16 @@ export class TuiShell implements LineInput {
 				if (editor.getText() !== "") return undefined;
 				if (this.pendingAsks.length > 0) this.drainAsks();
 				this.options.onEof();
+				return { consume: true };
+			}
+			// Fold affordance (TUI-only; see the parity ledger): toggle the
+			// newest fold. With none present the key passes through to the
+			// editor — which has no Ctrl+O binding, so effectively a no-op.
+			if (matchesKey(data, "ctrl+o")) {
+				const newest = this.folds.at(-1);
+				if (newest === undefined) return undefined;
+				newest.toggle();
+				this.tui?.requestRender();
 				return { consume: true };
 			}
 			return undefined;
@@ -209,6 +233,17 @@ export class TuiShell implements LineInput {
 			this.pendingAsks.push({ question, resolve });
 			if (wasFirst) this.showAsk(question);
 		});
+	}
+
+	/**
+	 * Append a collapsed fold below the transcript text (v1 ordering: the
+	 * stream renders first, folds after — see the parity ledger).
+	 */
+	addFold(title: string, lines: string[]): void {
+		const fold = new Fold(title, lines);
+		this.folds.push(fold);
+		this.foldContainer.addChild(fold);
+		this.tui?.requestRender();
 	}
 
 	getHistory(): readonly string[] {

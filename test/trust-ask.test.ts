@@ -18,8 +18,11 @@ class AskTerminal implements Terminal {
 		this.buffer = buffer;
 	}
 
+	stopped = false;
+
 	stop(): void {
 		this.buffer = null;
+		this.stopped = true;
 	}
 
 	async drainInput(): Promise<void> {}
@@ -78,6 +81,25 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		terminal.data("\r");
 		await expect(asked).resolves.toBe("yes");
 		expect(transcript.completedLines()).toEqual([]); // the ask leaves no transcript trace
+	});
+
+	it("(review P0) the ask settles BEFORE it returns — the terminal stop has run, so a successor shell cannot be undermined", async () => {
+		const terminal = new AskTerminal();
+		const asked = askTrustViaTui({
+			transcript: new TranscriptSink(),
+			cwd: "/tmp/x",
+			resources: [".imp/extensions"],
+			terminal,
+		});
+		await settle();
+		terminal.data("\r");
+		let stoppedAtResolve = false;
+		await expect(
+			asked.then(() => {
+				stoppedAtResolve = terminal.stopped;
+			}),
+		).resolves.toBe(undefined);
+		expect(stoppedAtResolve).toBe(true); // the 40ms delayed stop already ran
 	});
 
 	it("down + Enter answers no", async () => {

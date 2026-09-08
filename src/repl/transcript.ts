@@ -39,9 +39,6 @@ export class TranscriptSink implements Component {
 	/** Fires whenever lines change — the shell binds tui.requestRender. */
 	onUpdate: (() => void) | null = null;
 
-	/** The Renderer's write sink. Chunk-boundary safe in BOTH directions:
-	 *  split arbitrarily AND merged into single feeds (a partial marker is
-	 *  held back until the stream resolves it). */
 	/** Reset to an empty screen (/new, /resume replay). The next feed or
 	 *  render starts from line zero — a cleared sink is indistinguishable
 	 *  from a fresh one (debt clearance: /new used to leave stale lines). */
@@ -54,6 +51,9 @@ export class TranscriptSink implements Component {
 		this.onUpdate?.();
 	}
 
+	/** The Renderer's write sink. Chunk-boundary safe in BOTH directions:
+	 *  split arbitrarily AND merged into single feeds (a partial marker is
+	 *  held back until the stream resolves it). */
 	feed = (chunk: string): void => {
 		let buffer = this.carry + chunk;
 		this.carry = "";

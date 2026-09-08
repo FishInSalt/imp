@@ -116,7 +116,10 @@ class FakeTerminal implements Terminal {
 	frameSince(mark: number): string {
 		// Write-boundary safe (debt clearance): joining raw writes could glue
 		// the tail of one frame to the head of the next into a phantom line —
-		// a boundary break is inserted when neither side ends a line.
+		// a boundary break is inserted when neither side ends a line. NOTE:
+		// the inserted \n is synthetic — assertions must never match text
+		// ACROSS a write boundary (same logical line split over two writes
+		// would read as two lines here; no current TUI write does that).
 		let out = "";
 		for (const write of this.writes.slice(mark)) {
 			const text = stripAnsi(write);

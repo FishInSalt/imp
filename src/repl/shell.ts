@@ -147,6 +147,11 @@ export class TuiShell implements LineInput {
 	private readonly theme: EditorTheme = tuiEditorTheme();
 	private tui: TUI | null = null;
 	private terminal: Terminal | null = null;
+	/** The exact closure bound to the shared sink's onUpdate (ownership
+	 *  check in stopTerminal) and the whenSettled handshake (review P0). */
+	private boundOnUpdate: (() => void) | null = null;
+	private settlePromise: Promise<void> | null = null;
+	private settleResolve: (() => void) | null = null;
 	private editor: Editor | null = null;
 	private askContainer = new Container();
 	/** Hosts the Fold children — sits between transcript and ask line. */
@@ -206,7 +211,8 @@ export class TuiShell implements LineInput {
 		this.terminal = terminal;
 		const tui = new TUI(terminal, true); // hardware cursor: IME candidate positioning
 		this.tui = tui;
-		this.options.transcript.onUpdate = () => tui.requestRender();
+		this.boundOnUpdate = () => tui.requestRender();
+		this.options.transcript.onUpdate = this.boundOnUpdate;
 
 		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
@@ -277,9 +283,13 @@ export class TuiShell implements LineInput {
 				if (this.selector.filterKey?.(data) === true) return { consume: true };
 			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt
-			// path — UNLESS the editor's autocomplete panel is open: then the
+			// path — UNLESS the editor's autocomplete panel is VISIBLE: then the
 			// first Esc only closes the panel (debt clearance — pi-tui grew
-			// isShowingAutocomplete(), the dual-consumer edge is gone). While
+			// isShowingAutocomplete()). Caveat (review): during the ~20ms
+			// autocomplete debounce the panel is not yet visible, so Esc
+			// interrupts — and the late panel may then pop over the aborted
+			// turn (closeable with another Esc; upstream cancel API pending).
+			// While
 			// a selector is open Esc stays the selector's cancel — never an
 			// interrupt.
 			if (
@@ -653,6 +663,8 @@ export class TuiShell implements LineInput {
 			// pi-tui's MIN_RENDER_INTERVAL_MS = 16.
 			tui.requestRender();
 			setTimeout(() => this.stopTerminal(), 40);
+		} else {
+			this.stopTerminal(); // never started: nothing to delay for
 		}
 	}
 
@@ -660,11 +672,36 @@ export class TuiShell implements LineInput {
 	private stopTerminal(): void {
 		if (this.stopped) return;
 		this.stopped = true;
-		this.options.transcript.onUpdate = null;
+		// Ownership guard (review P0 hardening): only unbind OUR callback —
+		// a successor shell may have re-bound the shared sink already (the
+		// one-shot trust-ask shell hands the same TranscriptSink to the real
+		// REPL shell).
+		if (this.options.transcript.onUpdate === this.boundOnUpdate) {
+			this.options.transcript.onUpdate = null;
+		}
 		this.terminal?.write("\x1b]2;\x07"); // hand the window its own title back
 		this.terminal = null;
 		this.tui?.stop();
 		this.tui = null;
+		this.settleResolve?.();
+		this.settleResolve = null;
+	}
+
+	/** Resolves once close() has fully settled — the 40ms terminal stop
+	 *  has RUN, not merely been scheduled (review P0: the one-shot
+	 *  trust-ask shell returns before the delayed stop, which then pauses
+	 *  stdin and unbinds the shared sink UNDER the freshly started real
+	 *  shell — an intermittent dead-input REPL). Await this before any
+	 *  successor shell binds the same terminal. Already-settled (or
+	 *  never-started) shells resolve immediately. */
+	whenSettled(): Promise<void> {
+		if (this.stopped) return Promise.resolve();
+		if (this.settlePromise === null) {
+			this.settlePromise = new Promise<void>((resolve) => {
+				this.settleResolve = resolve;
+			});
+		}
+		return this.settlePromise;
 	}
 
 	/** Dim hint row (M10): visible only while idle, the editor empty, and no

@@ -630,8 +630,14 @@ class ReplMachine {
 		let body = result.output;
 		if (result.exitCode !== undefined && result.exitCode !== 0) {
 			const real = new RegExp(`(?:\n\n|^)Exit code: ${result.exitCode}$`).exec(result.output);
-			if (real !== null) body = result.output.slice(0, real.index).trimEnd();
-			this.renderer.note(`(exit ${result.exitCode})`);
+			if (real !== null) {
+				body = result.output.slice(0, real.index).trimEnd();
+				// Note ONLY alongside an actual peel: a truncated output keeps
+				// the section mid-body ("[output truncated: …]" follows it), so
+				// the text already states the code once — a note here would
+				// state it twice (review P2).
+				this.renderer.note(`(exit ${result.exitCode})`);
+			}
 		}
 		if (body !== "") this.renderer.writeLine(body);
 	}

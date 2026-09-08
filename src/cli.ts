@@ -15,6 +15,7 @@ import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { dim, red, VERSION } from "./format.js";
 import { Renderer } from "./render.js";
+import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
 import { TranscriptSink } from "./repl/transcript.js";
 import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from "./runner.js";
@@ -293,7 +294,14 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	let code: number;
 	try {
-		code = await runRepl({ runner, commands, confirm, shell, transcript });
+		code = await runRepl({
+			runner,
+			commands,
+			confirm,
+			shell,
+			transcript,
+			inputHistoryPath: shell === "tui" ? historyFilePath(homedir()) : undefined,
+		});
 	} catch (err) {
 		reportStartupError(err);
 		runner.close();

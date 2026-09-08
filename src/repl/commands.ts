@@ -236,6 +236,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				const shown = sessions.slice(0, 20);
 				const index = await select({
 					title: "sessions — pick one to resume",
+					filterable: true, // type to narrow by id or title (M11 #9)
 					items: shown.map((info) => ({
 						label: info.id.slice(0, 8),
 						description: sessionRowDescription(info.modified, info.messageCount, info.title),

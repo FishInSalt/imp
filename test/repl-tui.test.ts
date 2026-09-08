@@ -1683,6 +1683,52 @@ describe("runRepl with shell:tui", () => {
 		shell.close();
 	});
 
+	it("/tree (review P1-1): the summarizer window holds state — typed lines QUEUE, /new is refused", async () => {
+		let releaseSummary: () => void = () => {};
+		const gated = new Promise<void>((resolve) => {
+			releaseSummary = resolve;
+		});
+		const env = await startTuiRepl([
+			reply("answer one"),
+			reply("answer two"),
+			reply("answer three"), // q3 on the new branch
+			() => gated.then(() => reply("THE LEFT BRANCH SUMMARY")), // the gated summarizer
+			reply("flushed turn reply"),
+		]);
+		await settle();
+		env.terminal.data("q1 trunk\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer one"), 8000);
+		env.terminal.data("q2 old\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer two"), 8000);
+		env.terminal.data("/fork 2\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("forked before"), 8000);
+		env.terminal.data("q3 new\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("answer three"), 8000);
+		// switch — the summarizer hangs on the gate
+		env.terminal.data("/tree\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("Switch to which branch?"), 8000);
+		env.terminal.data("\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("switching branches"), 8000);
+		// during the window: a typed line must QUEUE, not open a stale-history turn
+		env.terminal.data("typed during the switch\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("1 queued"), 8000);
+		expect(env.requests).toHaveLength(4); // q1, q2, q3, and the pending summary — no 5th
+		// and /new is refused while the switch is in flight
+		env.terminal.data("/new\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("waits for the running turn"), 8000);
+		releaseSummary();
+		await waitUntil(() => env.terminal.frameSince(0).includes("summarized in context"), 8000);
+		// the queued line flushes as a real turn ON the new branch
+		await waitUntil(() => env.terminal.frameSince(0).includes("flushed turn reply"), 8000);
+		const flushed = env.requests[4];
+		const userTexts = (flushed?.messages ?? [])
+			.filter((m): m is UserMessage => m.role === "user")
+			.map((m) => m.content);
+		expect(userTexts).toContain("typed during the switch");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("/tree (#10 batch 2): switch back — the left branch is summarized into the next request", async () => {
 		const env = await startTuiRepl([
 			reply("answer one"),

@@ -692,12 +692,22 @@ describe("/tree (#10 batch 2)", () => {
 		await dispatchCommand("/tree 1", env.ctx);
 		out = env.output();
 		expect(out).toContain("switched branches");
-		expect(out).toContain("no summary: disabled or failed");
+		expect(out).toContain("summary off — IMP_BRANCH_SUMMARY=0");
 		// history is the OLD branch again
 		const texts = env.runner.history.map((m) => (m.role === "user" ? m.content : ""));
 		expect(texts).toContain("q2-old");
 		expect(texts).not.toContain("q2-new");
 		expect(env.replayed.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("fork without writing, then switch back: the empty-left note (review P2-3)", async () => {
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old, write nothing
+		await dispatchCommand("/tree 1", env.ctx); // switch back — left branch is EMPTY
+		expect(env.output()).toContain("nothing was written on the left branch to summarize");
 	});
 
 	it("bad args teach; running is rejected", async () => {

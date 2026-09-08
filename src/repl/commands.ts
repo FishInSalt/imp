@@ -304,15 +304,22 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			if (tipId === undefined) return "handled"; // unreachable; type guard
-			const { summarized, messages } = await ctx.runner.switchSessionBranch(tipId);
+			// Progress feedback BEFORE the potentially 5-20s summarizer await —
+			// the state machine holds input in the queue meanwhile (review P2-1).
+			ctx.renderer.note("▪ switching branches…");
+			const { summary, messages } = await ctx.runner.switchSessionBranch(tipId);
 			ctx.clearView?.();
 			const session = ctx.runner.session;
 			if (session !== null && messages > 0) ctx.replay(session);
-			ctx.renderer.note(
-				summarized
-					? `▪ switched branches — ${messages} messages here; the left one is summarized in context`
-					: `▪ switched branches — ${messages} messages here (no summary: disabled or failed)`,
-			);
+			const tail =
+				summary === "written"
+					? "the left one is summarized in context"
+					: summary === "empty"
+						? "nothing was written on the left branch to summarize"
+						: summary === "disabled"
+							? "summary off — IMP_BRANCH_SUMMARY=0"
+							: "summarizer failed — see imp-log; switched without it";
+			ctx.renderer.note(`▪ switched branches — ${messages} messages here (${tail})`);
 			return "handled";
 		},
 	},

@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, appendFileSync as fsAppend, readFileSync } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
-import { BRANCH_MARK, SessionStore } from "../src/core/session/store.js";
+import { BRANCH_MARK, SessionStore, SUMMARY_MARK } from "../src/core/session/store.js";
 
 function mkpath(): Promise<string> {
 	return mkdtemp(path.join(tmpdir(), "imp-session-"));
@@ -251,6 +252,77 @@ describe("SessionStore", () => {
 		expect(framed?.content ?? "").toContain(BRANCH_MARK);
 		// stats: only real messages count
 		expect(reopened.stats().messageCount).toBe(2);
+	});
+
+	it("position markers: a fork or switch survives a restart (review P1-2)", async () => {
+		const dir = await mkpath();
+		const file = path.join(dir, "s.jsonl");
+		const store = SessionStore.create(file, "/w");
+		store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		const u2 = store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2"));
+		store.forkBefore(u2); // NO write after the fork — the classic loss case
+		// reopen: the write head is where the fork put it, and the abandoned
+		// tip is listable (/tree can switch back — the note's promise holds)
+		const reopened = SessionStore.open(file);
+		const after = reopened.userForkPoints().map((e) => (e.message as { content: string }).content);
+		expect(after).toEqual(["q1"]);
+		expect(reopened.otherBranchTips()).toHaveLength(1);
+		expect(reopened.otherBranchTips()[0]?.label).toBe("q2");
+		// a subsequent append implies its own leaf — the entry wins over the marker
+		reopened.appendMessage(user("q3"));
+		const again = SessionStore.open(file);
+		const texts = again
+			.getBranch()
+			.map((e) => (e.type === "message" && e.message.role === "user" ? e.message.content : ""))
+			.filter((t) => t !== "");
+		expect(texts).toEqual(["q1", "q3"]);
+	});
+
+	it("position markers: switching persists too; null leaf and corrupt ids are safe", async () => {
+		const dir = await mkpath();
+		const file = path.join(dir, "s2.jsonl");
+		const store = SessionStore.create(file, "/w");
+		store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		store.appendMessage(user("q2"));
+		store.appendMessage(assistantText("a2"));
+		const tip = store.otherBranchTips()[0]; // none yet — switch needs a fork first
+		expect(tip).toBeUndefined();
+		const points = store.userForkPoints();
+		store.forkBefore(points[1]!.id);
+		store.appendMessage(user("q-new")); // the forked branch needs an entry to have a tip
+		const oldTip = store.otherBranchTips()[0]!;
+		store.switchBranch(oldTip.id);
+		expect(SessionStore.open(file).otherBranchTips()).toHaveLength(1); // the forked branch's tip
+		// fork before the FIRST message → null leaf persists as an empty branch
+		const fresh = SessionStore.create(path.join(dir, "s3.jsonl"), "/w");
+		const first = fresh.appendMessage(user("only"));
+		fresh.forkBefore(first);
+		expect(SessionStore.open(path.join(dir, "s3.jsonl")).getBranch()).toEqual([]);
+		// a position line naming a missing id is ignored (falls back to last entry)
+		fsAppend(file, `${JSON.stringify({ type: "position", leafId: "deadbeef" })}\n`);
+		expect(SessionStore.open(file).stats().messageCount).toBeGreaterThan(0);
+	});
+
+	it("branchSummary after a compaction: the else branch renders both frames in order (review F4)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s4.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		store.appendCompaction("compacted away", [user("q1"), assistantText("a1")], 500);
+		store.appendBranchSummary("left a branch");
+		store.appendMessage(user("q2"));
+		const { messages, compacted } = store.buildContext();
+		expect(compacted).toBe(true);
+		const userFrames = messages.filter((m) => m.role === "user") as Array<{ content: string }>;
+		expect(userFrames.some((m) => m.content.startsWith(SUMMARY_MARK))).toBe(true);
+		expect(userFrames.some((m) => m.content.startsWith(BRANCH_MARK))).toBe(true);
+		// order: compaction frame first, branch frame after
+		expect(userFrames.findIndex((m) => m.content.startsWith(SUMMARY_MARK))).toBeLessThan(
+			userFrames.findIndex((m) => m.content.startsWith(BRANCH_MARK)),
+		);
 	});
 
 	it("stats() aggregates assistant usage and turns", async () => {

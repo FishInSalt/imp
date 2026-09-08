@@ -346,10 +346,15 @@ class ReplMachine {
 			this.reportError(err);
 			return;
 		}
-		// Manual /compact runs in its own state so Ctrl+C gets the right hint
-		// and /new / /compact can refuse while it is in flight.
-		const manualCompact = name === "compact" && this.state === "idle" && this.runner.session !== null;
-		if (manualCompact) {
+		// Manual /compact AND /tree run in their own state so Ctrl+C gets the
+		// right hint, /new //resume can refuse while in flight, and — critical
+		// for /tree — the 5-20s summarizer await cannot be crossed by a new
+		// turn or a session swap (review P1-1: an unguarded window once let a
+		// typed line open a turn on stale history, and /new mid-await left
+		// runner.session and runner.history pointing at different sessions).
+		const stateful =
+			(name === "compact" || name === "tree") && this.state === "idle" && this.runner.session !== null;
+		if (stateful) {
 			this.state = "compacting";
 			this.input.setActive(true);
 		}
@@ -359,11 +364,11 @@ class ReplMachine {
 			// which must not make dispatchCommand's isActive() guard reject it.
 			// Any OTHER line arriving while compacting still sees isActive() true.
 			// Extension commands ride the same path with identical semantics (M4b).
-			await dispatchCommand(line, this.commandContext(manualCompact), this.commands);
+			await dispatchCommand(line, this.commandContext(stateful), this.commands);
 		} catch (err) {
 			this.reportError(err);
 		} finally {
-			if (manualCompact && this.state === "compacting") {
+			if (stateful && this.state === "compacting") {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
 			}
@@ -793,11 +798,11 @@ class ReplMachine {
 		this.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	private commandContext(authorizedCompact = false): CommandContext {
+	private commandContext(authorizedStateful = false): CommandContext {
 		const ctx: CommandContext = {
 			runner: this.runner,
 			renderer: this.renderer,
-			isActive: () => !authorizedCompact && (this.state === "running" || this.state === "compacting"),
+			isActive: () => !authorizedStateful && (this.state === "running" || this.state === "compacting"),
 			replay: this.replay,
 			requestExit: (code: number) => this.requestExit(code),
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted

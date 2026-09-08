@@ -378,6 +378,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **P2**：bang 截断场景 exit code 双显（截断段在 Exit code 段之后→正则不匹配→正文+note 各一次）→ note 只在真正剥离时发；history 锁 degraded 分支 unlink 活锁可级联破坏互斥（A 的 finally 删掉 C 的新锁）→ 与 trust 完全对齐（降级不删锁）；Esc 注释过度声明（debounce 窗口内仍会中断+迟弹面板，上游 cancel API 未公开）→ 措辞修正；clearView 接口文档"after"与实现"before"相反→修正；transcript.ts clear() 插在 feed 文档注释与 feed 之间→注释归位；frameSince 第三份副本（repl-status）漏加固→同步+两份已加固处补"合成换行不得跨 write 断言"文档
   - **报告级接受**：Ctrl+O 全展开的单帧 O(总行数) 截断计算（展开全部的固有代价）；summarizeResult 对所有工具滤 `Exit code: N` 行（read 日志含此行时 +N 少计——与"status-y 行"框定一致）；ask 壳 close 后 ≤40ms typed-ahead 被吞（与 M8 F9 同类 cosmetic）
 
+- **#10 会话树 批次 1：/fork（2026-09-09，576 tests，feat/fork-batch1）**：设计评估修正——M2 起存储层就是 pi v3 树格式（id/parentId、leafId、getBranch、append-only），缺的只是操作与界面层，成本从"另一个量级"降为两个半天批次。三决策（用户拍板"按建议来"）：fork 边界跟 pi（选中用户消息→从其**之前**分叉，该条重说）；切换摘要默认开+`IMP_BRANCH_SUMMARY=0` 关（批次 2）；/fork 弃尾不摘要（旧枝在文件里，/tree 可回——批次 2）
+  - **存储**：`store.forkBefore(entryId)`（校验=用户消息+在当前分支上；leafId 移到目标 parentId；返回 retained/abandoned 计数）+ `userForkPoints()`（当前分支用户消息 oldest→newest，含最新一条=重做末轮）
+  - **runner**：`forkSessionAt`（镜像 resumeSession：history 清空重载 buildContext——同一接线）+ `forkPoints`（预览=shorten(userText)）
+  - **命令**：`/fork` 无参 TUI 弹 filterable picker（复用 #9）；`/fork <n>` 数字直选（legacy 文本回退=编号列表+教学行，契约"缺 select 必须有文本回退"）；成功后 clearView→replay（/resume 同款流）+ note `▪ forked before "…" — N kept, M left on the old branch`；allowedDuringRun:false
+  - **语义自查**（已核）：steering user 消息只注入在 toolResult 之后→fork 保留路径永不以悬空 tool_use 结尾；fork 点在旧 compaction 之下→新路径不含该 compaction（回到压缩前全文=设计语义）；auto-compact 闩随 ctx% 重挂
+  - 钉子：store 4 例（分叉/首条前清空/非用户与他枝拒绝/分叉点枚举）+ 命令 5 例 + e2e（真 picker 过滤选点→fork 后**下一个模型请求**不含弃尾内容、屏幕清除需 post-fork mark）+ /help 金样与 known 行同步；pty 真机：GLM 冷启动下时序放宽后全链路通过
+  - **流程**：批次 2（/tree+branch_summary）落地后**合并为一轮对抗审查**覆盖两批交互面（存储核心已在批次 1 自查+钉子覆盖）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

@@ -239,6 +239,40 @@ export class SessionStore {
 	}
 
 	/** Entries from root to the given leaf (default: current leaf). */
+	/** User-message fork points on the CURRENT branch, oldest → newest
+	 *  (#10 batch 1): /fork's picker and /fork <n> both index this list. The
+	 *  latest user message is included — forking before it re-does the last
+	 *  exchange. */
+	userForkPoints(): MessageEntry[] {
+		return this.getBranch().filter(
+			(entry): entry is MessageEntry => entry.type === "message" && entry.message.role === "user",
+		);
+	}
+
+	/** Fork the tree: move the write position to just BEFORE the given user
+	 *  message — the abandoned tail stays in the file (append-only), and
+	 *  subsequent appends grow a NEW branch from the fork point. pi's
+	 *  boundary rule: fork targets are user messages (conversation seams),
+	 *  and the chosen message itself is re-typed on the new branch.
+	 *  Returns message counts for the teaching note. */
+	forkBefore(entryId: string): { retained: number; abandoned: number } {
+		const target = this.byId.get(entryId);
+		if (target === undefined || target.type !== "message" || target.message.role !== "user") {
+			throw new SessionError(`fork target ${entryId} is not a user message`);
+		}
+		// Defense: only current-path entries are fork targets (the picker and
+		// /fork <n> never offer others — switching to ANOTHER branch's message
+		// is /tree's job, not /fork's).
+		const onCurrentPath = this.getBranch().some((entry) => entry.id === entryId);
+		if (!onCurrentPath) {
+			throw new SessionError(`fork target ${entryId} is not on the current branch`);
+		}
+		const before = this.getBranch().filter((entry) => entry.type === "message").length;
+		this.leafId = target.parentId; // null targets the very first message → empty branch
+		const retained = this.getBranch().filter((entry) => entry.type === "message").length;
+		return { retained, abandoned: before - retained };
+	}
+
 	getBranch(leafId?: string | null): SessionEntry[] {
 		const target = leafId === undefined ? this.leafId : leafId;
 		if (target === null) return [];

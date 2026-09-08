@@ -40,8 +40,9 @@ import {
 class FakeTerminal implements Terminal {
 	private buffer: StdinBuffer | null = null;
 	private rawInput: ((data: string) => void) | null = null;
-	private readonly columnCount: number;
+	private columnCount: number;
 	private readonly rowCount: number;
+	private onResize: (() => void) | null = null;
 	readonly writes: string[] = [];
 
 	constructor(columnCount = 80, rowCount = 24) {
@@ -49,7 +50,14 @@ class FakeTerminal implements Terminal {
 		this.rowCount = rowCount;
 	}
 
-	start(onInput: (data: string) => void, _onResize: () => void): void {
+	/** Simulate SIGWINCH: the width changes and the TUI's resize hook
+	 *  (bound to requestRender) fires. */
+	resize(columns: number): void {
+		this.columnCount = columns;
+		this.onResize?.();
+	}
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
 		// Production splits stdin bursts into per-key sequences and re-wraps
 		// paste events (terminal.ts binds both) — mirror it exactly.
 		const buffer = new StdinBuffer();
@@ -57,11 +65,13 @@ class FakeTerminal implements Terminal {
 		buffer.on("paste", (content: string) => onInput(`\x1b[200~${content}\x1b[201~`));
 		this.buffer = buffer;
 		this.rawInput = onInput;
+		this.onResize = onResize;
 	}
 
 	stop(): void {
 		this.buffer = null;
 		this.rawInput = null;
+		this.onResize = null;
 	}
 
 	async drainInput(): Promise<void> {}
@@ -104,7 +114,16 @@ class FakeTerminal implements Terminal {
 
 	/** Everything written since `mark`, ANSI/control-stripped. */
 	frameSince(mark: number): string {
-		return stripAnsi(this.writes.slice(mark).join(""));
+		// Write-boundary safe (debt clearance): joining raw writes could glue
+		// the tail of one frame to the head of the next into a phantom line —
+		// a boundary break is inserted when neither side ends a line.
+		let out = "";
+		for (const write of this.writes.slice(mark)) {
+			const text = stripAnsi(write);
+			if (out !== "" && !out.endsWith("\n") && !text.startsWith("\n")) out += "\n";
+			out += text;
+		}
+		return out;
 	}
 }
 
@@ -1632,6 +1651,101 @@ describe("runRepl with shell:tui", () => {
 		// Ctrl+O expands the full content
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.terminal.frameSince(0).includes("line-three"));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("resize reflows the render — a wide fold truncates to the new width (debt clearance #16)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle();
+		const long = "x".repeat(70);
+		shell.addFold(`wide ${long}`, [`body ${long}`]);
+		await settle();
+		terminal.data("\x0f"); // expand-all
+		await settle();
+		for (const line of terminal.frameSince(0).split("\n")) {
+			expect(line.length).toBeLessThanOrEqual(80); // fits the original width
+		}
+		const mark = terminal.writes.length; // post-resize frames only
+		terminal.resize(40); // SIGWINCH: width drops, the resize hook re-renders
+		await settle();
+		const narrow = terminal.frameSince(mark);
+		let sawBody = false;
+		for (const line of narrow.split("\n")) {
+			expect(line.length).toBeLessThanOrEqual(40); // re-truncated, no renderer throw
+			if (line.includes("body")) sawBody = true;
+		}
+		expect(sawBody).toBe(true); // the fold body is still there, just clipped
+		shell.close();
+	});
+
+	it("debt clearance: error results fold too — no red ⎿ line, the ● ✗ line stays, expand works", async () => {
+		const failing: Tool = {
+			name: "bash",
+			description: "test bash stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return {
+					output: "Error: command timed out after 5s and was killed. Partial output:\nline one\nline two",
+					isError: true,
+				};
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "sleep 99" } }],
+					"tool_use",
+				),
+				reply("done"),
+			],
+			{ tools: [failing] },
+		);
+		await settle();
+		env.terminal.data("run it\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("● bash $ sleep 99 ✗"); // the salient failure line stays
+		expect(frame).not.toContain("⎿"); // the red ⎿ preview is gone — folded instead
+		expect(frame).toContain("▸ Error: command timed out"); // the error fold's collapsed title
+		// expand-all reveals the partial output
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.terminal.frameSince(0).includes("line one"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("debt clearance: /new clears the transcript and folds", async () => {
+		const chatty: Tool = {
+			name: "bash",
+			description: "test bash stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return { output: "stdout:\nsome long output line that should vanish\n" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "seq 99" } }],
+					"tool_use",
+				),
+				reply("done"),
+				reply("fresh turn"),
+			],
+			{ tools: [chatty] },
+		);
+		await settle();
+		env.terminal.data("run it\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("should vanish"), 8000);
+		env.terminal.data("/new\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("new session"), 8000);
+		const mark = env.terminal.writes.length;
+		env.terminal.data("hello\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("fresh turn"), 8000);
+		// the old content and its fold are gone from the CURRENT screen
+		expect(env.terminal.frameSince(mark)).not.toContain("should vanish");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

@@ -49,9 +49,17 @@ export function summarizeResult(name: string, content: string): string {
 	// historical ⎿ semantics for non-bash results (review P1: a file whose
 	// first line is blank must preview its first content line, not
 	// "(no output)").
-	const head = firstLine(lines.slice(start).join("\n"), 80);
+	let headIdx = start;
+	while (headIdx < lines.length && (lines[headIdx] ?? "").trim() === "") headIdx++;
+	const head = firstLine(lines.slice(headIdx).join("\n"), 80);
 	if (head === "") return "(no output)";
-	const more = lines.length - start - 1;
+	// (+N) counts CONTENT lines only (debt clearance): a physical count let
+	// blank separators and the status-y "Exit code: N" line inflate it.
+	const more = lines.filter((line, i) => {
+		if (i <= headIdx) return false;
+		if (line.trim() === "") return false;
+		return !/^Exit code: \d+$/.test(line.trim());
+	}).length;
 	return more > 0 ? `${head} (+${more} lines)` : head;
 }
 

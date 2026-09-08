@@ -411,10 +411,12 @@ export class Renderer {
 		this.write(`${line}\n`);
 		// Result summary — Claude-Code-style `⎿` under the call. Display only;
 		// the model still receives the full content through the session. TUI
-		// mode (foldedResults) folds successful results instead: the fold's
-		// title carries the same preview and Ctrl+O expands the content; errors
-		// keep the red `⎿` — they read best expanded and salient.
-		if (result.isError || this.options.foldedResults !== true) {
+		// mode (foldedResults) folds EVERY result instead — errors included
+		// (debt clearance: a timed-out bash error's "Partial output" ran to
+		// hundreds of lines with no way in). The fold's title carries the same
+		// preview, errors with a red arrow; Ctrl+O expands. The `● tool ✗`
+		// line above keeps the failure salient either way.
+		if (this.options.foldedResults !== true) {
 			this.write(`${this.resultSummary(result)}\n`);
 		}
 		if (others.length > 0 && this.options.liveTools) {

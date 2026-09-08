@@ -42,6 +42,18 @@ export class TranscriptSink implements Component {
 	/** The Renderer's write sink. Chunk-boundary safe in BOTH directions:
 	 *  split arbitrarily AND merged into single feeds (a partial marker is
 	 *  held back until the stream resolves it). */
+	/** Reset to an empty screen (/new, /resume replay). The next feed or
+	 *  render starts from line zero — a cleared sink is indistinguishable
+	 *  from a fresh one (debt clearance: /new used to leave stale lines). */
+	clear(): void {
+		this.lines = [];
+		this.current = "";
+		this.carry = "";
+		this.wrapped = [];
+		this.wrappedWidth = -1;
+		this.onUpdate?.();
+	}
+
 	feed = (chunk: string): void => {
 		let buffer = this.carry + chunk;
 		this.carry = "";

@@ -64,7 +64,16 @@ class FakeTerminal implements Terminal {
 
 	/** Everything written since `mark`, ANSI/control-stripped. */
 	frameSince(mark: number): string {
-		return stripAnsi(this.writes.slice(mark).join(""));
+		// Write-boundary safe (debt clearance): joining raw writes could glue
+		// the tail of one frame to the head of the next into a phantom line —
+		// a boundary break is inserted when neither side ends a line.
+		let out = "";
+		for (const write of this.writes.slice(mark)) {
+			const text = stripAnsi(write);
+			if (out !== "" && !out.endsWith("\n") && !text.startsWith("\n")) out += "\n";
+			out += text;
+		}
+		return out;
 	}
 }
 
@@ -320,7 +329,7 @@ describe("TuiShell.addFold", () => {
 		shell.close();
 	});
 
-	it("two folds: ctrl+o toggles the LAST one only — the first stays collapsed", async () => {
+	it("two folds: ctrl+o expands ALL (debt clearance — mid-turn folds reachable), second press collapses all", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle();
@@ -331,12 +340,12 @@ describe("TuiShell.addFold", () => {
 		expect(terminal.frameSince(0)).toContain("▸ fold a (+1/-0)");
 		expect(terminal.frameSince(0)).toContain("▸ fold b (+1/-0)");
 
-		terminal.data("\x0f"); // only fold b expands
+		terminal.data("\x0f"); // expand-all: BOTH bodies reachable
 		await settle();
 		expect(terminal.frameSince(0)).toContain("+ beta");
-		expect(terminal.frameSince(0)).not.toContain("+ alpha");
+		expect(terminal.frameSince(0)).toContain("+ alpha");
 
-		terminal.data("\x0f"); // fold b collapses; fold a never opened
+		terminal.data("\x0f"); // collapse-all
 		await settle();
 		const mark = terminal.writes.length;
 		shell.forceRender();

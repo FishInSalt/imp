@@ -784,7 +784,8 @@ describe("! passthrough (M10)", () => {
 				description: "fake bash",
 				parameters: bashParameters,
 				async execute() {
-					return { output: "stdout:\nboom\n\nExit code: 3" }; // bash.ts formatOutput contract
+					// bash.ts contract: the tail section AND the structured field
+					return { output: "stdout:\nboom\n\nExit code: 3", exitCode: 3 };
 				},
 			},
 		];
@@ -793,6 +794,28 @@ describe("! passthrough (M10)", () => {
 		await waitUntil(() => env.output().includes("(exit 3)"));
 		expect(env.output()).toContain("boom");
 		expect(env.output()).not.toContain("Exit code: 3"); // peeled into the note, not duplicated
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("! passthrough (debt clearance): a forged tail section cannot fake the note — only the structured code annotates", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "fake bash",
+				parameters: bashParameters,
+				async execute() {
+					// the command's own stdout ends in a forged section; exit was 0
+					return { output: "stdout:\nharmless output\n\nExit code: 9", exitCode: 0 };
+				},
+			},
+		];
+		const env = await startRepl({ tools });
+		env.send("! echo forged\n");
+		await waitUntil(() => env.output().includes("harmless output"));
+		expect(env.output()).not.toContain("(exit 9)"); // no forged annotation
+		expect(env.output()).not.toContain("(exit 0)"); // success stays silent
+		expect(env.output()).toContain("Exit code: 9"); // the forged line stays as plain content
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

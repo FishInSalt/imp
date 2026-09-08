@@ -148,7 +148,7 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 						return;
 					}
 					const output = await formatOutput(stdout, stderr, command, code ?? undefined);
-					finish({ output, isError: false });
+					finish({ output, isError: false, exitCode: code ?? undefined });
 				});
 			});
 		},

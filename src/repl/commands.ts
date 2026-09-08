@@ -31,6 +31,10 @@ export interface CommandContext {
 	 *  call this too; extensions are arbitrary code by contract, so this
 	 *  adds no new capability, only a documented one. */
 	submitPrompt(text: string): void;
+	/** TUI shells only: wipe transcript + folds. /new calls it after
+	 *  newSession (debt clearance — the old session's screen used to stay);
+	 *  wired in repl.ts, absent in test recorders unless injected. */
+	clearView?: () => void;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
 	 *  fallback for a missing select. Resolves the chosen index, or null on
@@ -68,9 +72,9 @@ Keys:
   Ctrl+C             abort the running turn (press twice to force quit);
                      at an empty prompt: press twice to exit
   Esc                abort the running turn (same as Ctrl+C); with the
-                     autocomplete panel open, one Esc closes it and aborts
+                     autocomplete panel open, one Esc closes the panel only
   Ctrl+D             exit
-  Ctrl+O             expand/collapse the newest diff fold
+  Ctrl+O             expand/collapse all folds (results, errors, diffs)
   newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
   ! prefix           run a shell command directly — e.g. ! ls -la
   autocomplete (/ commands · @ files):
@@ -152,6 +156,7 @@ function switchModel(ctx: CommandContext, id: string): void {
 function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 	try {
 		const { id8, messages } = ctx.runner.resumeSession(id);
+		ctx.clearView?.(); // the old conversation leaves the screen FIRST (debt clearance)
 		const session = ctx.runner.session;
 		if (session !== null && messages > 0) ctx.replay(session);
 		ctx.renderer.note(`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored`);
@@ -192,6 +197,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 		summary: "start a fresh session (the old one stays on disk)",
 		allowedDuringRun: false,
 		run: (_args, ctx) => {
+			// Clear FIRST: newSession's "▪ new session …" note must land on
+			// the fresh screen, not be wiped by it (debt clearance).
+			ctx.clearView?.();
 			ctx.runner.newSession();
 			return "handled";
 		},

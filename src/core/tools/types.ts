@@ -4,6 +4,11 @@ export interface ToolExecuteResult {
 	/** Text fed back to the model as the tool result. */
 	output: string;
 	isError?: boolean;
+	/** The process exit status, when the tool ran one (bash). Structured —
+	 *  never parsed back out of `output`: the display layer used to strip a
+	 *  trailing "Exit code: N" section textually, which a command's own
+	 *  stdout could forge (debt clearance). Absent for non-process tools. */
+	exitCode?: number;
 }
 
 /**

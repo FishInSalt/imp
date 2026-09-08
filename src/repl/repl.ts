@@ -412,13 +412,14 @@ class ReplMachine {
 	 *  fold (M11: `⎿ stdout: (+22 lines)` told the reader nothing and hid the
 	 *  content with no way in — dogfood 2026-09-09); edits keep their
 	 *  decorated diff fold, everything else previews via summarizeResult and
-	 *  carries the full content. Errors do not fold: the red `⎿` line stays,
-	 *  expanded and salient. Child-sourced results never reach this tap. */
+	 *  carries the full content. Errors fold with a red arrow (debt
+	 *  clearance); the `● ✗` line above keeps the failure salient.
+	 *  Child-sourced results never reach this tap. */
 	private showResultFold(event: AgentEvent): void {
-		if (event.type !== "tool_end" || event.result.isError) return;
+		if (event.type !== "tool_end") return;
 		if (this.input.addFold === undefined) return;
 		const result = event.result;
-		if (result.toolName === "edit") {
+		if (!result.isError && result.toolName === "edit") {
 			const content = result.content;
 			const split = content.indexOf(":\n");
 			if (split !== -1) {
@@ -443,7 +444,12 @@ class ReplMachine {
 		if (rawLines.length > FOLD_LINE_CAP) {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
-		this.input.addFold(summarizeResult(result.toolName, result.content), capped, false);
+		this.input.addFold(
+			summarizeResult(result.toolName, result.content),
+			capped,
+			false,
+			result.isError === true,
+		);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -616,13 +622,18 @@ class ReplMachine {
 	}
 
 	/** Bang output block: the tool's own truncation stands (bash.ts); the
-	 *  trailing "Exit code: N" section becomes the dim "(exit N)" note so
-	 *  the code is never stated twice. Error text displays as-is. */
+	 *  exit status comes from the STRUCTURED field — the trailing
+	 *  "Exit code: N" section is stripped only when it matches the real
+	 *  code, so the code is stated exactly once and a command's own output
+	 *  can no longer forge the annotation (debt clearance). */
 	private renderBangResult(result: ToolExecuteResult): void {
-		const exitMatch = /(?:\n\n|^)Exit code: (\d+)$/.exec(result.output);
-		const body = exitMatch === null ? result.output : result.output.slice(0, exitMatch.index).trimEnd();
+		let body = result.output;
+		if (result.exitCode !== undefined && result.exitCode !== 0) {
+			const real = new RegExp(`(?:\n\n|^)Exit code: ${result.exitCode}$`).exec(result.output);
+			if (real !== null) body = result.output.slice(0, real.index).trimEnd();
+			this.renderer.note(`(exit ${result.exitCode})`);
+		}
 		if (body !== "") this.renderer.writeLine(body);
-		if (exitMatch !== null) this.renderer.note(`(exit ${exitMatch[1]})`);
 	}
 
 	/** Activity region (M10 B). tool_start adds a pending row; tool_end removes
@@ -786,6 +797,7 @@ class ReplMachine {
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string) => this.enqueuePrompt(text),
+			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
 			abortActive: () => {
 				if (this.controller !== null) {
 					this.controller.abort();
@@ -840,6 +852,8 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			fdPath,
 		};
 	}
+	// /resume clears the view first (see the command) — replay itself never
+	// clears, because the startup banner is already on screen when it runs.
 	const replay = (session: SessionStore): number =>
 		replaySession(
 			{

@@ -57,8 +57,13 @@ describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay,
 	});
 
 	it("summarizeResult (review P1): a blank FIRST line previews the first content line, not '(no output)'", () => {
-		expect(summarizeResult("read", "\nfoo\nbar")).toBe("foo (+2 lines)");
-		expect(summarizeResult("task", "\n\nchild report")).toBe("child report (+2 lines)"); // physical-line count, as before
+		expect(summarizeResult("read", "\nfoo\nbar")).toBe("foo (+1 lines)"); // content lines only (debt clearance)
+		expect(summarizeResult("task", "\n\nchild report")).toBe("child report"); // blanks never inflate (+N)
+	});
+
+	it("summarizeResult (debt clearance): blank separators and the Exit code line never count toward (+N)", () => {
+		expect(summarizeResult("bash", "stdout:\nreal output\n\n\nExit code: 1")).toBe("real output");
+		expect(summarizeResult("bash", "stdout:\na\nb\n\nstderr:\nc\n\nExit code: 2")).toBe("a (+3 lines)"); // section headers stay (visible when expanded)
 	});
 
 	it("summarizeArgs (review P2): built-in fallbacks keep the 120-char cap", () => {

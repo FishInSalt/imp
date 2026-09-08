@@ -28,14 +28,19 @@ export class Fold implements Component {
 	private readonly title: string;
 	/** Body pre-decorated once at construction; render stays cheap. */
 	private readonly body: string[];
+	/** Error folds keep their salience: arrow and title render red (the
+	 *  `● tool ✗` line above already flags the failure — the fold keeps the
+	 *  long error content out of the way without hiding the failure). */
+	private readonly error: boolean;
 	private expanded = false;
 
 	/** `decorate=false` keeps the body verbatim — for result folds whose
 	 *  content merely RESEMBLES a diff (ls -l's "-rw…", npm trees, markdown
 	 *  "+ item"): diff coloring there would lie (review P2). */
-	constructor(title: string, lines: string[] = [], decorate = true) {
+	constructor(title: string, lines: string[] = [], decorate = true, error = false) {
 		this.title = title;
 		this.body = decorate ? decorateDiffLines(lines) : lines;
+		this.error = error;
 	}
 
 	/** Flip collapsed ⇄ expanded; the shell repaints. */
@@ -43,10 +48,20 @@ export class Fold implements Component {
 		this.expanded = !this.expanded;
 	}
 
+	isExpanded(): boolean {
+		return this.expanded;
+	}
+
+	/** Set directly — Ctrl+O's expand/collapse-all (debt clearance). */
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
+	}
+
 	render(width: number): string[] {
 		const w = Math.max(1, width);
 		const arrow = this.expanded ? "▾" : "▸";
-		const rendered = [truncateToWidth(`${DIM}${arrow}${RESET} ${this.title}`, w)];
+		const head = this.error ? `${RED}${arrow} ${this.title}${RESET}` : `${DIM}${arrow}${RESET} ${this.title}`;
+		const rendered = [truncateToWidth(head, w)];
 		if (this.expanded) {
 			for (const line of this.body) rendered.push(truncateToWidth(line, w));
 		}

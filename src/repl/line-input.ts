@@ -46,6 +46,11 @@ export interface LineInput {
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
 	select?(options: SelectOptions): Promise<number | null>;
+	/** Queue visual (M10, TUI only): one dim "N queued · next: <preview>" line
+	 *  below the ask region while lines wait behind the running turn. A count
+	 *  of 0 (or a null preview) removes the line entirely — the readline shell
+	 *  has no such line and keeps its "▪ queued:" notes instead. */
+	setQueue?(count: number, preview: string | null): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }

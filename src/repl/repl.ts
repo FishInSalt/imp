@@ -5,7 +5,7 @@ import type { SessionStore } from "../core/session/store.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
-import type { RegisteredExtensionCommand } from "../extensions/types.js";
+import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
@@ -14,7 +14,7 @@ import { COMMANDS, type CommandContext, dispatchCommand, parseCommand } from "./
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
-import type { LineInput } from "./line-input.js";
+import type { LineInput, SelectItemOption, SelectOptions } from "./line-input.js";
 import { replaySession } from "./replay.js";
 import { type AutocompleteOptions, TuiShell } from "./shell.js";
 import type { TranscriptSink } from "./transcript.js";
@@ -76,16 +76,36 @@ function autocompleteCommands(
 		})),
 	];
 }
+/** TUI queue-line preview (LineInput.setQueue): cap at ~40 columns. */
+function queuePreview(text: string): string {
+	return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/** The three-option confirm picker (M10): approve, approve for the session, decline. */
+const CONFIRM_ITEMS: SelectItemOption[] = [
+	{ label: "Yes" },
+	{ label: "Yes, don't ask again this session" },
+	{ label: "No" },
+];
 
 /**
  * The interactive side of api.confirm: one host created before extension
  * loading (cli.ts loads extensions before the REPL exists), bound to the
- * live ReplInput once runRepl starts. Unbound (scripted mode, tests): the
+ * live input once runRepl starts. Unbound (scripted mode, tests): the
  * same never-hangs contract as the registry fallback — false + one stderr
  * teaching line.
+ *
+ * With a picker bound (TuiShell), questions render as the three-option
+ * selector and a "Yes, don't ask again this session" pick records the
+ * sessionKey in a per-process allowlist — later confirms on that key
+ * short-circuit to approval without prompting. Without a picker (readline
+ * shell, print mode) the flow is the original [y/N] ask, byte-for-byte.
  */
 export class TtyConfirm {
 	private ask: ((question: string) => Promise<boolean>) | null = null;
+	private select: ((options: SelectOptions) => Promise<number | null>) | null = null;
+	/** sessionKeys the user approved with "don't ask again this session". */
+	private readonly sessionAllowed = new Set<string>();
 	private readonly renderer: Renderer;
 
 	constructor(renderer: Renderer) {
@@ -93,13 +113,25 @@ export class TtyConfirm {
 	}
 
 	/** The confirm handler — pass to loadExtensions when interactive. */
-	readonly handler = (message: string, detail?: string): Promise<boolean> => {
+	readonly handler = async (message: string, detail?: string, options?: ConfirmOptions): Promise<boolean> => {
+		const sessionKey = options?.sessionKey;
+		if (sessionKey !== undefined && this.sessionAllowed.has(sessionKey)) {
+			this.renderer.note(`▪ confirm: ${message} — allowed for this session`);
+			return true;
+		}
 		this.renderer.note(`▪ confirm: ${message}`);
 		if (detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
+		const select = this.select;
+		if (select !== null) {
+			const choice = await select({ title: message, items: CONFIRM_ITEMS });
+			if (choice === null) return false; // cancelled picker declines, like Ctrl+C at the ask
+			if (choice === 1 && sessionKey !== undefined) this.sessionAllowed.add(sessionKey);
+			return choice !== 2;
+		}
 		const ask = this.ask;
 		if (ask === null) {
 			process.stderr.write(NO_CONFIRM_LINE);
-			return Promise.resolve(false);
+			return false;
 		}
 		return ask("proceed? [y/N] ");
 	};
@@ -107,6 +139,11 @@ export class TtyConfirm {
 	/** runRepl binds the live tty once its input exists. */
 	bind(ask: (question: string) => Promise<boolean>): void {
 		this.ask = ask;
+	}
+
+	/** runRepl binds the picker when the input shell implements select. */
+	bindSelect(select: (options: SelectOptions) => Promise<number | null>): void {
+		this.select = select;
 	}
 }
 
@@ -196,6 +233,7 @@ class ReplMachine {
 		}
 		this.queue.push(line);
 		if (this.interactive) this.renderer.note(`▪ queued: ${shorten(line)}`);
+		this.syncQueue();
 		this.input.refresh();
 	}
 
@@ -334,6 +372,7 @@ class ReplMachine {
 		const [next] = this.queue.splice(index, 1);
 		if (next === undefined) return []; // unreachable (index !== -1); type guard
 		this.renderer.note(`▪ steering: ${shorten(next)}`);
+		this.syncQueue();
 		return [{ role: "user", content: next }];
 	}
 
@@ -410,6 +449,7 @@ class ReplMachine {
 		}
 		this.queue = rest;
 		this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+		this.syncQueue();
 		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
 		// the shell, it does not open a model turn.
 		if (isBangLine(next)) {
@@ -475,10 +515,19 @@ class ReplMachine {
 		this.input.setActive(false); // shows "> "
 	}
 
+	/** Push the queue visual (TUI shells): "N queued · next: <head>", or clear
+	 *  it when the queue empties. Called at every queue mutation — push,
+	 *  steering consumption, leftover flush, and discard. */
+	private syncQueue(): void {
+		const head = this.queue[0];
+		this.input.setQueue?.(this.queue.length, head === undefined ? null : queuePreview(head));
+	}
+
 	private discardQueue(): void {
 		if (this.queue.length === 0) return;
 		this.renderer.note(`▪ discarded ${this.queue.length} queued line(s)`);
 		this.queue = [];
+		this.syncQueue();
 	}
 
 	private requestExit(code: number): void {
@@ -634,8 +683,12 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		replay,
 	});
 	// api.confirm's tty side: route questions to this REPL's single readline
-	// interface (a second interface would race it for stdin bytes).
+	// interface (a second interface would race it for stdin bytes). With a
+	// picker-capable shell the host also gets select — the three-option
+	// confirm (M10) reuses the same binding path as ctx.select.
 	options.confirm?.bind((question: string) => input.ask(question));
+	const confirmSelect = input.select?.bind(input);
+	if (confirmSelect !== undefined) options.confirm?.bindSelect(confirmSelect);
 
 	input.start();
 	if (interactive) {

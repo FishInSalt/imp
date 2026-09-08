@@ -95,6 +95,13 @@ describe("guardian caller-cwd resolution (spec part 3 item 7)", () => {
 		expect(decision).toBeUndefined();
 	});
 
+	it("M10 sessionKey passthrough: write approvals key on the caller cwd (guardian:write:<cwd>)", async () => {
+		const { gate, confirm } = await loadGuardian("/proj");
+		await gate(writeEvent("/tmp/imp-wt-9", "../escape.txt"));
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(confirm.mock.calls[0]?.[2]).toEqual({ sessionKey: "guardian:write:/tmp/imp-wt-9" });
+	});
+
 	it("relative paths resolve against the caller cwd, not api.cwd (subagent event.cwd wins)", async () => {
 		const { gate } = await loadGuardian("/proj");
 		// same relative path, different caller: inside the worktree → allowed
@@ -126,11 +133,23 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 
 	it("IMP_GUARDIAN_BLOCK custom patterns ask too; declined keeps the pattern reason", async () => {
 		vi.stubEnv("IMP_GUARDIAN_BLOCK", "deploy-prod");
-		const { gate } = await loadGuardian("/proj");
+		const { gate, confirm } = await loadGuardian("/proj");
 		const decision = await gate({ args: { command: "deploy-prod --yes" } });
 		expect(decision).toEqual({
 			block: true,
 			reason: "matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run",
+		});
+		// M10: the session key is the matched pattern string, so "don't ask
+		// again" scopes to this rule — not to all bash
+		expect(confirm.mock.calls[0]?.[2]).toEqual({ sessionKey: "guardian:bash:deploy-prod" });
+	});
+
+	it("M10 sessionKey passthrough: built-in bash rules key on the matched regex's source", async () => {
+		const { gate, confirm } = await loadGuardian("/proj");
+		await gate({ args: { command: "rm -rf node_modules" } });
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(confirm.mock.calls[0]?.[2]).toEqual({
+			sessionKey: "guardian:bash:\\brm\\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\b",
 		});
 	});
 

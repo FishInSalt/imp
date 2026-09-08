@@ -21,3 +21,13 @@ export const CHILD_TIMEOUT_MS = 30 * 60 * 1000;
  *  turn latency against endpoint pressure and worst-case deterministic
  *  tool_end wait (a fast call reports behind at most cap-1 slow siblings). */
 export const MAX_CONCURRENT_TASKS = 5;
+
+/** Footer/status context window: IMP_CONTEXT_WINDOW when it parses to a
+ *  positive finite number, otherwise the same 131072 default the compaction
+ *  settings use. Read per call so env changes take effect immediately. */
+export function contextWindowTokens(): number {
+	const raw = process.env.IMP_CONTEXT_WINDOW;
+	if (raw === undefined || raw === "") return 131072;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 131072;
+}

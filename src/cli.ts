@@ -269,6 +269,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		liveTools: interactive && transcript === undefined,
 		toolStyle: "one-line",
 		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text
+		foldedResults: transcript !== undefined, // TUI: ⎿ preview line → expandable fold
 	});
 	// Extension confirm (interactive only): the host exists before extensions
 	// load; runRepl binds it to the live tty prompt once the REPL starts.

@@ -132,6 +132,10 @@ export function tuiEditorTheme(): EditorTheme {
 /** The hint row's text (M10): input affordances, dim — input aid only,
  *  @ inserts path text, it never reads files into the turn. */
 const PLACEHOLDER_HINT = dim("(/ for commands · @ files · ! bash · shift+enter newline)", true);
+/** The same row while a turn runs: the esc affordance belongs on screen the
+ *  whole run (dogfood 2026-09-09 #8) — a stuck bash is exactly when users
+ *  reach for it, and "typing queues" advertises steering. */
+const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue)", true);
 
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
@@ -569,9 +573,11 @@ export class TuiShell implements LineInput {
 		if (this.placeholder === null) return;
 		// An open selector hides the hint too: keys go to the picker while it
 		// owns focus, so "you can type" would be a lie (M10 review P2#5).
-		const visible =
-			!this.active && this.editorText === "" && this.pendingAsks.length === 0 && this.selector === null;
-		this.placeholder.setText(visible ? PLACEHOLDER_HINT : "");
+		const blocked = this.pendingAsks.length > 0 || this.selector !== null;
+		// While a turn runs the row carries the interrupt affordance instead
+		// of hiding (M11 #8) — blocked (ask/selector) still clears it.
+		const text = blocked ? "" : this.active ? INTERRUPT_HINT : this.editorText === "" ? PLACEHOLDER_HINT : "";
+		this.placeholder.setText(text);
 		this.tui?.requestRender();
 	}
 

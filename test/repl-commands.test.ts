@@ -186,6 +186,7 @@ describe("slash commands", () => {
 				"  /model [id]        show the current model, or switch (applies next turn)",
 				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
+				"  /status            session, model, context, and trust at a glance",
 				"  /compact           summarize older context now",
 				"",
 				"",
@@ -360,7 +361,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /sessions /resume /model /worktrees /trust /compact — /help shows what they do\n",
+				"known: /help /exit /new /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -476,6 +477,19 @@ describe("/worktrees (M6b §7 follow-up)", () => {
 		env.ctx.worktreeCwd = repo.root;
 		await dispatchCommand("/worktrees", env.ctx);
 		expect(env.output()).toContain("no kept worktrees");
+	});
+});
+
+describe("/status (M11)", () => {
+	it("prints model, session, context, and trust lines", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/status", env.ctx);
+		const out = env.output();
+		expect(out).toContain("▪ model claude-sonnet-4-5");
+		expect(out).toMatch(/▪ session [0-9a-f]{8} · [\d]+ msgs · in [\d.]+[km]? \/ out [\d.]+[km]? cumulative/);
+		expect(out).toMatch(/▪ context ~[\d.]+[km]? tokens · \d+% of window/);
+		expect(out).toContain("▪ project trust");
+		expect(env.requests).toHaveLength(0); // read-only — no model call
 	});
 });
 

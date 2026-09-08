@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shorten, summarizeArgs } from "../src/format.js";
+import { shorten, summarizeArgs, summarizeResult } from "../src/format.js";
 
 describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay, activity)", () => {
 	it("bash keeps the historical `$ command` form, byte-identical", () => {
@@ -28,16 +28,12 @@ describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay,
 
 	it("find: pattern, optional scope and type", () => {
 		expect(summarizeArgs("find", { pattern: "*.test.ts" })).toBe("*.test.ts");
-		expect(summarizeArgs("find", { pattern: "*", path: "docs", type: "file" })).toBe(
-			"* in docs · files",
-		);
+		expect(summarizeArgs("find", { pattern: "*", path: "docs", type: "file" })).toBe("* in docs · files");
 	});
 
 	it("task: (agent) prompt, prompt capped by shorten", () => {
 		expect(summarizeArgs("task", { prompt: "map the repo" })).toBe("map the repo");
-		expect(summarizeArgs("task", { prompt: "map the repo", agent: "scout" })).toBe(
-			"(scout) map the repo",
-		);
+		expect(summarizeArgs("task", { prompt: "map the repo", agent: "scout" })).toBe("(scout) map the repo");
 		const long = "x".repeat(200);
 		expect(summarizeArgs("task", { prompt: long })).toBe(`${"x".repeat(80)}…`);
 	});
@@ -46,6 +42,18 @@ describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay,
 		expect(summarizeArgs("web_search", { query: "pi-tui" })).toBe('{"query":"pi-tui"}');
 		const big = { blob: "y".repeat(200) };
 		expect(summarizeArgs("custom", big)).toBe(`${JSON.stringify(big).slice(0, 120)}…`);
+	});
+
+	it("summarizeResult: bash skips stdout:/stderr: headers — first output line + (+N)", () => {
+		expect(summarizeResult("bash", "stdout:\nl1\nl2\nl3")).toBe("l1 (+2 lines)");
+		expect(summarizeResult("bash", "stderr:\nboom\nmore")).toBe("boom (+1 lines)");
+		expect(summarizeResult("bash", "(no output)")).toBe("(no output)");
+		expect(summarizeResult("bash", "")).toBe("(no output)");
+	});
+
+	it("summarizeResult: non-bash previews the first line unchanged", () => {
+		expect(summarizeResult("read", "import x\nexport {}")).toBe("import x (+1 lines)");
+		expect(summarizeResult("task", "single")).toBe("single");
 	});
 
 	it("shorten: 80-char cap with ellipsis", () => {

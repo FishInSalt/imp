@@ -1,6 +1,15 @@
 import type { AgentEvent } from "./core/loop.js";
 import type { ToolResult } from "./core/messages.js";
-import { bold, dim, firstLine, green, red, renderMarkdownLite, summarizeArgs } from "./format.js";
+import {
+	bold,
+	dim,
+	firstLine,
+	green,
+	red,
+	renderMarkdownLite,
+	summarizeArgs,
+	summarizeResult,
+} from "./format.js";
 
 export type ToolStyle = "two-line" | "one-line";
 
@@ -15,6 +24,10 @@ export interface RendererOptions {
 	/** Render streamed assistant text as markdown-lite (paragraph-buffered). REPL only;
 	 *  print mode stays byte-identical. */
 	markdown?: boolean;
+	/** TUI mode: successful tool results fold instead of writing the `⎿`
+	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
+	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
+	foldedResults?: boolean;
 	/** Spinner redraw interval. 0 disables the timer (tests tick manually). Default 120. */
 	spinnerIntervalMs?: number;
 	/** Injected clock for deterministic tool durations in tests. */
@@ -358,7 +371,7 @@ export class Renderer {
 		if (this.options.toolStyle === "two-line") {
 			const line = result.isError
 				? red(`  ✗ ${firstLine(result.content)}`, this.options.ansi)
-				: dim(`  → ${firstLine(result.content)}`, this.options.ansi);
+				: dim(`  → ${summarizeResult(result.toolName, result.content)}`, this.options.ansi);
 			this.write(`${line}\n`);
 			this.needsNewline = false;
 			return;
@@ -389,8 +402,13 @@ export class Renderer {
 		}
 		this.write(`${line}\n`);
 		// Result summary — Claude-Code-style `⎿` under the call. Display only;
-		// the model still receives the full content through the session.
-		this.write(`${this.resultSummary(result)}\n`);
+		// the model still receives the full content through the session. TUI
+		// mode (foldedResults) folds successful results instead: the fold's
+		// title carries the same preview and Ctrl+O expands the content; errors
+		// keep the red `⎿` — they read best expanded and salient.
+		if (result.isError || this.options.foldedResults !== true) {
+			this.write(`${this.resultSummary(result)}\n`);
+		}
 		if (others.length > 0 && this.options.liveTools) {
 			this.redrawPending(); // the aggregate (or sole survivor's line) stays live
 			this.needsNewline = true;
@@ -403,11 +421,7 @@ export class Renderer {
 	private resultSummary(result: ToolResult): string {
 		// Claude-Code-calibrated gutter: two spaces + ⎿ + two spaces, one style
 		// wrap for the whole line (nested wraps reset each other mid-line).
-		const lines = result.content.split("\n");
-		const head = firstLine(result.content, 80);
-		const more = lines.length > 1 ? ` (+${lines.length - 1} lines)` : "";
-		const body = head === "" ? `(no output)` : `${head}${more}`;
-		const text = `  ⎿  ${body}`;
+		const text = `  ⎿  ${summarizeResult(result.toolName, result.content)}`;
 		return result.isError ? red(text, this.options.ansi) : dim(text, this.options.ansi);
 	}
 

@@ -26,6 +26,28 @@ export function shorten(text: string): string {
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
 }
 
+/** One-line preview of a tool RESULT — the `⎿` summary and the fold title
+ *  share it. bash results lead with `stdout:`/`stderr:` section headers
+ *  (bash.ts's formatOutput contract); skipping them shows the first output
+ *  line, which is what a reader actually wants (dogfood 2026-09-09:
+ *  `⎿ stdout: (+22 lines)` carried no information). Other tools preview
+ *  their first line as before. */
+export function summarizeResult(name: string, content: string): string {
+	const lines = content.split("\n");
+	let start = 0;
+	if (name === "bash") {
+		while (start < lines.length) {
+			const line = lines[start] ?? "";
+			if (line === "stdout:" || line === "stderr:" || line.trim() === "") start++;
+			else break;
+		}
+	}
+	if (start >= lines.length || (lines[start] ?? "").trim() === "") return "(no output)";
+	const head = firstLine(lines[start] ?? "", 80);
+	const more = lines.length - start - 1;
+	return more > 0 ? `${head} (+${more} lines)` : head;
+}
+
 /** Human-readable one-line summary of a tool call's arguments.
  *  One funnel for every surface — print tool lines, TUI transcript lines,
  *  replay, and the activity region — so the label reads the same everywhere.

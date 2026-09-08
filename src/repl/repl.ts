@@ -1,5 +1,6 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
+import { contextWindowTokens } from "../core/constants.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
@@ -7,7 +8,7 @@ import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
-import { formatTokens, shorten, summarizeArgs, VERSION } from "../format.js";
+import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
@@ -55,6 +56,10 @@ export interface ReplOptions {
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
 
+/** Defensive cap on a non-edit fold body (tools truncate their own output
+ *  already — this only bounds pathological results). */
+const FOLD_LINE_CAP = 400;
+
 /** "! cmd" lines: the shell executes them itself (M10). Blank after the
  *  "!" is a usage hint, not a command. */
 function isBangLine(line: string): boolean {
@@ -90,16 +95,6 @@ const CONFIRM_ITEMS: SelectItemOption[] = [
 	{ label: "Yes, don't ask again this session" },
 	{ label: "No" },
 ];
-
-/** Footer context window: IMP_CONTEXT_WINDOW when it parses to a positive
- *  finite number, otherwise the same 131072 default the compaction
- *  settings use. Read per call so env changes take effect immediately. */
-function contextWindowTokens(): number {
-	const raw = process.env.IMP_CONTEXT_WINDOW;
-	if (raw === undefined || raw === "") return 131072;
-	const parsed = Number(raw);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 131072;
-}
 
 /**
  * The interactive side of api.confirm: one host created before extension
@@ -253,7 +248,11 @@ class ReplMachine {
 			return;
 		}
 		this.queue.push(line);
-		if (this.interactive) this.renderer.note(`▪ queued: ${shorten(line)}`);
+		// The TUI's queue row (setQueue) shows the line with its position — the
+		// note would repeat it (dogfood 2026-09-09). Legacy keeps the note.
+		if (this.interactive && this.input.setQueue === undefined) {
+			this.renderer.note(`▪ queued: ${shorten(line)}`);
+		}
 		this.syncQueue();
 		this.input.refresh();
 	}
@@ -369,7 +368,7 @@ class ReplMachine {
 					// zero-rendering-visibility rule, enforced at this tap.
 					if (info === undefined) {
 						this.renderer.event(event);
-						this.showEditFold(event); // M9 parity: top-level edits fold; child edits could later
+						this.showResultFold(event); // TUI: every top-level result folds (M11); child edits could later
 					}
 					this.trackActivity(event, info);
 				},
@@ -385,15 +384,34 @@ class ReplMachine {
 	 *  becomes a collapsed fold (Ctrl+O expands; the ⎿ summary line stays
 	 *  in the stream). The legacy shell has no addFold and skips this.
 	 *  Presentation-agnostic: consumes plain data, no pi-tui types. */
-	private showEditFold(event: AgentEvent): void {
+	/** Fold a finished top-level tool result (TUI only — the legacy shell has
+	 *  no addFold and keeps its `⎿` line). Successful results of EVERY tool
+	 *  fold (M11: `⎿ stdout: (+22 lines)` told the reader nothing and hid the
+	 *  content with no way in — dogfood 2026-09-09); edits keep their
+	 *  decorated diff fold, everything else previews via summarizeResult and
+	 *  carries the full content. Errors do not fold: the red `⎿` line stays,
+	 *  expanded and salient. Child-sourced results never reach this tap. */
+	private showResultFold(event: AgentEvent): void {
 		if (event.type !== "tool_end" || event.result.isError) return;
-		if (event.result.toolName !== "edit") return; // write carries no diff
 		if (this.input.addFold === undefined) return;
-		const content = event.result.content;
-		const split = content.indexOf(":\n");
-		if (split === -1) return; // not the "summary: diff" contract
-		const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
-		this.input.addFold(title, lines);
+		const result = event.result;
+		if (result.toolName === "edit") {
+			const content = result.content;
+			const split = content.indexOf(":\n");
+			if (split === -1) return; // not the "summary: diff" contract
+			const { title, lines } = buildFoldFromDiff(content.slice(0, split), content.slice(split + 2));
+			this.input.addFold(title, lines);
+			return;
+		}
+		const lines = result.content.split("\n");
+		// The tools truncate their own output (bash/read caps), so the fold body
+		// is already bounded; a defensive cap keeps a pathological result from
+		// swelling the fold container.
+		const capped = lines.slice(0, FOLD_LINE_CAP);
+		if (lines.length > FOLD_LINE_CAP) {
+			capped.push(dim(`… (${lines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
+		}
+		this.input.addFold(summarizeResult(result.toolName, result.content), capped);
 	}
 
 	private steeringMessages(): AgentMessage[] {
@@ -506,7 +524,11 @@ class ReplMachine {
 			return;
 		}
 		this.queue = rest;
-		this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+		// TUI: the echoed `> line` (Renderer.user) says this already; the note
+		// would double it (dogfood 2026-09-09). Legacy keeps the note.
+		if (this.input.setQueue === undefined) {
+			this.renderer.note(`▪ continuing with queued: ${shorten(next)}`);
+		}
 		this.syncQueue();
 		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
 		// the shell, it does not open a model turn.

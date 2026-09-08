@@ -1,4 +1,6 @@
 import { homedir } from "node:os";
+import { estimateContextTokens } from "../core/compaction.js";
+import { contextWindowTokens } from "../core/constants.js";
 import type { SessionStore } from "../core/session/store.js";
 import {
 	canonicalizeDir,
@@ -9,6 +11,7 @@ import {
 } from "../core/trust.js";
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
+import { formatTokens } from "../format.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { SelectOptions } from "./line-input.js";
@@ -392,6 +395,43 @@ export const COMMANDS: readonly SlashCommand[] = [
 			} catch (err) {
 				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
 			}
+			return "handled";
+		},
+	},
+	{
+		name: "status",
+		summary: "session, model, context, and trust at a glance",
+		allowedDuringRun: true,
+		// Read-only state dump — safe mid-run (notes interleave cleanly), and
+		// "what model am I on / how full is the context" is exactly what you
+		// want to ask while a long turn streams (M11 #7).
+		run: (_args, ctx): CommandOutcome => {
+			const runner = ctx.runner;
+			ctx.renderer.note(`▪ model ${runner.model}`);
+			const session = runner.session;
+			if (session === null) {
+				ctx.renderer.note("▪ session none (--no-session)");
+			} else {
+				const stats = session.stats();
+				ctx.renderer.note(
+					`▪ session ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
+				);
+			}
+			const contextTokens = estimateContextTokens(runner.history).tokens;
+			const contextPercent = Math.round((contextTokens / contextWindowTokens()) * 100);
+			ctx.renderer.note(
+				`▪ context ~${formatTokens(contextTokens)} tokens · ${contextPercent}% of window${contextPercent >= 80 ? " — /compact to summarize older turns" : ""}`,
+			);
+			const storePath = ctx.trustStorePath ?? defaultTrustStorePath(homedir());
+			const cwd = session?.header.cwd ?? process.cwd();
+			const entry = nearestTrustEntry(readTrustFile(storePath), canonicalizeDir(cwd));
+			const state =
+				entry === null
+					? "no entry for this tree"
+					: entry.trusted
+						? `granted at ${entry.path}`
+						: `revoked at ${entry.path}`;
+			ctx.renderer.note(`▪ project trust ${state}`);
 			return "handled";
 		},
 	},

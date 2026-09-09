@@ -463,6 +463,12 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#gemini-welcome Gemini 风格欢迎页（2026-09-10，654 tests，feat/gemini-welcome）**：用户给 Gemini CLI 截图，要求把该风格应用过来（zai-vision 识别：像素块大字 logo 蓝紫粉渐变 + "Tips for getting started:" 编号列表 + 无边框）。
+  - **替换圆角框**：figlet ANSI-Shadow 像素 "imp" logo（██ 块，6 行×15 列）+ 逐列水平渐变（truecolor 38;2，三停靠点 (66,133,244)→(156,107,255)→(255,110,199)，空格不着色）+ Gemini 原版三条 tips 逐字（通用最佳实践：提问/改文件/跑命令、要具体、/help）+ dim 身份行（版本·session·模型）——**logo 即问候，无边框**；上一批的六条命令速查退役（/help 与占位符已覆盖）
+  - 渐变门控 `renderer.ansiEnabled`（Renderer 新 getter）：非 ANSI 渲染纯文本 logo，测试封闭
+  - 测试：结构钉重写（logo 两端行、三条 tips 逐字、身份行、旧 banner 消失）+ gradientLine 单元钉（ansi=false 无转义；true 首列蓝末列粉；tips 行永不着色）；四个锚点 "◆ Welcome to imp!" → "Tips for getting started:"
+  - 真机：`██╗███╗   ███╗` 六行渐变 + tips + identity，扩展笔记随后；蓝粉 truecolor 均在
+
 - **#welcome-order 欢迎页顺序优化（2026-09-10，653 tests，fix/welcome-order）**：用户晒启动截图评估出两问题：①扩展/上下文/信任 note 抢在欢迎页之前（噪音压过问候，本末倒置）②框内提示行 `/ commands · @ files · ! bash · Ctrl+D exits` 与 TUI 编辑器占位符逐字重复。
   - **启动 note 缓冲**（cli.ts，仅 interactive）：REPL 接管屏幕前所有 `▪` note（扩展行/上下文横幅/信任结果/恢复摘要）入队，`releaseStartupNotes` 在 runRepl 打完欢迎框或恢复 banner 后统一释放——问候置顶、环境噪音随后。**错误行与交互式询问照常实时**（走 error/confirm 路径不经过 note）；打印模式不包装、字节不变；/new 之后的 note 实时（已释放）
   - **框内提示行删除**：键位教学只留编辑器占位符一处（它还会在输入清空时复现，且多教 shift+enter）

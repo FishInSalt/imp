@@ -73,27 +73,59 @@ const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
  *  quick-reference of the commands people actually reach for, and the
  *  session's identity. Resumed sessions keep the compact banner — the
  *  panel is the "new conversation" moment, not a constant. */
-function welcomeLines(sessionId: string, modelReference: string): string[] {
-	const rows: [string, string][] = [
-		["/help", "show every command"],
-		["/model", "pick a model"],
-		["/new", "fresh session"],
-		["/compact", "summarize older turns"],
-		["/sessions", "list past sessions"],
-		["/resume", "reopen one"],
-	];
-	const inner = [
-		" ◆ Welcome to imp!",
-		"",
-		...rows.map(([name, desc]) => `   ${name.padEnd(11)}${desc}`),
-		"",
-		`   imp ${VERSION} · session ${sessionId} · ${modelReference}`,
-	];
-	const width = Math.max(...inner.map((line) => line.length));
+/** Pixel-block "imp" (figlet ANSI-Shadow — the chunky style of Gemini CLI's
+ *  logo). ██ cells read as solid pixels; the gradient paints per column. */
+const IMP_LOGO = [
+	"██╗███╗   ███╗",
+	"██║████╗ ████║",
+	"██║██╔████╔██║",
+	"██║██║╚██╔╝██║",
+	"██║██║ ╚═╝ ██║",
+	"╚═╝╚═╝     ╚═╝",
+];
+
+/** Gemini-style horizontal gradient stops: blue → purple → pink. */
+const GRADIENT_STOPS: [number, number, number][] = [
+	[66, 133, 244],
+	[156, 107, 255],
+	[255, 110, 199],
+];
+
+/** Colorize one line's glyphs column-by-column (spaces stay plain); truecolor
+ *  ANSI per character. `ansi=false` returns the line untouched. */
+function gradientLine(line: string, ansi: boolean): string {
+	if (!ansi) return line;
+	const width = line.length;
+	const lerp = (a: number, b: number, t: number): number => Math.round(a + (b - a) * t);
+	return line
+		.split("")
+		.map((ch, x) => {
+			if (ch === " ") return ch;
+			const t = width <= 1 ? 0 : x / (width - 1);
+			const stops: [[number, number, number], [number, number, number]] =
+				t < 0.5
+					? [GRADIENT_STOPS[0] ?? [0, 0, 0], GRADIENT_STOPS[1] ?? [0, 0, 0]]
+					: [GRADIENT_STOPS[1] ?? [0, 0, 0], GRADIENT_STOPS[2] ?? [0, 0, 0]];
+			const [c0, c1] = stops;
+			const lt = t < 0.5 ? t * 2 : (t - 0.5) * 2;
+			const [r, g, b] = [lerp(c0[0], c1[0], lt), lerp(c0[1], c1[1], lt), lerp(c0[2], c1[2], lt)];
+			return `\x1b[38;2;${r};${g};${b}m${ch}\x1b[0m`;
+		})
+		.join("");
+}
+
+/** Gemini-CLI-style welcome: gradient pixel logo, numbered getting-started
+ *  tips, dim identity line. No box — the logo is the greeting. */
+export function welcomeLines(sessionId: string, modelReference: string, ansi: boolean): string[] {
 	return [
-		`╭${"─".repeat(width + 2)}╮`,
-		...inner.map((line) => `│ ${line.padEnd(width)} │`),
-		`╰${"─".repeat(width + 2)}╯`,
+		...IMP_LOGO.map((line) => gradientLine(line, ansi)),
+		"",
+		"Tips for getting started:",
+		"1. Ask questions, edit files, or run commands.",
+		"2. Be specific for the best results.",
+		"3. /help for more information.",
+		"",
+		`imp ${VERSION} · session ${sessionId} · ${modelReference}`,
 	];
 }
 
@@ -1021,9 +1053,15 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		if (fresh) {
 			// fresh conversation → the welcome panel (whole box dim, like
 			// Claude Code); session identity rides inside it
-			for (const line of welcomeLines(session.header.id.slice(0, 8), runner.modelReference())) {
-				renderer.writeLine(renderer.dim(line));
-			}
+			// logo gradient + tips as-is; the identity line rides dim
+			const welcome = welcomeLines(
+				session.header.id.slice(0, 8),
+				runner.modelReference(),
+				renderer.ansiEnabled,
+			);
+			for (const line of welcome.slice(0, -1)) renderer.writeLine(line);
+			const identity = welcome[welcome.length - 1];
+			if (identity !== undefined) renderer.writeLine(renderer.dim(identity));
 		} else {
 			renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
 		}

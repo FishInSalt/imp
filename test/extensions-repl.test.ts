@@ -340,7 +340,7 @@ export default function (api) {
 		const out = env.output();
 		const extAt = out.indexOf("▪ extension one [project]");
 		const contextAt = out.indexOf("▪ context:");
-		const replAt = out.indexOf("◆ Welcome to imp!"); // fresh session → welcome panel
+		const replAt = out.indexOf("Tips for getting started:"); // fresh session → welcome panel
 		expect(extAt).toBeGreaterThanOrEqual(0);
 		expect(contextAt).toBeGreaterThanOrEqual(0);
 		expect(replAt).toBeGreaterThanOrEqual(0);

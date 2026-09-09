@@ -109,6 +109,26 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	// with the registered commands (M4b §8.2). confirm mirrors cli.ts's
 	// interactive wiring (spec part 2 item 6).
 	const ttyConfirm = args.confirm === true ? new TtyConfirm(renderer) : undefined;
+	// cli.ts's startup-note deferral (welcome-first ordering): every `▪` note
+	// before the REPL owns the screen queues and flushes after the banner
+	const interactive = args.tty ?? true;
+	const startupNotes: string[] | null = interactive ? [] : null;
+	let releaseStartupNotes: (() => void) | undefined;
+	if (startupNotes !== null) {
+		const liveNote = renderer.note.bind(renderer);
+		let released = false;
+		renderer.note = (text: string): void => {
+			if (!released) {
+				startupNotes.push(text);
+				return;
+			}
+			liveNote(text);
+		};
+		releaseStartupNotes = () => {
+			released = true;
+			for (const line of startupNotes.splice(0)) liveNote(line);
+		};
+	}
 	const loaded: LoadedExtensions = await loadExtensions({
 		cwd,
 		cliPaths: args.extensionPaths ?? [],
@@ -140,11 +160,12 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		commands: loaded.runtime.commands,
 		input: fake.stdin,
 		output: fake.stdout,
-		interactive: args.tty ?? true,
+		interactive,
 		// readline shell: these scenarios pin the legacy path (M9; the pi-tui
 		// shell has its own suite in repl-tui.test.ts)
 		shell: "legacy",
 		confirm: ttyConfirm,
+		releaseStartupNotes,
 		exit: (code) => {
 			throw new Error(`force-exit:${code}`);
 		},
@@ -297,7 +318,7 @@ export default function (api) {
 		expect(await env.repl).toBe(0);
 	});
 
-	it("banner order: extension lines print after loadExtensions and before the context banner and the REPL banner (design §7.3)", async () => {
+	it("banner order: the welcome panel tops the screen; deferred extension/context notes print after it (design §7.3, welcome-first)", async () => {
 		const env = await startRepl({
 			agentsMd: true,
 			noContextFiles: false,
@@ -324,7 +345,9 @@ export default function (api) {
 		expect(contextAt).toBeGreaterThanOrEqual(0);
 		expect(replAt).toBeGreaterThanOrEqual(0);
 		expect(extAt).toBeLessThan(contextAt);
-		expect(extAt).toBeLessThan(replAt);
+		// the greeting owns the top: welcome panel BEFORE the flushed notes
+		expect(replAt).toBeLessThan(extAt);
+		expect(replAt).toBeLessThan(contextAt);
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("1 turns"));
 		env.fake.eof();

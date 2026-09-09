@@ -331,6 +331,29 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	// Extension confirm (interactive only): the host exists before extensions
 	// load; runRepl binds it to the live tty prompt once the REPL starts.
 	const confirm = interactive ? new TtyConfirm(renderer) : undefined;
+	let releaseStartupNotes: (() => void) | undefined;
+	// Startup-note deferral (interactive only): every `▪` note emitted before
+	// the REPL owns the screen — extension lines, the context banner, trust
+	// outcomes — queues here and prints AFTER the welcome panel/banner, so
+	// the greeting tops the screen instead of drowning under environment
+	// noise. Errors and interactive asks print live (they use other paths);
+	// print mode doesn't wrap at all and keeps its byte contract.
+	const startupNotes: string[] | null = interactive ? [] : null;
+	if (startupNotes !== null) {
+		const liveNote = renderer.note.bind(renderer);
+		let released = false;
+		renderer.note = (text: string): void => {
+			if (!released) {
+				startupNotes.push(text);
+				return;
+			}
+			liveNote(text);
+		};
+		releaseStartupNotes = () => {
+			released = true;
+			for (const line of startupNotes.splice(0)) liveNote(line);
+		};
+	}
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
 	try {
@@ -376,6 +399,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			runner,
 			commands,
 			confirm,
+			releaseStartupNotes,
 			shell,
 			transcript,
 			inputHistoryPath: shell === "tui" ? historyFilePath(homedir()) : undefined,

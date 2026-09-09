@@ -44,6 +44,9 @@ interface StartArgs {
 	noSession?: boolean;
 	resume?: string;
 	sessionBaseDir?: string;
+	/** When set, runRepl gets a releaseStartupNotes that writes this marker —
+	 *  pins the release timing relative to the banner block. */
+	releaseProbe?: string;
 	provider?: LLMProvider;
 	deferInit?: boolean;
 }
@@ -87,6 +90,10 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		// These scenarios pin the readline shell (the IMP_REPL=legacy escape
 		// hatch path). The pi-tui shell has its own suite (repl-tui.test.ts).
 		shell: "legacy",
+		releaseStartupNotes:
+			args.releaseProbe !== undefined
+				? () => renderer.writeLine(args.releaseProbe as string)
+				: undefined,
 		exit: (code) => {
 			exitCodes.push(code);
 			throw new Error(`force-exit:${code}`);
@@ -128,6 +135,20 @@ describe("runRepl welcome panel", () => {
 		expect(out).toMatch(/imp 0\.1\.0 · session [0-9a-f]{8} · test-model/);
 		// the old compact banner line is gone on fresh sessions
 		expect(out).not.toContain("/help for commands");
+		env.fake.eof();
+		await env.repl;
+	});
+
+	it("releaseStartupNotes fires AFTER the welcome panel (fresh) — deferred notes never bury the greeting", async () => {
+		const env = await startRepl({ scripts: [reply("ok")], releaseProbe: "RELEASED-HERE" });
+		await waitUntil(() => env.output().includes("RELEASED-HERE"));
+		const out = env.output();
+		// the box is the only thing before the release point: no tips line
+		// either — the editor placeholder below teaches the keys
+		expect(out).not.toContain("Ctrl+D exits");
+		expect(out).not.toContain("@ files");
+		expect(out).toContain("RELEASED-HERE");
+		expect(out.indexOf("◆ Welcome to imp!")).toBeLessThan(out.indexOf("RELEASED-HERE"));
 		env.fake.eof();
 		await env.repl;
 	});

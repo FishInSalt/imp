@@ -463,6 +463,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#welcome-order 欢迎页顺序优化（2026-09-10，653 tests，fix/welcome-order）**：用户晒启动截图评估出两问题：①扩展/上下文/信任 note 抢在欢迎页之前（噪音压过问候，本末倒置）②框内提示行 `/ commands · @ files · ! bash · Ctrl+D exits` 与 TUI 编辑器占位符逐字重复。
+  - **启动 note 缓冲**（cli.ts，仅 interactive）：REPL 接管屏幕前所有 `▪` note（扩展行/上下文横幅/信任结果/恢复摘要）入队，`releaseStartupNotes` 在 runRepl 打完欢迎框或恢复 banner 后统一释放——问候置顶、环境噪音随后。**错误行与交互式询问照常实时**（走 error/confirm 路径不经过 note）；打印模式不包装、字节不变；/new 之后的 note 实时（已释放）
+  - **框内提示行删除**：键位教学只留编辑器占位符一处（它还会在输入清空时复现，且多教 shift+enter）
+  - 释放时机契约：fresh=欢迎框后；resumed=banner 后、`▪ session` note 前（相对顺序不变）
+  - 测试：banner-order 测试翻转为新契约（welcome < extension < context）+ harness 复刻 cli 包装；+释放时机钉（RELEASED-HERE 探针，fresh 场景）；欢迎结构测试加 not.toContain("Ctrl+D exits"/"@ files")
+  - 真机：框置顶、`▪ extension guardian/notify/…` 在框后、无重复提示行
+
 - **#welcome-screen 欢迎页（2026-09-10，652 tests，feat/welcome-screen）**：用户要求仿 Claude Code 启动欢迎页。
   - **新会话（TUI interactive）**：圆角边框欢迎面板（整体 dim）：`◆ Welcome to imp!` + 六条高频命令速查（/help /model /new /compact /sessions /resume——全部真实存在，不虚构）+ 输入提示行（/ 命令 · @ 文件 · ! bash · Ctrl+D 退出）+ 身份行（版本 · session id8 · modelReference）；框宽按内容自适应（全 ASCII+◆ 单宽）
   - **恢复会话**：保持旧紧凑 banner（`imp 0.1.0 — /help...` + `▪ session` + `▪ replayed N`）——欢迎页是"新对话"时刻，不重复打扰（CC 同款语义：continuation 显示 "Continued from..."）

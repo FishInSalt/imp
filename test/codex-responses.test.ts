@@ -121,7 +121,9 @@ describe("codex-responses provider", () => {
 		const body = captured.at(-1)?.body as Record<string, unknown>;
 		expect(body.instructions).toBe("sys-instructions");
 		expect(body.store).toBe(false);
-		expect(body.max_output_tokens).toBe(1024);
+		// the ChatGPT backend rejects max_output_tokens with a 400 — the wire
+		// must not carry it (regression pin: live "Unsupported parameter" 400)
+		expect("max_output_tokens" in body).toBe(false);
 		expect(body.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "hi" }] }]);
 		const headers = captured.at(-1)?.headers ?? {};
 		expect(headers.authorization).toBe("Bearer fake-access");

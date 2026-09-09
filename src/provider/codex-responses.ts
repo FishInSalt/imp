@@ -124,8 +124,12 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				stream: true,
 				instructions: request.system,
 				input: toInputItems(request.system, request.messages),
-				max_output_tokens: request.maxTokens,
 				parallel_tool_calls: true,
+				// NOTE: no max_output_tokens — the ChatGPT backend REJECTS it
+				// ("Unsupported parameter", live 400 on the first real turn). The
+				// reference implementation sends none either; output limits are
+				// plan/policy-managed server-side. request.maxTokens is simply
+				// not applicable to this family.
 			};
 			if (request.tools.length > 0) {
 				body.tools = request.tools.map((t) => ({

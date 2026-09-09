@@ -455,6 +455,8 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **教训（记档）**：对"端点返回空"的结论必须先穷尽参数空间（此处=版本门控）再定性；对参考项目的断言（"CLI 也静态"）要么读源码要么不写；"官方全集"这类词只用于有出处的事实
   - 已知边界：pi.dev 为第三方公共服务（参考项目自用）——uptime 依赖以静态兜底+缓存衰减；ChatGPT 后端 /codex/models 的能力元数据（reasoning levels 等）未利用（记为潜在增强）
 
+- **#codex-max-output 修复（2026-09-10，636 tests，fix/codex-max-output）**：用户切换 openai 模型聊天报 400 "Unsupported parameter: max_output_tokens"——codex-responses 请求体误发该参数（ChatGPT 后端 Responses 端点不接受；pi 的实现本就不发，输出限额由计划策略在服务端管理，request.maxTokens 对该族不适用）。移除参数 + 回归钉（wire 不得携带）。教训：wire 参数清单对照参考实现逐项核对，"看起来标准"的参数在方言端点可能非法。
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

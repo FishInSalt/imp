@@ -264,3 +264,32 @@ describe("compactSession", () => {
 		expect(session.getEntries().length).toBe(2); // untouched
 	});
 });
+
+describe("isContextOverflowError (overflow-grace)", () => {
+	it("matches every provider's phrasing; rejects unrelated errors", async () => {
+		const { isContextOverflowError } = await import("../src/core/compaction.js");
+		expect(
+			isContextOverflowError(
+				new Error(
+					'Anthropic API error 400: {"error":{"message":"prompt is too long: 500000 tokens > 200000 maximum"}}',
+				),
+			),
+		).toBe(true);
+		expect(
+			isContextOverflowError(new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}')),
+		).toBe(true);
+		expect(
+			isContextOverflowError(
+				new Error("OpenAI Codex API error 400: This model's maximum context length is 272000 tokens"),
+			),
+		).toBe(true);
+		expect(isContextOverflowError(new Error("request failed: too many input tokens"))).toBe(true);
+		expect(
+			isContextOverflowError(
+				new Error('OpenAI Codex API error 400: {"detail":"Unsupported parameter: max_output_tokens"}'),
+			),
+		).toBe(false);
+		expect(isContextOverflowError(new Error("OpenAI API error 401: bad key"))).toBe(false);
+		expect(isContextOverflowError("just a string")).toBe(false);
+	});
+});

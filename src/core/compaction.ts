@@ -1,3 +1,4 @@
+import { formatTokens } from "../format.js";
 import type { LLMProvider } from "../provider/types.js";
 import type { AgentMessage, AssistantMessage, Usage } from "./messages.js";
 import { addUsage, emptyUsage } from "./messages.js";
@@ -115,6 +116,32 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextEstimate
 
 export function shouldCompact(contextTokens: number, settings: CompactionSettings): boolean {
 	return contextTokens > settings.contextWindow - settings.reserveTokens;
+}
+
+/**
+ * Does a provider error say "the request exceeded the model's context
+ * window"? Providers phrase it differently (anthropic: "prompt is too
+ * long"; openai: "maximum context length" / context_length_exceeded; the
+ * codex backend and gateways have their own spellings) — match them all.
+ * Drives the one-shot compact-and-retry recovery (#overflow-grace).
+ */
+const CONTEXT_OVERFLOW_RE =
+	/prompt is too long|context[_ ]length|maximum context|context (window|length) exceed|too many (input )?tokens|input tokens? (exceed|too (large|long))|exceeds (the )?(maximum )?context/i;
+
+export function isContextOverflowError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return CONTEXT_OVERFLOW_RE.test(err.message);
+}
+
+/** The teaching message when recovery is impossible: what happened, and the
+ *  two ways out (pi's guidance, adapted to imp's commands). */
+export function overflowGuidance(contextTokens: number, settings: CompactionSettings, cause: string): string {
+	return (
+		`context ~${formatTokens(contextTokens)} exceeds the current model's window ` +
+		`(${formatTokens(settings.contextWindow)}); compaction failed: ${cause} — ` +
+		"the summarization request itself may be larger than this model accepts. " +
+		"Switch to a larger-context model (e.g. /model glm-5.3) and run /compact there, or start /new."
+	);
 }
 
 // ============================================================================

@@ -463,6 +463,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#overflow-grace 溢出优雅失败（2026-09-10，641 tests，feat/overflow-grace）**：用户问 500k 上下文切 272k 模型会发生什么。核实：imp 与 pi 的阈值压缩同构（都把全量转录单发摘要模型）——**单发摘要架构下"用小窗模型摘要超它窗口的转录"无解，是两家共同盲区**；pi 的差别是失败路径优雅（响应式 overflow 一次恢复+指引）。用户拍板"只做 pi 式优雅失败"（不做压缩先于收缩/硬截断）。
+  - **isContextOverflowError**（compaction.ts）：跨 provider 短语识别（anthropic "prompt is too long"/openai "context_length_exceeded|maximum context"/codex 变体）；**overflowGuidance**：教学文案（数字+原因+两条出路：切大窗模型 /compact 或 /new）
+  - **响应式一次恢复**（runner.runTurnOrRecoverFromOverflow，调用侧包裹不动方法体）：活请求报溢出→note→compactAndSplice（同快照 provider/settings/model）→成功则**重试（userMessage 抑制防重复入列——首次尝试已把 user 消息推进 history）**；压缩失败或重试再溢出→指引而非裸 400。**不设 pi 的同模型守卫**：imp 只捕获活错误不持久化错误消息，该场景不可能出现（记档）
+  - **前置压缩失败教学化**（onBeforeTurn catch）：切小死锁场景（摘要请求自身超窗）从裸 400 变为指引；run_error 双源落日志（compaction/overflow-recovery）
+  - 测试 +4：识别矩阵（四家短语真/两假阴性）、恢复成功（无重复 prompt+摘要帧入列）、二次溢出=指引且恰三次调用（fail→summarize→fail，无第三轮）、死锁教学（同族 /model+IMP_CONTEXT_WINDOW 缩窗触发前置路径）
+  - 真机回归：glm 正常路径无变化。**遗留（用户知情）**：500k→272k 切换死锁仍不可自动解开（恢复会失败并指引手动路径）；"压缩先于收缩+硬截断"方案已设计未实施
+  - 踩坑×3（同一课三犯）：**多步 python 脚本中途断言失败=零写盘**（三连"以为改了其实没改"——import 先落/主体后落的分裂态最难察觉）；biome 会把长参数行拆多行致锚点失配；**makeEnv 直连 runTurn 不流式渲染文本**（断言走 history 而非 output——e2e cross-family 测试当时删 output 断言就是这个原因）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

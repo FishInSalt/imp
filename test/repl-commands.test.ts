@@ -743,6 +743,101 @@ describe("/tree (#10 batch 2)", () => {
 		expect(env.output()).toContain("nothing was written on the left branch to summarize");
 	});
 
+	it("overflow-grace: a live overflow error recovers ONCE via compact-and-retry (no prompt duplication)", async () => {
+		const sink: LLMRequest[] = [];
+		let call = 0;
+		const scripted: LLMProvider = {
+			name: "overflow-then-ok",
+			async *stream(request) {
+				sink.push({ ...request, messages: [...request.messages] });
+				call++;
+				if (call === 1) throw new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}');
+				if (call === 2) {
+					// the compaction summary call
+					yield { type: "text_delta", text: "SUMMARY-OF-OLD" };
+					yield { type: "message_end", message: assistant([{ type: "text", text: "SUMMARY-OF-OLD" }]) };
+					return;
+				}
+				yield { type: "text_delta", text: "recovered answer" };
+				yield { type: "message_end", message: assistant([{ type: "text", text: "recovered answer" }]) };
+			},
+		};
+		const big = "context ".repeat(6000); // ~9k tokens each — compaction needs material beyond keepRecent
+		const env = await makeEnv({
+			provider: scripted,
+			seed: [user(`old work A ${big}`), assistantText(`answer A ${big}`), user(`old work B ${big}`)],
+		});
+		const result = await env.runner.runTurn({ userMessage: "please continue" });
+		expect(result.stopReason).not.toBe("error");
+		expect(env.output()).toContain("compacting once and retrying");
+		// direct runTurn does not stream to the recorder — assert via history
+		const finalText = env.runner.history.filter((m): m is AgentMessage => m.role === "assistant").at(-1);
+		expect(JSON.stringify(finalText)).toContain("recovered answer");
+		// the retried request runs over history WITH the user message exactly once,
+		// and the compacted history carries the summary frame
+		const lastUserTexts = sink
+			.at(-1)
+			?.messages.filter((m): m is UserMessage => m.role === "user")
+			.map((m) => m.content);
+		expect(lastUserTexts?.filter((t) => t === "please continue")).toHaveLength(1);
+		expect(JSON.stringify(lastUserTexts)).toContain("SUMMARY-OF-OLD");
+	});
+
+	it("overflow-grace: a SECOND overflow after recovery surfaces the guidance, not a raw 400", async () => {
+		let call = 0;
+		const scripted: LLMProvider = {
+			name: "always-overflow",
+			async *stream() {
+				call++;
+				if (call === 2) {
+					yield { type: "message_end", message: assistant([{ type: "text", text: "SUMMARY" }]) };
+					return;
+				}
+				throw new Error("Anthropic API error 400: prompt is too long: 500000 tokens");
+			},
+		};
+		const big = "context ".repeat(6000);
+		const env = await makeEnv({
+			provider: scripted,
+			seed: [user(`old work A ${big}`), assistantText(`answer A ${big}`), user(`old work B ${big}`)],
+		});
+		await expect(env.runner.runTurn({ userMessage: "hello" })).rejects.toThrow(/larger-context model/);
+		expect(call).toBe(3); // fail → summarize → fail again → guidance (no third retry)
+	});
+
+	it("overflow-grace: the switch-down deadlock teaches instead of a raw 400 (pre-prompt compaction fails)", async () => {
+		// shrink the window via a same-family /model switch so the seeded history
+		// overflows and the PRE-prompt compaction itself "overflows"
+		const scripted: LLMProvider = {
+			name: "deadlock",
+			async *stream() {
+				// the summary call rejects with an overflow-shaped error
+				throw new Error("OpenAI Codex API error 400: This model's maximum context length is 272000 tokens");
+			},
+		};
+		const env = await makeEnv({
+			provider: scripted,
+			seed: [
+				user("long conversation part one"),
+				assistantText("answer one"),
+				user("part two"),
+				assistantText("answer two"),
+			],
+		});
+		const prev = process.env.IMP_CONTEXT_WINDOW;
+		process.env.IMP_CONTEXT_WINDOW = "150"; // everything overflows; keepRecent dominates
+		try {
+			await dispatchCommand("/model glm-4.6", env.ctx); // same family → keeps the fake; window re-read from env
+			await expect(env.runner.runTurn({ userMessage: "next" })).rejects.toThrow(
+				/larger-context model.*\/compact/s,
+			);
+			expect(env.output()).toContain("compacting");
+		} finally {
+			if (prev === undefined) delete process.env.IMP_CONTEXT_WINDOW;
+			else process.env.IMP_CONTEXT_WINDOW = prev;
+		}
+	});
+
 	it("switching families adapts the compaction window both ways (glm-5.3 1M ↔ gpt-5.5 272k)", async () => {
 		const env = await makeEnv({ model: "glm-5.3" });
 		expect((env.runner as any).settings.contextWindow).toBe(1_000_000);

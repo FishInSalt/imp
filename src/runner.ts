@@ -5,6 +5,8 @@ import {
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
+	isContextOverflowError,
+	overflowGuidance,
 	shouldCompact,
 	summarizeBranchSegment,
 } from "./core/compaction.js";
@@ -520,7 +522,64 @@ class RunnerImpl implements Runner {
 		const settings = this.settings;
 		this.lastRunModel = model;
 		const session = this.sessionStore;
-		return this.runTurnInner(model, provider, settings, session, options);
+		return this.runTurnOrRecoverFromOverflow(options, model, provider, settings, session);
+	}
+
+	/** #overflow-grace: a live "context window exceeded" provider error gets
+	 *  ONE compact-and-retry attempt (pi's overflow recovery, minus its
+	 *  stale-error same-model guard — imp only catches live request errors,
+	 *  never persisted ones, so that scenario cannot arise). The user message
+	 *  is already in history from the failed attempt; the retry reruns with
+	 *  the prompt suppressed so it is not duplicated. Any second failure
+	 *  surfaces the guidance instead of a raw provider 400. */
+	private async runTurnOrRecoverFromOverflow(
+		options: RunTurnOptions,
+		model: string,
+		provider: LLMProvider,
+		settings: CompactionSettings,
+		session: SessionStore | null,
+	): Promise<RunAgentLoopResult> {
+		try {
+			return await this.runTurnInner(model, provider, settings, session, options);
+		} catch (err) {
+			if (!isContextOverflowError(err)) throw err;
+			const cause = err instanceof Error ? err.message : String(err);
+			this.logger.log("run_error", { source: "overflow-recovery", message: cause });
+			this.options.renderer.note("▪ context over the model's window — compacting once and retrying…");
+			let compacted = false;
+			try {
+				compacted = await this.compactAndSplice(provider, settings, model);
+			} catch (compactErr) {
+				const compactCause = compactErr instanceof Error ? compactErr.message : String(compactErr);
+				this.logger.log("run_error", { source: "compaction", message: compactCause });
+				throw new Error(overflowGuidance(estimateContextTokens(this.history).tokens, settings, compactCause));
+			}
+			if (!compacted) {
+				throw new Error(
+					overflowGuidance(estimateContextTokens(this.history).tokens, settings, "nothing safe to compact"),
+				);
+			}
+			// retry over the existing history (user message already appended).
+			// A SECOND overflow here is terminal — surface the guidance, not the
+			// raw provider 400 (one attempt, like pi's _overflowRecoveryAttempted).
+			try {
+				return await this.runTurnInner(model, provider, settings, session, {
+					...options,
+					userMessage: undefined,
+				});
+			} catch (retryErr) {
+				if (!isContextOverflowError(retryErr)) throw retryErr;
+				const retryCause = retryErr instanceof Error ? retryErr.message : String(retryErr);
+				this.logger.log("run_error", { source: "overflow-recovery", message: `retry failed: ${retryCause}` });
+				throw new Error(
+					overflowGuidance(
+						estimateContextTokens(this.history).tokens,
+						settings,
+						"still over the window after one compaction",
+					),
+				);
+			}
+		}
 	}
 
 	/** The live turn's onEvent tap (M10 B): the construction-time task tool
@@ -570,7 +629,17 @@ class RunnerImpl implements Runner {
 							const est = estimateContextTokens(history);
 							if (!shouldCompact(est.tokens, settings)) return;
 							this.options.renderer.note(`▪ context ~${formatTokens(est.tokens)} tokens — compacting…`);
-							await this.compactAndSplice(provider, settings, model);
+							// #overflow-grace: a failed pre-prompt compaction must not surface
+							// as a raw provider 400 — teach the two ways out instead (this is
+							// the 1M→272k switch-down deadlock: the summarization request
+							// itself can exceed the new model's input window).
+							try {
+								await this.compactAndSplice(provider, settings, model);
+							} catch (err) {
+								const cause = err instanceof Error ? err.message : String(err);
+								this.logger.log("run_error", { source: "compaction", message: cause });
+								throw new Error(overflowGuidance(est.tokens, settings, cause));
+							}
 						}
 					: undefined,
 				getSteeringMessages: options.getSteeringMessages,

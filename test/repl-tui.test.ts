@@ -1189,30 +1189,45 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("/model with no args opens the selector; Down+Enter switches like /model <id>", async () => {
-		const env = await startTuiRepl([reply("ok")]);
-		await settle();
-		env.terminal.data("/model\r");
-		await settle();
-		const frame = env.terminal.frameSince(0);
-		expect(frame).toContain("models — switch applies from the next turn"); // title
-		expect(frame).toContain("→ test-model"); // current id first, preselected
-		expect(frame).toContain("claude-sonnet-4-5");
-		expect(frame).toContain("glm-4.6"); // README-documented candidates listed
-		expect(frame).toContain("current"); // the current row is marked
-		env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
-		await settle();
-		env.terminal.data("\r"); // pick
-		await settle();
-		expect(env.runner.model).toBe("claude-sonnet-4-5");
-		expect(env.transcript.completedLines().join("\n")).toContain(
-			"▪ model: test-model → claude-sonnet-4-5 (applies from the next turn)",
-		);
-		// Mutation pin: the footer refreshes after a COMMAND (no turn ran) —
-		// runCommand's finally push is what makes this green.
-		expect(env.terminal.frameSince(0)).toContain("claude-sonnet-4-5 · ");
-		env.terminal.data("/exit\r");
-		const code = await env.repl;
-		expect(code).toBe(0);
+		// #model-discovery hermeticity: pin "no family configured" so the list
+		// is the classic seed set, independent of the host's login/keys.
+		const saved: Record<string, string | undefined> = {};
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		try {
+			const env = await startTuiRepl([reply("ok")]);
+			await settle();
+			env.terminal.data("/model\r");
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("models — switch applies from the next turn"); // title
+			expect(frame).toContain("→ test-model"); // current id first, preselected
+			expect(frame).toContain("claude-sonnet-4-5");
+			expect(frame).toContain("glm-4.6"); // README-documented candidates listed
+			expect(frame).toContain("current"); // the current row is marked
+			env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
+			await settle();
+			env.terminal.data("\r"); // pick
+			await settle();
+			expect(env.runner.model).toBe("claude-sonnet-4-5");
+			expect(env.transcript.completedLines().join("\n")).toContain(
+				"▪ model: test-model → claude-sonnet-4-5 (applies from the next turn)",
+			);
+			// Mutation pin: the footer refreshes after a COMMAND (no turn ran) —
+			// runCommand's finally push is what makes this green.
+			expect(env.terminal.frameSince(0)).toContain("claude-sonnet-4-5 · ");
+			env.terminal.data("/exit\r");
+			const code = await env.repl;
+			expect(code).toBe(0);
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
 	});
 
 	it("/model selector: Esc cancels — no switch, no note, editor keeps keys", async () => {

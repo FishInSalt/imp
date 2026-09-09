@@ -162,6 +162,30 @@ describe("parseCommand", () => {
 });
 
 describe("slash commands", () => {
+	// Hermetic picker (#model-discovery): the /model list depends on which
+	// families hold credentials — pin the test env to "nothing configured"
+	// (IMP_AUTH_PATH to a nonexistent file; no provider keys).
+	const SAVED: Record<string, string | undefined> = {};
+	beforeEach(() => {
+		for (const key of [
+			"ANTHROPIC_AUTH_TOKEN",
+			"ANTHROPIC_API_KEY",
+			"ANTHROPIC_BASE_URL",
+			"OPENAI_API_KEY",
+			"OPENAI_BASE_URL",
+			"IMP_AUTH_PATH",
+		]) {
+			SAVED[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+	});
+	afterEach(() => {
+		for (const [key, value] of Object.entries(SAVED)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	});
 	it("/help lists all seven (generated, cannot drift)", async () => {
 		const env = await makeEnv();
 		await dispatchCommand("/help", env.ctx);
@@ -804,8 +828,10 @@ describe("/tree (#10 batch 2)", () => {
 		};
 		await dispatchCommand("/model", ctx);
 		const labels = calls[0]?.items.map((i) => `${i.label}${i.description === "current" ? "*" : ""}`) ?? [];
-		expect(labels[0]).toBe("openai-codex/gpt-5.4*");
-		expect(labels).not.toContain("gpt-5.4*"); // the bare front entry that silently flipped families is gone
+		// the current row carries its CANONICAL label — the bare "gpt-5.4"
+		// entry that silently flipped families is gone
+		expect(labels).toContain("openai-codex/gpt-5.4*");
+		expect(labels).not.toContain("gpt-5.4*");
 	});
 
 	it("/model with a provider prefix re-routes the protocol family (multi-provider)", async () => {

@@ -123,15 +123,15 @@ describe("runRepl welcome panel", () => {
 		const env = await startRepl({ scripts: [reply("hi")] });
 		await waitUntil(() => env.output().includes("Tips for getting started:"));
 		const out = env.output();
-		// the pixel-block logo spells ALL THREE letters — i (dotted), m,
-		// p (bowl + stem) — rendered plain because this renderer is ansi:false
-		expect(out).toContain(" ██╗███╗   ███╗█████╗");
-		expect(out).toContain("██╔╝████╗ ████║██╔══██╗");
-		// rows 3-6 carry the i-m letter gap (the font's trailing space)
-		expect(out).toContain("██║ ██╔████╔██║██████╔╝");
-		expect(out).toContain("██║ ██║╚██╔╝██║██╔══██╗");
-		expect(out).toContain("██║ ██║ ╚═╝ ██║██║  ██║");
-		expect(out).toContain("╚═╝ ╚═╝     ╚═╝╚═╝  ╚═╝");
+		// glyphs pinned verbatim against ANSI Shadow.flf (full-width
+		// layout): tittle-less i, m, and p whose bowl closes one row above
+		// the bare descender — rendered plain because ansi:false
+		expect(out).toContain("██╗███╗   ███╗██████╗");
+		expect(out).toContain("██║████╗ ████║██╔══██╗");
+		expect(out).toContain("██║██╔████╔██║██████╔╝");
+		expect(out).toContain("██║██║╚██╔╝██║██╔═══╝");
+		expect(out).toContain("██║██║ ╚═╝ ██║██║");
+		expect(out).toContain("╚═╝╚═╝     ╚═╝╚═╝");
 		// Gemini-style numbered tips (verbatim — generic best practice)
 		expect(out).toContain("1. Ask questions, edit files, or run commands.");
 		expect(out).toContain("2. Be specific for the best results.");
@@ -147,7 +147,7 @@ describe("runRepl welcome panel", () => {
 	it("gradientLine colorizes per column when ansi, stays plain otherwise", async () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		const plain = welcomeLines("deadbeef", "test-model", false);
-		expect(plain[0]).toBe(" ██╗███╗   ███╗█████╗"); // no escapes
+		expect(plain[0]).toBe("██╗███╗   ███╗██████╗"); // no escapes
 		const colored = welcomeLines("deadbeef", "test-model", true);
 		// first painted column ≈ blue stop, last ≈ pink stop (exact lerp
 		// values depend on the column index — anchor on near-stop hues)

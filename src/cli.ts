@@ -86,6 +86,10 @@ Environment:
     export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
     export IMP_MODEL=glm-4.6
 
+  OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
+    imp login
+    imp -m openai-codex/gpt-5.5
+
   OpenAI and OpenAI-compatible providers (model id prefix routes):
     export OPENAI_API_KEY=<key>
     export IMP_MODEL=openai/gpt-5.2

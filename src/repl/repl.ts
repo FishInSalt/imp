@@ -1,6 +1,5 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
-import { contextWindowTokens } from "../core/constants.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
@@ -493,7 +492,7 @@ class ReplMachine {
 		// estimate is O(messages) local work — fine at this low-frequency push
 		// point, but never call it from a streaming-delta path.
 		const contextPercent = Math.round(
-			(estimateContextTokens(this.runner.history).tokens / contextWindowTokens()) * 100,
+			(estimateContextTokens(this.runner.history).tokens / this.runner.contextWindow) * 100,
 		);
 		parts.push(`ctx ${contextPercent}%`);
 		if (contextPercent >= 80) {

@@ -1,4 +1,5 @@
 import { createAnthropicProvider } from "./anthropic.js";
+import { createCodexResponsesProvider } from "./codex-responses.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
 
@@ -12,12 +13,14 @@ import type { LLMProvider } from "./types.js";
  *   openai/gpt-5.2            → OpenAI Chat Completions (OPENAI_API_KEY)
  *   openai/deepseek-chat      → any OpenAI-compatible endpoint via OPENAI_BASE_URL
  *   anthropic/glm-4.6         → explicit anthropic-messages routing (equivalent to glm-4.6)
+ *   openai-codex/gpt-5.5      → Responses protocol on the ChatGPT-subscription
+ *                               credential (imp login; see codex-auth.ts)
  *
  * This is the seed of the full registry (contextWindow per model, picker,
  * session persistence) — deliberately a pure function with no state.
  */
 
-export type ProviderName = "anthropic" | "openai";
+export type ProviderName = "anthropic" | "openai" | "openai-codex";
 
 export interface ModelRef {
 	provider: ProviderName;
@@ -33,6 +36,7 @@ export function parseModelRef(reference: string): ModelRef {
 	if (modelId === "") return { provider: "anthropic", modelId: reference };
 	if (provider === "anthropic") return { provider: "anthropic", modelId };
 	if (provider === "openai") return { provider: "openai", modelId };
+	if (provider === "openai-codex") return { provider: "openai-codex", modelId };
 	// Unknown prefix (e.g. a model id that legitimately contains a slash,
 	// like some OpenRouter or Bedrock ids): treat the whole string as a bare
 	// anthropic id — same behavior as before this module existed.
@@ -45,6 +49,8 @@ export function createProviderFor(provider: ProviderName): LLMProvider {
 			return createAnthropicProvider();
 		case "openai":
 			return createOpenAICompletionsProvider();
+		case "openai-codex":
+			return createCodexResponsesProvider();
 		default: {
 			const exhaustive: never = provider;
 			throw new Error(`unreachable provider: ${JSON.stringify(exhaustive)}`);

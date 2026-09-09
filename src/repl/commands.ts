@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
-import { contextWindowTokens } from "../core/constants.js";
 import type { SessionStore } from "../core/session/store.js";
 import {
 	canonicalizeDir,
@@ -138,7 +137,14 @@ function formatWhen(date: Date): string {
  *  ids) with the runner's current id prepended when it is not among them — a
  *  custom IMP_MODEL / -m id must stay pickable. Replace when a real model
  *  registry lands. */
-const MODEL_CANDIDATES: readonly string[] = ["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"];
+const MODEL_CANDIDATES: readonly string[] = [
+	"claude-sonnet-4-5",
+	"glm-4.6",
+	"glm-4.5",
+	"glm-4.7",
+	"openai-codex/gpt-5.5",
+	"openai/gpt-5.2",
+];
 
 function modelCandidates(current: string): string[] {
 	return MODEL_CANDIDATES.includes(current) ? [...MODEL_CANDIDATES] : [current, ...MODEL_CANDIDATES];
@@ -148,8 +154,8 @@ function modelCandidates(current: string): string[] {
  *  write and the note are byte-identical whichever way the id arrived. */
 function switchModel(ctx: CommandContext, id: string): void {
 	const previous = ctx.runner.model;
-	ctx.runner.model = id;
-	ctx.renderer.note(`▪ model: ${previous} → ${id} (applies from the next turn)`);
+	ctx.runner.setModel(id); // re-resolves the provider too (multi-provider)
+	ctx.renderer.note(`▪ model: ${previous} → ${ctx.runner.model} (applies from the next turn)`);
 }
 
 /** /resume <id>'s body, shared by the by-arg path and the picker's pick — the
@@ -554,7 +560,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				);
 			}
 			const contextTokens = estimateContextTokens(runner.history).tokens;
-			const contextPercent = Math.round((contextTokens / contextWindowTokens()) * 100);
+			const contextPercent = Math.round((contextTokens / ctx.runner.contextWindow) * 100);
 			ctx.renderer.note(
 				`▪ context ~${formatTokens(contextTokens)} tokens · ${contextPercent}% of window${contextPercent >= 80 ? " — /compact to summarize older turns" : ""}`,
 			);

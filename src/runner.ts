@@ -28,7 +28,8 @@ import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens, shorten } from "./format.js";
 import { withLogging } from "./provider/logging.js";
-import { resolveModel } from "./provider/resolve.js";
+import { contextWindowFor } from "./provider/models.js";
+import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
 import type { LLMProvider } from "./provider/types.js";
 import type { Renderer } from "./render.js";
 
@@ -106,6 +107,12 @@ export interface Runner {
 	readonly history: AgentMessage[];
 	/** Per-run model. Mutable: `/model` writes it; runTurn/compaction read it at call time. */
 	model: string;
+	/** Runtime model switch (#multi-provider batch 2): re-resolves the provider
+	 *  from the canonical reference so /model can cross protocols mid-session,
+	 *  and recomputes the compaction window to match the new model. */
+	setModel(reference: string): void;
+	/** Effective context window for the CURRENT model (registry-backed). */
+	readonly contextWindow: number;
 	/** The renderer all status output flows through (shared with the REPL). */
 	readonly renderer: Renderer;
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult>;
@@ -174,7 +181,7 @@ export async function createRunner(options: RunnerOptions): Promise<Runner> {
 	const resolved = resolveModel(options.model);
 	const provider = withLogging(options.provider ?? resolved.provider, logger);
 	const initialModel = resolved.modelId;
-	return new RunnerImpl(options, logger, provider, initialModel);
+	return new RunnerImpl(options, logger, provider, initialModel, parseModelRef(options.model).provider);
 }
 
 class RunnerImpl implements Runner {
@@ -182,21 +189,29 @@ class RunnerImpl implements Runner {
 	model: string;
 	private readonly options: RunnerOptions;
 	private readonly logger: RunLogger;
-	private readonly provider: LLMProvider; // wrapped with logging once, reused everywhere
+	private provider: LLMProvider; // wrapped with logging once; /model may swap it (multi-provider)
+	private providerName: ProviderName;
 	private readonly tools: Tool[];
 	private readonly autoCompact: boolean;
 	private readonly branchSummaryEnabled: boolean;
-	private readonly settings = DEFAULT_COMPACTION_SETTINGS;
+	private settings = DEFAULT_COMPACTION_SETTINGS; // contextWindow follows the model (multi-provider)
 	private system: string;
 	private sessionStore: SessionStore | null = null;
 	private readonly agents: AgentRegistry;
 	private initialized = false;
 	private lastRunModel: string;
 
-	constructor(options: RunnerOptions, logger: RunLogger, provider: LLMProvider, initialModel: string) {
+	constructor(
+		options: RunnerOptions,
+		logger: RunLogger,
+		provider: LLMProvider,
+		initialModel: string,
+		providerName: ProviderName,
+	) {
 		this.options = options;
 		this.logger = logger;
 		this.provider = provider;
+		this.providerName = options.provider !== undefined ? "anthropic" : providerName;
 		this.model = initialModel;
 		this.lastRunModel = initialModel;
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
@@ -461,6 +476,23 @@ class RunnerImpl implements Runner {
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()
 		this.system = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
+	}
+
+	setModel(reference: string): void {
+		const ref = parseModelRef(reference);
+		this.model = ref.modelId;
+		// Swap the provider INSTANCE only when the protocol family changes —
+		// a same-family switch keeps the current instance (test fakes inject
+		// here; in production the kept instance IS the real one).
+		if (ref.provider !== this.providerName) {
+			this.provider = createProviderFor(ref.provider);
+			this.providerName = ref.provider;
+		}
+		this.settings = { ...this.settings, contextWindow: contextWindowFor(reference) };
+	}
+
+	get contextWindow(): number {
+		return contextWindowFor(this.model);
 	}
 
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult> {

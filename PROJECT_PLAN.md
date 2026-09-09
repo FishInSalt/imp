@@ -412,6 +412,15 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 已知边界：run_log provider 名显示 "openai"（批次 2 随注册表细化）；/model picker 候选仍是提示文本（批次 2）；ChatGPT 订阅凭证走批次 1 OAuth+批次 2 Responses
   - 踩坑：blocks 与 tool_call_delta 均按**到达序**排列（与 anthropic 约定一致）——交错流的测试期望两次写反，先推演到达序再写断言
 
+- **#多 provider 批次 1+2：Codex OAuth + Responses 协议 + 模型注册表（2026-09-10，617 tests）**：用户场景=ChatGPT 订阅凭证 + z.ai GLM Coding Plan 两家；批次 0（OpenAI Chat Completions 通用层）已先行合入。
+  - **批次 1（feat/codex-oauth，607）**：`provider/codex-auth.ts` 设备码 OAuth（auth.openai.com/codex/device 展示 user_code 轮询、slow_down 退避、token 交换（设备码流的 PKCE verifier 由服务端返回）、60s 过期余量刷新、**单飞刷新**——并发回合竞态双刷新会用已轮换的 refresh token 自锁）、JWT claim 提取 chatgpt_account_id；凭据 `~/.imp/auth.json`（0600），损坏/异构文件=未登录而非崩溃；CLI `imp login`/`imp logout`。7 个封闭测试（本地假认证服务器+自铸 JWT，产线端点零接触）。真机：login 拿到真实设备码、无凭证路径教学清晰
+  - **批次 2（617）**：`provider/codex-responses.ts`（~280 行）——chatgpt.com/backend-api/codex/responses，Bearer+chatgpt-account-id+originator:imp+OpenAI-Beta 头；instructions 承载 system；input 项形状（input_text/output_text/function_call/function_call_output——工具调用是独立项非 role 消息）；扁平工具格式+strict:false；output_index 槽位流；**usage.input_tokens 含缓存读需减**；completed/incomplete/failed/error 事件映射+无终止事件判截断；reasoning 事件按 v0.1 策略忽略（加密回放缓做）。`provider/models.ts` 静态注册表（contextWindow 逐模型，数字全部取自 pi 自动生成目录：codex 系 272k/128k、claude-sonnet 系 1M、glm-4.6 200k；未知模型回退 131072 保守方向——压缩宁可早触发）；IMP_CONTEXT_WINDOW 仍最优先。**runner.setModel**：/model 运行时跨协议族切换（providerName 追踪；同族保持当前实例——测试注入友好+产线即真实例）；compaction settings 的 contextWindow 与 footer//status 的 ctx% 全部改读 runner.contextWindow（按当前模型解析）
+  - **接线**：`openai-codex/<id>` 前缀路由；/model picker 候选增 openai-codex/gpt-5.5 与 openai/gpt-5.2；cli HELP 增订阅 plan 段
+  - **流程事故（1 起）**：批次 1 提交直落 main（忘开分支）——同 d271d5f 事故；保提交拓扑修正（branch feat/codex-oauth + reset --keep + merge --no-ff）。**教训：合入后立即 git branch 确认落点再开新批次**
+  - **调试大战（批次 1 测试）**：症状=fetch 永挂。沿途修掉两个真问题（403-pending 响应体未排水毒化 keep-alive 连接——与 postJsonWithRetry 的 drain 注释同一课；sleep abort 只清 timer 未 resolve 永久挂起）。最终根因=**测试服务器 handler 对 form-encoded body 裸 JSON.parse 抛异常→无响应→fetch 静默挂起**——"假服务器处理器抛异常表现为客户端无限等待，无任何错误浮出"；二分法（隔离复刻→模块探针→逐段打点）全程 90 分钟
+  - 已知边界：模型选择不随会话持久化（既有语义，跨 provider 需重开时 -m 指定）；reasoning 加密回放/usage 限额显示/browser 登录缓做；z.ai OpenAI 模式端点不覆盖 Coding Plan 额度（批次 0 已证）
+  - 待办：**全量对抗审查**（三批合并 diff：shared 抽取等价性、openai-completions wire、codex-auth 状态机、responses wire、setModel 切换面）——按 #10 惯例两路
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

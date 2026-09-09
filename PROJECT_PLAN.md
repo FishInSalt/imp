@@ -463,6 +463,9 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#logo-imp logo 补全（2026-09-10，654 tests，fix/logo-imp）**：用户发现 logo 不完整——首版手打字形**漏了字母 p**（拼成 "im"）且 i 少顶点衬线。修正为完整 ANSI-Shadow 小写 "imp" 六行（i=带点竖笔、m=三拱、p=碗形+降部），渐变测试锚点从"首列=精确蓝停靠点"放宽为"首列≈蓝"（列位插值本就不落在停靠点上）。
+  - 踩坑：手打 figlet 字形必须逐字母对照字体验证——凭记忆连写丢字母且不自知（用户肉眼抓出）；真机 smoke 只查了渐变转义与行存在，没查"拼的是什么"
+
 - **#gemini-welcome Gemini 风格欢迎页（2026-09-10，654 tests，feat/gemini-welcome）**：用户给 Gemini CLI 截图，要求把该风格应用过来（zai-vision 识别：像素块大字 logo 蓝紫粉渐变 + "Tips for getting started:" 编号列表 + 无边框）。
   - **替换圆角框**：figlet ANSI-Shadow 像素 "imp" logo（██ 块，6 行×15 列）+ 逐列水平渐变（truecolor 38;2，三停靠点 (66,133,244)→(156,107,255)→(255,110,199)，空格不着色）+ Gemini 原版三条 tips 逐字（通用最佳实践：提问/改文件/跑命令、要具体、/help）+ dim 身份行（版本·session·模型）——**logo 即问候，无边框**；上一批的六条命令速查退役（/help 与占位符已覆盖）
   - 渐变门控 `renderer.ansiEnabled`（Renderer 新 getter）：非 ANSI 渲染纯文本 logo，测试封闭

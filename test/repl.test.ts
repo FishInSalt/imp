@@ -123,9 +123,12 @@ describe("runRepl welcome panel", () => {
 		const env = await startRepl({ scripts: [reply("hi")] });
 		await waitUntil(() => env.output().includes("Tips for getting started:"));
 		const out = env.output();
-		// the pixel-block logo (rendered plain — this renderer is ansi:false)
-		expect(out).toContain("██╗███╗   ███╗");
-		expect(out).toContain("╚═╝╚═╝     ╚═╝");
+		// the pixel-block logo spells ALL THREE letters — i (dotted), m,
+		// p (bowl + stem) — rendered plain because this renderer is ansi:false
+		expect(out).toContain(" ██╗███╗   ███╗█████╗");
+		expect(out).toContain("██╔╝████╗ ████║██╔══██╗");
+		expect(out).toContain("██║██╔████╔██║██████╔╝");
+		expect(out).toContain("╚═╝╚═╝     ╚═╝╚═╝  ╚═╝");
 		// Gemini-style numbered tips (verbatim — generic best practice)
 		expect(out).toContain("1. Ask questions, edit files, or run commands.");
 		expect(out).toContain("2. Be specific for the best results.");
@@ -141,9 +144,11 @@ describe("runRepl welcome panel", () => {
 	it("gradientLine colorizes per column when ansi, stays plain otherwise", async () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		const plain = welcomeLines("deadbeef", "test-model", false);
-		expect(plain[0]).toBe("██╗███╗   ███╗"); // no escapes
+		expect(plain[0]).toBe(" ██╗███╗   ███╗█████╗"); // no escapes
 		const colored = welcomeLines("deadbeef", "test-model", true);
-		expect(colored[0]).toContain("\x1b[38;2;66;133;244m"); // first column ≈ blue
+		// first painted column ≈ blue stop, last ≈ pink stop (exact lerp
+		// values depend on the column index — anchor on near-stop hues)
+		expect(colored[0]).toMatch(/\x1b\[38;2;7[0-9];13[0-9];24[0-9]m/); // ≈ blue
 		expect(colored[0]).toContain("\x1b[38;2;255;110;199m"); // last column ≈ pink
 		// tips and identity are never colorized
 		expect(colored.find((l) => l.startsWith("1. Ask"))).not.toContain("\x1b[");

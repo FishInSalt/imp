@@ -76,12 +76,12 @@ const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
 /** Pixel-block "imp" (figlet ANSI-Shadow — the chunky style of Gemini CLI's
  *  logo). ██ cells read as solid pixels; the gradient paints per column. */
 const IMP_LOGO = [
-	"██╗███╗   ███╗",
-	"██║████╗ ████║",
-	"██║██╔████╔██║",
-	"██║██║╚██╔╝██║",
-	"██║██║ ╚═╝ ██║",
-	"╚═╝╚═╝     ╚═╝",
+	" ██╗███╗   ███╗█████╗",
+	"██╔╝████╗ ████║██╔══██╗",
+	"██║██╔████╔██║██████╔╝",
+	"██║██║╚██╔╝██║██╔══██╗",
+	"██║██║ ╚═╝ ██║██║  ██║",
+	"╚═╝╚═╝     ╚═╝╚═╝  ╚═╝",
 ];
 
 /** Gemini-style horizontal gradient stops: blue → purple → pink. */

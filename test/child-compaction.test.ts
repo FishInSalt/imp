@@ -336,7 +336,7 @@ describe("task tool end-to-end (default settings, real session seam)", () => {
 			"E2E-SUMMARY",
 		);
 		const task = createTaskTool({
-			provider: routed.provider,
+			getProvider: () => routed.provider,
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [huge],

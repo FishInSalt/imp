@@ -1,6 +1,7 @@
 import path from "node:path";
 import { type AgentRegistry, loadAgentDefinitions } from "./core/agents/registry.js";
 import {
+	type CompactionSettings,
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
@@ -113,6 +114,8 @@ export interface Runner {
 	setModel(reference: string): void;
 	/** Effective context window for the CURRENT model (registry-backed). */
 	readonly contextWindow: number;
+	/** Canonical display reference — "openai-codex/gpt-5.4" vs bare "glm-4.6". */
+	modelReference(): string;
 	/** The renderer all status output flows through (shared with the REPL). */
 	readonly renderer: Renderer;
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult>;
@@ -211,8 +214,11 @@ class RunnerImpl implements Runner {
 		this.options = options;
 		this.logger = logger;
 		this.provider = provider;
-		this.providerName = options.provider !== undefined ? "anthropic" : providerName;
+		this.providerName = options.provider !== undefined ? parseModelRef(options.model).provider : providerName;
 		this.model = initialModel;
+		// Multi-provider review P1-3: the compaction window must follow the
+		// registry from construction — not only after an explicit /model switch.
+		this.settings = { ...this.settings, contextWindow: contextWindowFor(options.model) };
 		this.lastRunModel = initialModel;
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
 		// keep their hermetic set, extension tools append after the base six. The
@@ -237,7 +243,7 @@ class RunnerImpl implements Runner {
 		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir, options.agentsProjectAllowed);
 		this.tools.push(
 			createTaskTool({
-				provider: this.provider,
+				getProvider: () => this.provider,
 				getModel: () => this.model,
 				getSystem: () => this.system,
 				getTools: () => this.tools,
@@ -484,11 +490,20 @@ class RunnerImpl implements Runner {
 		// Swap the provider INSTANCE only when the protocol family changes —
 		// a same-family switch keeps the current instance (test fakes inject
 		// here; in production the kept instance IS the real one).
+		// The swapped instance goes through withLogging like the construction-time
+		// one (review P1-4: run_log must not go silent after a cross-family switch).
 		if (ref.provider !== this.providerName) {
-			this.provider = createProviderFor(ref.provider);
+			this.provider = withLogging(createProviderFor(ref.provider), this.logger);
 			this.providerName = ref.provider;
 		}
 		this.settings = { ...this.settings, contextWindow: contextWindowFor(reference) };
+	}
+
+	/** The model's canonical display reference — prefixed for non-anthropic
+	 *  families so users can tell WHICH protocol a bare id switched to
+	 *  (review P2-5: "gpt-5.4" alone is ambiguous across families). */
+	modelReference(): string {
+		return this.providerName === "anthropic" ? this.model : `${this.providerName}/${this.model}`;
 	}
 
 	get contextWindow(): number {
@@ -497,9 +512,15 @@ class RunnerImpl implements Runner {
 
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult> {
 		const model = this.model; // captured at call entry: /model mid-run affects only later turns
+		// Provider and settings snapshot for the same reason (review P1-2):
+		// /model is allowedDuringRun — a mid-run family switch must not leak a
+		// new provider (or window) into an in-flight turn's compaction seam,
+		// where it would pair with the captured model id of the OLD family.
+		const provider = this.provider;
+		const settings = this.settings;
 		this.lastRunModel = model;
 		const session = this.sessionStore;
-		return this.runTurnInner(model, session, options);
+		return this.runTurnInner(model, provider, settings, session, options);
 	}
 
 	/** The live turn's onEvent tap (M10 B): the construction-time task tool
@@ -508,6 +529,8 @@ class RunnerImpl implements Runner {
 
 	private async runTurnInner(
 		model: string,
+		provider: LLMProvider,
+		settings: CompactionSettings,
 		session: SessionStore | null,
 		options: RunTurnOptions,
 	): Promise<RunAgentLoopResult> {
@@ -517,7 +540,7 @@ class RunnerImpl implements Runner {
 		this.turnEventTap = options.onEvent ?? null;
 		try {
 			const result = await runAgentLoop({
-				provider: this.provider,
+				provider,
 				model,
 				system: this.system,
 				tools: this.tools,
@@ -545,9 +568,9 @@ class RunnerImpl implements Runner {
 					? async (history) => {
 							if (!this.autoCompact) return;
 							const est = estimateContextTokens(history);
-							if (!shouldCompact(est.tokens, this.settings)) return;
+							if (!shouldCompact(est.tokens, settings)) return;
 							this.options.renderer.note(`▪ context ~${formatTokens(est.tokens)} tokens — compacting…`);
-							await this.compactAndSplice(model);
+							await this.compactAndSplice(provider, settings, model);
 						}
 					: undefined,
 				getSteeringMessages: options.getSteeringMessages,
@@ -592,17 +615,23 @@ class RunnerImpl implements Runner {
 		// The signal is deliberately NOT forwarded: aborting mid-summary would
 		// persist a truncated checkpoint (design §7.4). Ctrl+C twice force-exits.
 		if (!this.sessionStore) return "no-session";
-		return (await this.compactAndSplice(this.model)) ? "compacted" : "nothing-to-compact";
+		return (await this.compactAndSplice(this.provider, this.settings, this.model))
+			? "compacted"
+			: "nothing-to-compact";
 	}
 
-	private async compactAndSplice(model: string): Promise<boolean> {
+	private async compactAndSplice(
+		provider: LLMProvider,
+		settings: CompactionSettings,
+		model: string,
+	): Promise<boolean> {
 		const session = this.sessionStore;
 		if (!session) return false;
 		const compacted = await compactSession({
 			session,
-			provider: this.provider,
+			provider,
 			model,
-			settings: this.settings,
+			settings,
 		});
 		if (compacted) {
 			this.history.splice(0, this.history.length, ...session.buildContext().messages);

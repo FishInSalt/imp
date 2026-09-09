@@ -137,7 +137,7 @@ describe("createTaskTool end-to-end", () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider([assistant([{ type: "text", text: "the bug is on line 3" }])], sink);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "glm-5.3",
 			getSystem: () => "PARENT-SYSTEM",
 			getTools: () => [echo],
@@ -178,7 +178,7 @@ describe("createTaskTool end-to-end", () => {
 			},
 		]);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "m",
 			getSystem: () => "",
 			getTools: () => [echo],
@@ -196,7 +196,7 @@ describe("createTaskTool end-to-end", () => {
 	it("getSession() → null (sessions disabled): still runs, errors say 'not persisted'", async () => {
 		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "m",
 			getSystem: () => "",
 			getTools: () => [echo],
@@ -212,10 +212,11 @@ describe("createTaskTool end-to-end", () => {
 		const sink: LLMRequest[] = [];
 		let model = "old-model";
 		const task = createTaskTool({
-			provider: scriptedProvider(
-				[assistant([{ type: "text", text: "1" }]), assistant([{ type: "text", text: "2" }])],
-				sink,
-			),
+			getProvider: () =>
+				scriptedProvider(
+					[assistant([{ type: "text", text: "1" }]), assistant([{ type: "text", text: "2" }])],
+					sink,
+				),
 			getModel: () => model,
 			getSystem: () => "SYS",
 			getTools: () => [echo],
@@ -226,6 +227,37 @@ describe("createTaskTool end-to-end", () => {
 		model = "new-model";
 		await task.execute({ prompt: "b" }, new AbortController().signal);
 		expect(sink.map((r) => r.model)).toEqual(["old-model", "new-model"]);
+	});
+
+	it("getProvider is read at spawn: a cross-family /model switch reaches the child (review P1-1)", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const parent = createSession(baseDir, baseDir);
+		const seen: string[] = [];
+		let current: LLMProvider = {
+			name: "family-a",
+			async *stream() {
+				seen.push("family-a");
+				yield { type: "message_end", message: assistant([{ type: "text", text: "a" }]) };
+			},
+		};
+		const task = createTaskTool({
+			getProvider: () => current,
+			getModel: () => "m",
+			getSystem: () => "SYS",
+			getTools: () => [echo],
+			getSession: () => parent,
+			sessionBaseDir: baseDir,
+		});
+		await task.execute({ prompt: "a" }, new AbortController().signal);
+		current = {
+			name: "family-b",
+			async *stream() {
+				seen.push("family-b");
+				yield { type: "message_end", message: assistant([{ type: "text", text: "b" }]) };
+			},
+		};
+		await task.execute({ prompt: "b" }, new AbortController().signal);
+		expect(seen).toEqual(["family-a", "family-b"]);
 	});
 });
 
@@ -249,7 +281,7 @@ describe("named agents (M5c)", () => {
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider([assistant([{ type: "text", text: "scout says hi" }])], sink);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "parent-model",
 			getSystem: () => "PARENT-SYSTEM",
 			getTools: () => [echo],
@@ -329,7 +361,7 @@ describe("named agents (M5c)", () => {
 			sink,
 		);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "m",
 			getSystem: () => "",
 			getTools: () => [slow],
@@ -364,7 +396,7 @@ describe("named agents (M5c)", () => {
 		);
 		const gateCalls: Array<{ name: string; agent?: string; cwd?: string }> = [];
 		const { task } = agentTask([scout], {
-			provider,
+			getProvider: () => provider,
 			cwd: "/wired-parent-cwd", // the runner always passes its cwd — pinned here (M6b)
 			onToolCall: (call: { name: string }, info: { agent?: string; cwd?: string }) => {
 				gateCalls.push({ name: call.name, agent: info.agent, cwd: info.cwd });
@@ -390,7 +422,7 @@ describe("named agents (M5c)", () => {
 		);
 		const events: Array<{ type: string; agent?: string; cwd?: string }> = [];
 		const { task } = agentTask([scout], {
-			provider,
+			getProvider: () => provider,
 			cwd: "/wired-parent-cwd",
 			onEvent: (event: { type: string }, info: { agent?: string; cwd?: string }) => {
 				if (event.type === "tool_start" || event.type === "tool_end") {
@@ -410,7 +442,7 @@ describe("named agents (M5c)", () => {
 		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
 		const gateCalls: Array<{ agent?: string }> = [];
 		const { task } = agentTask([], {
-			provider,
+			getProvider: () => provider,
 			onToolCall: (
 				_call: { toolCallId: string; name: string; args: Record<string, unknown> },
 				info: { agent?: string; cwd?: string },
@@ -563,7 +595,7 @@ describe("worktree isolation (M6b)", () => {
 		const childCwds: string[] = [];
 		const provider = scriptedProvider([], sink);
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -586,15 +618,16 @@ describe("worktree isolation (M6b)", () => {
 		const sink: LLMRequest[] = [];
 		const gateCalls: Array<{ name: string; cwd?: string }> = [];
 		const { task, childCwds } = await repoTask({
-			provider: scriptedProvider(
-				[
-					assistant([
-						{ type: "toolCall", id: "w1", name: "write", arguments: { path: "note.txt", content: "x" } },
-					]),
-					assistant([{ type: "text", text: "done" }]),
-				],
-				sink,
-			),
+			getProvider: () =>
+				scriptedProvider(
+					[
+						assistant([
+							{ type: "toolCall", id: "w1", name: "write", arguments: { path: "note.txt", content: "x" } },
+						]),
+						assistant([{ type: "text", text: "done" }]),
+					],
+					sink,
+				),
 			onToolCall: (call: { name: string }, info: { cwd?: string }) => {
 				gateCalls.push({ name: call.name, cwd: info.cwd });
 			},
@@ -612,20 +645,21 @@ describe("worktree isolation (M6b)", () => {
 	it("a child writing inside its worktree keeps the work: file lands there, parent tree untouched, trailer names the branch", async () => {
 		const sink: LLMRequest[] = [];
 		const { task, root, childCwds } = await repoTask({
-			provider: scriptedProvider(
-				[
-					assistant([
-						{
-							type: "toolCall",
-							id: "w1",
-							name: "write",
-							arguments: { path: "child-note.txt", content: "written by the child" },
-						},
-					]),
-					assistant([{ type: "text", text: "wrote the note" }]),
-				],
-				sink,
-			),
+			getProvider: () =>
+				scriptedProvider(
+					[
+						assistant([
+							{
+								type: "toolCall",
+								id: "w1",
+								name: "write",
+								arguments: { path: "child-note.txt", content: "written by the child" },
+							},
+						]),
+						assistant([{ type: "text", text: "wrote the note" }]),
+					],
+					sink,
+				),
 		});
 		const result = await task.execute(
 			{ prompt: "write child-note.txt", worktree: true },
@@ -648,7 +682,7 @@ describe("worktree isolation (M6b)", () => {
 	it("a child that changes nothing gets its worktree removed and no trailer", async () => {
 		const sink: LLMRequest[] = [];
 		const { task, root } = await repoTask({
-			provider: scriptedProvider([assistant([{ type: "text", text: "just looked around" }])], sink),
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "just looked around" }])], sink),
 		});
 		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("just looked around");
@@ -674,7 +708,7 @@ describe("worktree isolation (M6b)", () => {
 		rgit(["commit", "-qm", "seed"]);
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider([], sink),
+			getProvider: () => scriptedProvider([], sink),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -695,7 +729,7 @@ describe("worktree isolation (M6b)", () => {
 		const nowhere = await mkdtemp(path.join(tmpdir(), "imp-wt-nogit-"));
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider([], sink),
+			getProvider: () => scriptedProvider([], sink),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -712,7 +746,7 @@ describe("worktree isolation (M6b)", () => {
 	it("agent frontmatter worktree: true defaults the isolation on; the call can still opt out", async () => {
 		const sink: LLMRequest[] = [];
 		const { task, childCwds } = await repoTask({
-			provider: scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
 			agents: [
 				{
 					name: "builder",
@@ -760,7 +794,7 @@ describe("worktree isolation (M6b)", () => {
 				throw new Error("endpoint exploded");
 			},
 		};
-		const { task, root } = await repoTask({ provider: throwing });
+		const { task, root } = await repoTask({ getProvider: () => throwing });
 		const result = await task.execute(
 			{ prompt: "write then die", worktree: true },
 			new AbortController().signal,
@@ -800,7 +834,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		await seedRepo(root);
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider([], sink),
+			getProvider: () => scriptedProvider([], sink),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -845,7 +879,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		const sink: LLMRequest[] = [];
 		const childCwds: string[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider([assistant([{ type: "text", text: "looked only" }])], sink),
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "looked only" }])], sink),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -871,21 +905,22 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		const sink: LLMRequest[] = [];
 		const childCwds: string[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider(
-				[
-					assistant([
-						{
-							type: "toolCall",
-							id: "w1",
-							name: "write",
-							arguments: { path: "built.txt", content: "committed work" },
-						},
-					]),
-					assistant([{ type: "toolCall", id: "c1", name: "commit_all", arguments: {} }]),
-					assistant([{ type: "text", text: "committed" }]),
-				],
-				sink,
-			),
+			getProvider: () =>
+				scriptedProvider(
+					[
+						assistant([
+							{
+								type: "toolCall",
+								id: "w1",
+								name: "write",
+								arguments: { path: "built.txt", content: "committed work" },
+							},
+						]),
+						assistant([{ type: "toolCall", id: "c1", name: "commit_all", arguments: {} }]),
+						assistant([{ type: "text", text: "committed" }]),
+					],
+					sink,
+				),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -929,10 +964,11 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			},
 		};
 		const task = createTaskTool({
-			provider: scriptedProvider(
-				[assistant([{ type: "toolCall", id: "h1", name: "hang", arguments: { message: "x" } }])],
-				sink,
-			),
+			getProvider: () =>
+				scriptedProvider(
+					[assistant([{ type: "toolCall", id: "h1", name: "hang", arguments: { message: "x" } }])],
+					sink,
+				),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -958,7 +994,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		const childCwds: string[] = [];
 		const make = () =>
 			createTaskTool({
-				provider: scriptedProvider([assistant([{ type: "text", text: "read-only" }])], sink),
+				getProvider: () => scriptedProvider([assistant([{ type: "text", text: "read-only" }])], sink),
 				getModel: () => "m",
 				getSystem: () => "PARENT",
 				getTools: () => [],
@@ -997,7 +1033,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		writeFileSync(path.join(root, "node_modules", "junk.js"), "// not ignored\n", "utf8");
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
-			provider: scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "idle" }])], sink),
 			getModel: () => "m",
 			getSystem: () => "PARENT",
 			getTools: () => [],
@@ -1038,7 +1074,7 @@ describe("task tool roster under the trust gate (M8 review tierScope F1)", () =>
 			stream: async function* () {},
 		} as unknown as LLMProvider;
 		const task = createTaskTool({
-			provider,
+			getProvider: () => provider,
 			getModel: () => "glm-5.3",
 			getSystem: () => "PARENT-SYSTEM",
 			getTools: () => [],

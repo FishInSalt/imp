@@ -199,7 +199,12 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 	const device = (await start.json()) as { device_auth_id?: string; user_code?: string; interval?: number };
 	const rawInterval: unknown = device.interval;
 	const intervalSeconds = typeof rawInterval === "string" ? Number(rawInterval.trim()) : rawInterval;
-	if (!device.device_auth_id || !device.user_code || typeof intervalSeconds !== "number") {
+	if (
+		!device.device_auth_id ||
+		!device.user_code ||
+		typeof intervalSeconds !== "number" ||
+		!Number.isFinite(intervalSeconds)
+	) {
 		throw new Error(`Codex device-code response missing fields: ${JSON.stringify(device)}`);
 	}
 	options.onDeviceCode?.({
@@ -213,15 +218,18 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 	while (Date.now() < deadline) {
 		if (signal?.aborted) throw new Error("Login cancelled");
 		await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, pollIntervalMs);
-			signal?.addEventListener(
-				"abort",
-				() => {
-					clearTimeout(timer);
-					resolve(); // without this the poll loop would hang past the abort
-				},
-				{ once: true },
-			);
+			const timer = setTimeout(settle, pollIntervalMs);
+			// Removed on BOTH settle paths (review F4): a per-iteration listener
+			// that is never detached accumulates ~900 closures on a 15-min login.
+			const onAbort = () => {
+				clearTimeout(timer);
+				settle();
+			};
+			function settle() {
+				resolve();
+				signal?.removeEventListener("abort", onAbort);
+			}
+			signal?.addEventListener("abort", onAbort, { once: true });
 		});
 		if (signal?.aborted) throw new Error("Login cancelled");
 

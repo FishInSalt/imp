@@ -114,6 +114,7 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 	return {
 		name: "openai-codex",
 		async *stream(request: LLMRequest): AsyncIterable<LLMEvent> {
+			if (request.signal?.aborted) return; // before auth: the refresh POST is not abortable (review F5)
 			const credential = await auth();
 			if (request.signal?.aborted) return;
 
@@ -149,6 +150,7 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				},
 				JSON.stringify(body),
 				request.signal,
+				"Codex",
 			);
 			if (response === null) return; // aborted mid-connect
 			if (!response.ok || !response.body) {

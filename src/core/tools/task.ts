@@ -46,7 +46,10 @@ const taskSchema = Type.Object({
 });
 
 export interface TaskToolOptions {
-	provider: LLMProvider;
+	/** Read at spawn: `/model` may swap the protocol family mid-session —
+	 *  children must inherit whatever is current, not the construction-time
+	 *  instance (multi-provider review P1-1). */
+	getProvider: () => LLMProvider;
 	/** Read at spawn: `/model` writes the runner's model mid-session. */
 	getModel: () => string;
 	/** Read at spawn: `/new`/`/resume` re-assemble the system prompt. */
@@ -216,7 +219,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					if (parent !== null) session = createChildSession(parent, options.sessionBaseDir);
 				}
 				outcome = await runSubagent({
-					provider: options.provider,
+					provider: options.getProvider(),
 					model: agent?.model ?? options.getModel(),
 					system: options.getSystem(),
 					extraSystem: agent?.system,

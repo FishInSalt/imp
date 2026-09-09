@@ -37,11 +37,21 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
 
+let envWarned = false;
+
 function envInt(name: string): number | undefined {
 	const raw = process.env[name];
 	if (raw === undefined) return undefined;
 	const n = Number(raw);
-	return Number.isFinite(n) && n > 0 ? n : undefined;
+	if (Number.isFinite(n) && n > 0) return n;
+	// Invalid values warn once and are IGNORED (fall through to the registry) —
+	// aligned with constants.ts's old contract rather than silently diverging
+	// between the footer and the compaction gate (review P2-8).
+	if (!envWarned) {
+		envWarned = true;
+		process.stderr.write(`imp: ignoring invalid ${name}=${JSON.stringify(raw)} (not a positive number)\n`);
+	}
+	return undefined;
 }
 
 /**

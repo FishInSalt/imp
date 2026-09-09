@@ -50,11 +50,16 @@ describe("buildModelList", () => {
 			configured: (f) => f === "anthropic" || f === "openai-codex",
 			discover: async (f) => (f === "anthropic" ? ["glm-4.6"] : null),
 		});
+		// the full 7-entry official coding-plan catalog (fix/codex-catalog)
 		expect(rows.map((r) => r.label)).toEqual([
 			"glm-4.6",
 			"openai-codex/gpt-5.5",
 			"openai-codex/gpt-5.4",
 			"openai-codex/gpt-5.4-mini",
+			"openai-codex/gpt-5.3-codex-spark",
+			"openai-codex/gpt-5.6-luna",
+			"openai-codex/gpt-5.6-sol",
+			"openai-codex/gpt-5.6-terra",
 		]);
 		expect(rows[1]?.description).toBe("ChatGPT plan (Codex)");
 	});
@@ -72,6 +77,25 @@ describe("buildModelList", () => {
 		});
 		expect(failed.rows.map((r) => r.label)).toEqual(["openai/deepseek-chat", "openai/gpt-5.2"]);
 		expect(failed.fallbackNotes).toEqual(["OpenAI-compatible endpoint"]);
+	});
+
+	it("codex: warm-cache extras APPEND to the static catalog (backend listing is additive)", async () => {
+		const { rows } = await buildModelList("glm-4.6", {
+			configured: (f) => f === "openai-codex",
+			discover: async (f) => (f === "openai-codex" ? ["gpt-5.9-preview"] : null),
+		});
+		const labels = rows.map((r) => r.label);
+		expect(labels[0]).toBe("glm-4.6"); // the current model fronts the list
+		expect(labels.slice(1, 8)).toEqual([
+			"openai-codex/gpt-5.5",
+			"openai-codex/gpt-5.4",
+			"openai-codex/gpt-5.4-mini",
+			"openai-codex/gpt-5.3-codex-spark",
+			"openai-codex/gpt-5.6-luna",
+			"openai-codex/gpt-5.6-sol",
+			"openai-codex/gpt-5.6-terra",
+		]);
+		expect(labels[8]).toBe("openai-codex/gpt-5.9-preview");
 	});
 
 	it("nothing configured (fresh install): the classic global seed list", async () => {

@@ -11,7 +11,7 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
-import { discoverModels, familyConfigured } from "../provider/discover.js";
+import { discoverModels, familyConfigured, peekCachedModels, warmCodexCache } from "../provider/discover.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { SelectOptions } from "./line-input.js";
@@ -155,7 +155,18 @@ function modelCandidates(current: string): string[] {
 const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 	anthropic: ["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"],
 	openai: ["openai/gpt-5.2"],
-	"openai-codex": ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4-mini"],
+	// The complete official coding-plan catalog (pi's generated
+	// openai-codex.json is the sourced truth — probe confirmed the backend's
+	// /codex/models returns an empty list for plan accounts today).
+	"openai-codex": [
+		"openai-codex/gpt-5.5",
+		"openai-codex/gpt-5.4",
+		"openai-codex/gpt-5.4-mini",
+		"openai-codex/gpt-5.3-codex-spark",
+		"openai-codex/gpt-5.6-luna",
+		"openai-codex/gpt-5.6-sol",
+		"openai-codex/gpt-5.6-terra",
+	],
 };
 
 /** Row descriptions identify the family — a bare id cannot (P2-5 lesson). */
@@ -195,13 +206,15 @@ export async function buildModelList(
 		ids = modelCandidates(current).filter((id) => id !== current);
 	} else {
 		for (const family of configuredFamilies) {
+			const discovered = await deps.discover(family);
 			if (family === "openai-codex") {
-				// No public listing on the ChatGPT backend — the static catalog IS
-				// the truth for this family.
+				// The static catalog is the primary truth; the backend listing
+				// (probed live: exists, currently empty) is ADDITIVE — whatever it
+				// ever starts serving shows up here without another change.
 				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+				for (const id of discovered ?? []) ids.push(`openai-codex/${id}`);
 				continue;
 			}
-			const discovered = await deps.discover(family);
 			if (discovered === null) {
 				fallbackNotes.push(familyLabel(`${family}/`));
 				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
@@ -482,9 +495,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 				// TUI shell: a pick behaves exactly like /model <id> on the chosen
 				// row; cancelling changes nothing and notes nothing. The list is what
 				// the CONFIGURED endpoints actually serve (#model-discovery).
+				if (familyConfigured("openai-codex")) warmCodexCache(); // background; never blocks the picker
 				const { rows, fallbackNotes } = await buildModelList(ctx.runner.modelReference(), {
 					configured: familyConfigured,
-					discover: discoverModels,
+					discover: (family) =>
+						family === "openai-codex"
+							? Promise.resolve(peekCachedModels("openai-codex"))
+							: discoverModels(family),
 				});
 				for (const note of fallbackNotes) {
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);

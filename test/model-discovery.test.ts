@@ -50,9 +50,10 @@ describe("buildModelList", () => {
 			configured: (f) => f === "anthropic" || f === "openai-codex",
 			discover: async (f) => (f === "anthropic" ? ["glm-4.6"] : null),
 		});
-		// the full 7-entry official coding-plan catalog (fix/codex-catalog)
+		// static seeds = the offline floor (pi.dev catalog synced, incl. gpt-6-astra)
 		expect(rows.map((r) => r.label)).toEqual([
 			"glm-4.6",
+			"openai-codex/gpt-6-astra",
 			"openai-codex/gpt-5.5",
 			"openai-codex/gpt-5.4",
 			"openai-codex/gpt-5.4-mini",
@@ -79,23 +80,29 @@ describe("buildModelList", () => {
 		expect(failed.fallbackNotes).toEqual(["OpenAI-compatible endpoint"]);
 	});
 
-	it("codex: warm-cache extras APPEND to the static catalog (backend listing is additive)", async () => {
-		const { rows } = await buildModelList("glm-4.6", {
+	it("codex: pi.dev catalog is primary (gpt-6-astra arrives with it); failure falls back to static seeds + note", async () => {
+		const fresh = await buildModelList("glm-4.6", {
 			configured: (f) => f === "openai-codex",
-			discover: async (f) => (f === "openai-codex" ? ["gpt-5.9-preview"] : null),
+			// the pi.dev shape: a bare array (or {models:[...]}) — served gpt-6-astra on day one
+			discover: async (f) => (f === "openai-codex" ? ["gpt-6-astra", "gpt-5.5", "gpt-5.4"] : null),
 		});
-		const labels = rows.map((r) => r.label);
-		expect(labels[0]).toBe("glm-4.6"); // the current model fronts the list
-		expect(labels.slice(1, 8)).toEqual([
+		expect(fresh.rows.map((r) => r.label)).toEqual([
+			"glm-4.6",
+			"openai-codex/gpt-6-astra",
 			"openai-codex/gpt-5.5",
 			"openai-codex/gpt-5.4",
-			"openai-codex/gpt-5.4-mini",
-			"openai-codex/gpt-5.3-codex-spark",
-			"openai-codex/gpt-5.6-luna",
-			"openai-codex/gpt-5.6-sol",
-			"openai-codex/gpt-5.6-terra",
 		]);
-		expect(labels[8]).toBe("openai-codex/gpt-5.9-preview");
+		expect(fresh.fallbackNotes).toEqual([]);
+		const failed = await buildModelList("glm-4.6", {
+			configured: (f) => f === "openai-codex",
+			discover: async () => null,
+		});
+		expect(failed.rows.map((r) => r.label).slice(0, 3)).toEqual([
+			"glm-4.6",
+			"openai-codex/gpt-6-astra",
+			"openai-codex/gpt-5.5",
+		]);
+		expect(failed.fallbackNotes).toEqual(["model catalog (pi.dev)"]);
 	});
 
 	it("nothing configured (fresh install): the classic global seed list", async () => {
@@ -162,10 +169,13 @@ describe("discoverModels + familyConfigured", () => {
 			"OPENAI_API_KEY",
 			"OPENAI_BASE_URL",
 			"IMP_AUTH_PATH",
+			"IMP_CATALOG_BASE_URL",
 		]) {
 			SAVED[key] = process.env[key];
 			delete process.env[key];
 		}
+		// deleting IMP_AUTH_PATH would EXPOSE the host's real login — pin "none"
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
 		hits = [];
 	});
 	afterEach(() => {
@@ -199,6 +209,52 @@ describe("discoverModels + familyConfigured", () => {
 		// the openai family fetches {base}/models — point base so that path 404s, then use the real path via a second config
 		expect(await discoverModels("openai")).toBeNull(); // /models → 404
 		expect(hits).toContain("/models");
+	});
+
+	it("codex: pi.dev catalog (bare-array shape) via IMP_CATALOG_BASE_URL; gated on login", async () => {
+		// credential present (pinned path) + local catalog server
+		const dir = mkdtempSync(path.join(tmpdir(), "imp-disc-"));
+		const credFile = path.join(dir, "auth.json");
+		writeFileSync(
+			credFile,
+			JSON.stringify({
+				provider: "openai-codex",
+				accessToken: "a",
+				refreshToken: "r",
+				expiresAt: Date.now() + 600_000,
+				accountId: "acct",
+			}),
+		);
+		let hit = false;
+		const cat = createServer((req, res) => {
+			hit = true;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ "gpt-6-astra": { id: "gpt-6-astra" }, gpt55: { id: "gpt-5.5" } })); // pi.dev's record-keyed shape
+		});
+		await new Promise<void>((r) => cat.listen(0, "127.0.0.1", r));
+		const { port } = cat.address() as { port: number };
+		const savedAuth = process.env.IMP_AUTH_PATH;
+		const savedCat = process.env.IMP_CATALOG_BASE_URL;
+		process.env.IMP_AUTH_PATH = credFile;
+		process.env.IMP_CATALOG_BASE_URL = `http://127.0.0.1:${port}`;
+		try {
+			resetDiscoveryCacheForTest();
+			expect(await discoverModels("openai-codex")).toEqual(["gpt-6-astra", "gpt-5.5"]);
+			expect(hit).toBe(true);
+			// without the login, no fetch happens even with the catalog configured
+			process.env.IMP_AUTH_PATH = "/nonexistent";
+			resetDiscoveryCacheForTest();
+			hit = false;
+			expect(await discoverModels("openai-codex")).toBeNull();
+			expect(hit).toBe(false);
+		} finally {
+			cat.close();
+			if (savedAuth === undefined) delete process.env.IMP_AUTH_PATH;
+			else process.env.IMP_AUTH_PATH = savedAuth;
+			if (savedCat === undefined) delete process.env.IMP_CATALOG_BASE_URL;
+			else process.env.IMP_CATALOG_BASE_URL = savedCat;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("unconfigured families resolve null WITHOUT any network", async () => {

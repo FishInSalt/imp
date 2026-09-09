@@ -68,11 +68,13 @@ export function familyConfigured(family: ProviderName): boolean {
  * The ids an endpoint serves (wire ids, endpoint order), or null when the
  * family is unconfigured or its listing is unreachable.
  *
- * openai-codex: the ChatGPT backend HAS /codex/models (requires
- * client_version; probed live 2026-09 — exists but returns an empty list
- * for coding-plan accounts, which is why pi keeps an explicit catalog). We
- * call it anyway as an ADDITIVE source: whatever it ever starts serving
- * appears in the picker on top of the static catalog.
+ * openai-codex: the ChatGPT backend's /codex/models is version-gated to a
+ * 3-entry recommended subset (probed live: client_version ≥0.124 required;
+ * entries carry minimal_client_version) — NOT the full set. The complete,
+ * current catalog comes from pi's public central service
+ * (pi.dev/api/models/providers/openai-codex — the same source the reference
+ * project fetches; it served gpt-6-astra the day it shipped). Static seeds
+ * remain the offline fallback.
  */
 export async function discoverModels(family: ProviderName): Promise<string[] | null> {
 	if (!familyConfigured(family)) return null;
@@ -132,15 +134,23 @@ async function fetchOnce(
 			return "retry";
 		}
 		if (!response.ok) return null;
-		const json = (await response.json()) as {
-			data?: Array<{ id?: unknown; slug?: unknown }>;
-			models?: Array<{ id?: unknown; slug?: unknown }>;
-		};
-		const list: Array<{ id?: unknown; slug?: unknown }> | null = Array.isArray(json.data)
-			? json.data
-			: Array.isArray(json.models)
-				? json.models
-				: null;
+		const json = (await response.json()) as unknown;
+		const asRecord = typeof json === "object" && json !== null ? (json as Record<string, unknown>) : {};
+		// Three listing shapes in the wild: a bare array, {data:[...]} /
+		// {models:[...]}, and pi.dev's record keyed by model id (parseCatalog's
+		// Object.values branch in the reference project).
+		const candidate = Array.isArray(json)
+			? json
+			: Array.isArray(asRecord.data)
+				? asRecord.data
+				: Array.isArray(asRecord.models)
+					? asRecord.models
+					: Object.values(asRecord).length > 0 &&
+							Object.values(asRecord).every((v) => typeof v === "object" && v !== null && "id" in v)
+						? Object.values(asRecord)
+						: null;
+		const list: Array<{ id?: unknown; slug?: unknown }> | null =
+			candidate !== null ? (candidate as Array<{ id?: unknown; slug?: unknown }>) : null;
 		if (list === null) return null;
 		const ids = list
 			.map((m) => {
@@ -158,31 +168,10 @@ async function fetchOnce(
 	}
 }
 
-/** Codex listing — uses the stored credential as-is: the picker must not
- *  trigger a token refresh as a side effect. */
+/** Codex listing: pi's public catalog service (unauthenticated, fast).
+ *  IMP_CATALOG_BASE_URL redirects it (tests / mirrors). */
 async function discoverCodexModels(): Promise<string[] | null> {
-	const credential = loadCodexCredential();
-	if (credential === null) return null;
-	const base = (process.env.OPENAI_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(/\/+$/, "");
-	return fetchJson(`${base}/codex/models?client_version=imp-0.1.0`, {
-		authorization: `Bearer ${credential.accessToken}`,
-		"chatgpt-account-id": credential.accountId,
-		originator: "imp",
-		accept: "application/json",
-	});
-}
-
-/** Warm cache read — the picker's codex strategy: never block on the
- *  network (the ChatGPT backend can hang for seconds); show the static
- *  catalog now and let warmCodexCache() fill the cache for the NEXT open. */
-export function peekCachedModels(family: ProviderName): string[] | null {
-	if (family !== "openai-codex") return null;
-	const base = (process.env.OPENAI_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(/\/+$/, "");
-	const hit = cache.get(`openai-codex|${base}`);
-	return hit !== undefined && now() - hit.at < CACHE_TTL_MS ? hit.ids : null;
-}
-
-/** Fire-and-forget cache warm-up; never throws. */
-export function warmCodexCache(): void {
-	void discoverCodexModels().catch(() => undefined);
+	if (!familyConfigured("openai-codex")) return null;
+	const base = (process.env.IMP_CATALOG_BASE_URL ?? "https://pi.dev").replace(/\/+$/, "");
+	return fetchJson(`${base}/api/models/providers/openai-codex`, { accept: "application/json" });
 }

@@ -11,7 +11,7 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
-import { discoverModels, familyConfigured, peekCachedModels, warmCodexCache } from "../provider/discover.js";
+import { discoverModels, familyConfigured } from "../provider/discover.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { SelectOptions } from "./line-input.js";
@@ -159,6 +159,7 @@ const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 	// openai-codex.json is the sourced truth — probe confirmed the backend's
 	// /codex/models returns an empty list for plan accounts today).
 	"openai-codex": [
+		"openai-codex/gpt-6-astra",
 		"openai-codex/gpt-5.5",
 		"openai-codex/gpt-5.4",
 		"openai-codex/gpt-5.4-mini",
@@ -208,11 +209,15 @@ export async function buildModelList(
 		for (const family of configuredFamilies) {
 			const discovered = await deps.discover(family);
 			if (family === "openai-codex") {
-				// The static catalog is the primary truth; the backend listing
-				// (probed live: exists, currently empty) is ADDITIVE — whatever it
-				// ever starts serving shows up here without another change.
-				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
-				for (const id of discovered ?? []) ids.push(`openai-codex/${id}`);
+				// pi.dev's catalog is the primary truth (it served gpt-6-astra the
+				// day it shipped); the static seeds are the offline fallback — a
+				// union floor so a catalog regression can never HIDE models.
+				if (discovered === null) {
+					ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+					fallbackNotes.push("model catalog (pi.dev)");
+				} else {
+					for (const id of discovered) ids.push(`openai-codex/${id}`);
+				}
 				continue;
 			}
 			if (discovered === null) {
@@ -495,13 +500,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 				// TUI shell: a pick behaves exactly like /model <id> on the chosen
 				// row; cancelling changes nothing and notes nothing. The list is what
 				// the CONFIGURED endpoints actually serve (#model-discovery).
-				if (familyConfigured("openai-codex")) warmCodexCache(); // background; never blocks the picker
 				const { rows, fallbackNotes } = await buildModelList(ctx.runner.modelReference(), {
 					configured: familyConfigured,
-					discover: (family) =>
-						family === "openai-codex"
-							? Promise.resolve(peekCachedModels("openai-codex"))
-							: discoverModels(family),
+					discover: discoverModels,
 				});
 				for (const note of fallbackNotes) {
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);

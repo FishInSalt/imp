@@ -1231,21 +1231,35 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("/model selector: Esc cancels — no switch, no note, editor keeps keys", async () => {
-		const env = await startTuiRepl([reply("ok")]);
-		await settle();
-		env.terminal.data("/model\r");
-		await settle();
-		// Positive control (review P2): the picker must actually be open —
-		// without ctx.select, /model silently falls back to the legacy text
-		// path and every later assertion would still pass.
-		expect(env.terminal.frameSince(0)).toContain("models — switch applies from the next turn");
-		env.terminal.data("\x1b"); // Esc — cancel
-		await settle();
-		expect(env.runner.model).toBe("test-model");
-		expect(env.transcript.completedLines().join("\n")).not.toContain("▪ model:");
-		env.terminal.data("/exit\r"); // keys still reach the editor
-		const code = await env.repl;
-		expect(code).toBe(0);
+		// #model-discovery hermeticity (same pin as the Down+Enter test)
+		const saved: Record<string, string | undefined> = {};
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		try {
+			const env = await startTuiRepl([reply("ok")]);
+			await settle();
+			env.terminal.data("/model\r");
+			await settle();
+			// Positive control (review P2): the picker must actually be open —
+			// without ctx.select, /model silently falls back to the legacy text
+			// path and every later assertion would still pass.
+			expect(env.terminal.frameSince(0)).toContain("models — switch applies from the next turn");
+			env.terminal.data("\x1b"); // Esc — cancel
+			await settle();
+			expect(env.runner.model).toBe("test-model");
+			expect(env.transcript.completedLines().join("\n")).not.toContain("▪ model:");
+			env.terminal.data("/exit\r"); // keys still reach the editor
+			const code = await env.repl;
+			expect(code).toBe(0);
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
 	});
 
 	it("EOF on an empty editor exits gracefully with the session-saved note", async () => {

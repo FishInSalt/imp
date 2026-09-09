@@ -403,6 +403,15 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **接受（记录）**：巨大弃段摘要请求无总量截断（serialize 只截单条）——超窗报错被 catch 降级为无摘要切换，best-effort 声明内；switchBranch 第三重校验为防御性死代码；"N messages here" 含摘要帧（与 /resume 同口径）
   - 踩坑：测试期望两次写错语义方向（fork 后未写的分支无 tip；重启后 otherBranchTips 为空）——**树操作的期望值要沿叶子存在性推演**，不能凭直觉
 
+- **#多 provider 批次 0：OpenAI Chat Completions 通用层（2026-09-10，600 tests，feat/openai-compat）**：动机=用户持有 OpenAI（ChatGPT 订阅凭证）与 z.ai 两家 coding plan，要求支持且尽量通用。市场事实：主流厂商分两种协议——Anthropic Messages（已支持，z.ai 在用）与 OpenAI Chat Completions（本批新增）。一个适配器解锁 OpenAI 本家+DeepSeek/Kimi/MiniMax/xAI/OpenRouter/网关+z.ai OpenAI 模式端点。
+  - **shared.ts 抽取**：parseSse/parseFrame/abortSafe/safeParseJson/重试策略从 anthropic.ts 原位抽出为 postJsonWithRetry（含中止返回 null 哨兵保持"静默结束"契约）；anthropic 行为等价由既有 590 测试背书
+  - **openai-completions.ts（~280 行）**：system 走 messages[0]；tool_calls 按 index 流式累积（id/name 首块到达、arguments 分片）；toolResult → 独立 role:"tool" 消息；usage 末块到达（stream_options.include_usage）含 prompt_tokens_details.cached_tokens 与 OpenRouter prompt_cache_hit_tokens 双拼写；finish_reason 映射（tool_calls→tool_use/length→max_tokens/stop→end_turn）+ 无 finish_reason 判截断 + 有 toolCall 兜底 tool_use；maxTokensField 按 model 探测（gpt-5*/o 系→max_completion_tokens，其余 max_tokens，参考 pi compat 经验）；空回复合成 "(empty)" 文本块；401/404 提示带 env 名
+  - **resolve.ts 路由种子**：`openai/<id>` 前缀路由（bare id 默认 anthropic，未知前缀含斜杠的 id 整体回退——存量配置/会话字节不变）；runner 构造期解析（`options.model` → {provider, modelId}），子代理天然继承；运行中 /model 跨 provider 切换留给注册表批次
+  - **测试（+10）**：本地 SSE 服务器 wire 级——文本流/交错工具调用分片累积/OpenRouter usage 双拼写/请求体全形状（system 首位、assistant tool_calls 回显、tool 消息、嵌套工具格式、maxTokensField 翻转、Bearer 头）/中止无 message_end/截断报错/429 重试恢复/401 提示/空回合
+  - **真机验证（z.ai OpenAI 模式端点）**：协议与认证通过，返回结构化 429 code 1113 "Insufficient balance"——**GLM Coding Plan 额度不覆盖 OpenAI 模式端点（走平台计费）**；错误路径按设计（重试→清晰提示+会话续跑）。正向流由 wire 测试覆盖
+  - 已知边界：run_log provider 名显示 "openai"（批次 2 随注册表细化）；/model picker 候选仍是提示文本（批次 2）；ChatGPT 订阅凭证走批次 1 OAuth+批次 2 Responses
+  - 踩坑：blocks 与 tool_call_delta 均按**到达序**排列（与 anthropic 约定一致）——交错流的测试期望两次写反，先推演到达序再写断言
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

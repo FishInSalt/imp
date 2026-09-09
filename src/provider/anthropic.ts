@@ -1,25 +1,9 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const API_VERSION = "2023-06-01";
-
-/** Transient, idempotent-to-retry failures (nothing yielded yet). */
-const RETRY_DELAYS_MS = [600, 1500];
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-
-const delay = (ms: number, signal?: AbortSignal) =>
-	new Promise<void>((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(timer);
-				resolve();
-			},
-			{ once: true },
-		);
-	});
 
 export interface AnthropicProviderOptions {
 	apiKey?: string;
@@ -79,69 +63,6 @@ interface SseEvent {
 }
 
 /** Parse an SSE byte stream into events. Frames are separated by a blank line. */
-/**
- * Undici rejects the fetch body reader when its request is aborted; without
- * this wrapper that rejection escapes the provider as a thrown DOMException
- * and the agent loop mistakes a user abort for a provider failure.
- */
-async function* abortSafe<T>(source: AsyncIterable<T>, signal?: AbortSignal): AsyncGenerator<T> {
-	try {
-		for await (const item of source) yield item;
-	} catch (err) {
-		if (signal?.aborted) return;
-		throw err;
-	}
-}
-
-async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			let sep = buffer.indexOf("\n\n");
-			while (sep !== -1) {
-				const frame = buffer.slice(0, sep);
-				buffer = buffer.slice(sep + 2);
-				const parsed = parseFrame(frame);
-				if (parsed) yield parsed;
-				sep = buffer.indexOf("\n\n");
-			}
-		}
-	} finally {
-		reader.releaseLock();
-	}
-}
-
-function parseFrame(frame: string): SseEvent | undefined {
-	let event = "message";
-	const dataLines: string[] = [];
-	for (const line of frame.split("\n")) {
-		if (line.startsWith("event:")) {
-			event = line.slice(6).trim();
-		} else if (line.startsWith("data:")) {
-			dataLines.push(line.slice(5).trimStart());
-		}
-	}
-	if (dataLines.length === 0) return undefined;
-	try {
-		return { event, data: JSON.parse(dataLines.join("\n")) };
-	} catch {
-		return undefined;
-	}
-}
-
-function safeParseJson(raw: string): unknown {
-	try {
-		return JSON.parse(raw);
-	} catch {
-		return { _parseError: "tool arguments were not valid JSON", raw: raw.slice(0, 500) };
-	}
-}
-
 export function createAnthropicProvider(options: AnthropicProviderOptions = {}): LLMProvider {
 	// Key resolution mirrors Claude Code conventions so Anthropic-compatible
 	// services (e.g. Z.ai GLM Coding Plan) work via env vars alone:
@@ -180,40 +101,20 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				}));
 			}
 
-			// Connection-level drops and 429/5xx are safe to retry: nothing has
-			// been yielded and the request body is unchanged. Real usage shows the
-			// Z.ai endpoint drops connections occasionally (three live incidents
-			// during M4 acceptance alone) — one quiet retry saves whole turns.
-			// Mid-stream failures after events started flowing are NOT retried
-			// (see abortSafe / message_stop truncation handling below).
-			let response: Response | null = null;
-			let networkError: Error | null = null;
-			for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-				if (attempt > 0) await delay(RETRY_DELAYS_MS[attempt - 1] ?? 0, request.signal);
-				try {
-					const r = await fetch(`${baseUrl}/v1/messages`, {
-						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							...(auth === "bearer" ? { authorization: `Bearer ${apiKey}` } : { "x-api-key": apiKey }),
-							"anthropic-version": API_VERSION,
-						},
-						body: JSON.stringify(body),
-						signal: request.signal,
-					});
-					if (!RETRYABLE_STATUS.has(r.status) || attempt === RETRY_DELAYS_MS.length) {
-						response = r;
-						break;
-					}
-					await r.text().catch(() => ""); // drain so the socket is released before retrying
-				} catch (err) {
-					if (request.signal?.aborted) return;
-					networkError = err instanceof Error ? err : new Error(String(err));
-				}
-			}
-			if (response === null) {
-				throw new Error(`Anthropic request failed: ${networkError?.message ?? "retries exhausted"}`);
-			}
+			// Retry policy (connection drops, 429/5xx — nothing yielded yet)
+			// lives in shared.ts; see the abortSafe / message_stop truncation
+			// handling below for why mid-stream failures are NOT retried.
+			const response = await postJsonWithRetry(
+				`${baseUrl}/v1/messages`,
+				{
+					"content-type": "application/json",
+					...(auth === "bearer" ? { authorization: `Bearer ${apiKey}` } : { "x-api-key": apiKey }),
+					"anthropic-version": API_VERSION,
+				},
+				JSON.stringify(body),
+				request.signal,
+			);
+			if (response === null) return; // aborted mid-connect
 
 			if (!response.ok || !response.body) {
 				const text = await response.text().catch(() => "");

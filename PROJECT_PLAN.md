@@ -433,6 +433,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 真机冒烟：glm 默认路径无回归（6/6 答对、无错误）
   - 两路 Correct 交叉印证：shared 抽取等价（null 哨兵=原静默 return）、单飞刷新竞态窗口推演、403/404 排水体真修对、parseModelRef 边界、footer/status 改线正确
 
+- **#model-discovery 模型列表动态发现（2026-09-10，634 tests，feat/model-discovery）**：用户报告两问题——①无 anthropic 订阅却见 claude 且能聊天（z.ai 网关对未列出 id 的兜底路由，非声明支持）②glm/openai 只列静态表一小部分。根因：/model 候选=硬编码静态表，与端点实际供应脱钩。**只读探测证实** z.ai Anthropic 兼容端点实现 /v1/models，返回 10 个 GLM 全集、无 claude。
+  - **provider/discover.ts**：discoverModels(family)——anthropic 家 GET {base}/v1/models?limit=1000（Bearer/x-api-key+anthropic-version，与 anthropic.ts 同解析）、openai 家 GET {base}/models；内存缓存 5 分钟（(family,baseUrl) 键，时钟可注入）；2.5s 超时静默回退；familyConfigured(family) 凭证门控（codex=读凭据文件，**支持 IMP_AUTH_PATH 覆盖**——测试封闭性/沙箱）
+  - **buildModelList**（commands.ts 导出，deps 可注入）：已配置族的**发现结果即列表**（anthropic bare、其余加前缀 canonical）；未配置族整体排除（用户拍板"列表即当前真实可用"）；发现失败→该族静态种子+note；**全部未配置（全新安装）→经典全局种子表**保住 picker 可用性与既有金样；codex 无公开列表端点→静态目录即真相；当前模型在列表内则原地标 current（不重复前置），自定义 id 恒首位；行描述标族名（P2-5 教训延续）
+  - 真机验收：z.ai 10 GLM 全现、claude 消失、族标签正确；测试隔离修复两处（repl-commands describe 级 + tui picker 用例——**用户真实 ~/.imp/auth.json 曾令测试非封闭**，IMP_AUTH_PATH 钉住）
+  - 测试 +12：buildModelList 六路径（发现即列表/claude 不凭空/多族合并排除/codex 静态/全新安装经典表/自定义 current 前置）、发现层（头形状/缓存命中与 TTL 过期/401→null/未配置零网络）、IMP_AUTH_PATH 凭据门控
+  - **审查评估**：纯增量功能（picker 数据源+发现层），无并发/协议状态机面，12 专属测试+真机验证——判定无需独立对抗审查；遗留：openai 家发现未对真实 OpenAI 端点验收（无 key）、z.ai 发现结果含 has_more 未翻页（10 条内无影响）
+  - 已知边界：/model <id> 手动路径不变（网关兜底路由仍是用户的显式选择）；legacy readline 无参路径仍是教学文本（无列表能力）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

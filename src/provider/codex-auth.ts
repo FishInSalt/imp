@@ -80,7 +80,9 @@ function decodeJwtAccountId(token: string): string {
 }
 
 function authFilePath(authPath?: string): string {
-	return authPath ?? path.join(homedir(), ".imp", "auth.json");
+	// IMP_AUTH_PATH redirects the credential store (sandboxing / hermetic
+	// tests — the picker's family check must not depend on the host login).
+	return authPath ?? process.env.IMP_AUTH_PATH ?? path.join(homedir(), ".imp", "auth.json");
 }
 
 /** Read the stored credential; null when absent, foreign-provider, or corrupt. */

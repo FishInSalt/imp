@@ -11,6 +11,7 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
+import { discoverModels, familyConfigured } from "../provider/discover.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { SelectOptions } from "./line-input.js";
@@ -148,6 +149,73 @@ const MODEL_CANDIDATES: readonly string[] = [
 
 function modelCandidates(current: string): string[] {
 	return MODEL_CANDIDATES.includes(current) ? [...MODEL_CANDIDATES] : [current, ...MODEL_CANDIDATES];
+}
+
+/** Static seeds shown when a CONFIGURED family's listing is unreachable. */
+const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
+	anthropic: ["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"],
+	openai: ["openai/gpt-5.2"],
+	"openai-codex": ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4-mini"],
+};
+
+/** Row descriptions identify the family — a bare id cannot (P2-5 lesson). */
+function familyLabel(id: string): string {
+	if (id.startsWith("openai-codex/")) return "ChatGPT plan (Codex)";
+	if (id.startsWith("openai/")) return "OpenAI-compatible endpoint";
+	return "anthropic-compatible endpoint";
+}
+
+export interface ModelListDeps {
+	/** Families that currently hold a credential. */
+	configured: (family: "anthropic" | "openai" | "openai-codex") => boolean;
+	/** Endpoint listing, null when unreachable — injectable for tests. */
+	discover: (family: "anthropic" | "openai" | "openai-codex") => Promise<string[] | null>;
+}
+
+/**
+ * Build the picker list: the union of what every CONFIGURED family serves
+ * (#model-discovery — "what you can use right now"). Unconfigured families
+ * are excluded outright; a configured family whose listing fails falls back
+ * to its static seed. When NOTHING is configured (fresh install) the classic
+ * global seed list keeps the picker useful. The current model always leads,
+ * even when it is a custom id the endpoints never listed.
+ */
+export async function buildModelList(
+	current: string,
+	deps: ModelListDeps,
+): Promise<{
+	rows: Array<{ label: string; description?: string }>;
+	fallbackNotes: string[];
+}> {
+	const families = ["anthropic", "openai", "openai-codex"] as const;
+	const fallbackNotes: string[] = [];
+	let ids: string[] = [];
+	const configuredFamilies = families.filter((f) => deps.configured(f));
+	if (configuredFamilies.length === 0) {
+		ids = modelCandidates(current).filter((id) => id !== current);
+	} else {
+		for (const family of configuredFamilies) {
+			if (family === "openai-codex") {
+				// No public listing on the ChatGPT backend — the static catalog IS
+				// the truth for this family.
+				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+				continue;
+			}
+			const discovered = await deps.discover(family);
+			if (discovered === null) {
+				fallbackNotes.push(familyLabel(`${family}/`));
+				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+			} else {
+				ids.push(...discovered.map((id) => (family === "anthropic" ? id : `${family}/${id}`)));
+			}
+		}
+	}
+	ids = [...new Set(ids)];
+	const rows = (ids.includes(current) ? ids : [current, ...ids]).map((id) => ({
+		label: id,
+		description: id === current ? "current" : familyLabel(id),
+	}));
+	return { rows, fallbackNotes };
 }
 
 /** The switch itself, shared by "/model <id>" and the picker's pick — the
@@ -412,16 +480,20 @@ export const COMMANDS: readonly SlashCommand[] = [
 					return "handled";
 				}
 				// TUI shell: a pick behaves exactly like /model <id> on the chosen
-				// row; cancelling changes nothing and notes nothing.
-				const candidates = modelCandidates(ctx.runner.modelReference());
+				// row; cancelling changes nothing and notes nothing. The list is what
+				// the CONFIGURED endpoints actually serve (#model-discovery).
+				const { rows, fallbackNotes } = await buildModelList(ctx.runner.modelReference(), {
+					configured: familyConfigured,
+					discover: discoverModels,
+				});
+				for (const note of fallbackNotes) {
+					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);
+				}
 				const index = await select({
 					title: "models — switch applies from the next turn",
-					items: candidates.map((id) => ({
-						label: id,
-						description: id === ctx.runner.modelReference() ? "current" : undefined,
-					})),
+					items: rows,
 				});
-				const id = index === null ? undefined : candidates[index];
+				const id = index === null ? undefined : rows[index]?.label;
 				if (id !== undefined) switchModel(ctx, id);
 				return "handled";
 			}

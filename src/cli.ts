@@ -83,6 +83,17 @@ Environment:
     export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
     export IMP_MODEL=glm-4.6
 
+  OpenAI and OpenAI-compatible providers (model id prefix routes):
+    export OPENAI_API_KEY=<key>
+    export IMP_MODEL=openai/gpt-5.2
+    # any compatible endpoint (DeepSeek, Kimi, OpenRouter, ...):
+    export OPENAI_BASE_URL=https://api.deepseek.com/v1
+    export IMP_MODEL=openai/deepseek-chat
+    # Z.ai via its OpenAI-mode endpoint:
+    export OPENAI_API_KEY=<your z.ai key>
+    export OPENAI_BASE_URL=https://api.z.ai/api/paas/v4
+    export IMP_MODEL=openai/glm-4.6
+
 Examples:
   imp -p "List the .ts files here and count their total lines"
   imp -p "Read src/cli.ts and fix the bug in argument parsing"

@@ -27,8 +27,8 @@ import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens, shorten } from "./format.js";
-import { createAnthropicProvider } from "./provider/anthropic.js";
 import { withLogging } from "./provider/logging.js";
+import { resolveModel } from "./provider/resolve.js";
 import type { LLMProvider } from "./provider/types.js";
 import type { Renderer } from "./render.js";
 
@@ -167,8 +167,14 @@ export async function createRunner(options: RunnerOptions): Promise<Runner> {
 			message: failure.detail,
 		});
 	}
-	const provider = withLogging(options.provider ?? createAnthropicProvider(), logger);
-	return new RunnerImpl(options, logger, provider);
+	// #multi-provider: a bare model id keeps the anthropic default (byte-identical
+	// for every existing config); "openai/<id>" routes to the Chat Completions
+	// protocol. Runtime /model switching across providers arrives with the
+	// registry batch; construction-time resolution covers subagents too.
+	const resolved = resolveModel(options.model);
+	const provider = withLogging(options.provider ?? resolved.provider, logger);
+	const initialModel = resolved.modelId;
+	return new RunnerImpl(options, logger, provider, initialModel);
 }
 
 class RunnerImpl implements Runner {
@@ -187,12 +193,12 @@ class RunnerImpl implements Runner {
 	private initialized = false;
 	private lastRunModel: string;
 
-	constructor(options: RunnerOptions, logger: RunLogger, provider: LLMProvider) {
+	constructor(options: RunnerOptions, logger: RunLogger, provider: LLMProvider, initialModel: string) {
 		this.options = options;
 		this.logger = logger;
 		this.provider = provider;
-		this.model = options.model;
-		this.lastRunModel = options.model;
+		this.model = initialModel;
+		this.lastRunModel = initialModel;
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
 		// keep their hermetic set, extension tools append after the base six. The
 		// default six run under options.cwd — never process.cwd() — so the

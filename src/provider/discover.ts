@@ -20,7 +20,7 @@ import type { ProviderName } from "./resolve.js";
  */
 
 const CACHE_TTL_MS = 5 * 60_000;
-const REQUEST_TIMEOUT_MS = 2_500;
+const REQUEST_TIMEOUT_MS = 4_000;
 
 interface CacheEntry {
 	ids: string[];
@@ -66,12 +66,17 @@ export function familyConfigured(family: ProviderName): boolean {
 
 /**
  * The ids an endpoint serves (wire ids, endpoint order), or null when the
- * family is unconfigured or its listing is unreachable. Codex is always null
- * — it has no listing endpoint and uses a static catalog.
+ * family is unconfigured or its listing is unreachable.
+ *
+ * openai-codex: the ChatGPT backend HAS /codex/models (requires
+ * client_version; probed live 2026-09 — exists but returns an empty list
+ * for coding-plan accounts, which is why pi keeps an explicit catalog). We
+ * call it anyway as an ADDITIVE source: whatever it ever starts serving
+ * appears in the picker on top of the static catalog.
  */
 export async function discoverModels(family: ProviderName): Promise<string[] | null> {
 	if (!familyConfigured(family)) return null;
-	if (family === "openai-codex") return null;
+	if (family === "openai-codex") return discoverCodexModels();
 
 	const baseUrl = family === "anthropic" ? anthropicBaseUrl() : openaiBaseUrl();
 	const cacheKey = `${family}|${baseUrl}`;
@@ -91,20 +96,93 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 		headers.authorization = `Bearer ${String(process.env.OPENAI_API_KEY)}`;
 	}
 
+	return fetchJson(url, headers, cacheKey);
+}
+
+/** Fetch a models listing; accepts both {data:[...]} (OpenAI/Anthropic
+ *  convention) and {models:[{slug|id}]} (the codex backend's shape). */
+async function fetchJson(
+	url: string,
+	headers: Record<string, string>,
+	cacheKey?: string,
+): Promise<string[] | null> {
+	// One quiet retry on throttling: a single 429 must not collapse the
+	// picker into its fallback seeds (observed live against z.ai).
+	for (let attempt = 0; attempt < 2; attempt++) {
+		if (attempt > 0) await new Promise((r) => setTimeout(r, 400));
+		const result = await fetchOnce(url, headers, cacheKey);
+		if (result !== "retry") return result;
+	}
+	return null;
+}
+
+type FetchOnce = string[] | null | "retry";
+
+async function fetchOnce(
+	url: string,
+	headers: Record<string, string>,
+	cacheKey?: string,
+): Promise<FetchOnce> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
 		const response = await fetch(url, { headers, signal: controller.signal });
+		if (response.status === 429 || response.status >= 500) {
+			await response.text().catch(() => ""); // drain before retrying
+			return "retry";
+		}
 		if (!response.ok) return null;
-		const json = (await response.json()) as { data?: Array<{ id?: unknown }> };
-		if (!Array.isArray(json.data)) return null;
-		const ids = json.data.map((m) => (typeof m?.id === "string" ? m.id : "")).filter((id) => id !== "");
+		const json = (await response.json()) as {
+			data?: Array<{ id?: unknown; slug?: unknown }>;
+			models?: Array<{ id?: unknown; slug?: unknown }>;
+		};
+		const list: Array<{ id?: unknown; slug?: unknown }> | null = Array.isArray(json.data)
+			? json.data
+			: Array.isArray(json.models)
+				? json.models
+				: null;
+		if (list === null) return null;
+		const ids = list
+			.map((m) => {
+				const id = m?.id ?? m?.slug;
+				return typeof id === "string" ? id : "";
+			})
+			.filter((id) => id !== "");
 		if (ids.length === 0) return null;
-		cache.set(cacheKey, { ids, at: now() });
+		if (cacheKey !== undefined) cache.set(cacheKey, { ids, at: now() });
 		return ids;
 	} catch {
 		return null; // offline / timeout / bad shape — caller falls back
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+/** Codex listing — uses the stored credential as-is: the picker must not
+ *  trigger a token refresh as a side effect. */
+async function discoverCodexModels(): Promise<string[] | null> {
+	const credential = loadCodexCredential();
+	if (credential === null) return null;
+	const base = (process.env.OPENAI_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(/\/+$/, "");
+	return fetchJson(`${base}/codex/models?client_version=imp-0.1.0`, {
+		authorization: `Bearer ${credential.accessToken}`,
+		"chatgpt-account-id": credential.accountId,
+		originator: "imp",
+		accept: "application/json",
+	});
+}
+
+/** Warm cache read — the picker's codex strategy: never block on the
+ *  network (the ChatGPT backend can hang for seconds); show the static
+ *  catalog now and let warmCodexCache() fill the cache for the NEXT open. */
+export function peekCachedModels(family: ProviderName): string[] | null {
+	if (family !== "openai-codex") return null;
+	const base = (process.env.OPENAI_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(/\/+$/, "");
+	const hit = cache.get(`openai-codex|${base}`);
+	return hit !== undefined && now() - hit.at < CACHE_TTL_MS ? hit.ids : null;
+}
+
+/** Fire-and-forget cache warm-up; never throws. */
+export function warmCodexCache(): void {
+	void discoverCodexModels().catch(() => undefined);
 }

@@ -441,6 +441,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - **审查评估**：纯增量功能（picker 数据源+发现层），无并发/协议状态机面，12 专属测试+真机验证——判定无需独立对抗审查；遗留：openai 家发现未对真实 OpenAI 端点验收（无 key）、z.ai 发现结果含 has_more 未翻页（10 条内无影响）
   - 已知边界：/model <id> 手动路径不变（网关兜底路由仍是用户的显式选择）；legacy readline 无参路径仍是教学文本（无列表能力）
 
+- **#codex-catalog 补全 + 发现健壮性（2026-09-10，635 tests，fix/codex-catalog）**：用户报告——已登录 OpenAI coding plan 但模型列表非全集。核实：①ChatGPT 后端**存在** /codex/models 端点（400 索要 client_version；0.50/0.60 + codex_cli_rs originator 全部 200 但 `{"models":[]}`——计划账户当下不供动态列表，pi 生成器同持显式目录"避免别名"）②我的静态目录只放了 3 款（pi 生成目录实有 7）。
+  - **静态目录补全至 7 款官方全集**（gpt-5.5/5.4/5.4-mini/5.3-codex-spark/5.6-luna/sol/terra，取自 pi openai-codex.json）
+  - **codex 发现改为"温缓存增补"**：fetchJson 兼容 {data:[]} 与 {models:[{slug|id}]} 双形状；picker 对 codex 只读**已温缓存**（peekCachedModels）——绝不为列表等网络；打开 picker 时后台 warmCodexCache() 预热供下次合并；后端将来供模型即自动出现
+  - **发现健壮性**：超时 2.5s→4s + 429/5xx 一次 400ms 静默重试（真机复现过 z.ai 瞬时限流把列表打成 fallback——重试后恢复）
+  - 真机终验：picker (1/17)=10 发现 GLM+7 Codex 全集、无 fallback note；调试插曲：picker 曾两连 fallback，pty 下直跑发现层成功——定位为端点瞬时限流（加重试后消失），DBG 打点确认无失败路径后移除
+  - 测试 +1（codex 温缓存增补序：静态 7 款在前、extras 追加）+ 1 处期望更新（合并路径 8 行）；已知边界：picking 视口只显前 ~8 行（17 行滚动，计数可见）；OPENAI_CODEX_BASE_URL 同源复用于发现
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

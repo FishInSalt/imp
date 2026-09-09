@@ -146,6 +146,11 @@ export class Renderer {
 		return dim(text, this.options.ansi);
 	}
 
+	/** Whether this renderer emits ANSI (the welcome logo's gradient gate). */
+	get ansiEnabled(): boolean {
+		return this.options.ansi;
+	}
+
 	/** Ends a run's output. `always` reproduces print mode's unconditional "\n". */
 	endRun(always = false): void {
 		this.stopSpinner();

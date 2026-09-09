@@ -1138,7 +1138,7 @@ describe("runRepl with shell:tui", () => {
 		});
 		const env = await startTuiRepl([() => gated.then(() => reply("hello from the model"))]);
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("◆ Welcome to imp!"); // welcome panel painted
+		expect(env.terminal.frameSince(0)).toContain("Tips for getting started:"); // welcome painted
 		// P1 regression: the footer is live at STARTUP — the machine's
 		// constructor push arrives before input.start() and must be buffered,
 		// not dropped (no turn has run yet).

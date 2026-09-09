@@ -91,9 +91,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		// hatch path). The pi-tui shell has its own suite (repl-tui.test.ts).
 		shell: "legacy",
 		releaseStartupNotes:
-			args.releaseProbe !== undefined
-				? () => renderer.writeLine(args.releaseProbe as string)
-				: undefined,
+			args.releaseProbe !== undefined ? () => renderer.writeLine(args.releaseProbe as string) : undefined,
 		exit: (code) => {
 			exitCodes.push(code);
 			throw new Error(`force-exit:${code}`);
@@ -121,22 +119,34 @@ afterEach(() => {
 });
 
 describe("runRepl welcome panel", () => {
-	it("fresh session: rounded box with branding, quick reference, and identity", async () => {
+	it("fresh session: gradient pixel logo, numbered tips, and dim identity", async () => {
 		const env = await startRepl({ scripts: [reply("hi")] });
-		await waitUntil(() => env.output().includes("◆ Welcome to imp!"));
+		await waitUntil(() => env.output().includes("Tips for getting started:"));
 		const out = env.output();
-		expect(out).toContain("╭");
-		expect(out).toContain("╰");
-		// quick-reference rows advertise real commands only
-		for (const cmd of ["/help", "/model", "/new", "/compact", "/sessions", "/resume"]) {
-			expect(out).toContain(cmd);
-		}
+		// the pixel-block logo (rendered plain — this renderer is ansi:false)
+		expect(out).toContain("██╗███╗   ███╗");
+		expect(out).toContain("╚═╝╚═╝     ╚═╝");
+		// Gemini-style numbered tips (verbatim — generic best practice)
+		expect(out).toContain("1. Ask questions, edit files, or run commands.");
+		expect(out).toContain("2. Be specific for the best results.");
+		expect(out).toContain("3. /help for more information.");
 		// identity line: version + session id + model
 		expect(out).toMatch(/imp 0\.1\.0 · session [0-9a-f]{8} · test-model/);
 		// the old compact banner line is gone on fresh sessions
 		expect(out).not.toContain("/help for commands");
 		env.fake.eof();
 		await env.repl;
+	});
+
+	it("gradientLine colorizes per column when ansi, stays plain otherwise", async () => {
+		const { welcomeLines } = await import("../src/repl/repl.js");
+		const plain = welcomeLines("deadbeef", "test-model", false);
+		expect(plain[0]).toBe("██╗███╗   ███╗"); // no escapes
+		const colored = welcomeLines("deadbeef", "test-model", true);
+		expect(colored[0]).toContain("\x1b[38;2;66;133;244m"); // first column ≈ blue
+		expect(colored[0]).toContain("\x1b[38;2;255;110;199m"); // last column ≈ pink
+		// tips and identity are never colorized
+		expect(colored.find((l) => l.startsWith("1. Ask"))).not.toContain("\x1b[");
 	});
 
 	it("releaseStartupNotes fires AFTER the welcome panel (fresh) — deferred notes never bury the greeting", async () => {
@@ -148,7 +158,7 @@ describe("runRepl welcome panel", () => {
 		expect(out).not.toContain("Ctrl+D exits");
 		expect(out).not.toContain("@ files");
 		expect(out).toContain("RELEASED-HERE");
-		expect(out.indexOf("◆ Welcome to imp!")).toBeLessThan(out.indexOf("RELEASED-HERE"));
+		expect(out.indexOf("Tips for getting started:")).toBeLessThan(out.indexOf("RELEASED-HERE"));
 		env.fake.eof();
 		await env.repl;
 	});
@@ -191,7 +201,7 @@ describe("runRepl welcome panel", () => {
 describe("runRepl", () => {
 	it("happy path: hi → streamed text → stats → prompt redrawn; provider saw the user message", async () => {
 		const env = await startRepl({ scripts: [reply("Hello!")] });
-		await waitUntil(() => env.output().includes("◆ Welcome to imp!"));
+		await waitUntil(() => env.output().includes("Tips for getting started:"));
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("— test-model · 1 turns · in 10 / out 5 tokens"));
 		expect(env.output()).toContain("Hello!");

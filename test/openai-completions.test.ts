@@ -1,8 +1,9 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
+import type { Tool } from "../src/core/tools/types.js";
 import { createOpenAICompletionsProvider } from "../src/provider/openai-completions.js";
-import type { LLMEvent } from "../src/provider/types.js";
+import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 
 /**
  * Wire-level tests for the OpenAI Chat Completions adapter (#multi-provider
@@ -19,11 +20,11 @@ function sse(obj: unknown): string {
 	return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
-const REQ = (model: string, messages: AgentMessage[]) => ({
+const REQ = (model: string, messages: AgentMessage[], tools: Tool[] = []): LLMRequest => ({
 	system: "sys-prompt",
 	model,
 	messages,
-	tools: [],
+	tools,
 	maxTokens: 1024,
 });
 
@@ -182,23 +183,22 @@ describe("openai-completions provider", () => {
 			{ role: "user", content: "list files" },
 			{
 				role: "assistant",
+				usage: { inputTokens: 1, outputTokens: 1 },
+				stopReason: "tool_use",
 				blocks: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
 			},
 			{
 				role: "toolResult",
-				results: [{ toolCallId: "call_1", content: "a\nb", isError: false }],
+				results: [{ toolCallId: "call_1", toolName: "bash", content: "a\nb", isError: false }],
 			},
 		];
-		const req = REQ("glm-4.6", messages);
-		req.tools = [
-			{
-				name: "bash",
-				description: "run",
-				parameters: { type: "object", properties: { command: { type: "string" } } },
-				execute: (() => {}) as never,
-			},
-		];
-		await collect(provider().stream(req));
+		const bashTool: Tool = {
+			name: "bash",
+			description: "run",
+			parameters: { type: "object", properties: { command: { type: "string" } } } as never,
+			execute: async () => ({ output: "", isError: false }),
+		};
+		await collect(provider().stream(REQ("glm-4.6", messages, [bashTool])));
 		const body = captured.at(-1)?.body as Record<string, unknown>;
 		const wire = body.messages as Array<Record<string, unknown>>;
 		expect(wire[0]).toEqual({ role: "system", content: "sys-prompt" });

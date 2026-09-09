@@ -26,6 +26,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	"glm-5-turbo": 200_000,
 	"glm-5.2": 1_000_000,
 	// OpenAI Codex — ChatGPT subscription models (pi openai-codex.json)
+	"gpt-6-astra": 272_000, // pi.dev catalog 2026-09
 	"gpt-5.3-codex-spark": 128_000,
 	"gpt-5.4": 272_000,
 	"gpt-5.4-mini": 272_000,

@@ -448,6 +448,13 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 真机终验：picker (1/17)=10 发现 GLM+7 Codex 全集、无 fallback note；调试插曲：picker 曾两连 fallback，pty 下直跑发现层成功——定位为端点瞬时限流（加重试后消失），DBG 打点确认无失败路径后移除
   - 测试 +1（codex 温缓存增补序：静态 7 款在前、extras 追加）+ 1 处期望更新（合并路径 8 行）；已知边界：picking 视口只显前 ~8 行（17 行滚动，计数可见）；OPENAI_CODEX_BASE_URL 同源复用于发现
 
+- **#codex-catalog-2 数据源更正：pi.dev 中心目录（2026-09-10，636 tests，fix/codex-catalog-2）**：用户质疑上一批核实并给出关键线索（pi 登录同账户能见 gpt-6，imp 不能）。复盘证实我上一批有三处错误：①"计划账户拿不到动态列表"——错，是 client_version 门控（条目带 minimal_client_version≥0.124，我用 0.50/0.60 太旧得空）；②"官方 Codex CLI 维护静态目录"——未核实的推断，错；③"pi 的 7 款=官方全集"——过度陈述。**真相**：ChatGPT 后端 /codex/models 用真实版本（0.130.0，本机 codex CLI）只回 3 条能力门控推荐集（gpt-5.5/spark/codex-auto-review(visibility=hide)）；**pi 的完整列表来自自己的中心目录服务 `pi.dev/api/models/providers/<id>`**（公共无认证、4 小时刷新、新模型当日上线——现含 8 款：gpt-6-astra/5.5/5.4/5.4-mini/spark/5.6-luna/sol/terra）。
+  - **实现**：codex 家发现源改 pi.dev（IMP_CATALOG_BASE_URL 可重定向，测试/镜像用）；静态种子同步 8 款（含 gpt-6-astra ctx 272k，models.ts 注册表同补）作离线兜底；**发现失败→静态兜底+note**（不再"只温缓存增补"——pi.dev 快且公共，与其他族同样 await）；fetchJson 兼容三种形状（裸数组 / {data|models:[]} / **pi.dev 的按 id 键记录**——第三形状正是首版冒烟失败的原因，pi 自己的 parseCatalog 就有 Object.values 分支）
+  - 测试：codex 发现改 record 形状 + 门控（有登录才拉目录）；pi.dev 主源/静态兜底二路径；"未配置零网络"测试的 env 钉法修正（**删 IMP_AUTH_PATH 会暴露宿主真实登录**——必须钉 nonexistent）
+  - 真机终验：picker (1/18)=10 GLM+8 codex、无 fallback 注记、发现层直证 gpt-6-astra 在列
+  - **教训（记档）**：对"端点返回空"的结论必须先穷尽参数空间（此处=版本门控）再定性；对参考项目的断言（"CLI 也静态"）要么读源码要么不写；"官方全集"这类词只用于有出处的事实
+  - 已知边界：pi.dev 为第三方公共服务（参考项目自用）——uptime 依赖以静态兜底+缓存衰减；ChatGPT 后端 /codex/models 的能力元数据（reasoning levels 等）未利用（记为潜在增强）
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

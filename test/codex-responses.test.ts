@@ -309,6 +309,21 @@ describe("contextWindowFor registry", () => {
 		expect(contextWindowFor("glm-4.6")).toBe(200_000);
 		expect(contextWindowFor("claude-sonnet-4-5")).toBe(1_000_000);
 		expect(contextWindowFor("mystery-model")).toBe(DEFAULT_CONTEXT_WINDOW);
+		// z.ai current line (static sync from the pi.dev zai catalog)
+		expect(contextWindowFor("glm-5.3")).toBe(1_000_000);
+		expect(contextWindowFor("glm-5.3-flash")).toBe(1_000_000);
+		// runtime enrichment OVERRANKS the static table: discovery metadata for a
+		// brand-new id (not in any table) becomes effective immediately
+		const { registerDiscoveredContextWindows, resetDiscoveredWindowsForTest } = await import(
+			"../src/provider/discover.js"
+		);
+		resetDiscoveredWindowsForTest();
+		registerDiscoveredContextWindows({ "gpt-7-nova": 400_000, "glm-4.6": 123_456 });
+		expect(contextWindowFor("gpt-7-nova")).toBe(400_000);
+		expect(contextWindowFor("glm-4.6")).toBe(123_456); // discovery wins over the table
+		expect(contextWindowFor("openai-codex/gpt-7-nova")).toBe(400_000); // prefix-stripped
+		resetDiscoveredWindowsForTest();
+		expect(contextWindowFor("glm-4.6")).toBe(200_000); // back to the table
 		const prev = process.env.IMP_CONTEXT_WINDOW;
 		process.env.IMP_CONTEXT_WINDOW = "999";
 		expect(contextWindowFor("gpt-5.5")).toBe(999);

@@ -743,6 +743,19 @@ describe("/tree (#10 batch 2)", () => {
 		expect(env.output()).toContain("nothing was written on the left branch to summarize");
 	});
 
+	it("switching families adapts the compaction window both ways (glm-5.3 1M ↔ gpt-5.5 272k)", async () => {
+		const env = await makeEnv({ model: "glm-5.3" });
+		expect((env.runner as any).settings.contextWindow).toBe(1_000_000);
+		await dispatchCommand("/model openai-codex/gpt-5.5", env.ctx);
+		// switched DOWN to 272k: the gate tightens with the new family's window —
+		// an over-limit history compacts on the next turn instead of 400ing
+		expect((env.runner as any).settings.contextWindow).toBe(272_000);
+		expect(env.runner.contextWindow).toBe(272_000);
+		await dispatchCommand("/model glm-5.3", env.ctx);
+		// switched back UP to 1M: the gate relaxes; compaction no longer fires early
+		expect((env.runner as any).settings.contextWindow).toBe(1_000_000);
+	});
+
 	it("construction-time registry window reaches the compaction gate (review P1-3)", async () => {
 		const env = await makeEnv(); // default claude-sonnet-4-5
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any

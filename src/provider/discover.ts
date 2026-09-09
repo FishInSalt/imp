@@ -29,6 +29,27 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/** Runtime window enrichment (#context-window-adapt): listings that carry
+ *  contextWindow metadata (pi.dev's catalogs do; the first-party
+ *  /v1/models endpoints do not) feed this map, which outranks the static
+ *  table — a newly shipped model gets its REAL window before any registry
+ *  update, so compaction neither fires absurdly early nor too late. */
+const discoveredWindows = new Map<string, number>();
+
+export function registerDiscoveredContextWindows(windows: Record<string, number>): void {
+	for (const [id, ctx] of Object.entries(windows)) {
+		if (Number.isFinite(ctx) && ctx > 0) discoveredWindows.set(id, ctx);
+	}
+}
+
+export function resetDiscoveredWindowsForTest(): void {
+	discoveredWindows.clear();
+}
+
+export function discoveredWindowFor(modelId: string): number | undefined {
+	return discoveredWindows.get(modelId);
+}
+
 /** Injectable clock for tests. */
 let now: () => number = Date.now;
 
@@ -149,15 +170,22 @@ async function fetchOnce(
 							Object.values(asRecord).every((v) => typeof v === "object" && v !== null && "id" in v)
 						? Object.values(asRecord)
 						: null;
-		const list: Array<{ id?: unknown; slug?: unknown }> | null =
+		const list: Array<{ id?: unknown; slug?: unknown; contextWindow?: unknown }> | null =
 			candidate !== null ? (candidate as Array<{ id?: unknown; slug?: unknown }>) : null;
 		if (list === null) return null;
-		const ids = list
-			.map((m) => {
-				const id = m?.id ?? m?.slug;
-				return typeof id === "string" ? id : "";
-			})
-			.filter((id) => id !== "");
+		const entries = list.filter((m): m is { id?: unknown; slug?: unknown; contextWindow?: unknown } => {
+			const id = m?.id ?? m?.slug;
+			return typeof id === "string" && id !== "";
+		});
+		const ids = entries.map((m) => (m.id ?? m.slug) as string);
+		// enrich the runtime window map when the listing carries metadata
+		const windows: Record<string, number> = {};
+		for (const m of entries) {
+			if (typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow) && m.contextWindow > 0) {
+				windows[(m.id ?? m.slug) as string] = m.contextWindow;
+			}
+		}
+		if (Object.keys(windows).length > 0) registerDiscoveredContextWindows(windows);
 		if (ids.length === 0) return null;
 		if (cacheKey !== undefined) cache.set(cacheKey, { ids, at: now() });
 		return ids;

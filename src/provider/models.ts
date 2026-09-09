@@ -9,6 +9,8 @@
  * IMP_CONTEXT_WINDOW still wins over everything, as before.
  */
 
+import { discoveredWindowFor } from "./discover.js";
+
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	// Anthropic (pi anthropic.json catalog)
 	"claude-sonnet-4-5": 1_000_000,
@@ -24,7 +26,12 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	"glm-4.6": 200_000,
 	"glm-4.7": 204_800,
 	"glm-5-turbo": 200_000,
+	// z.ai current GLM-5.x line (pi.dev zai catalog, 2026-09)
 	"glm-5.2": 1_000_000,
+	"glm-5.2-highspeed": 1_000_000,
+	"glm-5.3": 1_000_000,
+	"glm-5.3-flash": 1_000_000,
+	"glm-5.3-highspeed": 1_000_000,
 	// OpenAI Codex — ChatGPT subscription models (pi openai-codex.json)
 	"gpt-6-astra": 272_000, // pi.dev catalog 2026-09
 	"gpt-5.3-codex-spark": 128_000,
@@ -37,6 +44,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
+
+// circular-safe: discover.js owns the runtime map; import lazily via type-only + accessor
 
 let envWarned = false;
 
@@ -64,5 +73,6 @@ export function contextWindowFor(reference: string): number {
 	if (env !== undefined) return env;
 	const slash = reference.indexOf("/");
 	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
-	return MODEL_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_WINDOW;
+	// env > runtime-enriched (discovery metadata) > static table > default
+	return discoveredWindowFor(modelId) ?? MODEL_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_WINDOW;
 }

@@ -127,8 +127,11 @@ describe("runRepl welcome panel", () => {
 		// p (bowl + stem) — rendered plain because this renderer is ansi:false
 		expect(out).toContain(" ██╗███╗   ███╗█████╗");
 		expect(out).toContain("██╔╝████╗ ████║██╔══██╗");
-		expect(out).toContain("██║██╔████╔██║██████╔╝");
-		expect(out).toContain("╚═╝╚═╝     ╚═╝╚═╝  ╚═╝");
+		// rows 3-6 carry the i-m letter gap (the font's trailing space)
+		expect(out).toContain("██║ ██╔████╔██║██████╔╝");
+		expect(out).toContain("██║ ██║╚██╔╝██║██╔══██╗");
+		expect(out).toContain("██║ ██║ ╚═╝ ██║██║  ██║");
+		expect(out).toContain("╚═╝ ╚═╝     ╚═╝╚═╝  ╚═╝");
 		// Gemini-style numbered tips (verbatim — generic best practice)
 		expect(out).toContain("1. Ask questions, edit files, or run commands.");
 		expect(out).toContain("2. Be specific for the best results.");

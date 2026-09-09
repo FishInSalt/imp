@@ -54,7 +54,7 @@ describe("taskResult contract (§3)", () => {
 			outcome({ turns: 7, usage: { inputTokens: 12345, outputTokens: 1400, cacheReadTokens: 9800 } }),
 			null,
 		);
-		expect(result.output).toContain("(child: 7 turns, 12.3k in / 1.4k out / 9.8k cache)");
+		expect(result.output).toContain("(child: 7 turns, 12k in / 1.4k out / 9.8k cache)");
 	});
 
 	it("no assistant text anywhere → the explicit no-output marker", () => {

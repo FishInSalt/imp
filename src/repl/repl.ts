@@ -1,13 +1,14 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
-import type { AgentMessage } from "../core/messages.js";
+import type { AgentMessage, AssistantMessage, Usage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
+import { costFor } from "../provider/models.js";
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
@@ -480,21 +481,73 @@ class ReplMachine {
 	private refreshFooter(): void {
 		const parts: string[] = [this.runner.model];
 		const session = this.runner.session;
-		if (session !== null) {
-			parts.push(session.header.id.slice(0, 8));
-			const stats = session.stats();
-			if (stats.inputTokens > 0 || stats.outputTokens > 0) {
-				parts.push(`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`);
+		if (session !== null) parts.push(session.header.id.slice(0, 8));
+
+		// Session-wide usage segments (pi footer semantics), all from the live
+		// history: cumulative ↑/↓, cache read R / write W, the LATEST cache hit
+		// rate CH (= cacheRead / full prompt of the last response that reported
+		// cache data), and $ cost priced per message at its producer model's
+		// rates — messages from before the model field existed (or models not
+		// in the cost table) fall back to the current model's rates, so a
+		// mid-session /model switch prices each turn correctly.
+		const assistants = this.runner.history.filter((m): m is AssistantMessage => m.role === "assistant");
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let cacheRead = 0;
+		let cacheWrite = 0;
+		let lastCacheUsage: Usage | undefined;
+		let cost = 0;
+		let subscription = costFor(this.runner.model)?.subscription ?? false;
+		for (const m of assistants) {
+			inputTokens += m.usage.inputTokens;
+			outputTokens += m.usage.outputTokens;
+			cacheRead += m.usage.cacheReadTokens ?? 0;
+			cacheWrite += m.usage.cacheWriteTokens ?? 0;
+			if (m.usage.cacheReadTokens !== undefined) lastCacheUsage = m.usage;
+			const rates = costFor(m.model ?? this.runner.model);
+			if (rates) {
+				cost +=
+					(m.usage.inputTokens * rates.input +
+						m.usage.outputTokens * rates.output +
+						(m.usage.cacheReadTokens ?? 0) * rates.cacheRead +
+						(m.usage.cacheWriteTokens ?? 0) * rates.cacheWrite) /
+					1_000_000;
+				if (rates.subscription) subscription = true;
 			}
 		}
+		if (inputTokens > 0 || outputTokens > 0 || cacheRead > 0 || cacheWrite > 0) {
+			const usageParts = [`↑${formatTokens(inputTokens)}`, `↓${formatTokens(outputTokens)}`];
+			if (cacheRead > 0) usageParts.push(`R${formatTokens(cacheRead)}`);
+			if (cacheWrite > 0) usageParts.push(`W${formatTokens(cacheWrite)}`);
+			if (lastCacheUsage) {
+				// pi's CH: hit share of the FULL prompt (input + cache read + write)
+				const denom =
+					lastCacheUsage.inputTokens +
+					(lastCacheUsage.cacheReadTokens ?? 0) +
+					(lastCacheUsage.cacheWriteTokens ?? 0);
+				if (denom > 0) {
+					usageParts.push(`CH${(((lastCacheUsage.cacheReadTokens ?? 0) / denom) * 100).toFixed(1)}%`);
+				}
+			}
+			parts.push(usageParts.join(" "));
+		}
+		// Subscription-backed models still show $0.000 (sub) — the traffic is
+		// covered by the plan, the number is what it would cost at API rates.
+		if (cost > 0 || subscription) {
+			parts.push(`$${cost.toFixed(3)}${subscription ? " (sub)" : ""}`);
+		}
+
 		// Context fill from the same live history the loop and auto-compaction
 		// use (estimateContextTokens anchors on the last measured usage). The
 		// estimate is O(messages) local work — fine at this low-frequency push
-		// point, but never call it from a streaming-delta path.
-		const contextPercent = Math.round(
-			(estimateContextTokens(this.runner.history).tokens / this.runner.contextWindow) * 100,
-		);
-		parts.push(`ctx ${contextPercent}%`);
+		// point, but never call it from a streaming-delta path. pi's format:
+		// one decimal, the window size, and the auto-compaction tag.
+		const contextPercent =
+			(estimateContextTokens(this.runner.history).tokens / this.runner.contextWindow) * 100;
+		const contextSegment = `${contextPercent.toFixed(1)}%/${formatTokens(this.runner.contextWindow)}${
+			this.runner.autoCompactEnabled ? " (auto)" : ""
+		}`;
+		parts.push(contextSegment);
 		if (contextPercent >= 80) {
 			parts.push("low — /compact");
 			// The warning note rides the footer's shell gate: legacy/pipe sessions
@@ -502,7 +555,9 @@ class ReplMachine {
 			// that way (M10 review P2#1).
 			if (!this.lowContextNoted && this.input.setFooter !== undefined) {
 				this.lowContextNoted = true;
-				this.renderer.note(`▪ context ${contextPercent}% used — /compact to summarize older turns`);
+				this.renderer.note(
+					`▪ context ${contextPercent.toFixed(1)}% used — /compact to summarize older turns`,
+				);
 			}
 		} else {
 			this.lowContextNoted = false;

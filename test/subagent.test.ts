@@ -257,7 +257,7 @@ it("extraSystem (M5c) lands after CHILD_SUFFIX, append-only", async () => {
 describe("childUsageTrailer", () => {
 	it("formats turns and tokens; cache segment only when cache read > 0", () => {
 		expect(childUsageTrailer(7, { inputTokens: 12345, outputTokens: 1400, cacheReadTokens: 9800 })).toBe(
-			"(child: 7 turns, 12.3k in / 1.4k out / 9.8k cache)",
+			"(child: 7 turns, 12k in / 1.4k out / 9.8k cache)",
 		);
 		expect(childUsageTrailer(1, { inputTokens: 10, outputTokens: 5 })).toBe(
 			"(child: 1 turns, 10 in / 5 out)",

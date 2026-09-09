@@ -125,9 +125,15 @@ export function summarizeArgs(name: string, args: unknown): string {
 }
 
 /** 1234 -> "1.2k"; 567 -> "567". */
+/** Compact token counts (pi's footer algorithm): 999 → "999", 1_500 → "1.5k",
+ * 12_000 → "12k", 1_050_000 → "1.1M". One decimal below 10k/10M so small
+ * sessions keep resolution; rounded above to keep the footer short. */
 export function formatTokens(n: number): string {
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
+	if (n < 1000) return String(n);
+	if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+	if (n < 10_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	return `${Math.round(n / 1_000_000)}M`;
 }
 
 export function green(text: string, ansi = process.stdout.isTTY === true): string {

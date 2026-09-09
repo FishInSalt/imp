@@ -463,6 +463,16 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#footer-stats pi 式状态栏（2026-09-10，649 tests，feat/footer-stats）**：用户要求 footer 按 pi 展示模型状态（例：`↑15M ↓1.9M R415M CH99.6% $76.556 36.7%/1.0M (auto)`）。
+  - **usage 段**（全部从 live history 累计）：↑↓ 现有 + `R`缓存读 + `W`缓存写（>0 才显示）+ `CH%` 末条命中率（pi 公式 cacheRead/(input+R+W)，取最后一条报了缓存数据的 assistant）
+  - **$ 成本**：`models.ts` 新增每百万 token 费率表（出处=pi 的 provider 目录 JSON：anthropic API 价、zai 全 0+subscription、openai-codex API 价+subscription；**分层计价>272k 未建模**，长会话 tiered 模型略低估——记档）；**每条 assistant 消息打 model 戳**（loop 在 streamAssistant 出口打，新字段可选、旧会话回退当前模型费率）→ 会话中途 /model 切换各按各价；订阅族显示 `$0.000 (sub)`（pi 语义：流量走套餐，数字=API 价等效值）；表外模型整段省略
+  - **ctx 段**：`ctx N%` → `36.7%/1.0M (auto)`（一位小数+窗口尺寸+自动压缩指示，IMP_AUTOCOMPACT=0 时无 (auto)）；80% 低上下文提示与 note 同步改一位小数
+  - **formatTokens 升级为 pi 精确算法**（<1k 原样 / <10k 一位小数 k / <1M 整 k / <10M 一位小数 M / 以上整 M）——全局统一（压缩 banner、task 预算拖尾、resume note 同步变化，测试断言随改）
+  - Runner 接口加 `autoCompactEnabled`；打印模式字节不变（setFooter 本就 TUI 专属）
+  - 测试 +8：CH 公式（末条而非累计）、无缓存无段、按生产模型计价（1.0M×$3/$15→$1.050）、(sub) 显示、表外省略、(auto) 开关、costFor 解析（canonical/bare/订阅/未知）、formatTokens 分档、loop model 打戳
+  - 真机：glm-5.3 footer=`↑2.6k ↓3 CH0.0% · $0.000 (sub) · 0.3%/1.0M (auto)`
+  - 踩坑：TUI 测试脚本第二段需要第二次发消息才触发（scriptedProvider 重复末段）；Runner 是接口+Impl 双层——getter 只加 Impl 会 TS2339（接口也要声明）
+
 - **#overflow-grace 溢出优雅失败（2026-09-10，641 tests，feat/overflow-grace）**：用户问 500k 上下文切 272k 模型会发生什么。核实：imp 与 pi 的阈值压缩同构（都把全量转录单发摘要模型）——**单发摘要架构下"用小窗模型摘要超它窗口的转录"无解，是两家共同盲区**；pi 的差别是失败路径优雅（响应式 overflow 一次恢复+指引）。用户拍板"只做 pi 式优雅失败"（不做压缩先于收缩/硬截断）。
   - **isContextOverflowError**（compaction.ts）：跨 provider 短语识别（anthropic "prompt is too long"/openai "context_length_exceeded|maximum context"/codex 变体）；**overflowGuidance**：教学文案（数字+原因+两条出路：切大窗模型 /compact 或 /new）
   - **响应式一次恢复**（runner.runTurnOrRecoverFromOverflow，调用侧包裹不动方法体）：活请求报溢出→note→compactAndSplice（同快照 provider/settings/model）→成功则**重试（userMessage 抑制防重复入列——首次尝试已把 user 消息推进 history）**；压缩失败或重试再溢出→指引而非裸 400。**不设 pi 的同模型守卫**：imp 只捕获活错误不持久化错误消息，该场景不可能出现（记档）

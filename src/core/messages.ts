@@ -32,6 +32,10 @@ export interface AssistantMessage {
 	blocks: AssistantBlock[];
 	usage: Usage;
 	stopReason: StopReason;
+	/** Model that produced this message (stamped by the loop). Cost
+	 *  attribution reads it so a session that switched models prices each
+	 *  response at its own rates; entries from older imp versions lack it. */
+	model?: string;
 }
 
 export interface ToolResult {

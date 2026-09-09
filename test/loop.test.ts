@@ -69,6 +69,8 @@ describe("agent loop", () => {
 		expect(history).toHaveLength(4);
 		expect(history[0]).toMatchObject({ role: "user", content: "run it" });
 		expect(history[1]).toMatchObject({ role: "assistant" });
+		// cost attribution: assistant messages carry the producing model id
+		expect((history[1] as { model?: string }).model).toBe("mock");
 		expect(history[2]).toMatchObject({ role: "toolResult" });
 		const toolResult = history[2] as Extract<AgentMessage, { role: "toolResult" }>;
 		expect(toolResult.results[0]).toMatchObject({ isError: false, content: "echo: hi from imp" });

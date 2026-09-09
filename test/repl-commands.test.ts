@@ -269,7 +269,14 @@ describe("slash commands", () => {
 		await dispatchCommand("/model", env.ctx);
 		expect(calls).toHaveLength(1);
 		const labels = calls[0]?.items.map((item) => item.label);
-		expect(labels).toEqual(["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"]); // v1 candidates
+		expect(labels).toEqual([
+			"claude-sonnet-4-5",
+			"glm-4.6",
+			"glm-4.5",
+			"glm-4.7",
+			"openai-codex/gpt-5.5",
+			"openai/gpt-5.2",
+		]); // v1 candidates
 		expect(calls[0]?.title).toContain("model");
 		expect(env.runner.model).toBe("glm-4.6");
 		expect(env.output()).toBe("▪ model: claude-sonnet-4-5 → glm-4.6 (applies from the next turn)\n");
@@ -708,6 +715,21 @@ describe("/tree (#10 batch 2)", () => {
 		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old, write nothing
 		await dispatchCommand("/tree 1", env.ctx); // switch back — left branch is EMPTY
 		expect(env.output()).toContain("nothing was written on the left branch to summarize");
+	});
+
+	it("/model with a provider prefix re-routes the protocol family (multi-provider)", async () => {
+		const env = await makeEnv({ seed: [] });
+		expect(env.runner.model).toBe("claude-sonnet-4-5");
+		await dispatchCommand("/model glm-4.6", env.ctx); // same family: keeps the provider instance
+		expect(env.runner.model).toBe("glm-4.6");
+		expect(env.runner.contextWindow).toBe(200_000);
+		await dispatchCommand("/model openai-codex/gpt-5.4", env.ctx); // cross-family: provider swaps
+		expect(env.runner.model).toBe("gpt-5.4");
+		expect(env.runner.contextWindow).toBe(272_000);
+		expect(env.output()).toContain("claude-sonnet-4-5 → glm-4.6");
+		expect(env.output()).toContain("glm-4.6 → gpt-5.4");
+		await dispatchCommand("/model glm-4.6", env.ctx); // and back
+		expect(env.runner.model).toBe("glm-4.6");
 	});
 
 	it("bad args teach; running is rejected", async () => {

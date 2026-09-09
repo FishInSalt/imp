@@ -231,7 +231,8 @@ async function streamAssistant(args: {
 		onEvent?.(event);
 		if (event.type === "message_end") {
 			addUsage(usage, event.message.usage);
-			return event.message;
+			// stamp the producer model for cost attribution (footer $ segment)
+			return { ...event.message, model: request.model };
 		}
 	}
 	// Stream ended without a message_end event: an abort ends the generator

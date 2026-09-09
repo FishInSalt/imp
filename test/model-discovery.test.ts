@@ -299,3 +299,30 @@ describe("familyConfigured via IMP_AUTH_PATH", () => {
 		}
 	});
 });
+
+describe("costFor (footer cost table)", () => {
+	it("resolves canonical and bare references; flags subscriptions; unknown → undefined", async () => {
+		const { costFor } = await import("../src/provider/models.js");
+		const gpt = costFor("openai-codex/gpt-5.5");
+		expect(gpt).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, subscription: true });
+		expect(costFor("gpt-5.5")).toBe(gpt);
+		const glm = costFor("glm-5.3");
+		expect(glm?.subscription).toBe(true);
+		expect(glm?.input).toBe(0);
+		expect(costFor("claude-sonnet-4-5")?.subscription).toBeUndefined();
+		expect(costFor("totally-unknown")).toBeUndefined();
+	});
+});
+
+describe("formatTokens (pi footer algorithm)", () => {
+	it("keeps one decimal below 10k/10M, rounds above", async () => {
+		const { formatTokens } = await import("../src/format.js");
+		expect(formatTokens(999)).toBe("999");
+		expect(formatTokens(1500)).toBe("1.5k");
+		expect(formatTokens(9800)).toBe("9.8k");
+		expect(formatTokens(12_300)).toBe("12k");
+		expect(formatTokens(200_100)).toBe("200k");
+		expect(formatTokens(1_050_000)).toBe("1.1M");
+		expect(formatTokens(15_000_000)).toBe("15M");
+	});
+});

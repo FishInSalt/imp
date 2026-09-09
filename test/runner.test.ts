@@ -335,8 +335,8 @@ describe("Runner.runTurn", () => {
 		});
 
 		await runner.runTurn({ userMessage: "continue" });
-		expect(output()).toContain("▪ context ~200.0k tokens — compacting…\n");
-		expect(output()).toMatch(/▪ compacted: ~200\.0k → ~\d+ tokens \(1 msgs kept verbatim\)\n/);
+		expect(output()).toContain("▪ context ~200k tokens — compacting…\n");
+		expect(output()).toMatch(/▪ compacted: ~200k → ~\d+ tokens \(1 msgs kept verbatim\)\n/);
 		// history = [summary message, retained tail ("continue"), fresh reply]
 		const first = runner.history[0];
 		expect(first?.role).toBe("user");

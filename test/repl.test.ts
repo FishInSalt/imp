@@ -731,8 +731,8 @@ describe("runRepl", () => {
 		await waitUntil(() => fake.output().includes("1 turns"));
 		fake.send("again\n");
 		await waitUntil(() => fake.output().includes("second reply"));
-		expect(fake.output()).toContain("▪ context ~200.1k tokens — compacting…");
-		expect(fake.output()).toMatch(/▪ compacted: ~200\.1k → ~\d+ tokens \(\d+ msgs kept verbatim\)/);
+		expect(fake.output()).toContain("▪ context ~200k tokens — compacting…");
+		expect(fake.output()).toMatch(/▪ compacted: ~200k → ~\d+ tokens \(\d+ msgs kept verbatim\)/);
 		// the summarizer call got the transcript; the post-compact request starts with the summary
 		const summaryMsg = requests[1]?.messages[0];
 		expect(summaryMsg !== undefined && summaryMsg.role === "user" ? summaryMsg.content : "").toContain(

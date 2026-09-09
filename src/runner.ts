@@ -116,6 +116,8 @@ export interface Runner {
 	setModel(reference: string): void;
 	/** Effective context window for the CURRENT model (registry-backed). */
 	readonly contextWindow: number;
+	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
+	readonly autoCompactEnabled: boolean;
 	/** Canonical display reference — "openai-codex/gpt-5.4" vs bare "glm-4.6". */
 	modelReference(): string;
 	/** The renderer all status output flows through (shared with the REPL). */
@@ -198,6 +200,11 @@ class RunnerImpl implements Runner {
 	private providerName: ProviderName;
 	private readonly tools: Tool[];
 	private readonly autoCompact: boolean;
+
+	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
+	get autoCompactEnabled(): boolean {
+		return this.autoCompact;
+	}
 	private readonly branchSummaryEnabled: boolean;
 	private settings = DEFAULT_COMPACTION_SETTINGS; // contextWindow follows the model (multi-provider)
 	private system: string;

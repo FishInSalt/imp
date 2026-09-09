@@ -313,7 +313,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	}
 }
 
-/** Budget trailer for task results (design §3): `(child: 7 turns, 12.3k in / 1.4k out / 9.8k cache)`.
+/** Budget trailer for task results (design §3): `(child: 7 turns, 12k in / 1.4k out / 9.8k cache)`.
  *  An absent/zero cache read omits the segment — never "/ 0 cache". */
 export function childUsageTrailer(turns: number, usage: Usage): string {
 	const cache = usage.cacheReadTokens ?? 0;

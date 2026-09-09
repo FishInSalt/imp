@@ -123,7 +123,7 @@ function count(haystack: string, needle: string): number {
 	return haystack.split(needle).length - 1;
 }
 
-const LOW_NOTE = "▪ context 80% used — /compact to summarize older turns";
+const LOW_NOTE = "▪ context 80.0% used — /compact to summarize older turns";
 
 function reply(text: string, usage: Usage): AssistantMessage {
 	return { role: "assistant", blocks: [{ type: "text", text }], usage, stopReason: "end_turn" };
@@ -138,7 +138,7 @@ interface StatusEnv {
 
 /** runRepl on the TUI shell — the machine's footer/title pushes land on the
  *  FakeTerminal's write log. */
-async function startTuiRepl(scripts: ScriptStep[]): Promise<StatusEnv> {
+async function startTuiRepl(scripts: ScriptStep[], model = "test-model"): Promise<StatusEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-status-"));
 	const provider: LLMProvider = scriptedProvider(scripts);
 	const terminal = new FakeTerminal();
@@ -153,7 +153,7 @@ async function startTuiRepl(scripts: ScriptStep[]): Promise<StatusEnv> {
 	const runner = await createRunner({
 		cwd: baseDir,
 		argv: [],
-		model: "test-model",
+		model,
 		maxTokens: 1024,
 		maxTurns: 10,
 		noContextFiles: true,
@@ -193,10 +193,10 @@ describe("footer context percentage", () => {
 		vi.stubEnv("IMP_CONTEXT_WINDOW", "30");
 		const env = await startTuiRepl([reply("ok", { inputTokens: 5, outputTokens: 0 })]);
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("ctx 0%"); // empty history at startup
+		expect(env.terminal.frameSince(0)).toContain("0.0%/30 (auto)"); // empty history at startup
 		env.terminal.data("hi\r");
-		// anchored on the reply's usage: 5/30 = 16.67% → 17
-		await waitUntil(() => env.terminal.frameSince(0).includes("ctx 17%"));
+		// anchored on the reply's usage: 5/30 = 16.67% → 16.7 (one decimal, pi format)
+		await waitUntil(() => env.terminal.frameSince(0).includes("16.7%/30 (auto)"));
 		env.terminal.data("/exit\r");
 		await env.repl;
 	});
@@ -208,7 +208,7 @@ describe("footer context percentage", () => {
 		env.terminal.data("hi\r");
 		// the note fires in the same refreshFooter as the footer push; the
 		// frame repaint follows on the next render tick
-		await waitUntil(() => env.terminal.frameSince(0).includes("ctx 80%"));
+		await waitUntil(() => env.terminal.frameSince(0).includes("80.0%/100 (auto)"));
 		const frame = env.terminal.frameSince(0);
 		expect(frame).toContain("low — /compact");
 
@@ -222,7 +222,7 @@ describe("footer context percentage", () => {
 		// footer — and (debt clearance) the transcript itself starts over
 		const mark = env.terminal.writes.length;
 		env.terminal.data("/new\r");
-		await waitUntil(() => env.terminal.frameSince(mark).includes("ctx 0%"));
+		await waitUntil(() => env.terminal.frameSince(mark).includes("0.0%/100 (auto)"));
 		expect(env.terminal.frameSince(mark)).not.toContain("low — /compact");
 		expect(count(env.transcript.completedLines().join("\n"), LOW_NOTE)).toBe(0); // wiped with the view
 
@@ -240,8 +240,88 @@ describe("footer context percentage", () => {
 		env.terminal.data("hi\r");
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("1 turns"));
 		// 80 tokens of a 131072 window — no visible fill, no low hint
-		expect(env.terminal.frameSince(0)).toContain("ctx 0%");
+		expect(env.terminal.frameSince(0)).toContain("0.0%/131k (auto)");
 		expect(env.terminal.frameSince(0)).not.toContain("low — /compact");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+});
+
+// ── footer: pi-style usage segments (R/W, CH, $) ─────────────────────────
+
+describe("footer usage segments", () => {
+	it("cache read/write and the LATEST cache hit rate follow pi's formulas", async () => {
+		// two responses with cache data; CH must come from the last one
+		const env = await startTuiRepl([
+			reply("one", { inputTokens: 100, outputTokens: 10, cacheReadTokens: 900, cacheWriteTokens: 0 }),
+			reply("two", { inputTokens: 100, outputTokens: 10, cacheReadTokens: 1900, cacheWriteTokens: 8000 }),
+		]);
+		await settle();
+		env.terminal.data("hi\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("CH90.0%"));
+		env.terminal.data("again\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("R2.8k"));
+		const frame = env.terminal.frameSince(0);
+		// cumulative: ↑200 ↓20 R2.8k W8.0k; CH from the LAST response:
+		// 1900/(100+1900+8000) = 19.0%
+		expect(frame).toContain("↑200 ↓20 R2.8k W8.0k CH19.0%");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("no cache data anywhere → no R/W/CH segments", async () => {
+		const env = await startTuiRepl([reply("ok", { inputTokens: 50, outputTokens: 5 })]);
+		await settle();
+		env.terminal.data("hi\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("↑50 ↓5"));
+		const frame = env.terminal.frameSince(0);
+		expect(frame).not.toContain(" R");
+		expect(frame).not.toContain("CH");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("cost prices every response at its producer model's rates", async () => {
+		// claude-sonnet-4-5: $3/$15 per M in+out. First response on that model…
+		const env = await startTuiRepl(
+			[reply("one", { inputTokens: 100_000, outputTokens: 50_000 })],
+			"claude-sonnet-4-5",
+		);
+		await settle();
+		env.terminal.data("hi\r");
+		// 0.1M*3 + 0.05M*15 = 0.3 + 0.75 = $1.050, no subscription tag
+		await waitUntil(() => env.terminal.frameSince(0).includes("$1.050"));
+		expect(env.terminal.frameSince(0)).not.toContain("(sub)");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("subscription-backed models show $0.000 (sub)", async () => {
+		const env = await startTuiRepl([reply("ok", { inputTokens: 1000, outputTokens: 100 })], "glm-5.3");
+		await settle();
+		env.terminal.data("hi\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("$0.000 (sub)"));
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("models outside the cost table omit the $ segment entirely", async () => {
+		const env = await startTuiRepl([reply("ok", { inputTokens: 50, outputTokens: 5 })]);
+		await settle();
+		env.terminal.data("hi\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("↑50 ↓5"));
+		expect(env.terminal.frameSince(0)).not.toContain("$");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
+	it("IMP_AUTOCOMPACT=0 drops the (auto) tag", async () => {
+		vi.stubEnv("IMP_AUTOCOMPACT", "0");
+		vi.stubEnv("IMP_CONTEXT_WINDOW", "30");
+		const env = await startTuiRepl([reply("ok", { inputTokens: 5, outputTokens: 0 })]);
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("0.0%/30");
+		expect(env.terminal.frameSince(0)).not.toContain("(auto)");
 		env.terminal.data("/exit\r");
 		await env.repl;
 	});

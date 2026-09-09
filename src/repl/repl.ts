@@ -63,6 +63,36 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
  *  already — this only bounds pathological results). */
 const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
 
+/** Claude Code-style welcome panel for fresh TUI sessions: branding, a
+ *  quick-reference of the commands people actually reach for, and the
+ *  session's identity. Resumed sessions keep the compact banner — the
+ *  panel is the "new conversation" moment, not a constant. */
+function welcomeLines(sessionId: string, modelReference: string): string[] {
+	const rows: [string, string][] = [
+		["/help", "show every command"],
+		["/model", "pick a model"],
+		["/new", "fresh session"],
+		["/compact", "summarize older turns"],
+		["/sessions", "list past sessions"],
+		["/resume", "reopen one"],
+	];
+	const inner = [
+		" ◆ Welcome to imp!",
+		"",
+		...rows.map(([name, desc]) => `   ${name.padEnd(11)}${desc}`),
+		"",
+		"   / commands · @ files · ! bash · Ctrl+D exits",
+		"",
+		`   imp ${VERSION} · session ${sessionId} · ${modelReference}`,
+	];
+	const width = Math.max(...inner.map((line) => line.length));
+	return [
+		`╭${"─".repeat(width + 2)}╮`,
+		...inner.map((line) => `│ ${line.padEnd(width)} │`),
+		`╰${"─".repeat(width + 2)}╯`,
+	];
+}
+
 /** "! cmd" lines: the shell executes them itself (M10). Blank after the
  *  "!" is a usage hint, not a command. */
 function isBangLine(line: string): boolean {
@@ -981,14 +1011,22 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 
 	input.start();
 	if (interactive) {
-		renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
 		const session = runner.session;
-		if (session) {
-			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
-			// Replay the resumed history so the user sees what the model sees
-			// (the crash-recovery loop's missing half).
-			const replayed = replay(session);
-			if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
+		if (session !== null && session.stats().messageCount === 0) {
+			// fresh conversation → the welcome panel (whole box dim, like
+			// Claude Code); session identity rides inside it
+			for (const line of welcomeLines(session.header.id.slice(0, 8), runner.modelReference())) {
+				renderer.writeLine(renderer.dim(line));
+			}
+		} else {
+			renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
+			if (session) {
+				renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
+				// Replay the resumed history so the user sees what the model sees
+				// (the crash-recovery loop's missing half).
+				const replayed = replay(session);
+				if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
+			}
 		}
 		input.refresh(); // banner block ends with a fresh idle prompt
 	}

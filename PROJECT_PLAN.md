@@ -463,6 +463,14 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#welcome-screen 欢迎页（2026-09-10，652 tests，feat/welcome-screen）**：用户要求仿 Claude Code 启动欢迎页。
+  - **新会话（TUI interactive）**：圆角边框欢迎面板（整体 dim）：`◆ Welcome to imp!` + 六条高频命令速查（/help /model /new /compact /sessions /resume——全部真实存在，不虚构）+ 输入提示行（/ 命令 · @ 文件 · ! bash · Ctrl+D 退出）+ 身份行（版本 · session id8 · modelReference）；框宽按内容自适应（全 ASCII+◆ 单宽）
+  - **恢复会话**：保持旧紧凑 banner（`imp 0.1.0 — /help...` + `▪ session` + `▪ replayed N`）——欢迎页是"新对话"时刻，不重复打扰（CC 同款语义：continuation 显示 "Continued from..."）
+  - 判据 `session.stats().messageCount === 0`（上下文文件不算消息，agentsMd 场景仍算新会话）；**打印/管道模式字节不变**（interactive 分支外）；/new 不重弹欢迎页
+  - 测试 +3：面板结构（框+命令行+身份行+旧 banner 消失）、interactive=false 无面板、恢复会话走旧 banner+replayed 且无面板；banner 顺序测试锚点改 `◆ Welcome to imp!`
+  - 踩坑：**会话存储按扁平化 cwd 分目录**——resume 测试需共享 baseDir+cwd（startRepl 语义化为"传 sessionBaseDir 即同世界"）；欢迎页含 /compact 字样撞上 M10 测试的 not.toContain("/compact")（改为断言具体提示语 "low — /compact"）
+  - 真机：glm-5.3 新会话框渲染正确
+
 - **#footer-stats pi 式状态栏（2026-09-10，649 tests，feat/footer-stats）**：用户要求 footer 按 pi 展示模型状态（例：`↑15M ↓1.9M R415M CH99.6% $76.556 36.7%/1.0M (auto)`）。
   - **usage 段**（全部从 live history 累计）：↑↓ 现有 + `R`缓存读 + `W`缓存写（>0 才显示）+ `CH%` 末条命中率（pi 公式 cacheRead/(input+R+W)，取最后一条报了缓存数据的 assistant）
   - **$ 成本**：`models.ts` 新增每百万 token 费率表（出处=pi 的 provider 目录 JSON：anthropic API 价、zai 全 0+subscription、openai-codex API 价+subscription；**分层计价>272k 未建模**，长会话 tiered 模型略低估——记档）；**每条 assistant 消息打 model 戳**（loop 在 streamAssistant 出口打，新字段可选、旧会话回退当前模型费率）→ 会话中途 /model 切换各按各价；订阅族显示 `$0.000 (sub)`（pi 语义：流量走套餐，数字=API 价等效值）；表外模型整段省略

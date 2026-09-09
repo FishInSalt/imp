@@ -30,6 +30,7 @@ interface ReplEnv {
 	repl: Promise<number>;
 	requests: LLMRequest[];
 	exitCodes: number[];
+	baseDir: string;
 	send(text: string): void;
 	output(): string;
 }
@@ -38,14 +39,20 @@ interface StartArgs {
 	scripts?: ScriptStep[];
 	tools?: Tool[];
 	tty?: boolean;
+	interactive?: boolean;
 	model?: string;
 	noSession?: boolean;
+	resume?: string;
+	sessionBaseDir?: string;
 	provider?: LLMProvider;
 	deferInit?: boolean;
 }
 
 async function startRepl(args: StartArgs): Promise<ReplEnv> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
+	// a shared sessionBaseDir implies a shared cwd too: session files are
+	// namespaced by the flattened working directory, so a "resume" test needs
+	// both from the same world
+	const baseDir = args.sessionBaseDir ?? (await mkdtemp(path.join(tmpdir(), "imp-repl-")));
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
 	const provider: LLMProvider = args.provider ?? scriptedProvider(args.scripts ?? [reply("ok")], requests);
@@ -64,7 +71,8 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		maxTurns: 10,
 		noContextFiles: true,
 		noSession: args.noSession ?? false,
-		sessionBaseDir: baseDir,
+		resume: args.resume,
+		sessionBaseDir: args.sessionBaseDir ?? baseDir,
 		renderer,
 		provider,
 		tools: args.tools,
@@ -75,7 +83,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		runner,
 		input: fake.stdin,
 		output: fake.stdout,
-		interactive: args.tty ?? true,
+		interactive: args.interactive ?? args.tty ?? true,
 		// These scenarios pin the readline shell (the IMP_REPL=legacy escape
 		// hatch path). The pi-tui shell has its own suite (repl-tui.test.ts).
 		shell: "legacy",
@@ -85,7 +93,16 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		},
 	});
 	await ticks(2);
-	return { fake, runner, repl, requests, exitCodes, send: (t) => fake.send(t), output: () => fake.output() };
+	return {
+		fake,
+		runner,
+		repl,
+		requests,
+		exitCodes,
+		baseDir,
+		send: (t) => fake.send(t),
+		output: () => fake.output(),
+	};
 }
 
 beforeEach(() => {
@@ -96,14 +113,68 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
+describe("runRepl welcome panel", () => {
+	it("fresh session: rounded box with branding, quick reference, and identity", async () => {
+		const env = await startRepl({ scripts: [reply("hi")] });
+		await waitUntil(() => env.output().includes("◆ Welcome to imp!"));
+		const out = env.output();
+		expect(out).toContain("╭");
+		expect(out).toContain("╰");
+		// quick-reference rows advertise real commands only
+		for (const cmd of ["/help", "/model", "/new", "/compact", "/sessions", "/resume"]) {
+			expect(out).toContain(cmd);
+		}
+		// identity line: version + session id + model
+		expect(out).toMatch(/imp 0\.1\.0 · session [0-9a-f]{8} · test-model/);
+		// the old compact banner line is gone on fresh sessions
+		expect(out).not.toContain("/help for commands");
+		env.fake.eof();
+		await env.repl;
+	});
+
+	it("interactive=false (print/pipe path): no welcome panel — banner bytes stay frozen", async () => {
+		const env = await startRepl({ scripts: [reply("hi")], interactive: false, tty: false });
+		env.send("hi\n");
+		await waitUntil(() => env.output().includes("1 turns"));
+		expect(env.output()).not.toContain("Welcome to imp");
+		expect(env.output()).not.toContain("╭");
+		env.fake.eof();
+		await env.repl;
+	});
+
+	it("resumed session: compact banner + replayed note, no welcome panel", async () => {
+		// first process creates and saves a session with one exchange
+		const first = await startRepl({ scripts: [reply("earlier")] });
+		first.send("hello\n");
+		await waitUntil(() => first.output().includes("1 turns"));
+		const id8 = first.runner.session?.header.id.slice(0, 8) ?? "";
+		first.fake.eof();
+		await first.repl;
+
+		// second process resumes it
+		const second = await startRepl({
+			scripts: [reply("now")],
+			resume: id8,
+			sessionBaseDir: first.baseDir,
+		});
+		await waitUntil(() => second.output().includes("replayed"));
+		const out = second.output();
+		expect(out).toContain("imp 0.1.0 — /help for commands"); // legacy banner on resume
+		expect(out).toContain("▪ replayed");
+		expect(out).not.toContain("Welcome to imp");
+		second.fake.eof();
+		await second.repl;
+	});
+});
+
 describe("runRepl", () => {
 	it("happy path: hi → streamed text → stats → prompt redrawn; provider saw the user message", async () => {
 		const env = await startRepl({ scripts: [reply("Hello!")] });
-		await waitUntil(() => env.output().includes("imp 0.1.0 — /help for commands"));
+		await waitUntil(() => env.output().includes("◆ Welcome to imp!"));
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("— test-model · 1 turns · in 10 / out 5 tokens"));
 		expect(env.output()).toContain("Hello!");
-		expect(env.output()).toContain("▪ session ");
+		expect(env.output()).toMatch(/session [0-9a-f]{8}/); // welcome panel carries the id
 		// prompt redrawn after the run settled (after the stats line)
 		expect(env.output().lastIndexOf("> ")).toBeGreaterThan(env.output().indexOf("— test-model · 1 turns"));
 		expect(env.requests[0]?.messages).toEqual([{ role: "user", content: "hi" }]);
@@ -956,7 +1027,7 @@ describe("! passthrough (M10)", () => {
 		await waitUntil(() => env.output().includes("big context"));
 		const out = env.output();
 		expect(out).not.toContain("context 8"); // ~80% of the 131072 default — no note on legacy
-		expect(out).not.toContain("/compact");
+		expect(out).not.toContain("low — /compact"); // welcome panel may mention /compact
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

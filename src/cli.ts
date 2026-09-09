@@ -14,7 +14,8 @@ import {
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
-import { dim, red, VERSION } from "./format.js";
+import { bold, dim, red, VERSION } from "./format.js";
+import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
 import { historyFilePath } from "./repl/history.js";
@@ -52,6 +53,8 @@ Usage:
   imp "<prompt>"           Same as -p
   imp                     Start an interactive session (REPL)
   imp sessions             List saved sessions for this directory
+  imp login                Log in to OpenAI (ChatGPT plan) — device-code OAuth
+  imp logout               Remove the stored OpenAI credential
 
 Options:
   -p, --print <prompt>     Prompt to run
@@ -189,6 +192,32 @@ function parseArgs(argv: string[]): CliOptions {
 	return opts;
 }
 
+/** `imp login` — device-code OAuth for the OpenAI (ChatGPT plan) credential. */
+async function runLogin(): Promise<void> {
+	const controller = new AbortController();
+	process.on("SIGINT", () => controller.abort());
+	try {
+		const credential = await loginCodex({
+			signal: controller.signal,
+			onDeviceCode: ({ verificationUri, userCode, intervalSeconds }) => {
+				process.stdout.write(
+					`OpenAI (ChatGPT plan) login\n\n` +
+						`  1. open:    ${verificationUri}\n` +
+						`  2. enter code: ${bold(userCode)}\n\n` +
+						`Waiting for you to confirm (polls every ${intervalSeconds}s, Ctrl+C cancels)…\n`,
+				);
+			},
+		});
+		process.stdout.write(
+			`Logged in. The credential is stored in ~/.imp/auth.json\n` +
+				`Use OpenAI models with:  imp -m openai-codex/gpt-5.2\n`,
+		);
+	} catch (err) {
+		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+		process.exitCode = 1;
+	}
+}
+
 /** `imp sessions` — list saved sessions for this directory. */
 function printSessionList(): void {
 	const sessions = listSessions(process.cwd());
@@ -212,6 +241,15 @@ async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	if (argv[0] === "sessions") {
 		printSessionList();
+		return;
+	}
+	if (argv[0] === "login") {
+		await runLogin();
+		return;
+	}
+	if (argv[0] === "logout") {
+		logoutCodex();
+		process.stdout.write("Logged out of OpenAI (ChatGPT plan).\n");
 		return;
 	}
 	const opts = parseArgs(argv);

@@ -153,9 +153,11 @@ function modelCandidates(current: string): string[] {
 /** The switch itself, shared by "/model <id>" and the picker's pick — the
  *  write and the note are byte-identical whichever way the id arrived. */
 function switchModel(ctx: CommandContext, id: string): void {
-	const previous = ctx.runner.model;
+	const previous = ctx.runner.modelReference();
 	ctx.runner.setModel(id); // re-resolves the provider too (multi-provider)
-	ctx.renderer.note(`▪ model: ${previous} → ${ctx.runner.model} (applies from the next turn)`);
+	// Canonical refs on both sides (review P2-5): "gpt-5.4" alone cannot tell
+	// the user WHICH protocol family the switch landed on.
+	ctx.renderer.note(`▪ model: ${previous} → ${ctx.runner.modelReference()} (applies from the next turn)`);
 }
 
 /** /resume <id>'s body, shared by the by-arg path and the picker's pick — the
@@ -403,7 +405,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				const select = ctx.select;
 				if (select === undefined) {
 					// Legacy readline shell: the text flow, byte-for-byte.
-					ctx.renderer.writeLine(`model: ${ctx.runner.model}`);
+					ctx.renderer.writeLine(`model: ${ctx.runner.modelReference()}`);
 					ctx.renderer.writeLine(
 						"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)",
 					);
@@ -411,12 +413,12 @@ export const COMMANDS: readonly SlashCommand[] = [
 				}
 				// TUI shell: a pick behaves exactly like /model <id> on the chosen
 				// row; cancelling changes nothing and notes nothing.
-				const candidates = modelCandidates(ctx.runner.model);
+				const candidates = modelCandidates(ctx.runner.modelReference());
 				const index = await select({
 					title: "models — switch applies from the next turn",
 					items: candidates.map((id) => ({
 						label: id,
-						description: id === ctx.runner.model ? "current" : undefined,
+						description: id === ctx.runner.modelReference() ? "current" : undefined,
 					})),
 				});
 				const id = index === null ? undefined : candidates[index];

@@ -113,6 +113,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				},
 				JSON.stringify(body),
 				request.signal,
+				"Anthropic",
 			);
 			if (response === null) return; // aborted mid-connect
 

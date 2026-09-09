@@ -421,6 +421,18 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 已知边界：模型选择不随会话持久化（既有语义，跨 provider 需重开时 -m 指定）；reasoning 加密回放/usage 限额显示/browser 登录缓做；z.ai OpenAI 模式端点不覆盖 Coding Plan 额度（批次 0 已证）
   - 待办：**全量对抗审查**（三批合并 diff：shared 抽取等价性、openai-completions wire、codex-auth 状态机、responses wire、setModel 切换面）——按 #10 惯例两路
 
+- **#多 provider 审查闭环（2026-09-10，622 tests，fix/multi-provider-review）**：两路对抗审查（wire/auth 路 OK-with-notes：1 P1+4 P2；集成/切换面路 **BLOCK**：4 P1+5 P2）全部核实为真并修复。
+  - **P1-1 子代理拿到过期 provider**：task 工具构造期按值捕获 this.provider（同处的 getModel 等都是 getter，注释自己写着"spawn-time reads live"——provider 漏掉）→ 跨族 /model 后子代理=旧协议实例+新 wire id=必 404。修复：TaskToolOptions.provider → `getProvider: () => this.provider`；钉子：spawn 期换 provider 实例子代理跟随
+  - **P1-2 在飞回合的压缩缝读活 provider**：/model allowedDuringRun → 运行中切换后 onBeforeTurn/compactAndSplice 用**新族 provider + 旧族捕获 model**（404 冒泡毁整个回合）。修复：runTurn 入口与 model 一并快照 provider+settings 贯穿 runTurnInner/compactAndSplice（/compact 手动路径同步）；钉子：gated fake 在飞回合中 /model 跨族，回合仍以旧 model 完成
+  - **P1-3 构造期窗口不初始化**：settings.contextWindow 唯一写点是 setModel——默认用户 footer 用注册表 1M、压缩门却 131072：~11% 即压缩且 ≥80% 警告永不出现（注册表批次的核心承诺未兑现）。修复：构造期 `contextWindowFor(options.model)` 初始化；钉子：默认 1M / glm 200K
+  - **P1-4 切换后 run_log 静默**：setModel 换的实例未包 withLogging。修复：与构造期同款包装
+  - **F1（wire 路 P1）openai-completions usage 双计**：prompt_tokens 含缓存读被原样入 inputTokens，而 compaction 锚点公式按 anthropic 语义（input 不含缓存读）再叠加 cacheReadTokens——缓存重度会话 ctx% 虚高~2 倍、过早压缩。修复：减法对齐（与 codex-responses 同约定）；钉子 100-40=60
+  - **P2 批**：F2 重试耗尽错误丢 provider 名（postJsonWithRetry 增 label 参数三处传入）；F3 设备码 interval NaN 通过校验→0ms 热循环（Number.isFinite）；F4 登录轮询按迭代挂 abort 监听器不移除（~900 闭包触发 Node 告警——双 settle 路径 removeEventListener）；F5 codex-responses auth 阶段是 abort 盲区（检查移到 await auth() 前）；P2-5 bare id 显示面歧义（runner.modelReference() canonical——note/picker 前置项/current 标记/无参显示四处，anthropic 族保持 bare=存量字节不变；钉子：跨族后 picker 首项 openai-codex/gpt-5.4* 且 bare 项不再出现）；P2-6 近似前缀静默错路由（trim+大小写归一——"OpenAI/x"曾是延迟 404）；P2-7 注入 fake 时 providerName 按初始模型解析（openai/ 前缀初始模型+fake+同族切换不再丢 fake）；P2-8 constants.contextWindowTokens 死代码删除、models envInt 无效值告警一次+忽略（与旧契约对齐而非静默分叉）、login 文案 gpt-5.2→gpt-5.5（对齐注册表/HELP/404 提示）
+  - **P2-9 补钉**：跨族切换真回合 e2e（OPENAI_BASE_URL 指向本地假服务器——请求落新 provider 且 wire id 剥前缀、Bearer 正确）、构造期窗口、子代理继承、picker canonical、parseModelRef 大小写/trim；**未做**：login/logout CLI 集成测试（argv[0] 薄分派，记入已知项）
+  - 测试面连锁修改：TaskToolOptions 接口变更波及 task-tool/child-compaction 测试 16 处调用点+repoTask overrides（`{ provider }`→`{ getProvider }`）；makeEnv 增 model 参数
+  - 真机冒烟：glm 默认路径无回归（6/6 答对、无错误）
+  - 两路 Correct 交叉印证：shared 抽取等价（null 哨兵=原静默 return）、单飞刷新竞态窗口推演、403/404 排水体真修对、parseModelRef 边界、footer/status 改线正确
+
 - **M8 项目信任门 + /worktrees 清单（2026-09-06，`72ac78a`/`b3cd13f`，369 tests）**：把“clone 即 RCE”的洞补上，顺手清掉 M6b 设计 §7 预留的运维缺口。
   - **信任门（移植 pi trust-manager，逐行核验后裁剪）**：全局 `~/.imp/trust.json`（`Record<目录, boolean>`，排序+tab 缩进，diff 友好）；查询走**最近祖先**（monorepo 根信任一次全覆盖）；realpath 规范化防符号链接别名；坏文件=硬教学错误（绝不静默重诠）。权威序：`--trust`/`--no-trust` 旗标（落记录）→ 已记录决定 →（仅交互）启动前一次性 [y/N]（短命 readline，答案落记录；EOF/Ctrl+D=拒绝）。**print 模式未决=本会话拒绝且不落记录**+教学行（含文件与修复法），绝不挂死。门控面：`.imp/extensions` + `.imp/agents`；`AGENTS.md` 惯例不拦；全局 `~/.imp/` 自装免门；`-ne` 与门互斥语义明确。loader/runner 各加一个布尔参（只关项目层）。Claude Code 只贡献了提示语框定（"信任此目录的文件？"点名要加载什么）
   - **`/trust` 命令**：列全部记录+本目录生效决定（含决定来自哪个祖先）；`/trust remove <dir>` 撤销

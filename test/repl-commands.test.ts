@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +88,7 @@ async function makeEnv(args?: {
 	noSession?: boolean;
 	active?: boolean;
 	provider?: LLMProvider;
+	model?: string;
 }): Promise<TestEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-cmds-"));
 	const cwd = path.join(baseDir, "proj");
@@ -100,7 +102,7 @@ async function makeEnv(args?: {
 	const runner = await createRunner({
 		cwd,
 		argv: [],
-		model: "claude-sonnet-4-5",
+		model: args?.model ?? "claude-sonnet-4-5",
 		maxTokens: 1024,
 		maxTurns: 10,
 		noContextFiles: true,
@@ -717,6 +719,95 @@ describe("/tree (#10 batch 2)", () => {
 		expect(env.output()).toContain("nothing was written on the left branch to summarize");
 	});
 
+	it("construction-time registry window reaches the compaction gate (review P1-3)", async () => {
+		const env = await makeEnv(); // default claude-sonnet-4-5
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const gate = (env.runner as any).settings.contextWindow as number;
+		expect(gate).toBe(1_000_000);
+		const glm = await makeEnv({ model: "glm-4.6" });
+		expect((glm.runner as any).settings.contextWindow).toBe(200_000);
+	});
+
+	it("cross-family switch drives a REAL turn on the new provider (review P2-9 e2e)", async () => {
+		const seen: Array<{ model: string; auth: string }> = [];
+		const server = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c) => chunks.push(c as Buffer));
+			req.on("end", () => {
+				const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model?: string };
+				seen.push({ model: body.model ?? "", auth: String(req.headers.authorization ?? "") });
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.write(
+					`data: ${JSON.stringify({ choices: [{ delta: { role: "assistant" } }] })}\n\n` +
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "switched ok" } }] })}\n\n` +
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+				);
+				res.end();
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as { port: number };
+		const env = await makeEnv({ model: "glm-4.6" });
+		const prevKey = process.env.OPENAI_API_KEY;
+		const prevBase = process.env.OPENAI_BASE_URL;
+		process.env.OPENAI_API_KEY = "e2e-key";
+		process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}`;
+		try {
+			await dispatchCommand("/model openai/gpt-5.2", env.ctx);
+			await env.runner.runTurn({ userMessage: "hello new family" });
+			expect(seen).toHaveLength(1);
+			expect(seen[0]?.model).toBe("gpt-5.2"); // wire id — prefix stripped
+			expect(seen[0]?.auth).toBe("Bearer e2e-key");
+		} finally {
+			server.close();
+			if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevKey;
+			if (prevBase === undefined) delete process.env.OPENAI_BASE_URL;
+			else process.env.OPENAI_BASE_URL = prevBase;
+		}
+	});
+
+	it("an in-flight turn keeps its entry-time provider+model snapshot across a mid-run /model (review P1-2)", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const seen: string[] = [];
+		const gated: LLMProvider = {
+			name: "gated-fake",
+			async *stream(request) {
+				seen.push(request.model);
+				await gate;
+				yield { type: "message_end", message: assistant([{ type: "text", text: "from the old family" }]) };
+			},
+		};
+		const env = await makeEnv({ model: "glm-4.6", provider: gated });
+		const turn = env.runner.runTurn({ userMessage: "slow one" });
+		await new Promise((r) => setTimeout(r, 20)); // the turn is now in-flight inside the fake
+		await dispatchCommand("/model openai/gpt-5.2", env.ctx); // allowedDuringRun — must not leak into the turn
+		release?.();
+		const result = await turn;
+		expect(result.stopReason).not.toBe("error");
+		expect(seen).toEqual(["glm-4.6"]);
+	});
+
+	it("after a cross-family switch the picker fronts the CANONICAL current entry (review P2-5)", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/model openai-codex/gpt-5.4", env.ctx);
+		const calls: Array<{ items: Array<{ label: string; description?: string }> }> = [];
+		const ctx = {
+			...env.ctx,
+			select: async (opts: { items: Array<{ label: string; description?: string }> }) => {
+				calls.push(opts);
+				return 0;
+			},
+		};
+		await dispatchCommand("/model", ctx);
+		const labels = calls[0]?.items.map((i) => `${i.label}${i.description === "current" ? "*" : ""}`) ?? [];
+		expect(labels[0]).toBe("openai-codex/gpt-5.4*");
+		expect(labels).not.toContain("gpt-5.4*"); // the bare front entry that silently flipped families is gone
+	});
+
 	it("/model with a provider prefix re-routes the protocol family (multi-provider)", async () => {
 		const env = await makeEnv({ seed: [] });
 		expect(env.runner.model).toBe("claude-sonnet-4-5");
@@ -727,7 +818,7 @@ describe("/tree (#10 batch 2)", () => {
 		expect(env.runner.model).toBe("gpt-5.4");
 		expect(env.runner.contextWindow).toBe(272_000);
 		expect(env.output()).toContain("claude-sonnet-4-5 → glm-4.6");
-		expect(env.output()).toContain("glm-4.6 → gpt-5.4");
+		expect(env.output()).toContain("glm-4.6 → openai-codex/gpt-5.4"); // canonical — the family is visible (P2-5)
 		await dispatchCommand("/model glm-4.6", env.ctx); // and back
 		expect(env.runner.model).toBe("glm-4.6");
 	});

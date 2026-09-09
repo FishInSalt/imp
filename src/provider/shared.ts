@@ -105,6 +105,7 @@ export async function postJsonWithRetry(
 	headers: Record<string, string>,
 	body: string,
 	signal?: AbortSignal,
+	label = "LLM",
 ): Promise<Response | null> {
 	let networkError: Error | null = null;
 	for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
@@ -127,5 +128,5 @@ export async function postJsonWithRetry(
 			networkError = err instanceof Error ? err : new Error(String(err));
 		}
 	}
-	throw new Error(`request failed: ${networkError?.message ?? "retries exhausted"}`);
+	throw new Error(`${label} request failed: ${networkError?.message ?? "retries exhausted"}`);
 }

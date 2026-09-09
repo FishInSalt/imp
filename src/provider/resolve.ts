@@ -29,11 +29,16 @@ export interface ModelRef {
 }
 
 export function parseModelRef(reference: string): ModelRef {
-	const slash = reference.indexOf("/");
-	if (slash === -1) return { provider: "anthropic", modelId: reference };
-	const provider = reference.slice(0, slash);
-	const modelId = reference.slice(slash + 1);
-	if (modelId === "") return { provider: "anthropic", modelId: reference };
+	// Trim + case-insensitive prefix matching (review P2-6): "OpenAI/gpt-5.2"
+	// or " openai/gpt-5.2" used to fall through to a bare anthropic id and
+	// surface as a delayed 404 on the next turn — near-miss prefixes of KNOWN
+	// families are typos, not exotic ids.
+	const trimmed = reference.trim();
+	const slash = trimmed.indexOf("/");
+	if (slash === -1) return { provider: "anthropic", modelId: trimmed };
+	const provider = trimmed.slice(0, slash).toLowerCase();
+	const modelId = trimmed.slice(slash + 1);
+	if (modelId === "") return { provider: "anthropic", modelId: trimmed };
 	if (provider === "anthropic") return { provider: "anthropic", modelId };
 	if (provider === "openai") return { provider: "openai", modelId };
 	if (provider === "openai-codex") return { provider: "openai-codex", modelId };

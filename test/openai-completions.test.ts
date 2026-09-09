@@ -104,7 +104,8 @@ describe("openai-completions provider", () => {
 		expect(text.map((e) => e.text).join("")).toBe("hello");
 		const msg = lastMessage(events);
 		expect(msg.blocks).toEqual([{ type: "text", text: "hello" }]);
-		expect(msg.usage).toEqual({ inputTokens: 100, outputTokens: 7, cacheReadTokens: 40 });
+		// prompt_tokens(100) includes the 40 cache hits → inputTokens excludes them (review F1)
+		expect(msg.usage).toEqual({ inputTokens: 60, outputTokens: 7, cacheReadTokens: 40 });
 		expect(msg.stopReason).toBe("end_turn");
 	});
 
@@ -320,5 +321,9 @@ describe("parseModelRef routing", () => {
 			modelId: "openrouter/org/model",
 		});
 		expect(parseModelRef("openai/")).toEqual({ provider: "anthropic", modelId: "openai/" });
+		// review P2-6: near-miss prefixes are typos, not exotic ids
+		expect(parseModelRef("OpenAI/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
+		expect(parseModelRef(" openai/gpt-5.2 ")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
+		expect(parseModelRef("OpenAI-Codex/gpt-5.4")).toEqual({ provider: "openai-codex", modelId: "gpt-5.4" });
 	});
 });

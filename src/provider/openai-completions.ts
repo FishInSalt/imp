@@ -160,6 +160,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				},
 				JSON.stringify(body),
 				request.signal,
+				"OpenAI",
 			);
 			if (response === null) return; // aborted mid-connect
 			if (!response.ok || !response.body) {
@@ -227,13 +228,14 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				}
 
 				if (chunk.usage !== undefined) {
-					// api.openai.com counts cache reads inside prompt_tokens;
-					// OpenRouter reports the hit count under its own field.
-					usage.inputTokens = Math.max(usage.inputTokens, chunk.usage.prompt_tokens ?? 0);
-					usage.outputTokens = Math.max(usage.outputTokens, chunk.usage.completion_tokens ?? 0);
+					// prompt_tokens INCLUDES cache hits (both spellings report the
+					// hit count as a subset) — subtract to match the anthropic
+					// inputTokens convention the ctx%/compaction math assumes (review F1).
 					const cached =
-						chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens;
-					if (cached !== undefined) usage.cacheReadTokens = Math.max(usage.cacheReadTokens ?? 0, cached);
+						chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens ?? 0;
+					usage.inputTokens = Math.max(usage.inputTokens, (chunk.usage.prompt_tokens ?? 0) - cached);
+					usage.outputTokens = Math.max(usage.outputTokens, chunk.usage.completion_tokens ?? 0);
+					if (cached > 0) usage.cacheReadTokens = Math.max(usage.cacheReadTokens ?? 0, cached);
 				}
 			}
 

@@ -214,7 +214,7 @@ async function runLogin(): Promise<void> {
 		});
 		process.stdout.write(
 			`Logged in. The credential is stored in ~/.imp/auth.json\n` +
-				`Use OpenAI models with:  imp -m openai-codex/gpt-5.2\n`,
+				`Use OpenAI models with:  imp -m openai-codex/gpt-5.5\n`,
 		);
 	} catch (err) {
 		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));

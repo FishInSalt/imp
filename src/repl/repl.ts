@@ -55,6 +55,12 @@ export interface ReplOptions {
 	 *  cli.ts before extension loading (which precedes this call) and bound
 	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
 	confirm?: TtyConfirm;
+	/** Release cli.ts's deferred startup notes (extension/context/trust
+	 *  lines): called right after the welcome panel or banner prints, so the
+	 *  greeting owns the top of the screen and the environment noise follows
+	 *  it instead of burying it. Absent in tests and print mode — notes then
+	 *  print live, as before. */
+	releaseStartupNotes?: () => void;
 }
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
@@ -80,8 +86,6 @@ function welcomeLines(sessionId: string, modelReference: string): string[] {
 		" ◆ Welcome to imp!",
 		"",
 		...rows.map(([name, desc]) => `   ${name.padEnd(11)}${desc}`),
-		"",
-		"   / commands · @ files · ! bash · Ctrl+D exits",
 		"",
 		`   imp ${VERSION} · session ${sessionId} · ${modelReference}`,
 	];
@@ -921,6 +925,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	const interactive =
 		options.interactive ?? ((stdin as { isTTY?: boolean }).isTTY === true && output.isTTY === true);
 	const runner = options.runner;
+	const release = options.releaseStartupNotes;
 	const renderer = runner.renderer; // one renderer, one newline state, shared with the runner
 	const shell: ReplShell = options.shell ?? resolveShell();
 	const useTui = interactive && shell === "tui";
@@ -1012,7 +1017,8 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	input.start();
 	if (interactive) {
 		const session = runner.session;
-		if (session !== null && session.stats().messageCount === 0) {
+		const fresh = session !== null && session.stats().messageCount === 0;
+		if (fresh) {
 			// fresh conversation → the welcome panel (whole box dim, like
 			// Claude Code); session identity rides inside it
 			for (const line of welcomeLines(session.header.id.slice(0, 8), runner.modelReference())) {
@@ -1020,13 +1026,16 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			}
 		} else {
 			renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
-			if (session) {
-				renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
-				// Replay the resumed history so the user sees what the model sees
-				// (the crash-recovery loop's missing half).
-				const replayed = replay(session);
-				if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
-			}
+		}
+		// the greeting (or the resumed banner) owns the top of the screen;
+		// deferred environment notes (extensions, context, trust) follow it
+		release?.();
+		if (!fresh && session) {
+			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
+			// Replay the resumed history so the user sees what the model sees
+			// (the crash-recovery loop's missing half).
+			const replayed = replay(session);
+			if (replayed > 0) renderer.note(`▪ replayed ${replayed} messages — context restored`);
 		}
 		input.refresh(); // banner block ends with a fresh idle prompt
 	}

@@ -73,15 +73,19 @@ const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
  *  quick-reference of the commands people actually reach for, and the
  *  session's identity. Resumed sessions keep the compact banner — the
  *  panel is the "new conversation" moment, not a constant. */
-/** Pixel-block "imp" (figlet ANSI-Shadow — the chunky style of Gemini CLI's
- *  logo). ██ cells read as solid pixels; the gradient paints per column. */
+/** Pixel-block "imp" — glyphs verbatim from the ANSI Shadow FIGlet font
+ *  (xero/figlet-fonts "ANSI Shadow.flf", full-width layout; extraction
+ *  validated char-for-char against the canonical "hello" render). This
+ *  font's lowercase i has NO tittle and no trailing gap (unlike l), and p's
+ *  bowl closes one row above the bare descender stem. ██ cells read as
+ *  solid pixels; the gradient paints per column. */
 const IMP_LOGO = [
-	" ██╗███╗   ███╗█████╗",
-	"██╔╝████╗ ████║██╔══██╗",
-	"██║ ██╔████╔██║██████╔╝",
-	"██║ ██║╚██╔╝██║██╔══██╗",
-	"██║ ██║ ╚═╝ ██║██║  ██║",
-	"╚═╝ ╚═╝     ╚═╝╚═╝  ╚═╝",
+	"██╗███╗   ███╗██████╗",
+	"██║████╗ ████║██╔══██╗",
+	"██║██╔████╔██║██████╔╝",
+	"██║██║╚██╔╝██║██╔═══╝",
+	"██║██║ ╚═╝ ██║██║",
+	"╚═╝╚═╝     ╚═╝╚═╝",
 ];
 
 /** Gemini-style horizontal gradient stops: blue → purple → pink. */

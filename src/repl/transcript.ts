@@ -136,14 +136,22 @@ export class TranscriptSink implements Component {
 		}
 		let out = this.wrapped;
 		if (this.children.length > 0) {
+			// Splice the children in at their anchors. Row-by-row appends, not
+			// call-spreads: render() runs every frame, and spreading a whole
+			// marathon-session transcript (>100k rows) can hit V8's
+			// spread-argument ceiling (review P2).
 			out = [];
 			let emitted = 0;
+			const pushRows = (rows: readonly string[]): void => {
+				for (const row of rows) out.push(row);
+			};
 			for (const child of this.children) {
 				const upto = child.at === 0 ? 0 : (this.cumulative[child.at - 1] ?? 0);
-				out.push(...this.wrapped.slice(emitted, upto), ...child.component.render(w));
+				pushRows(this.wrapped.slice(emitted, upto));
+				pushRows(child.component.render(w));
 				emitted = Math.max(emitted, upto);
 			}
-			out.push(...this.wrapped.slice(emitted));
+			pushRows(this.wrapped.slice(emitted));
 		}
 		if (this.current === "") return out;
 		return [...out, ...this.wrapLine(this.current, w)];

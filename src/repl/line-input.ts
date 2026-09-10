@@ -61,8 +61,10 @@ export interface LineInput {
 	/** TUI shell only: persistent bottom status line (model · session ·
 	 *  cumulative tokens). The legacy shell has no such line and ignores it. */
 	setFooter?(text: string): void;
-	/** Append a collapsed fold (expandable body) below the transcript — a
-	 *  TUI-shell-only affordance; the readline shell has no folds. */
+	/** Append a collapsed fold (expandable body) INTO the transcript
+	 *  stream at its current end — inline, directly below the line that
+	 *  just completed (pi parity); a TUI-shell-only affordance, the
+	 *  readline shell has no folds. */
 	addFold?(title: string, lines: string[], decorate?: boolean, error?: boolean): void;
 	/** TUI shells: wipe transcript + folds (/new, /resume). Optional —
 	 *  the readline shell has no persistent screen state to clear. */

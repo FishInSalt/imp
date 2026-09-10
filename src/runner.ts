@@ -148,7 +148,7 @@ export interface Runner {
 		summary: "written" | "empty" | "disabled" | "failed";
 		messages: number;
 	}>;
-	printRunStats(result: RunAgentLoopResult): void;
+	printRunStats(result: RunAgentLoopResult, options?: { statsLine?: boolean }): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
 	 *  Eager unless deferInit was set; the scripted REPL calls it on the first
@@ -721,7 +721,7 @@ class RunnerImpl implements Runner {
 		return compacted !== null;
 	}
 
-	printRunStats(result: RunAgentLoopResult): void {
+	printRunStats(result: RunAgentLoopResult, options: { statsLine?: boolean } = {}): void {
 		switch (result.stopReason) {
 			case "aborted":
 				this.options.renderer.note("(aborted)");
@@ -732,12 +732,18 @@ class RunnerImpl implements Runner {
 			case "completed":
 				break;
 		}
-		const cacheNote = result.usage.cacheReadTokens
-			? ` · cache↓${formatTokens(result.usage.cacheReadTokens)}`
-			: "";
-		this.options.renderer.note(
-			`— ${this.lastRunModel} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}`,
-		);
+		// The per-run `— model · turns · tokens` line is print-mode output
+		// (bytes frozen). The TUI footer is the single status surface there —
+		// pi parity (2026-09-10): no per-run line after each answer. Stop
+		// notes above ("aborted" etc.) stay in both modes.
+		if (options.statsLine !== false) {
+			const cacheNote = result.usage.cacheReadTokens
+				? ` · cache↓${formatTokens(result.usage.cacheReadTokens)}`
+				: "";
+			this.options.renderer.note(
+				`— ${this.lastRunModel} · ${result.turns} turns · in ${formatTokens(result.usage.inputTokens)} / out ${formatTokens(result.usage.outputTokens)} tokens${cacheNote}`,
+			);
+		}
 		this.logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
 	}
 

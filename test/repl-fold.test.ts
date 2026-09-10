@@ -284,7 +284,28 @@ describe("buildFoldFromDiff", () => {
 // ── TuiShell.addFold: the shell integration ───────────────────────────────
 
 describe("TuiShell.addFold", () => {
-	it("renders collapsed below the streamed text — v1 ordering: stream first, fold after", async () => {
+	it("renders INLINE: text fed after the fold lands below it — the stream interleaves in arrival order (pi parity)", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feed("before the fold\n");
+		shell.addFold("edit a.ts (+1/-0)", ["+ one"]);
+		transcript.feed("after the fold\n"); // a later text delta streams BELOW
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		const iBefore = frame.indexOf("before the fold");
+		const iFold = frame.indexOf("▸ edit a.ts (+1/-0)");
+		const iAfter = frame.indexOf("after the fold");
+		expect(iBefore).toBeGreaterThanOrEqual(0);
+		expect(iFold).toBeGreaterThan(iBefore);
+		expect(iAfter).toBeGreaterThan(iFold); // the fold sits where it was anchored
+		shell.close();
+	});
+
+	it("renders collapsed below the streamed text — appended folds still land at the stream end", async () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();
 		await settle();

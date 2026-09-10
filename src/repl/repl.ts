@@ -664,10 +664,10 @@ class ReplMachine {
 		this.interruptCount = 0;
 		if (this.state === "exited") return;
 		this.renderer.endRun();
-		this.runner.printRunStats(result);
-		// Cumulative session tokens live in the TUI footer — printing the
-		// per-turn session line there too doubled every answer's status noise
-		// (dogfood report 2026-09-09). Print keeps both lines; bytes unchanged.
+		// Stats placement (pi parity, 2026-09-10): the TUI transcript carries
+		// NO stats lines — per-run AND cumulative usage live in the footer.
+		// Print mode keeps both lines; bytes frozen.
+		this.runner.printRunStats(result, { statsLine: this.input.setFooter === undefined });
 		if (this.input.setFooter === undefined) this.runner.printSessionStats();
 		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {

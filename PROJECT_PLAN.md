@@ -463,6 +463,8 @@ imp -p "读取 foo.ts 并修复其中的类型错误"   # 能改文件
   - 钉子：注册表补齐（glm-5.3 1M）、富集优先级（新 id 立即生效/覆盖表值/前缀剥离/重置回表）、**双向切换适配**（glm-5.3 1M↔gpt-5.5 272k：settings 门随族收紧放宽——切小后超限历史下回合自动压缩而非 400，切大后不再早压缩）
   - 已知边界：anthropic(z.ai) 家第一方列表无 ctx 字段——窗口靠静态表（全系已补）；发现富集当下只对 codex 家（pi.dev 源）实际供数；/status 只显百分比不显分母
 
+- **#queue-parity 队列四项对齐 pi（2026-09-10，659 tests，feat/queue-parity）**：用户点名四差距全部闭环——①排队可见性：TUI 队列区升级为逐条预览（`N queued` 头 + 每条 `  steer:/follow-up:/bash:/prompt: <预览≤40列>` + `  ↳ alt+up / esc+p to edit all queued` 提示行，空队列零行折叠）；②撤回重编：`alt+up`/`esc+p`（pi-tui \x1bp 别名，无 Kitty 协议终端可用）整体回编辑器，当前草稿保留在下方，运行不受扰；③中止不丢：四处 discardQueue 全部改为 restoreQueueToEditor（TUI=编辑器+`▪ restored N`，legacy=逐行回显 `(not run)`），失败路径同规则（设计变更：原拟"失败后保留队列跨 run"，探针实证下一 run 首次 steering poll 会吞掉 held 行——跨 run 保留需 pi 式 agent 级队列，超出本批，改统一交还）；④follow-up 分流：QueueEntry 带 mode（Enter=steer 默认 / alt+enter=followUp），steeringMessages 只弹 steer 条目，settle 后 flush 逐条 drain；idle 时 alt+enter=普通提交。hint 行同步（`alt+enter follow-up`）。**遗留（记档）**：follow-up 为独立 REPL turn（各带回显+统计），非 pi 的同 run 内连续推进（需 loop 级 getFollowUpMessages）；legacy shell 无 alt 键位（Enter-only）。README 补终端兼容表（WezTerm 全屏冲突/Alacritty 需映射 \x1b[13;3u/esc+p 兜底）。测试 +5（shell 键位、分流不注入+独立 turn、esc+p 恢复含草稿、失败交还 legacy、abort 编辑器恢复改钉）
+
 - **#logo-font-truth 字体原文件裁决（2026-09-10，654 tests，fix/logo-font-truth）**：用户目检报告 ①"i 第一个像素向右歪"②"p 右下角多两像素像 R"。**两处均为 bug 且都不是前两轮修的方向**。方法升级：拉取 ANSI Shadow.flf 原字体（xero/figlet-fonts）解析字形（行尾 @ 终止、$ 硬空格、7 行含空尾行、顺序码位、full-width=old_layout 0），**以 "hello" 全宽渲染逐字符命中经典图案验证提取器**后裁决：
   - **i = 纯竖笔**（`██╗/██║×4/╚═╝`，无点无偏移无尾随空隙——此字体小写 i 不带 tittle，与 l（8 宽带脚）不同）；上上轮"补的点状衬线"（` ██╗/██╔╝`）系凭空杜撰=用户看到的歪斜
   - **p = 碗形第 4 行收口**（`██╔═══╝`），第 5–6 行只剩左降部（`██║/╚═╝`）；我版右侧一路到底=用户看到的 R 感

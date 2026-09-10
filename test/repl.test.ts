@@ -600,7 +600,7 @@ describe("runRepl", () => {
 		runner.close();
 	});
 
-	it("abort discards the queue with a note; the REPL stays usable", async () => {
+	it("abort restores the queue as notes (legacy has no editor); the REPL stays usable", async () => {
 		const g = gate();
 		let startedFlag = false;
 		const tools: Tool[] = [
@@ -632,7 +632,9 @@ describe("runRepl", () => {
 		await waitUntil(() => env.output().includes("▪ queued: queued two"));
 		env.fake.interrupt();
 		g.resolve();
-		await waitUntil(() => env.output().includes("▪ discarded 2 queued line(s)"));
+		await waitUntil(() => env.output().includes("▪ 2 queued message(s) not run:"));
+		expect(env.output()).toContain("▪ queued one");
+		expect(env.output()).toContain("▪ queued two");
 		// REPL is alive again
 		env.send("after\n");
 		await waitUntil(() => env.requests.length >= 2);
@@ -1071,7 +1073,7 @@ describe("! passthrough (M10)", () => {
 		expect(await env.repl).toBe(0);
 	});
 
-	it("interrupting a ! command discards queued lines — turn semantics mirrored (M10 review P2#2)", async () => {
+	it("interrupting a ! command restores queued lines — turn semantics mirrored (M10 review P2#2)", async () => {
 		let started = false;
 		const tools: Tool[] = [
 			{
@@ -1098,8 +1100,46 @@ describe("! passthrough (M10)", () => {
 		await waitUntil(() => env.output().includes("queued"));
 		env.fake.interrupt();
 		await waitUntil(() => env.output().includes("Error: command aborted by user."));
-		await waitUntil(() => env.output().includes("discarded 1 queued"));
+		await waitUntil(() => env.output().includes("1 queued message(s) not run"));
+		expect(env.output()).toContain("▪ queued during bang");
 		expect(env.requests.length).toBe(0); // the queued line never reached the model
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+});
+describe("queue on provider failure (handed back, never dropped)", () => {
+	beforeEach(() => {
+		vi.stubEnv("IMP_LOG", "0");
+	});
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("a provider failure echoes the queued lines back (legacy); the user resends them", async () => {
+		const g = gate();
+		const env = await startRepl({
+			scripts: [
+				() =>
+					g.promise.then(() => {
+						throw new Error("provider exploded");
+					}),
+				reply("recovered"),
+				reply("held answer"),
+			],
+		});
+		env.send("go\n");
+		await waitUntil(() => env.requests.length >= 1);
+		env.send("held line\n");
+		await waitUntil(() => env.output().includes("▪ queued: held line"));
+		g.resolve(); // the provider now throws
+		await waitUntil(() => env.output().includes("imp: provider exploded"));
+		// legacy has no editor: the texts echo back — never silently lost
+		await waitUntil(() => env.output().includes("1 queued message(s) not run:"));
+		expect(env.output()).toContain("▪ held line");
+		// the user resends; the request carries it as a plain user message
+		env.send("held line\n");
+		await waitUntil(() => env.requests.length >= 2);
+		expect(env.requests[1]?.messages.some((m) => m.role === "user" && m.content === "held line")).toBe(true);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

@@ -21,8 +21,10 @@ import type {
 	ActivitySnapshot,
 	ActivityToolLine,
 	LineInput,
+	QueueEntryView,
 	SelectItemOption,
 	SelectOptions,
+	SubmitMode,
 } from "./line-input.js";
 import { replaySession } from "./replay.js";
 import { type AutocompleteOptions, TuiShell } from "./shell.js";
@@ -157,10 +159,28 @@ function autocompleteCommands(
 		})),
 	];
 }
-/** TUI queue-line preview (LineInput.setQueue): cap at ~40 columns. */
-function queuePreview(entry: string | { prompt: string }): string {
-	const text = typeof entry === "string" ? entry : entry.prompt;
-	return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+/** TUI queue-line preview (LineInput.setQueue): the first line of the
+ *  entry, capped at ~40 columns. */
+function queuePreviewText(text: string): string {
+	const firstLine = text.split("\n", 1)[0] ?? "";
+	return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine;
+}
+
+/** One entry of the input queue. Plain typed lines carry their routing
+ *  mode: "steer" (Enter) injects into the running turn at the next model
+ *  call; "followUp" (alt+enter) holds for after the run settles. Bang
+ *  lines and md prompts never steer — they are flush-only by design (the
+ *  prompt is model input verbatim, never re-interpreted). */
+type QueueEntry = { text: string; mode: SubmitMode } | { prompt: string };
+
+function entryText(entry: QueueEntry): string {
+	return "prompt" in entry ? entry.prompt : entry.text;
+}
+
+/** Routing label for the TUI queue preview rows. */
+function entryLabel(entry: QueueEntry): string {
+	if ("prompt" in entry) return "prompt";
+	return isBangLine(entry.text) ? "bash" : entry.mode === "followUp" ? "follow-up" : "steer";
 }
 
 /** The three-option confirm picker (M10): approve, approve for the session, decline. */
@@ -252,11 +272,11 @@ interface ReplMachineOptions {
  */
 class ReplMachine {
 	private state: ReplState = "idle";
-	/** Queued input. A plain string is a TYPED line — the flush re-applies
-	 *  bang/command routing on it. An { prompt } entry is markdown-command
-	 *  content (M11 #6): model input verbatim, never re-interpreted (a body
-	 *  starting with "!" must not run as a shell command — review P1). */
-	private queue: Array<string | { prompt: string }> = [];
+	/** Queued input (see QueueEntry): typed lines with their routing mode
+	 *  (steer / follow-up) and markdown-command prompts, which are model
+	 *  input verbatim and never re-interpreted (M11 #6 review P1 — a body
+	 *  starting with "!" must not run as a shell command). */
+	private queue: QueueEntry[] = [];
 	private controller: AbortController | null = null;
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
@@ -291,7 +311,7 @@ class ReplMachine {
 		this.refreshFooter(); // eager warmup already knows model + session
 	}
 
-	handleLine(line: string): void {
+	handleLine(line: string, mode: SubmitMode = "steer"): void {
 		if (this.state === "exited") return;
 		this.receivedLine = true;
 		this.interruptCount = 0; // an accepted line resets the double-Ctrl+C counter
@@ -325,7 +345,7 @@ class ReplMachine {
 			void this.submitTurn(line);
 			return;
 		}
-		this.queue.push(line);
+		this.queue.push({ text: line, mode });
 		// The TUI's queue row (setQueue) shows the line with its position — the
 		// note would repeat it (dogfood 2026-09-09). Legacy keeps the note.
 		if (this.interactive && this.input.setQueue === undefined) {
@@ -531,13 +551,16 @@ class ReplMachine {
 		// "! cmd" entries are shell directives, never model content: hold them
 		// in place (the post-run flush executes them) and steer the next plain
 		// line — with no bang lines queued this is exactly the old head-pop.
-		// Only TYPED lines steer (md prompts flush after the run by design);
-		// bang entries hold for the flush.
-		const index = this.queue.findIndex((entry) => typeof entry === "string" && !isBangLine(entry));
+		// Only steer-mode TYPED lines steer (follow-up lines, md prompts, and
+		// bang entries all hold for the flush — that is the whole point of
+		// alt+enter routing).
+		const index = this.queue.findIndex(
+			(entry) => "text" in entry && entry.mode === "steer" && !isBangLine(entry.text),
+		);
 		if (index === -1) return [];
 		const picked = this.queue.splice(index, 1)[0];
-		if (picked === undefined || typeof picked !== "string") return []; // unreachable; type guard
-		const next = picked;
+		if (picked === undefined || !("text" in picked)) return []; // unreachable; type guard
+		const next = picked.text;
 		this.renderer.note(`▪ steering: ${shorten(next)}`);
 		this.syncQueue();
 		return [{ role: "user", content: next }];
@@ -648,8 +671,9 @@ class ReplMachine {
 		if (this.input.setFooter === undefined) this.runner.printSessionStats();
 		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {
-			// the user pressed Ctrl+C to take control — queued lines are not run
-			this.discardQueue();
+			// the user pressed Ctrl+C to take control — queued lines are not run;
+			// they go back to the editor (pi: user input is never lost)
+			this.restoreQueueToEditor();
 			this.returnToIdle();
 			return;
 		}
@@ -667,7 +691,7 @@ class ReplMachine {
 		// stream cleanly — see abortSafe in anthropic.ts).
 		if (err instanceof Error && err.name === "AbortError") {
 			this.renderer.note("(aborted)");
-			this.discardQueue();
+			this.restoreQueueToEditor();
 			this.returnToIdle();
 			return;
 		}
@@ -679,12 +703,21 @@ class ReplMachine {
 		this.renderer.note(
 			'completed work from this turn is saved in the session — send another message (e.g. "继续") to resume from the break',
 		);
-		this.discardQueue();
+		// A failure ends the run without completing it — same rule as an
+		// abort: the queue is handed back (editor in the TUI, echoed notes in
+		// legacy), never silently dropped. A held-across-runs queue would need
+		// agent-level queues (pi's model); the next run's initial steering
+		// poll would otherwise silently absorb the held lines mid-prompt.
+		this.restoreQueueToEditor();
 		this.returnToIdle();
 	}
 
 	private async flushQueue(): Promise<void> {
 		if (this.pendingExitCode !== null) {
+			// An exit is pending — nothing will run, but the queued texts are
+			// still handed back (echoed: the editor closes with the shell)
+			// instead of vanishing with the process (review P2).
+			this.restoreQueueToEditor();
 			this.returnToIdle();
 			return;
 		}
@@ -697,19 +730,17 @@ class ReplMachine {
 		// TUI: the echoed `> line` (Renderer.user) says this already; the note
 		// would double it (dogfood 2026-09-09). Legacy keeps the note.
 		if (this.input.setQueue === undefined) {
-			this.renderer.note(
-				`▪ continuing with queued: ${shorten(typeof next === "string" ? next : next.prompt)}`,
-			);
+			this.renderer.note(`▪ continuing with queued: ${shorten(entryText(next))}`);
 		}
 		this.syncQueue();
 		// A queued "! cmd" keeps its bang semantics on the flush — it runs in
-		// the shell, it does not open a model turn. An { prompt } entry is md
+		// the shell, it does not open a model turn. A { prompt } entry is md
 		// content: straight to a turn, no re-interpretation (review P1).
-		if (typeof next === "string" && isBangLine(next)) {
-			await this.runBangCommand(next.slice(1).trim());
+		if (!("prompt" in next) && isBangLine(next.text)) {
+			await this.runBangCommand(next.text.slice(1).trim());
 			return;
 		}
-		await this.submitTurn(typeof next === "string" ? next : next.prompt);
+		await this.submitTurn(entryText(next));
 	}
 
 	/** "! cmd" (M10): run a shell command directly through the bash tool — no
@@ -739,10 +770,9 @@ class ReplMachine {
 			this.controller = null;
 			this.interruptCount = 0;
 			if (controller.signal.aborted) {
-				// Mirror the turn semantics: Ctrl+C takes control — queued lines are
-				// not run. They were queued behind a shell command the user just
-				// interrupted (M10 review P2#2).
-				this.discardQueue();
+				// Mirror the turn semantics: Ctrl+C takes control — queued lines
+				// are not run, they go back to the editor (M10 review P2#2).
+				this.restoreQueueToEditor();
 				this.returnToIdle();
 			} else {
 				await this.flushQueue(); // drains any queue, then back to idle
@@ -867,19 +897,59 @@ class ReplMachine {
 		this.input.setActive(false); // TUI: the hint row returns to its idle text
 	}
 
-	/** Push the queue visual (TUI shells): "N queued · next: <head>", or clear
-	 *  it when the queue empties. Called at every queue mutation — push,
-	 *  steering consumption, leftover flush, and discard. */
+	/** Push the queue visual (TUI shells): one row per queued entry with
+	 *  its routing label, under a "N queued" head — cleared when empty.
+	 *  Called at every queue mutation — push, steering consumption, leftover
+	 *  flush, dequeue, and abort-restore. */
 	private syncQueue(): void {
-		const head = this.queue[0];
-		this.input.setQueue?.(this.queue.length, head === undefined ? null : queuePreview(head));
+		const views: QueueEntryView[] = this.queue.map((entry) => ({
+			label: entryLabel(entry),
+			preview: queuePreviewText(entryText(entry)),
+		}));
+		this.input.setQueue?.(views);
 	}
 
-	private discardQueue(): void {
-		if (this.queue.length === 0) return;
-		this.renderer.note(`▪ discarded ${this.queue.length} queued line(s)`);
+	/** Pull every queued entry back out as editable text (alt+up / esc+p,
+	 *  and the abort paths): TUI shells get the joined text dropped into the
+	 *  editor above any in-progress draft; the legacy shell has no editor,
+	 *  so the texts echo as notes — either way nothing is silently lost
+	 *  (pi's rule: user input is never discarded without being handed
+	 *  back). */
+	private restoreQueueToEditor(): void {
+		const texts = this.queue.map(entryText);
 		this.queue = [];
 		this.syncQueue();
+		if (texts.length === 0) return;
+		// Exiting (pending exit or EOF): the editor closes with the shell, so
+		// the texts echo as notes — otherwise the TUI restore would land in a
+		// box that vanishes a tick later (review P2).
+		const exiting = this.pendingExitCode !== null || this.eofPending;
+		if (this.input.setText !== undefined && !exiting) {
+			const draft = this.input.getText?.() ?? "";
+			const combined = [texts.join("\n\n"), draft].filter((t) => t.trim() !== "").join("\n\n");
+			this.input.setText(combined);
+			this.renderer.note(`▪ restored ${texts.length} queued message(s) to the editor`);
+			// Declared semantics: resubmitting the restored blob re-interprets
+			// it as ONE submission — a blob starting with "!" runs as a single
+			// (possibly multi-line) shell command, and a restored {prompt} body
+			// loses its never-re-interpret protection (that holds pre-restore).
+			// The texts are visible in the editor before submit; the user decides.
+		} else {
+			this.renderer.note(`▪ ${texts.length} queued message(s) not run:`);
+			for (const text of texts) this.renderer.note(`▪ ${text}`);
+		}
+		this.input.refresh();
+	}
+
+	/** alt+up / esc+p (TUI): queued input is not a one-way door — pull it all
+	 *  back into the editor and keep editing. The run, if any, is untouched. */
+	handleDequeue(): void {
+		if (this.state === "exited") return;
+		if (this.queue.length === 0) {
+			this.renderer.note("▪ no queued messages to restore");
+			return;
+		}
+		this.restoreQueueToEditor();
 	}
 
 	private requestExit(code: number): void {
@@ -1016,9 +1086,10 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	const input: LineInput =
 		tuiSink !== null
 			? new TuiShell({
-					onLine: (line) => machine.handleLine(line),
+					onLine: (line, mode) => machine.handleLine(line, mode),
 					onInterrupt: () => machine.handleInterrupt(),
 					onEof: () => machine.handleEof(),
+					onDequeue: () => machine.handleDequeue(),
 					transcript: tuiSink,
 					terminal: options.terminal,
 					autocomplete,
@@ -1028,7 +1099,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					input: stdin,
 					output,
 					interactive,
-					onLine: (line) => machine.handleLine(line),
+					onLine: (line) => machine.handleLine(line), // Enter only — steer is the legacy default
 					onInterrupt: () => machine.handleInterrupt(),
 					onEof: () => machine.handleEof(),
 				});

@@ -165,7 +165,8 @@ async function settle(extraMs = 30): Promise<void> {
 }
 
 function makeShell(options?: {
-	onLine?: (l: string) => void;
+	onLine?: (l: string, mode?: "steer" | "followUp") => void;
+	onDequeue?: () => void;
 	autocomplete?: AutocompleteOptions;
 	historyPath?: string;
 }) {
@@ -177,12 +178,16 @@ function makeShell(options?: {
 		terminal,
 		autocomplete: options?.autocomplete,
 		historyPath: options?.historyPath,
-		onLine: (line) => {
-			events.push(`line:${line}`);
-			options?.onLine?.(line);
+		onLine: (line, mode) => {
+			events.push(`line:${mode ?? "steer"}:${line}`);
+			options?.onLine?.(line, mode);
 		},
 		onInterrupt: () => events.push("interrupt"),
 		onEof: () => events.push("eof"),
+		onDequeue: () => {
+			events.push("dequeue");
+			options?.onDequeue?.();
+		},
 	});
 	return { terminal, transcript, shell, events };
 }
@@ -308,7 +313,7 @@ describe("TuiShell", () => {
 		expect(frame).toMatch(/^\(\/ for commands/m); // flush-left: Text padding is (0,0), not pi-tui's (1,1) default
 		terminal.data("hello\r");
 		await settle();
-		expect(events).toEqual(["line:hello"]);
+		expect(events).toEqual(["line:steer:hello"]);
 		shell.close();
 	});
 
@@ -356,7 +361,7 @@ describe("TuiShell", () => {
 		await settle(0);
 		terminal.data("\r"); // submits the recalled text
 		await settle();
-		expect(events).toEqual(["line:one", "line:two", "line:two"]);
+		expect(events).toEqual(["line:steer:one", "line:steer:two", "line:steer:two"]);
 		shell.close();
 	});
 
@@ -629,7 +634,7 @@ describe("TuiShell selector", () => {
 		expect(frame).not.toContain("beta"); // the ask region is empty again
 		terminal.data("hello\r");
 		await settle();
-		expect(events).toEqual(["line:hello"]); // the editor owns keys again
+		expect(events).toEqual(["line:steer:hello"]); // the editor owns keys again
 		shell.close();
 	});
 
@@ -687,41 +692,49 @@ describe("TuiShell footer", () => {
 // ── queue visual: the M10 queue line ────────────────────────────────────
 
 describe("TuiShell queue line (setQueue)", () => {
-	it("paints a dim 'N queued · next:' row between the ask region and the marker", async () => {
+	it("paints dim per-entry rows under a 'N queued' head, plus the dequeue hint", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		shell.setQueue(1, "queued A");
+		shell.setQueue([{ label: "steer", preview: "queued A" }]);
 		await settle();
 		const raw = terminal.writes.join("");
-		expect(raw).toContain("\x1b[2m1 queued · next: queued A"); // dim is really emitted
+		expect(raw).toContain("\x1b[2m1 queued"); // dim is really emitted
+		expect(raw).toContain("  steer: queued A");
+		expect(raw).toContain("  ↳ alt+up / esc+p to edit all queued");
 		// placement: one full repaint, then read layout order out of that window
 		const mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
 		const frame = terminal.frameSince(mark);
-		expect(frame).toContain("1 queued · next: queued A");
-		expect(frame.indexOf("1 queued · next: queued A")).toBeLessThan(frame.indexOf("(/ for commands")); // above the hint
-		// an update repaints in place
-		shell.setQueue(2, "queued B");
+		expect(frame).toContain("1 queued");
+		expect(frame.indexOf("1 queued")).toBeLessThan(frame.indexOf("(/ for commands")); // above the hint
+		// an update repaints in place — labels distinguish routing modes
+		shell.setQueue([
+			{ label: "steer", preview: "queued A" },
+			{ label: "follow-up", preview: "queued B" },
+		]);
 		await settle();
-		expect(terminal.frameSince(0)).toContain("2 queued · next: queued B");
+		const after = terminal.frameSince(0);
+		expect(after).toContain("2 queued");
+		expect(after).toContain("  steer: queued A");
+		expect(after).toContain("  follow-up: queued B");
 		shell.close();
 	});
 
-	it("count 0 (or a null preview) collapses the row to zero lines", async () => {
+	it("an empty entries list collapses the region to zero lines", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		shell.setQueue(1, "queued A");
+		shell.setQueue([{ label: "steer", preview: "queued A" }]);
 		await settle();
-		expect(terminal.frameSince(0)).toContain("1 queued · next: queued A");
-		shell.setQueue(0, null);
+		expect(terminal.frameSince(0)).toContain("  steer: queued A");
+		shell.setQueue([]);
 		await settle();
 		const mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
-		expect(terminal.frameSince(mark)).not.toContain("queued · next:");
+		expect(terminal.frameSince(mark)).not.toContain("steer:");
 		shell.close();
 	});
 });
@@ -864,7 +877,7 @@ describe("TuiShell autocomplete (M10)", () => {
 		await settle(120);
 		terminal.data("\r");
 		await settle(0);
-		expect(events).toEqual(["line:/model"]); // completed, then submitted — one press
+		expect(events).toEqual(["line:steer:/model"]); // completed, then submitted — one press
 		shell.close();
 	});
 
@@ -876,7 +889,7 @@ describe("TuiShell autocomplete (M10)", () => {
 		await settle(120);
 		terminal.data("\r");
 		await settle(0);
-		expect(events).toEqual(["line:/mo"]); // no panel, no completion
+		expect(events).toEqual(["line:steer:/mo"]); // no panel, no completion
 		shell.close();
 	});
 
@@ -896,7 +909,7 @@ describe("TuiShell autocomplete (M10)", () => {
 		expect(terminal.frameSince(mark)).not.toContain("switch the model"); // panel gone
 		terminal.data("\r");
 		await settle(0);
-		expect(events).toEqual(["line:/mo"]); // the raw text survived
+		expect(events).toEqual(["line:steer:/mo"]); // the raw text survived
 		shell.close();
 	});
 
@@ -918,13 +931,13 @@ describe("TuiShell autocomplete (M10)", () => {
 		expect(events).toEqual([]);
 		terminal.data("\r"); // now the completed text submits
 		await settle(0);
-		expect(events).toEqual(["line:@alpha.txt"]); // input aid: path text, nothing read
+		expect(events).toEqual(["line:steer:@alpha.txt"]); // input aid: path text, nothing read
 		shell.close();
 	});
 });
 
 describe("TuiShell placeholder hint (M10)", () => {
-	const hint = "(/ for commands · @ files · ! bash · shift+enter newline)";
+	const hint = "(/ for commands · @ files · ! bash · shift+enter newline · alt+enter follow-up)";
 
 	/** forceRender into a fresh mark — the differential renderer may skip
 	 *  unchanged lines otherwise (same pattern as the marker tests). */
@@ -1024,7 +1037,7 @@ describe("multi-line submissions (M10 pin)", () => {
 		await settle(0);
 		terminal.data("line1\nline2\r"); // \n = the Ctrl+J byte through the real splitter
 		await settle(0);
-		expect(events).toEqual(["line:line1\nline2"]);
+		expect(events).toEqual(["line:steer:line1\nline2"]);
 		shell.close();
 	});
 
@@ -1034,7 +1047,7 @@ describe("multi-line submissions (M10 pin)", () => {
 		await settle(0);
 		terminal.data("aa\x1b[13;2ubb\r");
 		await settle(0);
-		expect(events).toEqual(["line:aa\nbb"]);
+		expect(events).toEqual(["line:steer:aa\nbb"]);
 		shell.close();
 	});
 });
@@ -1407,7 +1420,7 @@ describe("runRepl with shell:tui", () => {
 
 	// ── queue visual (M10): the machine pushes it, the shell paints it ──
 
-	it("queue visual: queued lines paint 'N queued · next:', drain via steering/flush, then clear", async () => {
+	it("queue visual: queued lines paint per-entry rows, drain via steering/flush, then clear", async () => {
 		const g = gate();
 		const g2 = gate();
 		let toolStarted = false;
@@ -1437,25 +1450,26 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => toolStarted);
 		env.terminal.data("queued A\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("1 queued · next: queued A");
+		expect(env.terminal.frameSince(0)).toContain("  steer: queued A");
 		env.terminal.data("queued B\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("2 queued · next: queued A"); // the head stays the preview
+		expect(env.terminal.frameSince(0)).toContain("2 queued"); // both rows visible now
+		expect(env.terminal.frameSince(0)).toContain("  steer: queued B");
 		g.resolve();
 		await waitUntil(() => env.requests.length >= 2); // steering poll consumed A; request 2 held open
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("1 queued · next: queued B");
+		expect(env.terminal.frameSince(0)).toContain("  steer: queued B");
 		const mark = env.terminal.writes.length;
 		g2.resolve(); // the run settles; leftover B flushes as its own turn → count 0
 		await waitUntil(() => env.requests.length >= 3);
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("queued · next:"); // the row cleared
+		expect(env.terminal.frameSince(mark)).not.toContain("steer:"); // the region cleared
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
 	});
 
-	it("queue visual: an abort discards the queue and clears the row", async () => {
+	it("queue visual: an abort restores the queue to the editor and clears the region", async () => {
 		const g = gate();
 		let toolStarted = false;
 		const slow: Tool = {
@@ -1483,13 +1497,21 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("queued A\r");
 		env.terminal.data("queued B\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("2 queued · next: queued A");
+		expect(env.terminal.frameSince(0)).toContain("2 queued");
 		const mark = env.terminal.writes.length;
-		env.terminal.data("\x03"); // abort — the user takes control, the queue is discarded
+		env.terminal.data("\x03"); // abort — the user takes control
 		g.resolve();
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("discarded 2 queued"));
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("restored 2 queued"));
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("queued · next:");
+		// the queue region cleared AND the editor now holds both texts (pi:
+		// user input is never lost) — one differential window covers both
+		const frame = env.terminal.frameSince(mark);
+		expect(frame).not.toContain("steer:");
+		expect(frame).toContain("queued A");
+		expect(frame).toContain("queued B");
+		// the restored text owns the editor now — clear it before /exit
+		// (18 chars: "queued A\n\nqueued B")
+		env.terminal.data("\x7f".repeat(18));
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
@@ -2003,7 +2025,7 @@ describe("runRepl with shell:tui", () => {
 		expect(second.terminal.frameSince(mark)).toContain("remembered prompt"); // editor shows it
 		second.terminal.data("\r"); // submit unchanged — routes to onLine
 		await settle();
-		expect(second.events.some((e) => e.startsWith("line:remembered prompt"))).toBe(true);
+		expect(second.events.some((e) => e.startsWith("line:steer:remembered prompt"))).toBe(true);
 		second.shell.close();
 	});
 
@@ -2075,7 +2097,7 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
 		const activeMark = env.terminal.writes.length;
 		env.terminal.data("second line\r");
-		await waitUntil(() => env.terminal.frameSince(activeMark).includes("1 queued · next: second line"), 8000);
+		await waitUntil(() => env.terminal.frameSince(activeMark).includes("  steer: second line"), 8000);
 		const stream = env.transcript.completedLines().join("\n");
 		expect(stream).not.toContain("▪ queued:"); // TUI: the row replaces the note
 		// idle hint swapped out (frameSince(0) still holds the startup text)
@@ -2122,6 +2144,134 @@ describe("runRepl with shell:tui", () => {
 		await settle(30);
 		expect(env.terminal.frameSince(mark)).not.toContain("thinking");
 		env.terminal.data("\x15"); // clear the draft (ctrl+u) before exiting cleanly
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+	describe("queue parity: follow-up routing and dequeue (machine)", () => {
+		it("alt+enter queues a follow-up: it skips the steering poll and runs as its own turn after the run", async () => {
+			const g = gate();
+			const g2 = gate();
+			let toolStarted = false;
+			const slow: Tool = {
+				name: "slow_tool",
+				description: "waits for the test gate",
+				parameters: Type.Object({ message: Type.String() }),
+				async execute() {
+					toolStarted = true;
+					await g.promise;
+					return { output: "done" };
+				},
+			};
+			const env = await startTuiRepl(
+				[
+					assistant(
+						[{ type: "toolCall", id: "t1", name: "slow_tool", arguments: { message: "x" } }],
+						"tool_use",
+					),
+					() => g2.promise.then(() => reply("turn one done")), // held: request 2 stays open
+					reply("turn two done"),
+				],
+				{ tools: [slow] },
+			);
+			await settle();
+			env.terminal.data("go\r");
+			await waitUntil(() => toolStarted);
+			env.terminal.data("steer me\r"); // Enter: steer mode
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("  steer: steer me");
+			env.terminal.data("later please");
+			env.terminal.data("\x1b\r"); // alt+enter: follow-up mode
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("  follow-up: later please");
+			g.resolve(); // tool finishes → steering poll consumes ONLY the steer entry
+			await waitUntil(() => env.requests.length >= 2);
+			const request2 = env.requests[1]?.messages ?? [];
+			expect(request2.some((m) => m.role === "user" && m.content === "steer me")).toBe(true);
+			expect(request2.some((m) => m.content === "later please")).toBe(false); // NOT injected
+			g2.resolve(); // turn settles → flush dispatches the follow-up as its own turn
+			await waitUntil(() => env.requests.length >= 3);
+			const request3 = env.requests[2]?.messages ?? [];
+			expect(request3.some((m) => m.role === "user" && m.content === "later please")).toBe(true);
+			await waitUntil(() => env.terminal.frameSince(0).includes("> later please")); // echoed
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("esc+p pulls every queued entry back into the editor above the current draft; the run is untouched", async () => {
+			const g = gate();
+			const env = await startTuiRepl([() => g.promise.then(() => reply("ok"))]);
+			await settle();
+			env.terminal.data("first\r");
+			await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
+			env.terminal.data("q one\r");
+			env.terminal.data("q two\r");
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("2 queued");
+			env.terminal.data("draft in progress"); // typed, not submitted
+			await settle();
+			env.terminal.data("\x1bp"); // esc+p dequeue
+			await waitUntil(() => env.transcript.completedLines().join("\n").includes("restored 2 queued"));
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("q one");
+			expect(frame).toContain("q two");
+			expect(frame).toContain("draft in progress"); // the draft survived below the restored text
+			expect(env.transcript.completedLines().join("\n")).not.toContain("steering:"); // nothing was injected
+			g.resolve();
+			await waitUntil(() => env.requests.length >= 1);
+			const first = env.requests[0]?.messages ?? [];
+			expect(first.some((m) => m.content === "q one")).toBe(false); // never steered, never flushed
+			env.terminal.data("\x7f".repeat(40));
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+	});
+	it("P1 regression: the restore path expands a large pasted draft — abort hands back content, not a marker", async () => {
+		const g = gate();
+		// Abort-aware hold (see "an aborted turn clears the activity rows"):
+		// the scripted g-promise ignores the signal, so a real-abort shape is
+		// injected instead.
+		const env = await startTuiRepl([], {
+			provider: {
+				name: "abort-hold",
+				async *stream(request) {
+					yield { type: "text_delta", text: "partial" };
+					await new Promise<void>((resolve) => {
+						const onAbort = () => resolve();
+						request.signal?.addEventListener("abort", onAbort, { once: true });
+						g.promise.then(() => {
+							request.signal?.removeEventListener("abort", onAbort);
+							resolve();
+						});
+					});
+					if (request.signal?.aborted) return;
+					yield { type: "message_end", message: reply("ok") };
+				},
+			},
+		});
+		await settle();
+		env.terminal.data("first\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
+		env.terminal.data("held line\r");
+		await settle();
+		// a >10-line paste becomes the (draft) content under test
+		const body = Array.from({ length: 11 }, (_, i) => `draft ${i + 1}`).join("\n");
+		env.terminal.data(`\x1b[200~${body}\x1b[201~`);
+		await settle();
+		const abortMark = env.terminal.writes.length;
+		env.terminal.data("\x03"); // abort → restore into the editor
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("restored 1 queued"));
+		for (let i = 0; i < 8; i++) await settle();
+		// post-abort window only: the pre-abort frames legitimately showed
+		// the marker while the paste sat in the editor. The editor restores
+		// scrolled to its end (cursor at bottom), so pin the VISIBLE tail:
+		// the pasted DRAFT came back expanded — never as a dead marker.
+		const frame = env.terminal.frameSince(abortMark);
+		expect(frame).toContain("draft 11");
+		expect(frame).not.toContain("[paste #");
+		g.resolve();
+		// clear the restored editor content before exiting (≈100 chars)
+		env.terminal.data("\x7f".repeat(110));
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2201,7 +2351,7 @@ describe("M10 review regressions (wave 1 + B)", () => {
 		// settle the ask, then queue + hint + marker in one full repaint
 		terminal.data("y\r");
 		await expect(asked).resolves.toBe(true);
-		shell.setQueue(1, "ORDER-QUEUE");
+		shell.setQueue([{ label: "steer", preview: "ORDER-QUEUE" }]);
 		await settle(30);
 		mark = terminal.writes.length;
 		shell.forceRender();
@@ -2213,6 +2363,64 @@ describe("M10 review regressions (wave 1 + B)", () => {
 		expect([q, h, e].every((i) => i >= 0)).toBe(true);
 		expect(q).toBeLessThan(h);
 		expect(h).toBeLessThan(e);
+		shell.close();
+	});
+});
+
+// ── queue parity: alt+enter follow-up routing + alt+up/esc+p dequeue ─────
+
+describe("queue parity: follow-up routing and dequeue (shell keys)", () => {
+	it("alt+enter (legacy \\x1b\\r) submits the editor text as mode followUp and clears the editor", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("hello");
+		terminal.data("\x1b\r");
+		await settle();
+		expect(events).toEqual(["line:followUp:hello"]);
+		// the editor was cleared by the alt+enter submit itself
+		terminal.data("x");
+		terminal.data("\r");
+		await settle();
+		expect(events).toEqual(["line:followUp:hello", "line:steer:x"]);
+		shell.close();
+	});
+
+	it("esc+p — the no-Kitty alias — fires onDequeue; alt+enter on an empty editor is a no-op", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("\x1b\r"); // empty editor: nothing to submit
+		await settle();
+		expect(events).toEqual([]);
+		terminal.data("\x1bp"); // esc+p = alt+up
+		await settle();
+		expect(events).toEqual(["dequeue"]);
+		// the Kitty CSI-u form of alt+up lands on the same action
+		terminal.data("\x1b[1;3A");
+		await settle();
+		expect(events).toEqual(["dequeue", "dequeue"]);
+		shell.close();
+	});
+});
+
+describe("queue parity: review findings", () => {
+	it("P1 regression: alt+enter expands a large paste and trims — the follow-up carries the body, never the [paste #] marker", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		// A bracketed paste over the 10-line threshold becomes a marker in
+		// the editor; the Enter pipeline expands it on submit, alt+enter must too.
+		const body = Array.from({ length: 12 }, (_, i) => `pasted line ${i + 1}`).join("\n");
+		terminal.data(`\x1b[200~${body}\x1b[201~`);
+		await settle();
+		// the RENDERED editor holds the marker (getText is expanded by design)
+		expect(terminal.frameSince(0)).toContain("[paste #1");
+		terminal.data("\x1b\r"); // alt+enter
+		await settle();
+		expect(events).toHaveLength(1);
+		expect(events[0]).toBe(`line:followUp:${body}`);
+		expect(events[0]).not.toContain("[paste #");
 		shell.close();
 	});
 });

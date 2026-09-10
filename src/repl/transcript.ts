@@ -1,5 +1,15 @@
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../tui.js";
 
+/** SGR: 256-color background for user-input blocks (pi parity: dark
+ *  #343541 ≈ palette 237). Hardcoded palette over truecolor for terminal
+ *  compatibility; a theme system would own this. */
+const USER_BLOCK_BG = "\x1b[48;5;237m";
+const RESET = "\x1b[0m";
+/** How each transcript line renders. "user" lines render as a pi-style
+ *  full-width background block row; the block's pad rows are stored as
+ *  empty "user" lines (kind survives resize via the wrap cache rebuild). */
+type LineKind = "plain" | "user";
+
 const LINE_RESET = "\r\x1b[2K";
 
 /**
@@ -30,6 +40,8 @@ const LINE_RESET = "\r\x1b[2K";
  */
 export class TranscriptSink implements Component {
 	private lines: string[] = [];
+	/** Parallel to lines — the render style of each completed line. */
+	private kinds: LineKind[] = [];
 	private current = "";
 	private carry = "";
 	/** Completed lines wrapped at wrappedWidth — appended incrementally,
@@ -56,7 +68,7 @@ export class TranscriptSink implements Component {
 	 *  Inline children go with the text: /new wipes folds too. */
 	clear(): void {
 		this.lines = [];
-		this.current = "";
+		this.kinds = [];
 		this.carry = "";
 		this.wrapped = [];
 		this.cumulative = [];
@@ -69,6 +81,20 @@ export class TranscriptSink implements Component {
 	 *  parity: tool-result folds render inline, under their tool line). */
 	appendChild(component: Component): void {
 		this.children.push({ at: this.lines.length, component });
+		this.onUpdate?.();
+	}
+
+	/** A user input as a pi-style full-width background block (no "> "
+	 *  prefix — pi renders the message body plain in a padded bg box).
+	 *  One call = one block: top/bottom pad rows (pi Box paddingY=1, same
+	 *  bg) sandwich every physical line of text, so multi-line input reads
+	 *  as ONE block. Any open streaming line settles first (the renderer
+	 *  guarantees one, this is belt-and-suspenders). */
+	feedUser(text: string): void {
+		if (this.current !== "") this.feed("\n");
+		this.pushLine("", "user"); // top pad
+		for (const line of text.split("\n")) this.pushLine(line, "user");
+		this.pushLine("", "user"); // bottom pad
 		this.onUpdate?.();
 	}
 
@@ -128,9 +154,10 @@ export class TranscriptSink implements Component {
 			this.wrappedWidth = w;
 			this.wrapped = [];
 			this.cumulative = [];
-			for (const line of this.lines) {
-				const rows = this.wrapLine(line, w);
-				this.wrapped.push(...rows);
+			for (let i = 0; i < this.lines.length; i++) {
+				const line = this.lines[i] ?? "";
+				const rows = this.kinds[i] === "user" ? this.wrapUserLine(line, w) : this.wrapLine(line, w);
+				for (const row of rows) this.wrapped.push(row);
 				this.cumulative.push(this.wrapped.length);
 			}
 		}
@@ -168,12 +195,34 @@ export class TranscriptSink implements Component {
 	}
 
 	private completeLine(line: string): void {
+		this.pushLine(line, "plain");
+	}
+
+	private pushLine(line: string, kind: LineKind): void {
 		this.lines.push(line);
+		this.kinds.push(kind);
 		if (this.wrappedWidth > 0) {
-			const rows = this.wrapLine(line, this.wrappedWidth);
-			this.wrapped.push(...rows);
+			const rows =
+				kind === "user" ? this.wrapUserLine(line, this.wrappedWidth) : this.wrapLine(line, this.wrappedWidth);
+			for (const row of rows) this.wrapped.push(row);
 			this.cumulative.push(this.wrapped.length);
 		}
+	}
+
+	/** A user-block row: content wraps at width-2 (pi Box paddingX=1 each
+	 *  side), then each row gains its left pad, right-fills to the FULL
+	 *  width, and takes the block background — the fill is render-width
+	 *  derived, so a resize re-derives it (kinds survive in the rebuild). */
+	private wrapUserLine(line: string, width: number): string[] {
+		const inner = Math.max(1, width - 2);
+		return this.wrapLine(line, inner).map((row) => this.fillUserRow(` ${row}`, width));
+	}
+
+	private fillUserRow(content: string, width: number): string {
+		let body = content;
+		if (visibleWidth(body) > width) body = truncateToWidth(body, width); // pathological last resort
+		const pad = " ".repeat(Math.max(0, width - visibleWidth(body)));
+		return `${USER_BLOCK_BG}${body}${pad}${RESET}`;
 	}
 
 	private wrapLine(line: string, width: number): string[] {

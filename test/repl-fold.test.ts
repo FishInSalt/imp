@@ -118,6 +118,14 @@ async function settle(extraMs = 30): Promise<void> {
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+/** Strip every ANSI escape (CSI + OSC), not just colors — width math on raw writes. */
+function stripEscapes(line: string): string {
+	return line
+		.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+		.replace(/\u001b\][^\u0007]*\u0007/g, "")
+		.replace(/\r/g, "");
+}
+
 function makeShell() {
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();
@@ -412,6 +420,75 @@ describe("TuiShell.addFold", () => {
 		terminal.data("\x0f"); // expand — the widest state
 		await settle();
 		expect(terminal.writes.length).toBeGreaterThan(0); // the TUI kept rendering, no width throw
+		shell.close();
+	});
+});
+
+// ── user input blocks (pi parity): full-width background rows ────────────
+
+describe("TranscriptSink.feedUser — pi-style user blocks", () => {
+	it("one call = one block: pad rows sandwich the text, every row fills the full width with the block bg", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feed("note above\n");
+		transcript.feedUser("hello there");
+		transcript.feed("note below\n");
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		expect(frame.indexOf("note above")).toBeLessThan(frame.indexOf("hello there"));
+		expect(frame.indexOf("hello there")).toBeLessThan(frame.indexOf("note below"));
+		// full-width fill: the pad rows and content rows all carry the bg SGR
+		const raw = terminal.writes.slice(mark).join("");
+		const bgRows = raw.split("\n").filter((l) => l.includes("\u001b[48;5;237m"));
+		expect(bgRows.length).toBeGreaterThanOrEqual(3); // top pad + content + bottom pad
+		for (const row of bgRows) {
+			// strip every CSI/OSC sequence, not just SGR color codes
+			const stripped = stripEscapes(row);
+			expect(stripped.length).toBe(80); // exact width — the differential renderer forbids wider
+		}
+		// the CONTENT row carries the left pad column inside the bg (pi Box paddingX)
+		expect(bgRows[1]).toContain("\u001b[48;5;237m hello there");
+		shell.close();
+	});
+
+	it("multi-line input is ONE block — no pad rows between the lines", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feedUser("line one\nline two\nline three");
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const raw = terminal.writes.slice(mark).join("");
+		const bgRows = raw.split("\n").filter((l) => l.includes("\u001b[48;5;237m"));
+		expect(bgRows.length).toBe(5); // pad + 3 lines + pad — contiguous text rows
+		for (const row of bgRows) expect(stripEscapes(row).length).toBe(80);
+		shell.close();
+	});
+
+	it("resize re-derives the fill: the block stays full-width at the new size", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feedUser("wide enough to wrap at 30 columns: abcdefghijklmnopqrstuvwxyz");
+		await settle();
+		terminal.resize(30);
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const raw = terminal.writes.slice(mark).join("");
+		const bgRows = raw.split("\n").filter((l) => l.includes("\u001b[48;5;237m"));
+		expect(bgRows.length).toBeGreaterThan(3); // the text wrapped — more content rows
+		for (const row of bgRows) {
+			const stripped = stripEscapes(row);
+			expect(stripped.length).toBe(30); // new width, still exactly full
+		}
 		shell.close();
 	});
 });

@@ -1081,6 +1081,7 @@ describe("runRepl with shell:tui", () => {
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
 			write: transcript.feed,
+			userSink: (text) => transcript.feedUser(text),
 			ansi: false,
 			liveTools: false, // no spinner timers; the byte path is what matters
 			toolStyle: "one-line",
@@ -1165,7 +1166,7 @@ describe("runRepl with shell:tui", () => {
 		expect(env.requests.length).toBe(1);
 		expect(env.requests[0]?.messages.at(-1)).toMatchObject({ role: "user", content: "hi" });
 		expect(env.transcript.completedLines().join("\n")).toContain("hello from the model");
-		expect(env.terminal.frameSince(0)).toContain("> "); // idle again after
+		expect(env.terminal.frameSince(0)).toContain("hi"); // the user block survives; idle again after
 		// Footer: model + session id8 at startup, cumulative tokens after the run
 		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
 		expect(env.terminal.frameSince(0)).toContain("↑10 ↓5");
@@ -1180,7 +1181,7 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("hello there\r");
 		await settle();
 		const lines = env.transcript.completedLines();
-		expect(lines).toContain("> hello there"); // the question is visible above the answer
+		expect(lines).toContain("hello there"); // the user block's text (no "> " prefix — pi parity)
 		expect(lines).toContain("the answer");
 		// pi parity (2026-09-10): neither the per-run `— model · turns ·
 		// tokens` line NOR the session cumulative line prints in the TUI
@@ -1409,7 +1410,7 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		const runFrame = env.terminal.frameSince(mark); // the run's own repaint only
 		expect(runFrame).toContain("thinking"); // activity row while gated
-		expect(runFrame).toContain("> hi"); // the echoed prompt rides the same frame
+		expect(runFrame).toContain("hi"); // the echoed user block rides the same frame
 		expect(runFrame).not.toContain("(/ for commands"); // hidden while running
 		releaseTurn();
 		const mark2 = env.terminal.writes.length;
@@ -2135,7 +2136,7 @@ describe("runRepl with shell:tui", () => {
 		// idle hint swapped out (frameSince(0) still holds the startup text)
 		expect(env.terminal.frameSince(activeMark)).not.toContain("(/ for commands");
 		g.resolve();
-		await waitUntil(() => env.terminal.frameSince(0).includes("> second line"), 8000); // flushed: echoed
+		await waitUntil(() => env.terminal.frameSince(0).includes("second line"), 8000); // flushed: echoed
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2224,7 +2225,7 @@ describe("runRepl with shell:tui", () => {
 			await waitUntil(() => env.requests.length >= 3);
 			const request3 = env.requests[2]?.messages ?? [];
 			expect(request3.some((m) => m.role === "user" && m.content === "later please")).toBe(true);
-			await waitUntil(() => env.terminal.frameSince(0).includes("> later please")); // echoed
+			await waitUntil(() => env.terminal.frameSince(0).includes("later please")); // echoed
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

@@ -317,6 +317,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	const transcript = shell === "tui" ? new TranscriptSink() : undefined;
 	const renderer = new Renderer({
 		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
+		userSink: transcript ? (text) => transcript.feedUser(text) : undefined,
 		ansi: process.stdout.isTTY === true,
 		// In-place pending tool lines only on the legacy readline shell. TUI
 		// mode turns them OFF: the live activity region owns pending state

@@ -9,6 +9,9 @@ export interface ReplayOptions {
 	ansi: boolean;
 	/** Render assistant text with markdown-lite (matches the live REPL). */
 	markdown: boolean;
+	/** TUI mode: user messages render as full-width background blocks (pi
+	 *  parity) instead of the truncated `> first-line` preview. */
+	userSink?: (text: string) => void;
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
@@ -29,12 +32,13 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 		liveTools: false,
 		toolStyle: "one-line",
 		markdown: options.markdown,
+		userSink: options.userSink,
 	});
 	const { messages } = session.buildContext();
 	if (messages.length === 0) return 0;
 	const unmatchedTools = new Map<string, { name: string; args: unknown }>(); // dangling tool_use
 	for (const message of messages) {
-		renderMessage(renderer, message, unmatchedTools);
+		renderMessage(renderer, message, unmatchedTools, options.userSink);
 	}
 	renderer.raw("\n"); // settle any markdown tail; blank line before the prompt
 	renderer.endRun();
@@ -51,6 +55,7 @@ function renderMessage(
 	renderer: Renderer,
 	message: AgentMessage,
 	unmatchedTools: Map<string, { name: string; args: unknown }>,
+	userSink?: (text: string) => void,
 ): void {
 	switch (message.role) {
 		case "user": {
@@ -64,6 +69,12 @@ function renderMessage(
 				renderer.note("▪ branch summary (a direction you left, kept for context):");
 				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
 				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
+				return;
+			}
+			if (userSink !== undefined) {
+				// TUI: the full message body as a background block — the live
+				// echo and the replay show the same shape (pi parity).
+				userSink(message.content);
 				return;
 			}
 			const lines = message.content.split("\n");

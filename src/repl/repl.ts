@@ -1066,6 +1066,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				write: tuiSink ? tuiSink.feed : (text) => output.write(text),
 				ansi: tuiSink !== null || output.isTTY === true,
 				markdown: true,
+				userSink: tuiSink ? (text) => tuiSink.feedUser(text) : undefined,
 			},
 			session,
 		);

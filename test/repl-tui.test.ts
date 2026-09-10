@@ -2000,7 +2000,8 @@ describe("runRepl with shell:tui", () => {
 			),
 		).toBe(true);
 		const stream = env.transcript.completedLines().join("\n");
-		// the user echo (`> !double-check…`) is expected — the BANG echo
+		// the user echo (the bg block holding `!double-check…` — no `> `
+		// prefix since the user-block change) is expected; the BANG echo
 		// (`! double-check…`, the runBangCommand note) must never appear
 		expect(stream).not.toMatch(/^! double-check/m);
 		env.terminal.data("/exit\r");

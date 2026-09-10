@@ -471,6 +471,36 @@ describe("TranscriptSink.feedUser — pi-style user blocks", () => {
 		shell.close();
 	});
 
+	it("a user block between two folds keeps both glued across a resize (anchor math is kind-independent)", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feed("tool one done\n");
+		shell.addFold("first result", ["body one"]);
+		transcript.feedUser("question in between");
+		transcript.feed("tool two done\n");
+		shell.addFold("second result", ["body two"]);
+		await settle();
+		const order = async (): Promise<number[]> => {
+			const mark = terminal.writes.length;
+			shell.forceRender();
+			await settle(0); // full renders are scheduled — drain before reading
+			const frame = terminal.frameSince(mark);
+			const idx = ["tool one", "first result", "question in between", "tool two", "second result"].map((t) =>
+				frame.indexOf(t),
+			);
+			for (const i of idx) expect(i).toBeGreaterThanOrEqual(0);
+			return idx;
+		};
+		const wide = await order();
+		for (let i = 1; i < wide.length; i++) expect(wide[i]).toBeGreaterThan(wide[i - 1]);
+		terminal.resize(30); // both folds AND the block rewrap
+		await settle();
+		const narrow = await order();
+		for (let i = 1; i < narrow.length; i++) expect(narrow[i]).toBeGreaterThan(narrow[i - 1]);
+		shell.close();
+	});
+
 	it("resize re-derives the fill: the block stays full-width at the new size", async () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();

@@ -1174,7 +1174,7 @@ describe("runRepl with shell:tui", () => {
 		expect(code).toBe(0);
 	});
 
-	it("a submitted prompt echoes into the transcript, and the turn settles to ONE stats line (no cumulative)", async () => {
+	it("a submitted prompt echoes into the transcript; NO stats lines in the TUI — the footer is the sole status surface (pi parity)", async () => {
 		const env = await startTuiRepl([reply("the answer")]);
 		await settle();
 		env.terminal.data("hello there\r");
@@ -1182,10 +1182,12 @@ describe("runRepl with shell:tui", () => {
 		const lines = env.transcript.completedLines();
 		expect(lines).toContain("> hello there"); // the question is visible above the answer
 		expect(lines).toContain("the answer");
-		// exactly one status line per turn: the run stats; the session
-		// cumulative line moved to the TUI footer (dogfood 2026-09-09)
-		expect(lines.some((l) => l.startsWith("— test-model ·"))).toBe(true);
+		// pi parity (2026-09-10): neither the per-run `— model · turns ·
+		// tokens` line NOR the session cumulative line prints in the TUI
+		// transcript — usage lives in the footer only (print keeps both).
+		expect(lines.some((l) => l.startsWith("— test-model ·"))).toBe(false);
 		expect(lines.filter((l) => l.includes("msgs total")).length).toBe(0);
+		expect(env.terminal.frameSince(0)).toContain("test-model"); // footer carries the model/usage
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
@@ -1568,6 +1570,36 @@ describe("runRepl with shell:tui", () => {
 		expect(stream).toContain("✓"); // the completion line (Renderer, unchanged)
 		expect(stream).not.toContain("⎿"); // M11: folded — the preview moved to the fold title
 		expect(env.terminal.frameSince(0)).toContain("▸"); // the fold itself
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("pi parity: the result fold renders INLINE — directly under its ● completion line, above the text that follows", async () => {
+		const g = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "gated", arguments: { message: "slow" } }],
+					"tool_use",
+				),
+				reply("after-the-tool answer text"),
+			],
+			{ tools: [gatedTool(g)] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("gated"), 8000); // live row up
+		g.resolve(); // let the tool finish
+		await waitUntil(() => env.terminal.frameSince(0).includes("✓"), 8000);
+		await waitUntil(() => env.terminal.frameSince(0).includes("after-the-tool"), 8000);
+		await settle();
+		const frame = env.terminal.frameSince(0);
+		const iTool = frame.indexOf("● gated"); // the completion line (● marks it; live rows are gone)
+		const iFold = frame.indexOf("▸"); // the result fold (collapsed title)
+		const iText = frame.indexOf("after-the-tool");
+		expect(iTool).toBeGreaterThanOrEqual(0);
+		expect(iFold).toBeGreaterThan(iTool); // fold UNDER its tool line…
+		expect(iText).toBeGreaterThan(iFold); // …and the following text UNDER the fold
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

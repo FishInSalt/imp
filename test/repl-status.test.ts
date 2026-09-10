@@ -212,10 +212,14 @@ describe("footer context percentage", () => {
 		const frame = env.terminal.frameSince(0);
 		expect(frame).toContain("low — /compact");
 
-		// a second turn stays above the threshold — the note must not repeat
+		// a second turn stays above the threshold — the note must not repeat.
+		// Turn-settle signal (pi parity 2026-09-10: no per-run stats line in
+		// the TUI transcript): the hint row flips from the interrupt text
+		// back to the idle "/ for commands" row when the turn settles.
 		env.terminal.data("again\r");
-		const RUN_STATS = "— test-model · 1 turns"; // per-run stats: one occurrence per completed turn
-		await waitUntil(() => count(env.transcript.completedLines().join("\n"), RUN_STATS) === 2);
+		const turnMark = env.terminal.writes.length;
+		await waitUntil(() => env.terminal.frameSince(turnMark).includes("(/ for commands"));
+		await settle();
 		expect(count(env.transcript.completedLines().join("\n"), LOW_NOTE)).toBe(1);
 
 		// /new empties the live history: ctx drops to 0, the hint leaves the
@@ -238,7 +242,10 @@ describe("footer context percentage", () => {
 		const env = await startTuiRepl([reply("ok", { inputTokens: 80, outputTokens: 0 })]);
 		await settle();
 		env.terminal.data("hi\r");
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("1 turns"));
+		// turn-settle: hint row returns to its idle form (no stats line to
+		// wait on in the TUI transcript — pi parity)
+		const settleMark = env.terminal.writes.length;
+		await waitUntil(() => env.terminal.frameSince(settleMark).includes("(/ for commands"));
 		// 80 tokens of a 131072 window — no visible fill, no low hint
 		expect(env.terminal.frameSince(0)).toContain("0.0%/131k (auto)");
 		expect(env.terminal.frameSince(0)).not.toContain("low — /compact");

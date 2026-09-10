@@ -35,19 +35,40 @@ export class TranscriptSink implements Component {
 	/** Completed lines wrapped at wrappedWidth — appended incrementally,
 	 *  rebuilt once on resize. The tail (current) rewraps per frame. */
 	private wrapped: string[] = [];
+	/** Running wrapped-row totals: cumulative[i] = rows emitted by
+	 *  lines[0..i]. Anchors the inline children across rewraps. */
+	private cumulative: number[] = [];
 	private wrappedWidth = -1;
+	/** Inline child components (folds), anchored to a completed-line
+	 *  count. pi parity (2026-09-10): a tool result renders inside the
+	 *  stream, directly under its `● … ✓` line — no fold region below the
+	 *  transcript. Anchors are append-only in practice (a fold lands at
+	 *  tool_end, after the tool line completes and before the next text
+	 *  delta); the anchor arithmetic still holds for any past position.
+	 *  The in-flight tail (current) always renders after every child. */
+	private children: Array<{ at: number; component: Component }> = [];
 	/** Fires whenever lines change — the shell binds tui.requestRender. */
 	onUpdate: (() => void) | null = null;
 
 	/** Reset to an empty screen (/new, /resume replay). The next feed or
 	 *  render starts from line zero — a cleared sink is indistinguishable
-	 *  from a fresh one (debt clearance: /new used to leave stale lines). */
+	 *  from a fresh one (debt clearance: /new used to leave stale lines).
+	 *  Inline children go with the text: /new wipes folds too. */
 	clear(): void {
 		this.lines = [];
 		this.current = "";
 		this.carry = "";
 		this.wrapped = [];
+		this.cumulative = [];
 		this.wrappedWidth = -1;
+		this.children = [];
+		this.onUpdate?.();
+	}
+
+	/** Anchor a component in the stream below the completed lines (pi
+	 *  parity: tool-result folds render inline, under their tool line). */
+	appendChild(component: Component): void {
+		this.children.push({ at: this.lines.length, component });
 		this.onUpdate?.();
 	}
 
@@ -105,10 +126,35 @@ export class TranscriptSink implements Component {
 		const w = Math.max(1, width);
 		if (w !== this.wrappedWidth) {
 			this.wrappedWidth = w;
-			this.wrapped = this.lines.flatMap((line) => this.wrapLine(line, w));
+			this.wrapped = [];
+			this.cumulative = [];
+			for (const line of this.lines) {
+				const rows = this.wrapLine(line, w);
+				this.wrapped.push(...rows);
+				this.cumulative.push(this.wrapped.length);
+			}
 		}
-		if (this.current === "") return this.wrapped;
-		return [...this.wrapped, ...this.wrapLine(this.current, w)];
+		let out = this.wrapped;
+		if (this.children.length > 0) {
+			// Splice the children in at their anchors. Row-by-row appends, not
+			// call-spreads: render() runs every frame, and spreading a whole
+			// marathon-session transcript (>100k rows) can hit V8's
+			// spread-argument ceiling (review P2).
+			out = [];
+			let emitted = 0;
+			const pushRows = (rows: readonly string[]): void => {
+				for (const row of rows) out.push(row);
+			};
+			for (const child of this.children) {
+				const upto = child.at === 0 ? 0 : (this.cumulative[child.at - 1] ?? 0);
+				pushRows(this.wrapped.slice(emitted, upto));
+				pushRows(child.component.render(w));
+				emitted = Math.max(emitted, upto);
+			}
+			pushRows(this.wrapped.slice(emitted));
+		}
+		if (this.current === "") return out;
+		return [...out, ...this.wrapLine(this.current, w)];
 	}
 
 	invalidate(): void {
@@ -123,7 +169,11 @@ export class TranscriptSink implements Component {
 
 	private completeLine(line: string): void {
 		this.lines.push(line);
-		if (this.wrappedWidth > 0) this.wrapped.push(...this.wrapLine(line, this.wrappedWidth));
+		if (this.wrappedWidth > 0) {
+			const rows = this.wrapLine(line, this.wrappedWidth);
+			this.wrapped.push(...rows);
+			this.cumulative.push(this.wrapped.length);
+		}
 	}
 
 	private wrapLine(line: string, width: number): string[] {

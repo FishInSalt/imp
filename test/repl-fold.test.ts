@@ -10,8 +10,9 @@ import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
  *  through the real splitter. */
 class FakeTerminal implements Terminal {
 	private buffer: StdinBuffer | null = null;
-	private readonly columnCount: number;
+	private columnCount: number;
 	private readonly rowCount: number;
+	private onResize: (() => void) | null = null;
 	readonly writes: string[] = [];
 
 	constructor(columnCount = 80, rowCount = 24) {
@@ -19,11 +20,18 @@ class FakeTerminal implements Terminal {
 		this.rowCount = rowCount;
 	}
 
-	start(onInput: (data: string) => void, _onResize: () => void): void {
+	/** Simulate SIGWINCH: the width changes and the TUI's resize hook fires. */
+	resize(columns: number): void {
+		this.columnCount = columns;
+		this.onResize?.();
+	}
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
 		const buffer = new StdinBuffer();
 		buffer.on("data", (sequence: string) => onInput(sequence));
 		buffer.on("paste", (content: string) => onInput(`\x1b[200~${content}\x1b[201~`));
 		this.buffer = buffer;
+		this.onResize = onResize;
 	}
 
 	stop(): void {
@@ -284,7 +292,44 @@ describe("buildFoldFromDiff", () => {
 // ── TuiShell.addFold: the shell integration ───────────────────────────────
 
 describe("TuiShell.addFold", () => {
-	it("renders collapsed below the streamed text — v1 ordering: stream first, fold after", async () => {
+	it("renders INLINE: text fed after the fold lands below it — the stream interleaves in arrival order (pi parity)", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		shell.start();
+		await settle();
+		transcript.feed("before the fold\n");
+		shell.addFold("edit a.ts (+1/-0)", ["+ one"]);
+		transcript.feed("after the fold\n"); // a later text delta streams BELOW
+		await settle();
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const frame = terminal.frameSince(mark);
+		const iBefore = frame.indexOf("before the fold");
+		const iFold = frame.indexOf("▸ edit a.ts (+1/-0)");
+		const iAfter = frame.indexOf("after the fold");
+		expect(iBefore).toBeGreaterThanOrEqual(0);
+		expect(iFold).toBeGreaterThan(iBefore);
+		expect(iAfter).toBeGreaterThan(iFold); // the fold sits where it was anchored
+
+		// Rewrap stability (review P2-3): anchors are line indices; after a
+		// width change every line rewraps to a different row count, and the
+		// fold must stay glued between the same neighbors.
+		terminal.resize(30); // 80 → 30: both text lines rewrap
+		await settle();
+		const mark2 = terminal.writes.length;
+		shell.forceRender();
+		await settle(0);
+		const narrow = terminal.frameSince(mark2);
+		const nBefore = narrow.indexOf("before the");
+		const nFold = narrow.indexOf("▸ edit a.ts");
+		const nAfter = narrow.indexOf("after the");
+		expect(nBefore).toBeGreaterThanOrEqual(0);
+		expect(nFold).toBeGreaterThan(nBefore);
+		expect(nAfter).toBeGreaterThan(nFold);
+		shell.close();
+	});
+
+	it("renders collapsed below the streamed text — appended folds still land at the stream end", async () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();
 		await settle();

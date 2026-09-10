@@ -74,8 +74,9 @@ export function tuiEditorTheme(): EditorTheme {
  * The pi-tui REPL shell (M9). Layout follows pi's interactive mode:
  *
  *   TUI
- *   ├─ transcript (TranscriptSink — the Renderer's output, hosted)
- *   ├─ folds      (addFold's collapsed "▸ title" lines; Ctrl+O expands)
+ *   ├─ transcript (TranscriptSink — the Renderer's output, hosted;
+ *   │              tool-result folds render INLINE here, directly under
+ *   │              their ● line — pi parity, no separate fold region)
  *   ├─ activity   (live tool/subagent rows while a turn runs; zero rows idle)
  *   ├─ ask line   ([y/N] question while one is pending; an item selector
  *   │              while one is open; hidden otherwise)
@@ -106,14 +107,17 @@ export function tuiEditorTheme(): EditorTheme {
  *    interrupt (M9 review P0: press+release double-fired).
  *  - Submissions are trim()-ed by the editor (readline delivered raw).
  *  - Folds (addFold) are a TUI-only affordance with no readline
- *    counterpart: collapsed "▸ title" lines render between the
- *    transcript and the ask line — the text stream first, folds after,
- *    in insertion order (v1; folds never interleave with streamed
- *    text). The producer is the machine's tool_end tap: every successful
- *    edit result ("<summary>:\n<diff>") becomes one fold, so Ctrl+O is
- *    live in real sessions; Ctrl+O toggles the most recently added fold
- *    only; with no fold present the key falls through to the editor,
- *    which has no Ctrl+O binding (a no-op).
+ *    counterpart: the collapsed "▸ title" lines render INLINE in the
+ *    transcript stream, anchored directly below the completed line they
+ *    follow — a tool result lands under its `● … ✓` line and later text
+ *    streams below the fold (pi parity 2026-09-10; v1 parked all folds
+ *    in a region below the stream, drifting them away from their calls
+ *    and accumulating across turns). The producer is the machine's
+ *    tool_end tap: every successful edit result ("<summary>:\n<diff>")
+ *    becomes one fold, so Ctrl+O is live in real sessions; Ctrl+O
+ *    toggles the most recently added fold only; with no fold present
+ *    the key falls through to the editor, which has no Ctrl+O binding
+ *    (a no-op).
  *  - Multi-line editor submits arrive as ONE line event with embedded
  *    newlines (readline split them into separate events); a multi-line
  *    answer to an [y/N] ask is judged on the whole text, so "y\nfootnote"
@@ -167,18 +171,17 @@ export class TuiShell implements LineInput {
 	private settleResolve: (() => void) | null = null;
 	private editor: Editor | null = null;
 	private askContainer = new Container();
-	/** Hosts the Fold children — sits between transcript and ask line. */
-	private readonly foldContainer = new Container();
-	/** Newest last; Ctrl+O toggles the last one only. */
+	/** Fold children live INLINE in the transcript (pi parity); this
+	 *  list mirrors them for Ctrl+O's expand-all. Newest last. */
 	private readonly folds: Fold[] = [];
 	/** The ask line's Text child, tracked so a selector sharing the ask
 	 *  region can never remove (or be removed by) the question line. */
 	private askLine: Text | null = null;
 	/** The queue visual line, below the ask region (empty = zero rows). */
 	private queueLine: Text | null = null;
-	/** Activity region (M10 B): live tool/subagent rows between the folds
-	 *  and the ask line. Owns the spinner animation so elapsed seconds tick
-	 *  without machine pushes. */
+	/** Activity region (M10 B): live tool/subagent rows between the
+	 *  transcript and the ask line. Owns the spinner animation so elapsed
+	 *  seconds tick without machine pushes. */
 	private readonly activityContainer = new Container();
 	private activity: ActivitySnapshot = { phase: "idle", tools: [], agents: [] };
 	private activityTimer: ReturnType<typeof setInterval> | null = null;
@@ -263,7 +266,6 @@ export class TuiShell implements LineInput {
 		}
 
 		tui.addChild(this.options.transcript);
-		tui.addChild(this.foldContainer);
 		tui.addChild(this.activityContainer); // live tool/subagent rows (M10 B)
 		tui.addChild(this.askContainer);
 		const queueLine = new Text(this.queueText, 0, 0);
@@ -558,13 +560,15 @@ export class TuiShell implements LineInput {
 	}
 
 	/**
-	 * Append a collapsed fold below the transcript text (v1 ordering: the
-	 * stream renders first, folds after — see the parity ledger).
+	 * Append a collapsed fold INLINE, directly below the transcript's
+	 * current end — at tool_end that is the `● … ✓` line (the renderer
+	 * consumes the event before this tap), so the result sits under its
+	 * call and later text streams below it (pi parity).
 	 */
 	addFold(title: string, lines: string[], decorate = true, error = false): void {
 		const fold = new Fold(title, lines, decorate, error);
 		this.folds.push(fold);
-		this.foldContainer.addChild(fold);
+		this.options.transcript.appendChild(fold);
 		this.tui?.requestRender();
 	}
 
@@ -572,14 +576,13 @@ export class TuiShell implements LineInput {
 		return this.history;
 	}
 
-	/** Wipe the conversation view: transcript lines AND folds (debt
-	 *  clearance — /new used to leave the old session's screen behind and
-	 *  the fold container grew without bound). Input history stays: it is
-	 *  the user's own recall, not this conversation. */
+	/** Wipe the conversation view: transcript lines AND their inline
+	 *  folds (debt clearance — /new used to leave the old session's screen
+	 *  behind and the fold list grew without bound). Input history stays:
+	 *  it is the user's own recall, not this conversation. */
 	clearConversation(): void {
-		this.options.transcript.clear();
+		this.options.transcript.clear(); // children are anchored to it — gone too
 		this.folds.length = 0;
-		this.foldContainer.clear();
 		this.tui?.requestRender();
 	}
 

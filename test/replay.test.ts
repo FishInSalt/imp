@@ -45,6 +45,32 @@ describe("replaySession", () => {
 		expect(out).toContain("Found it — off-by-one on line 2.");
 	});
 
+	it("userSink seam (TUI): the FULL message body goes to the block sink; summary marks bypass it", () => {
+		const bodies: string[] = [];
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "first line\nsecond\nthird" },
+			{
+				role: "user",
+				content: "[Conversation summary — 3 msgs]\n\ncompacted away context",
+			},
+		];
+		const chunks: string[] = [];
+		const n = replaySession(
+			{
+				write: (s) => chunks.push(s),
+				ansi: false,
+				markdown: false,
+				userSink: (text) => bodies.push(text),
+			},
+			fakeSession(messages),
+		);
+		expect(n).toBe(2);
+		// the real user message: full body, one call — no truncation preview
+		expect(bodies).toEqual(["first line\nsecond\nthird"]);
+		// the summary frame renders as a note instead (never through the sink)
+		expect(chunks.join("")).toContain("conversation summary");
+	});
+
 	it("multi-line user messages show first line + (+N lines)", () => {
 		const out = run([{ role: "user", content: "first line\nsecond\nthird" }]);
 		expect(out).toContain("> first line (+2 lines)");

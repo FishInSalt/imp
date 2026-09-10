@@ -727,8 +727,9 @@ class ReplMachine {
 			return;
 		}
 		this.queue = rest;
-		// TUI: the echoed `> line` (Renderer.user) says this already; the note
-		// would double it (dogfood 2026-09-09). Legacy keeps the note.
+		// TUI: the echoed user block (Renderer.user → the sink's bg block)
+		// says this already; the note would double it (dogfood 2026-09-09).
+		// Legacy keeps the note.
 		if (this.input.setQueue === undefined) {
 			this.renderer.note(`▪ continuing with queued: ${shorten(entryText(next))}`);
 		}
@@ -1066,6 +1067,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				write: tuiSink ? tuiSink.feed : (text) => output.write(text),
 				ansi: tuiSink !== null || output.isTTY === true,
 				markdown: true,
+				userSink: tuiSink ? (text) => tuiSink.feedUser(text) : undefined,
 			},
 			session,
 		);

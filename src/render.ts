@@ -24,6 +24,10 @@ export interface RendererOptions {
 	/** Render streamed assistant text as markdown-lite (paragraph-buffered). REPL only;
 	 *  print mode stays byte-identical. */
 	markdown?: boolean;
+	/** TUI mode: user prompts render as full-width background blocks in
+	 *  the transcript (pi parity) — the sink-side entry point replaces the
+	 *  byte-stream echo. Absent (print/legacy) keeps the `> ` echo bytes. */
+	userSink?: (text: string) => void;
 	/** TUI mode: successful tool results fold instead of writing the `⎿`
 	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
 	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
@@ -122,6 +126,10 @@ export class Renderer {
 		this.stopSpinner();
 		this.flushMarkdown();
 		this.ensureNewline();
+		if (this.options.userSink !== undefined) {
+			this.options.userSink(text); // TUI: pi-style background block
+			return;
+		}
 		for (const line of text.split("\n")) this.write(`> ${line}\n`);
 	}
 

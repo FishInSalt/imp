@@ -79,7 +79,8 @@ export function tuiEditorTheme(): EditorTheme {
  *   ├─ activity   (live tool/subagent rows while a turn runs; zero rows idle)
  *   ├─ ask line   ([y/N] question while one is pending; an item selector
  *   │              while one is open; hidden otherwise)
- *   ├─ queue line (dim "N queued · next: …" while lines wait; hidden at 0)
+ *   ├─ queue rows (dim per-entry previews under a "N queued" head, plus
+ *   │              the dequeue hint; hidden at 0)
  *   ├─ hint row   (dim placeholder while idle with an empty editor and no
  *   │              pending ask: the "/ @ ! newline" cheat sheet; zero
  *   │              rows otherwise)
@@ -299,8 +300,11 @@ export class TuiShell implements LineInput {
 				// waits for the running turn to settle instead of steering into
 				// it. Idle (or with a pending ask) it is just a submit — the mode
 				// only matters behind a live run. An open picker keeps its keys.
-				const text = editor.getText();
-				if (this.pendingAsks.length > 0 || text.trim() !== "") {
+				// Review P1: expansion + trim mirror the Enter pipeline
+				// (submitValue) — a large paste must submit its BODY, not the
+				// "[paste #N]" marker, and the text must be trimmed like Enter's.
+				const text = editor.getExpandedText().trim();
+				if (this.pendingAsks.length > 0 || text !== "") {
 					editor.setText(""); // Enter submits clear the editor for us; alt+enter must do it itself
 					this.submit(text, "followUp");
 				}
@@ -449,9 +453,11 @@ export class TuiShell implements LineInput {
 
 	/** Editor draft access (LineInput.getText/setText): the queue restore
 	 *  reads the draft so it is preserved, and lands the joined queued input
-	 *  above it. No editor (pre-start) degrades to the mirror/empty string. */
+	 *  above it. Expansion (review P1) — a large pasted draft must restore as
+	 *  its content, never as the "[paste #N]" marker setText would then
+	 *  destroy. No editor (pre-start) degrades to the mirror string. */
 	getText(): string {
-		return this.editor?.getText() ?? this.editorText;
+		return this.editor?.getExpandedText() ?? this.editorText;
 	}
 
 	setText(text: string): void {

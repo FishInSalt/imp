@@ -2226,6 +2226,55 @@ describe("runRepl with shell:tui", () => {
 			await expect(env.repl).resolves.toBe(0);
 		});
 	});
+	it("P1 regression: the restore path expands a large pasted draft — abort hands back content, not a marker", async () => {
+		const g = gate();
+		// Abort-aware hold (see "an aborted turn clears the activity rows"):
+		// the scripted g-promise ignores the signal, so a real-abort shape is
+		// injected instead.
+		const env = await startTuiRepl([], {
+			provider: {
+				name: "abort-hold",
+				async *stream(request) {
+					yield { type: "text_delta", text: "partial" };
+					await new Promise<void>((resolve) => {
+						const onAbort = () => resolve();
+						request.signal?.addEventListener("abort", onAbort, { once: true });
+						g.promise.then(() => {
+							request.signal?.removeEventListener("abort", onAbort);
+							resolve();
+						});
+					});
+					if (request.signal?.aborted) return;
+					yield { type: "message_end", message: reply("ok") };
+				},
+			},
+		});
+		await settle();
+		env.terminal.data("first\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("(esc to interrupt"), 8000);
+		env.terminal.data("held line\r");
+		await settle();
+		// a >10-line paste becomes the (draft) content under test
+		const body = Array.from({ length: 11 }, (_, i) => `draft ${i + 1}`).join("\n");
+		env.terminal.data(`\x1b[200~${body}\x1b[201~`);
+		await settle();
+		const abortMark = env.terminal.writes.length;
+		env.terminal.data("\x03"); // abort → restore into the editor
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("restored 1 queued"));
+		for (let i = 0; i < 8; i++) await settle();
+		// post-abort window only: the pre-abort frames legitimately showed
+		// the marker while the paste sat in the editor. The editor restores
+		// scrolled to its end (cursor at bottom), so pin the VISIBLE tail:
+		// the pasted DRAFT came back expanded — never as a dead marker.
+		const frame = env.terminal.frameSince(abortMark);
+		expect(frame).toContain("draft 11");
+		expect(frame).not.toContain("[paste #");
+		g.resolve();
+		// clear the restored editor content before exiting (≈100 chars)
+		env.terminal.data("\x7f".repeat(110));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
 });
 
 describe("TuiShell activity region (M10 B)", () => {
@@ -2351,6 +2400,27 @@ describe("queue parity: follow-up routing and dequeue (shell keys)", () => {
 		terminal.data("\x1b[1;3A");
 		await settle();
 		expect(events).toEqual(["dequeue", "dequeue"]);
+		shell.close();
+	});
+});
+
+describe("queue parity: review findings", () => {
+	it("P1 regression: alt+enter expands a large paste and trims — the follow-up carries the body, never the [paste #] marker", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		// A bracketed paste over the 10-line threshold becomes a marker in
+		// the editor; the Enter pipeline expands it on submit, alt+enter must too.
+		const body = Array.from({ length: 12 }, (_, i) => `pasted line ${i + 1}`).join("\n");
+		terminal.data(`\x1b[200~${body}\x1b[201~`);
+		await settle();
+		// the RENDERED editor holds the marker (getText is expanded by design)
+		expect(terminal.frameSince(0)).toContain("[paste #1");
+		terminal.data("\x1b\r"); // alt+enter
+		await settle();
+		expect(events).toHaveLength(1);
+		expect(events[0]).toBe(`line:followUp:${body}`);
+		expect(events[0]).not.toContain("[paste #");
 		shell.close();
 	});
 });

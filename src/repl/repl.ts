@@ -714,6 +714,10 @@ class ReplMachine {
 
 	private async flushQueue(): Promise<void> {
 		if (this.pendingExitCode !== null) {
+			// An exit is pending — nothing will run, but the queued texts are
+			// still handed back (echoed: the editor closes with the shell)
+			// instead of vanishing with the process (review P2).
+			this.restoreQueueToEditor();
 			this.returnToIdle();
 			return;
 		}
@@ -916,11 +920,20 @@ class ReplMachine {
 		this.queue = [];
 		this.syncQueue();
 		if (texts.length === 0) return;
-		if (this.input.setText !== undefined) {
+		// Exiting (pending exit or EOF): the editor closes with the shell, so
+		// the texts echo as notes — otherwise the TUI restore would land in a
+		// box that vanishes a tick later (review P2).
+		const exiting = this.pendingExitCode !== null || this.eofPending;
+		if (this.input.setText !== undefined && !exiting) {
 			const draft = this.input.getText?.() ?? "";
 			const combined = [texts.join("\n\n"), draft].filter((t) => t.trim() !== "").join("\n\n");
 			this.input.setText(combined);
 			this.renderer.note(`▪ restored ${texts.length} queued message(s) to the editor`);
+			// Declared semantics: resubmitting the restored blob re-interprets
+			// it as ONE submission — a blob starting with "!" runs as a single
+			// (possibly multi-line) shell command, and a restored {prompt} body
+			// loses its never-re-interpret protection (that holds pre-restore).
+			// The texts are visible in the editor before submit; the user decides.
 		} else {
 			this.renderer.note(`▪ ${texts.length} queued message(s) not run:`);
 			for (const text of texts) this.renderer.note(`▪ ${text}`);

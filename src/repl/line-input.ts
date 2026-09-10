@@ -16,6 +16,22 @@ export interface SelectOptions {
 	filterable?: boolean;
 }
 
+/** One row of the TUI queue preview (LineInput.setQueue): the routing
+ *  label plus a capped one-line preview. */
+export interface QueueEntryView {
+	/** How the entry will run: "steer" (injects into the running turn),
+	 *  "follow-up" (waits for the run to end), "bash" ("! cmd"), "prompt"
+	 *  (markdown-command content). */
+	label: string;
+	preview: string;
+}
+
+/** How a submitted line routes while a run is in flight. "steer" (Enter,
+ *  the default) enters the running turn before the next model call;
+ *  "followUp" (alt+enter) holds until the run settles. Idle, both submit
+ *  immediately — the mode only matters behind a live run. */
+export type SubmitMode = "steer" | "followUp";
+
 /**
  * The input-side contract the REPL state machine (repl.ts) consumes.
  *
@@ -55,11 +71,11 @@ export interface LineInput {
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
 	select?(options: SelectOptions): Promise<number | null>;
-	/** Queue visual (M10, TUI only): one dim "N queued · next: <preview>" line
-	 *  below the ask region while lines wait behind the running turn. A count
-	 *  of 0 (or a null preview) removes the line entirely — the readline shell
-	 *  has no such line and keeps its "▪ queued:" notes instead. */
-	setQueue?(count: number, preview: string | null): void;
+	/** Queue visual (TUI only): one dim row per queued entry ("  steer: <preview>"
+	 *  style) under a "N queued" head and a dequeue hint — the whole region
+	 *  collapses to zero rows when empty. The readline shell has no such line
+	 *  and keeps its "▪ queued:" notes instead. */
+	setQueue?(entries: readonly QueueEntryView[]): void;
 	/** Terminal window title (TUI only — OSC 2, written outside the frame
 	 *  pipeline). The readline shell has no title and ignores it. */
 	setTitle?(title: string): void;
@@ -67,6 +83,12 @@ export interface LineInput {
 	 *  snapshot on every event; idle clears the region. The shell owns the
 	 *  spinner animation and elapsed-time rendering. */
 	setActivity?(snapshot: ActivitySnapshot): void;
+	/** TUI only: the editor's current draft — the queue restore (alt+up /
+	 *  esc+p, and abort) preserves whatever the user is mid-typing. */
+	getText?(): string;
+	/** TUI only: replace the editor text — the queue restore lands the
+	 *  joined queued input above the preserved draft. */
+	setText?(text: string): void;
 	/** Release the terminal (or readline interface). */
 	close(): void;
 }
@@ -107,7 +129,7 @@ export interface ActivitySnapshot {
 
 /** Event surface both shells wire into the machine. */
 export interface LineInputEvents {
-	onLine(line: string): void;
+	onLine(line: string, mode?: SubmitMode): void;
 	onInterrupt(): void;
 	onEof(): void;
 }

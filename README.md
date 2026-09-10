@@ -52,8 +52,19 @@ imp            # interactive REPL (streaming, one-line tool status)
 ```
 
 - Plain lines are sent to the model. Lines typed while imp is working are
-  queued and injected when the current turn ends ("steering") — the prompt
-  shows `+ ` while a run is active.
+  queued — each queued row shows its route: `steer:` lines (plain Enter)
+  inject into the running turn before the next model call, `follow-up:`
+  lines (alt+enter) wait for the run to settle and then run as their own
+  turn. The prompt shows `+ ` while a run is active.
+- alt+up (or esc+p — works on terminals without the Kitty keyboard
+  protocol) pulls every queued line back into the editor for editing;
+  your in-progress draft is preserved below them. Ctrl+C abort hand the
+  queued lines back the same way — user input is never silently dropped.
+- Terminal notes for the alt keys: iTerm2, Ghostty, Kitty, and recent VS
+  Code terminals work out of the box. WezTerm binds Option+Enter to
+  fullscreen by default and Alacritty may send a plain Return — map both
+  to `\x1b[13;3u`, or use esc+p (dequeue has a fallback; alt+enter does
+  not, absent terminal support).
 - `Ctrl+C` aborts the running turn (press twice to force quit; at an empty
   prompt, press twice to exit). `Ctrl+D` exits. The exit line shows how to
   resume: `imp -r <id>`.

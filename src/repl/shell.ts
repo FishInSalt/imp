@@ -18,7 +18,13 @@ import {
 } from "../tui.js";
 import { Fold } from "./components/fold.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
-import type { ActivitySnapshot, LineInput, LineInputEvents, SelectOptions } from "./line-input.js";
+import type {
+	ActivitySnapshot,
+	LineInput,
+	LineInputEvents,
+	QueueEntryView,
+	SelectOptions,
+} from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Autocomplete wiring for the editor (M10): slash commands at line start
@@ -35,6 +41,9 @@ export interface AutocompleteOptions {
 }
 
 export interface TuiShellOptions extends LineInputEvents {
+	/** alt+up / esc+p: pull all queued input back into the editor for
+	 *  editing (pi's "dequeue"). */
+	onDequeue(): void;
 	/** Shared with the Renderer's write sink — the transcript IS the output. */
 	transcript: TranscriptSink;
 	/** Injected in tests; default binds the real process terminal. */
@@ -135,11 +144,14 @@ export function tuiEditorTheme(): EditorTheme {
 
 /** The hint row's text (M10): input affordances, dim — input aid only,
  *  @ inserts path text, it never reads files into the turn. */
-const PLACEHOLDER_HINT = dim("(/ for commands · @ files · ! bash · shift+enter newline)", true);
+const PLACEHOLDER_HINT = dim(
+	"(/ for commands · @ files · ! bash · shift+enter newline · alt+enter follow-up)",
+	true,
+);
 /** The same row while a turn runs: the esc affordance belongs on screen the
  *  whole run (dogfood 2026-09-09 #8) — a stuck bash is exactly when users
  *  reach for it, and "typing queues" advertises steering. */
-const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue)", true);
+const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter follow-up)", true);
 
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
@@ -282,6 +294,24 @@ export class TuiShell implements LineInput {
 				// before the list or the editor could see it.
 				if (this.selector.filterKey?.(data) === true) return { consume: true };
 			}
+			if (this.selector === null && matchesKey(data, "alt+enter")) {
+				// Alt+enter routes the editor text as a follow-up (pi parity): it
+				// waits for the running turn to settle instead of steering into
+				// it. Idle (or with a pending ask) it is just a submit — the mode
+				// only matters behind a live run. An open picker keeps its keys.
+				const text = editor.getText();
+				if (this.pendingAsks.length > 0 || text.trim() !== "") {
+					editor.setText(""); // Enter submits clear the editor for us; alt+enter must do it itself
+					this.submit(text, "followUp");
+				}
+				return { consume: true };
+			}
+			// alt+up — and esc+p, which works on terminals without the Kitty
+			// protocol (pi-tui maps both) — pulls queued input back for editing.
+			if (this.selector === null && matchesKey(data, "alt+up")) {
+				this.options.onDequeue();
+				return { consume: true };
+			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt
 			// path — UNLESS the editor's autocomplete panel is VISIBLE: then the
 			// first Esc only closes the panel (debt clearance — pi-tui grew
@@ -355,7 +385,7 @@ export class TuiShell implements LineInput {
 		this.updatePlaceholder(); // idle + empty editor: the hint row starts visible
 	}
 
-	private submit(text: string): void {
+	private submit(text: string, mode: "steer" | "followUp" = "steer"): void {
 		if (this.closed) return; // a submit racing shutdown must not start a turn
 		if (this.pendingAsks.length > 0) {
 			this.settleAsk(isYes(text));
@@ -375,7 +405,7 @@ export class TuiShell implements LineInput {
 			}
 			if (this.history.length > 100) this.history.length = 100;
 		}
-		this.options.onLine(text);
+		this.options.onLine(text, mode);
 	}
 
 	setActive(active: boolean): void {
@@ -399,12 +429,34 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
-	/** Queue visual line (LineInput.setQueue): dim "N queued · next: <preview>"
-	 *  while lines wait behind the running turn. Empty text renders ZERO rows
-	 *  (pi-tui Text) — a count of 0 collapses the line away entirely. */
-	setQueue(count: number, preview: string | null): void {
-		this.queueText = count > 0 && preview !== null ? dim(`${count} queued · next: ${preview}`, true) : "";
+	/** Queue visual line (LineInput.setQueue): one dim row per queued entry
+	 *  under a "N queued" head, plus the dequeue hint — pi's per-message
+	 *  preview. Empty entries render ZERO rows (pi-tui Text) — the region
+	 *  collapses away entirely. */
+	setQueue(entries: readonly QueueEntryView[]): void {
+		const rows = entries.map((entry) => dim(`  ${entry.label}: ${entry.preview}`, true));
+		this.queueText =
+			entries.length === 0
+				? ""
+				: [
+						dim(`${entries.length} queued`, true),
+						...rows,
+						dim("  ↳ alt+up / esc+p to edit all queued", true),
+					].join("\n");
 		this.queueLine?.setText(this.queueText);
+		this.tui?.requestRender();
+	}
+
+	/** Editor draft access (LineInput.getText/setText): the queue restore
+	 *  reads the draft so it is preserved, and lands the joined queued input
+	 *  above it. No editor (pre-start) degrades to the mirror/empty string. */
+	getText(): string {
+		return this.editor?.getText() ?? this.editorText;
+	}
+
+	setText(text: string): void {
+		this.editor?.setText(text);
+		this.editorText = text; // mirror (onChange covers the live editor; this pins the no-editor case)
 		this.tui?.requestRender();
 	}
 

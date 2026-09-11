@@ -1,5 +1,6 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import { clampThinkingLevel, effortFor, thinkingStyleFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 /**
@@ -104,6 +105,10 @@ function mapFinishReason(reason: string | undefined | null): StopReason {
 
 interface StreamDelta {
 	content?: string | null;
+	/** GLM / DeepSeek reasoning trace arrives as reasoning_content deltas
+	 *  (#thinking-levels) — display-only, never replayed in requests (the
+	 *  vendors' guidance: discard it from context). */
+	reasoning_content?: string | null;
 	tool_calls?: Array<{
 		index: number;
 		id?: string;
@@ -151,6 +156,17 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				}));
 				body.tool_choice = "auto";
 			}
+			// Thinking (#thinking-levels): gpt-5*/o-series take OpenAI's
+			// reasoning_effort; Z.ai GLM on this protocol takes its native
+			// thinking object; deepseek-reasoner reasons by default (no knob).
+			if (request.thinking !== undefined && request.thinking !== "off") {
+				const style = thinkingStyleFor("openai", request.model);
+				if (style === "openai-effort") {
+					body.reasoning_effort = effortFor(clampThinkingLevel(style, request.thinking));
+				} else if (style === "glm-openai") {
+					body.thinking = { type: "enabled" };
+				}
+			}
 
 			const response = await postJsonWithRetry(
 				`${baseUrl}/chat/completions`,
@@ -177,6 +193,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			// Assembly state. tool_calls index -> our block + raw JSON accumulator.
 			const blocks: AssistantBlock[] = [];
 			let textBlock: Extract<AssistantBlock, { type: "text" }> | null = null;
+			let thinkingBlock: Extract<AssistantBlock, { type: "thinking" }> | null = null;
 			const toolByIndex = new Map<number, Extract<AssistantBlock, { type: "toolCall" }>>();
 			const toolRawByIndex = new Map<number, string>();
 			const usage: Usage = { inputTokens: 0, outputTokens: 0 };
@@ -196,6 +213,16 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 					}
 					textBlock.text += content;
 					yield { type: "text_delta", text: content };
+				}
+
+				const reasoning = choice?.delta?.reasoning_content;
+				if (typeof reasoning === "string" && reasoning !== "") {
+					if (thinkingBlock === null) {
+						thinkingBlock = { type: "thinking", thinking: "" };
+						blocks.push(thinkingBlock);
+					}
+					thinkingBlock.thinking += reasoning;
+					yield { type: "thinking_delta", text: reasoning };
 				}
 
 				for (const tc of choice?.delta?.tool_calls ?? []) {

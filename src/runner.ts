@@ -17,7 +17,7 @@ import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
-import type { MessageEntry, SessionStore } from "./core/session/store.js";
+import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -33,6 +33,12 @@ import { formatTokens, shorten } from "./format.js";
 import { withLogging } from "./provider/logging.js";
 import { contextWindowFor } from "./provider/models.js";
 import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
+import {
+	clampThinkingLevel,
+	THINKING_LEVELS,
+	type ThinkingLevel,
+	thinkingStyleFor,
+} from "./provider/thinking.js";
 import type { LLMProvider } from "./provider/types.js";
 import type { Renderer } from "./render.js";
 
@@ -55,6 +61,9 @@ export interface RunnerOptions {
 	argv: string[]; // for the run logger
 	model: string;
 	maxTokens: number;
+	/** Startup thinking level (#thinking-levels, pi parity): --thinking /
+	 *  IMP_THINKING. Clamped per model family on warmup; default "off". */
+	thinking?: ThinkingLevel;
 	maxTurns: number;
 	noContextFiles: boolean;
 	noSession: boolean;
@@ -114,6 +123,14 @@ export interface Runner {
 	 *  from the canonical reference so /model can cross protocols mid-session,
 	 *  and recomputes the compaction window to match the new model. */
 	setModel(reference: string): void;
+	/** Current thinking level (#thinking-levels, pi parity). "off" default. */
+	readonly thinkingLevel: ThinkingLevel;
+	/** Set the thinking level; clamps to the CURRENT model's family. Returns
+	 *  the effective level (pi's clamp-to-nearest semantics). */
+	setThinkingLevel(level: ThinkingLevel): ThinkingLevel;
+	/** Whether the current model has a thinking knob at all (pi's
+	 *  supportsThinking — drives /think and the footer segment). */
+	supportsThinking(): boolean;
 	/** Effective context window for the CURRENT model (registry-backed). */
 	readonly contextWindow: number;
 	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
@@ -208,6 +225,8 @@ class RunnerImpl implements Runner {
 	private readonly branchSummaryEnabled: boolean;
 	private settings = DEFAULT_COMPACTION_SETTINGS; // contextWindow follows the model (multi-provider)
 	private system: string;
+	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
+	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
 	private readonly agents: AgentRegistry;
 	private initialized = false;
@@ -229,6 +248,12 @@ class RunnerImpl implements Runner {
 		// registry from construction — not only after an explicit /model switch.
 		this.settings = { ...this.settings, contextWindow: contextWindowFor(options.model) };
 		this.lastRunModel = initialModel;
+		// #thinking-levels: startup level (--thinking / IMP_THINKING), clamped
+		// to the startup model's family (pi clamps on init the same way).
+		this.level = clampThinkingLevel(
+			thinkingStyleFor(this.providerName, this.model),
+			this.options.thinking ?? "off",
+		);
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
 		// keep their hermetic set, extension tools append after the base six. The
 		// default six run under options.cwd — never process.cwd() — so the
@@ -252,6 +277,7 @@ class RunnerImpl implements Runner {
 		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir, options.agentsProjectAllowed);
 		this.tools.push(
 			createTaskTool({
+				getThinking: () => (this.level === "off" ? undefined : this.level),
 				getProvider: () => this.provider,
 				getModel: () => this.model,
 				getSystem: () => this.system,
@@ -328,6 +354,7 @@ class RunnerImpl implements Runner {
 					this.sessionStore = resumed;
 					const loaded = resumed.buildContext();
 					this.history.push(...loaded.messages);
+					this.restoreThinkingFromSession(resumed); // --resume/-c restore the branch's level too
 					const stats = resumed.stats();
 					const est = estimateContextTokens(this.history);
 					options.renderer.note(
@@ -489,8 +516,43 @@ class RunnerImpl implements Runner {
 		this.sessionStore = store;
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()
+		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.system = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
+	}
+
+	/** #thinking-levels: restore the branch's last recorded level (pi's
+	 *  resume behavior — sdk.ts reads ThinkingLevelChangeEntry). No entry
+	 *  on the branch → keep the startup level; a knob-less model clamps
+	 *  to "off" via the usual setModel-style clamp. Direct write: this is
+	 *  a REPLAY of an old decision, not a new one (no fresh session entry). */
+	private restoreThinkingFromSession(store: SessionStore): void {
+		const change = [...store.getEntries()]
+			.reverse()
+			.find(
+				(e): e is Extract<SessionEntry, { type: "thinkingLevelChange" }> => e.type === "thinkingLevelChange",
+			);
+		if (change === undefined) return;
+		const restored = change.thinkingLevel as ThinkingLevel;
+		if ((THINKING_LEVELS as readonly string[]).includes(restored)) {
+			this.level = clampThinkingLevel(thinkingStyleFor(this.providerName, this.model), restored);
+		}
+	}
+
+	get thinkingLevel(): ThinkingLevel {
+		return this.level;
+	}
+
+	setThinkingLevel(level: ThinkingLevel): ThinkingLevel {
+		this.level = clampThinkingLevel(thinkingStyleFor(this.providerName, this.model), level);
+		// pi parity: level changes are session entries (auditable, replayed
+		// as notes on /resume; buildContext skips them like branch summaries).
+		this.sessionStore?.appendThinkingLevelChange(this.level);
+		return this.level;
+	}
+
+	supportsThinking(): boolean {
+		return thinkingStyleFor(this.providerName, this.model) !== null;
 	}
 
 	setModel(reference: string): void {
@@ -506,6 +568,9 @@ class RunnerImpl implements Runner {
 			this.providerName = ref.provider;
 		}
 		this.settings = { ...this.settings, contextWindow: contextWindowFor(reference) };
+		// pi clamps the thinking level on model switch; a model with no knob
+		// drops it to "off" (kept silently — /think and the footer report it).
+		this.level = clampThinkingLevel(thinkingStyleFor(this.providerName, this.model), this.level);
 	}
 
 	/** The model's canonical display reference — prefixed for non-anthropic
@@ -613,6 +678,7 @@ class RunnerImpl implements Runner {
 				history: this.history,
 				userMessage: options.userMessage,
 				maxTokens: this.options.maxTokens,
+				thinking: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 				maxIterations: this.options.maxTurns,
 				// Assistant messages entering history also reach "message_end"
 				// observers (M4c design §8.3) — after persistence, like everything

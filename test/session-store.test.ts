@@ -471,3 +471,35 @@ describe("SessionStore", () => {
 		expect(context.messages[2]).toEqual(user("after compaction"));
 	});
 });
+
+// ── #thinking-levels: thinkingLevelChange entries ────────────────────────
+
+describe("thinkingLevelChange entries", () => {
+	it("round-trips through the JSONL file; malformed entries are rejected; buildContext skips them", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-store-"));
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), process.cwd());
+		store.appendMessage({ role: "user", content: "hi" });
+		store.appendThinkingLevelChange("medium");
+		const reloaded = SessionStore.open(store.filePath);
+		const entries = reloaded.getEntries();
+		expect(entries.some((e) => e.type === "thinkingLevelChange" && e.thinkingLevel === "medium")).toBe(true);
+		expect(reloaded.buildContext().messages).toHaveLength(1); // the user message only
+		// malformed INTERIOR line (a torn final line is dropped by design —
+		// crash tolerance — so a valid entry follows to make it interior)
+		fsAppend(
+			store.filePath,
+			JSON.stringify({ type: "thinkingLevelChange", id: "x", parentId: null, timestamp: "t" }) + "\n",
+		);
+		fsAppend(
+			store.filePath,
+			JSON.stringify({
+				type: "message",
+				id: "y",
+				parentId: null,
+				timestamp: "t",
+				message: { role: "user", content: "tail" },
+			}) + "\n",
+		);
+		expect(() => SessionStore.open(store.filePath)).toThrow(/missing level/);
+	});
+});

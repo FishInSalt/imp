@@ -73,6 +73,10 @@ export class Renderer {
 	 *  pre-M5b single-slot behavior byte-for-byte; >1 collapses to one
 	 *  aggregate spinner line (M5b design §7). */
 	private pendingTools: PendingTool[] = [];
+	/** Streamed reasoning trace (#thinking-levels). Deltas buffer here and
+	 *  flush as ONE dim italic section before the first answer content —
+	 *  pi renders runs of thinking blocks as a single dim section. */
+	private thinkingBuffer = "";
 	private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 	private thinkTimer: ReturnType<typeof setTimeout> | null = null;
 	private spinnerLabel: string | null = null;
@@ -95,9 +99,15 @@ export class Renderer {
 				this.think("Thinking…");
 				break;
 			case "text_delta":
+				this.flushThinking(); // the answer begins — the trace section closes
 				this.raw(event.text);
 				break;
+			case "thinking_delta":
+				this.stopSpinner();
+				this.thinkingBuffer += event.text;
+				break;
 			case "tool_start":
+				this.flushThinking(); // tool rows follow the trace section
 				this.toolStart(event.toolCallId, event.name, event.args);
 				break;
 			case "tool_end":
@@ -162,6 +172,7 @@ export class Renderer {
 	/** Ends a run's output. `always` reproduces print mode's unconditional "\n". */
 	endRun(always = false): void {
 		this.stopSpinner();
+		this.flushThinking(); // a trace-only turn still renders its section
 		// Run boundary: TUI pendings that never completed (aborted tools)
 		// belong to this run only — drop them so they cannot leak into the
 		// next one's bookkeeping.
@@ -282,6 +293,36 @@ export class Renderer {
 	}
 
 	// ── streamed text ───────────────────────────────────────────────────────
+
+	/** A settled reasoning trace (replay path): one dim section, no streaming. */
+	thinking(text: string): void {
+		this.thinkingBuffer += text;
+		this.flushThinking();
+	}
+
+	/** Flush the buffered reasoning trace as one dim italic section. The
+	 *  trace bypasses the markdown pipeline (pi styles it as markdown; imp's
+	 *  answer stream owns that pipeline — the trace stays plain prose). */
+	private flushThinking(): void {
+		if (this.thinkingBuffer === "") return;
+		const text = this.thinkingBuffer.trim();
+		this.thinkingBuffer = "";
+		if (text === "") return;
+		this.stopSpinner();
+		// Interleaved case (reasoning after text): the buffered answer
+		// paragraphs print FIRST — order follows the stream (review P2).
+		this.flushMarkdown();
+		this.ensureNewline();
+		let styled = dim(text, this.options.ansi);
+		if (this.options.ansi) {
+			// italic completes the pi look; like dim(), NEVER in piped output
+			styled = styled
+				.split("\n")
+				.map((l) => `\x1b[3m${l}\x1b[23m`)
+				.join("\n");
+		}
+		this.write(`${styled}\n\n`);
+	}
 
 	/** Streaming text (event or direct). Spinner-aware; markdown-buffered when enabled. */
 	raw(text: string): void {

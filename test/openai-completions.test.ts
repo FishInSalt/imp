@@ -327,3 +327,83 @@ describe("parseModelRef routing", () => {
 		expect(parseModelRef("OpenAI-Codex/gpt-5.4")).toEqual({ provider: "openai-codex", modelId: "gpt-5.4" });
 	});
 });
+
+// ── #thinking-levels: request knobs + reasoning_content ──────────────────
+
+describe("openai-completions thinking", () => {
+	let server: Server;
+	let captured: CapturedRequest[];
+
+	beforeAll(async () => {
+		server = createServer((req, res) => {
+			let body = "";
+			req.on("data", (c) => (body += c));
+			req.on("end", () => {
+				captured.push({ body: JSON.parse(body), headers: req.headers as Record<string, string> });
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.end(
+					sse({ choices: [{ delta: { reasoning_content: "pondering " } }] }) +
+						sse({ choices: [{ delta: { reasoning_content: "deeply" } }] }) +
+						sse({ choices: [{ delta: { content: "the answer" } }] }) +
+						sse({ choices: [{ delta: {}, finish_reason: "stop" }] }) +
+						sse({ usage: { prompt_tokens: 5, completion_tokens: 3 } }) +
+						"data: [DONE]\n\n",
+				);
+			});
+		});
+		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	});
+	afterAll(() => new Promise<void>((r) => server.close(() => r())));
+	const base = "http://127.0.0.1";
+	const port = () => (server.address() as { port: number }).port;
+
+	it("gpt-5 family: reasoning_effort rides the body; xhigh clamps to high", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		const events = await collect(provider.stream({ ...REQ("gpt-5.4", []), thinking: "xhigh" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("high");
+		expect(captured[0]?.body.thinking).toBeUndefined();
+		void events; // the shared script always streams reasoning_content — body is the pin
+	});
+
+	it("GLM family: the native thinking object, not reasoning_effort", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("glm-4.6", []), thinking: "low" }));
+		expect(captured[0]?.body.thinking).toEqual({ type: "enabled" });
+		expect(captured[0]?.body.reasoning_effort).toBeUndefined();
+	});
+
+	it("reasoning_content deltas stream as thinking events and store as a thinking block", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		const events = await collect(provider.stream(REQ("glm-4.6", [])));
+		const trace = events.filter(
+			(e): e is Extract<LLMEvent, { type: "thinking_delta" }> => e.type === "thinking_delta",
+		);
+		expect(trace.map((e) => e.text).join("")).toBe("pondering deeply");
+		const msg = lastMessage(events);
+		expect(msg.blocks[0]).toMatchObject({ type: "thinking", thinking: "pondering deeply" });
+		expect(msg.blocks.some((b) => b.type === "text" && b.text === "the answer")).toBe(true);
+	});
+
+	it("thinking blocks are NEVER replayed in requests (vendor guidance: discard)", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		const prior: AgentMessage[] = [
+			{
+				role: "assistant",
+				blocks: [
+					{ type: "thinking", thinking: "secret trace" },
+					{ type: "text", text: "prior answer" },
+				],
+				usage: { inputTokens: 0, outputTokens: 0 },
+				stopReason: "end_turn",
+			},
+		];
+		await collect(provider.stream(REQ("glm-4.6", prior)));
+		const sent = JSON.stringify(captured[0]?.body);
+		expect(sent).toContain("prior answer");
+		expect(sent).not.toContain("secret trace");
+	});
+});

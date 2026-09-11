@@ -22,7 +22,13 @@ export interface UserMessage {
 
 export type AssistantBlock =
 	| { type: "text"; text: string }
-	| { type: "toolCall"; id: string; name: string; arguments: unknown };
+	| { type: "toolCall"; id: string; name: string; arguments: unknown }
+	/** The model's reasoning trace (#thinking-levels). Stored with its
+	 *  provider signature when the protocol produces one (Anthropic: the
+	 *  thinking blocks MUST be passed back on tool-result continuations —
+	 *  anthropic.ts replays them; OpenAI-style reasoning_content is
+	 *  display-only and never replayed). Rendered dim in both shells. */
+	| { type: "thinking"; thinking: string; signature?: string };
 
 /** Why the model stopped: "end_turn", "tool_use", "max_tokens", "stop_sequence", or null if unknown. */
 export type StopReason = "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" | null;

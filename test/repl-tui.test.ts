@@ -1072,6 +1072,7 @@ describe("runRepl with shell:tui", () => {
 			confirm?: boolean;
 			agentsHomeDir?: string;
 			provider?: LLMProvider; // inject an abort-aware hold stream when needed
+			model?: string; // default test-model is knob-less; Claude opts into thinking
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
@@ -1091,7 +1092,7 @@ describe("runRepl with shell:tui", () => {
 		const runner = await createRunner({
 			cwd: baseDir,
 			argv: [],
-			model: "test-model",
+			model: options?.model ?? "test-model",
 			maxTokens: 1024,
 			maxTurns: 10,
 			noContextFiles: true,
@@ -2308,6 +2309,32 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("\x7f".repeat(110));
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
+	});
+
+	describe("#thinking-levels TUI", () => {
+		it("shift+tab cycles the level; the note lands and the footer repaints", async () => {
+			const env = await startTuiRepl([reply("ok")], { model: "claude-sonnet-4-5" });
+			await settle();
+			env.terminal.data("\x1b[Z"); // shift+tab — pi's binding
+			await settle();
+			expect(env.transcript.completedLines().join("\n")).toContain("▪ thinking: minimal");
+			expect(env.terminal.frameSince(0)).toContain("think:minimal");
+			env.terminal.data("\x1b[Z");
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("think:low");
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("shift+tab on a knob-less model: the teaching note, no state change", async () => {
+			const env = await startTuiRepl([reply("ok")]); // test-model — no knob
+			await settle();
+			env.terminal.data("\x1b[Z");
+			await settle();
+			expect(env.transcript.completedLines().join("\n")).toContain("no thinking control");
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
 	});
 });
 

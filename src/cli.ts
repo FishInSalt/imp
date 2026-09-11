@@ -16,6 +16,7 @@ import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
+import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
 import { historyFilePath } from "./repl/history.js";
@@ -29,9 +30,22 @@ import { resolveShell } from "./tui.js";
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
 const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
 
+/** IMP_THINKING startup level; invalid values are ignored with a notice
+ *  (unlike --thinking, which errors — a typo in a shell profile should not
+ *  block the session). */
+function envThinking(): import("./provider/thinking.js").ThinkingLevel | undefined {
+	const raw = process.env.IMP_THINKING;
+	if (raw === undefined) return undefined;
+	if ((THINKING_LEVELS as readonly string[]).includes(raw)) return raw as CliOptions["thinking"];
+	process.stderr.write(`imp: ignoring invalid IMP_THINKING="${raw}" (not a thinking level)\n`);
+	return undefined;
+}
+
 interface CliOptions {
 	prompt: string | undefined;
 	model: string;
+	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity). */
+	thinking: import("./provider/thinking.js").ThinkingLevel;
 	maxTokens: number;
 	maxTurns: number;
 	noContextFiles: boolean;
@@ -104,12 +118,18 @@ Environment:
 Examples:
   imp -p "List the .ts files here and count their total lines"
   imp -p "Read src/cli.ts and fix the bug in argument parsing"
-  imp -p "..." -m glm-4.6
+  imp -p "..." -m glm-4.6 --thinking medium
+
+Thinking levels (#thinking-levels): off, minimal, low, medium, high on
+models with a thinking knob (claude budget, gpt-5*/o-series effort, GLM
+on/off, codex effort). Set with --thinking <level> or IMP_THINKING, in
+a session with /think <level> (bare /think or Shift+Tab cycles).
 `;
 function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
 		model: defaultModel(),
+		thinking: envThinking() ?? "off",
 		maxTokens: 16384,
 		maxTurns: 40,
 		noContextFiles: false,
@@ -143,6 +163,14 @@ function parseArgs(argv: string[]): CliOptions {
 			case "--model":
 				opts.model = next();
 				break;
+			case "--thinking": {
+				const raw = next();
+				if (!(THINKING_LEVELS as readonly string[]).includes(raw)) {
+					throw new Error(`Invalid thinking level "${raw}". Valid values: ${THINKING_LEVELS.join(", ")}`);
+				}
+				opts.thinking = raw as CliOptions["thinking"];
+				break;
+			}
 			case "--max-tokens":
 				opts.maxTokens = Number.parseInt(next(), 10);
 				break;
@@ -428,6 +456,7 @@ function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): Ru
 		cwd: process.cwd(),
 		argv,
 		model: opts.model,
+		thinking: opts.thinking,
 		maxTokens: opts.maxTokens,
 		maxTurns: opts.maxTurns,
 		noContextFiles: opts.noContextFiles,

@@ -1,6 +1,7 @@
+import { loadApiKey, resolveApiKey } from "./auth-store.js";
 import { loadCodexCredential } from "./codex-auth.js";
 import type { ProviderName } from "./resolve.js";
-import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS } from "./zai.js";
+import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS, zaiApiKey } from "./zai.js";
 
 /**
  * Model-list discovery (#model-discovery): ask each configured endpoint what
@@ -70,17 +71,23 @@ function openaiBaseUrl(): string {
 	return (process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
 }
 
-/** Which credential, if any, is present for each family. */
+/** Which credential, if any, is present for each family. #login-repl: a
+ *  stored /login key counts exactly like the env var (pi's credential
+ *  store participates in the same gate). */
 export function familyConfigured(family: ProviderName): boolean {
 	switch (family) {
 		case "anthropic":
-			return process.env.ANTHROPIC_AUTH_TOKEN !== undefined || process.env.ANTHROPIC_API_KEY !== undefined;
+			return (
+				loadApiKey("anthropic") !== null ||
+				process.env.ANTHROPIC_AUTH_TOKEN !== undefined ||
+				process.env.ANTHROPIC_API_KEY !== undefined
+			);
 		case "openai":
-			return process.env.OPENAI_API_KEY !== undefined;
+			return resolveApiKey("openai", "OPENAI_API_KEY") !== null;
 		case "openai-codex":
 			return loadCodexCredential() !== null;
 		case "zai":
-			return process.env.ZAI_API_KEY !== undefined;
+			return zaiApiKey() !== null;
 		default: {
 			const exhaustive: never = family;
 			throw new Error(`unreachable family: ${JSON.stringify(exhaustive)}`);
@@ -117,7 +124,7 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 			`${base}/models`,
 			{
 				accept: "application/json",
-				authorization: `Bearer ${String(process.env.ZAI_API_KEY)}`,
+				authorization: `Bearer ${String(zaiApiKey())}`,
 			},
 			cacheKey,
 		).catch(() => null);
@@ -133,13 +140,17 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 	const headers: Record<string, string> = { accept: "application/json" };
 	if (family === "anthropic") {
 		url = `${baseUrl}/v1/models?limit=1000`;
+		// Same precedence as the provider: stored key (x-api-key) wins; env
+		// keeps the bearer/x-api-key split it always had.
+		const stored = loadApiKey("anthropic");
 		const token = process.env.ANTHROPIC_AUTH_TOKEN;
-		if (token !== undefined) headers.authorization = `Bearer ${token}`;
+		if (stored !== null) headers["x-api-key"] = stored;
+		else if (token !== undefined) headers.authorization = `Bearer ${token}`;
 		else headers["x-api-key"] = String(process.env.ANTHROPIC_API_KEY);
 		headers["anthropic-version"] = "2023-06-01";
 	} else {
 		url = `${baseUrl}/models`;
-		headers.authorization = `Bearer ${String(process.env.OPENAI_API_KEY)}`;
+		headers.authorization = `Bearer ${String(resolveApiKey("openai", "OPENAI_API_KEY")?.key)}`;
 	}
 
 	return fetchJson(url, headers, cacheKey);

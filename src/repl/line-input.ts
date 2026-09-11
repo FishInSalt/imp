@@ -56,6 +56,10 @@ export interface LineInput {
 	/** One-line [y/N] question (api.confirm's tty side). FIFO when concurrent;
 	 *  empty/EOF/anything but y/yes resolves false. */
 	ask(question: string): Promise<boolean>;
+	/** One-line TEXT question (/login's api-key prompt, pi's LoginDialog
+	 *  input). Enter returns the typed text (rendered unmasked — pi does not
+	 *  mask either); Esc/Ctrl+C/EOF/empty resolve null. FIFO with ask(). */
+	secret?(question: string): Promise<string | null>;
 	/** History so far (newest first). Interactive only. */
 	getHistory(): readonly string[];
 	/** TUI shell only: persistent bottom status line (model · session ·

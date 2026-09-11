@@ -72,7 +72,8 @@ Usage:
   imp                     Start an interactive session (REPL)
   imp sessions             List saved sessions for this directory
   imp login                Log in to OpenAI (ChatGPT plan) — device-code OAuth
-  imp logout               Remove the stored OpenAI credential
+  imp logout               Remove the stored OpenAI (ChatGPT plan) credential;
+                           keys saved by /login stay
 
 Options:
   -p, --print <prompt>     Prompt to run

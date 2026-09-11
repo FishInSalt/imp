@@ -1,4 +1,5 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import { resolveApiKey } from "./auth-store.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
 import {
 	adaptiveEffortFor,
@@ -86,9 +87,12 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 	//   ANTHROPIC_AUTH_TOKEN  -> Authorization: Bearer (checked first)
 	//   ANTHROPIC_API_KEY    -> x-api-key
 	//   ANTHROPIC_BASE_URL   -> endpoint override
+	// #login-repl: a stored /login key (pi's credential store order) wins
+	// over both env vars and always sends x-api-key style.
 	const envToken = process.env.ANTHROPIC_AUTH_TOKEN;
-	const apiKey = options.apiKey ?? envToken ?? process.env.ANTHROPIC_API_KEY;
-	const auth: "bearer" | "x-api-key" = options.auth ?? (envToken ? "bearer" : "x-api-key");
+	const stored = resolveApiKey("anthropic", "ANTHROPIC_API_KEY");
+	const apiKey = options.apiKey ?? stored?.key ?? envToken ?? process.env.ANTHROPIC_API_KEY;
+	const auth: "bearer" | "x-api-key" = options.auth ?? (stored === null && envToken ? "bearer" : "x-api-key");
 	const baseUrl = (options.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {

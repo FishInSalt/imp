@@ -66,7 +66,11 @@ export class ReplInput {
 	/** Queued [y/N] questions (api.confirm's tty side). Concurrent gated
 	 *  children can ask before the first is answered — FIFO keeps each answer
 	 *  bound to its own question. */
-	private pendingAsks: Array<{ question: string; resolve: (approved: boolean) => void }> = [];
+	/** FIFO questions — yes/no confirms and text prompts (/login keys). */
+	private pendingAsks: Array<
+		| { kind: "yesno"; question: string; resolve: (approved: boolean) => void }
+		| { kind: "text"; question: string; resolve: (answer: string | null) => void }
+	> = [];
 
 	constructor(options: ReplInputOptions) {
 		this.options = options;
@@ -84,7 +88,7 @@ export class ReplInput {
 		this.rl = rl;
 		rl.on("line", (line: string) => {
 			if (this.pendingAsks.length > 0) {
-				this.settleAsk(isYes(line));
+				this.settleAsk(line === "" ? null : line);
 				return;
 			}
 			this.options.onLine(line);
@@ -92,9 +96,9 @@ export class ReplInput {
 		// Terminal mode: readline captures \x03 and emits SIGINT on the interface.
 		rl.on("SIGINT", () => {
 			if (this.pendingAsks.length > 0) {
-				// Ctrl+C answers the question with "no" — a declined confirm is a
-				// block, not an interrupt; the run itself keeps going.
-				this.settleAsk(false);
+				// Ctrl+C cancels the question — a declined confirm is a block,
+				// not an interrupt; the run itself keeps going.
+				this.settleAsk(null);
 				return;
 			}
 			this.options.onInterrupt();
@@ -113,7 +117,7 @@ export class ReplInput {
 		rl.on("close", () => {
 			// FIRST, before draining: no prompt() may run on a closed interface
 			this.streamClosed = true;
-			while (this.pendingAsks.length > 0) this.settleAsk(false); // EOF answers "no"
+			while (this.pendingAsks.length > 0) this.settleAsk(null); // EOF cancels
 			if (!this.closed) this.options.onEof();
 		});
 		if (this.options.interactive) rl.prompt();
@@ -151,7 +155,22 @@ export class ReplInput {
 		const rl = this.rl;
 		return new Promise<boolean>((resolve) => {
 			const wasIdle = this.pendingAsks.length === 0;
-			this.pendingAsks.push({ question, resolve });
+			this.pendingAsks.push({ kind: "yesno", question, resolve });
+			if (wasIdle) {
+				rl.setPrompt(question);
+				rl.prompt(true);
+			}
+		});
+	}
+
+	/** Text question (/login's api-key prompt). The readline shell echoes
+	 *  the typed line — same as pi's dialog, which does not mask either. */
+	secret(question: string): Promise<string | null> {
+		if (this.rl === null || this.closed) return Promise.resolve(null);
+		const rl = this.rl;
+		return new Promise<string | null>((resolve) => {
+			const wasIdle = this.pendingAsks.length === 0;
+			this.pendingAsks.push({ kind: "text", question, resolve });
 			if (wasIdle) {
 				rl.setPrompt(question);
 				rl.prompt(true);
@@ -163,10 +182,11 @@ export class ReplInput {
 	 * Resolves FIRST: rendering the next question touches a readline interface
 	 * that may already be closed (EOF drain) — a thrown ERR_USE_AFTER_CLOSE must
 	 * never strand the awaiting gate. */
-	private settleAsk(approved: boolean): void {
+	private settleAsk(value: string | null): void {
 		const oldest = this.pendingAsks.shift();
 		if (oldest === undefined) return;
-		oldest.resolve(approved);
+		if (oldest.kind === "yesno") oldest.resolve(value !== null && isYes(value));
+		else oldest.resolve(value !== null && value !== "" ? value : null);
 		const next = this.pendingAsks[0];
 		if (next !== undefined) {
 			this.setPromptIfLive(next.question);
@@ -179,7 +199,9 @@ export class ReplInput {
 	private drainAsks(): void {
 		while (this.pendingAsks.length > 0) {
 			const oldest = this.pendingAsks.shift();
-			oldest?.resolve(false);
+			if (oldest === undefined) continue;
+			if (oldest.kind === "yesno") oldest.resolve(false);
+			else oldest.resolve(null);
 		}
 	}
 

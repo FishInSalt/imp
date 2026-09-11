@@ -314,21 +314,21 @@ describe("parseModelRef routing", () => {
 		const prevZai = process.env.ZAI_API_KEY;
 		delete process.env.ZAI_API_KEY;
 		try {
-		expect(parseModelRef("glm-4.6")).toEqual({ provider: "anthropic", modelId: "glm-4.6" });
-		expect(parseModelRef("anthropic/claude-sonnet-4-5")).toEqual({
-			provider: "anthropic",
-			modelId: "claude-sonnet-4-5",
-		});
-		expect(parseModelRef("openai/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
-		expect(parseModelRef("openrouter/org/model")).toEqual({
-			provider: "anthropic",
-			modelId: "openrouter/org/model",
-		});
-		expect(parseModelRef("openai/")).toEqual({ provider: "anthropic", modelId: "openai/" });
-		// review P2-6: near-miss prefixes are typos, not exotic ids
-		expect(parseModelRef("OpenAI/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
-		expect(parseModelRef(" openai/gpt-5.2 ")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
-		expect(parseModelRef("OpenAI-Codex/gpt-5.4")).toEqual({ provider: "openai-codex", modelId: "gpt-5.4" });
+			expect(parseModelRef("glm-4.6")).toEqual({ provider: "anthropic", modelId: "glm-4.6" });
+			expect(parseModelRef("anthropic/claude-sonnet-4-5")).toEqual({
+				provider: "anthropic",
+				modelId: "claude-sonnet-4-5",
+			});
+			expect(parseModelRef("openai/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
+			expect(parseModelRef("openrouter/org/model")).toEqual({
+				provider: "anthropic",
+				modelId: "openrouter/org/model",
+			});
+			expect(parseModelRef("openai/")).toEqual({ provider: "anthropic", modelId: "openai/" });
+			// review P2-6: near-miss prefixes are typos, not exotic ids
+			expect(parseModelRef("OpenAI/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
+			expect(parseModelRef(" openai/gpt-5.2 ")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
+			expect(parseModelRef("OpenAI-Codex/gpt-5.4")).toEqual({ provider: "openai-codex", modelId: "gpt-5.4" });
 		} finally {
 			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevZai;

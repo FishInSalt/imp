@@ -1074,6 +1074,8 @@ class ReplMachine {
 		// Commands without it keep their text fallbacks.
 		const select = this.input.select?.bind(this.input);
 		if (select !== undefined) ctx.select = select;
+		const secret = this.input.secret?.bind(this.input);
+		if (secret !== undefined) ctx.secret = secret;
 		return ctx;
 	}
 }

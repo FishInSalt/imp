@@ -219,8 +219,14 @@ export class TuiShell implements LineInput {
 	private detachInput: (() => void) | null = null;
 	private onProcessSigint: (() => void) | null = null;
 	private onStdinEnd: (() => void) | null = null;
-	/** Same FIFO contract as ReplInput.pendingAsks. */
-	private pendingAsks: Array<{ question: string; resolve: (approved: boolean) => void }> = [];
+	/** Same FIFO contract as ReplInput.pendingAsks. A queued entry is either
+	 *  a yes/no confirm (api.confirm) or a text question (/login's api-key
+	 *  prompt — pi's LoginDialog input; typed text renders unmasked, exactly
+	 *  like pi's own dialog, and never reaches input history). */
+	private pendingAsks: Array<
+		| { kind: "yesno"; question: string; resolve: (approved: boolean) => void }
+		| { kind: "text"; question: string; resolve: (answer: string | null) => void }
+	> = [];
 
 	constructor(options: TuiShellOptions) {
 		this.options = options;
@@ -345,17 +351,20 @@ export class TuiShell implements LineInput {
 			// a selector is open Esc stays the selector's cancel — never an
 			// interrupt.
 			if (
-				this.active &&
+				(this.active || this.pendingAsks.length > 0) &&
 				this.selector === null &&
 				matchesKey(data, "escape") &&
 				editor?.isShowingAutocomplete() !== true
 			) {
-				if (this.pendingAsks.length > 0) this.settleAsk(false);
+				// #login-repl: Esc also cancels an IDLE question (the secret
+				// prompt) — pi's dialogs cancel on Esc; before, only an active
+				// run routed Esc here and an idle prompt sat un-cancellable.
+				if (this.pendingAsks.length > 0) this.settleAsk(null);
 				else this.options.onInterrupt();
 				return undefined;
 			}
 			if (matchesKey(data, "ctrl+c")) {
-				if (this.pendingAsks.length > 0) this.settleAsk(false);
+				if (this.pendingAsks.length > 0) this.settleAsk(null);
 				else this.options.onInterrupt();
 				return { consume: true };
 			}
@@ -410,7 +419,7 @@ export class TuiShell implements LineInput {
 	private submit(text: string, mode: "steer" | "followUp" = "steer"): void {
 		if (this.closed) return; // a submit racing shutdown must not start a turn
 		if (this.pendingAsks.length > 0) {
-			this.settleAsk(isYes(text));
+			this.settleAsk(text === "" ? null : text);
 			return;
 		}
 		if (text !== "") {
@@ -567,10 +576,19 @@ export class TuiShell implements LineInput {
 		if (this.tui === null || this.closed) return Promise.resolve(false);
 		return new Promise<boolean>((resolve) => {
 			const wasFirst = this.pendingAsks.length === 0;
-			this.pendingAsks.push({ question, resolve });
+			this.pendingAsks.push({ kind: "yesno", question, resolve });
 			this.updatePlaceholder(); // a pending ask hides the hint row
 			// While a picker owns the keys the question would be unanswerable;
 			// hold it — the picker's finish() renders the queue head (M9-2 P2).
+			if (wasFirst && this.selector === null) this.showAsk(question);
+		});
+	}
+
+	secret(question: string): Promise<string | null> {
+		if (this.tui === null || this.closed) return Promise.resolve(null);
+		return new Promise<string | null>((resolve) => {
+			const wasFirst = this.pendingAsks.length === 0;
+			this.pendingAsks.push({ kind: "text", question, resolve });
 			if (wasFirst && this.selector === null) this.showAsk(question);
 		});
 	}
@@ -796,10 +814,11 @@ export class TuiShell implements LineInput {
 	}
 
 	/** Resolve the oldest question, then show the next (if queued). */
-	private settleAsk(approved: boolean): void {
+	private settleAsk(value: string | null): void {
 		const oldest = this.pendingAsks.shift();
 		if (oldest === undefined) return;
-		oldest.resolve(approved);
+		if (oldest.kind === "yesno") oldest.resolve(value !== null && isYes(value));
+		else oldest.resolve(value !== null && value !== "" ? value : null); // empty = cancel (pi stores no empty key)
 		const next = this.pendingAsks[0];
 		if (next !== undefined) {
 			this.showAsk(next.question);
@@ -814,7 +833,9 @@ export class TuiShell implements LineInput {
 	private drainAsks(): void {
 		while (this.pendingAsks.length > 0) {
 			const oldest = this.pendingAsks.shift();
-			oldest?.resolve(false);
+			if (oldest === undefined) continue;
+			if (oldest.kind === "yesno") oldest.resolve(false);
+			else oldest.resolve(null);
 		}
 		this.removeAskLine();
 		this.updatePlaceholder();

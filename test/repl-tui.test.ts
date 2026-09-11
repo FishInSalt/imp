@@ -9,6 +9,7 @@ import { createSession } from "../src/core/session/manager.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
+import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
@@ -384,6 +385,35 @@ describe("TuiShell", () => {
 		await settle();
 		await expect(second).resolves.toBe(false);
 		expect(shell.getHistory()).toEqual([]); // answers never leak into history
+		shell.close();
+	});
+
+	it("secret: Enter returns the text; empty and Esc cancel; the key never enters history (#login-repl)", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const ask = shell.secret("Enter Z.AI API key ");
+		await settle();
+		expect(terminal.frameSince(0)).toContain("Enter Z.AI API key ");
+		terminal.data("sk-live\r");
+		await settle();
+		await expect(ask).resolves.toBe("sk-live");
+		// the typed key never becomes recallable input
+		expect(shell.getHistory()).toEqual([]);
+		// empty Enter = cancel (null), not an empty-string key
+		const empty = shell.secret("Enter again ");
+		await settle();
+		terminal.data("\r");
+		await settle();
+		await expect(empty).resolves.toBeNull();
+		// Esc cancels too — even idle (the /login flow's cancel affordance)
+		const esc = shell.secret("Enter once more ");
+		await settle();
+		terminal.data("\x1b");
+		await settle();
+		await expect(esc).resolves.toBeNull();
+		// and the machine never saw a single line from any of it
+		expect(events).toEqual([]);
 		shell.close();
 	});
 
@@ -2392,6 +2422,47 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("/login: the secret prompt renders, Enter stores the key, Esc cancels; the typed key never enters history", async () => {
+			const saved: Record<string, string | undefined> = {};
+			for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY"]) {
+				saved[key] = process.env[key];
+				delete process.env[key];
+			}
+			const authPath = path.join(await mkdtemp(path.join(tmpdir(), "imp-login-")), "auth.json");
+			process.env.IMP_AUTH_PATH = authPath;
+			try {
+				const env = await startTuiRepl([reply("ok")]);
+				await settle();
+				env.terminal.data("/login zai\r");
+				await settle();
+				// the question renders (pi's prompt form) — unmasked input,
+				// exactly like pi's LoginDialog
+				expect(env.terminal.frameSince(0)).toContain("Enter Z.AI API key");
+				env.terminal.data("sk-tui-key\r"); // typed + Enter
+				await settle();
+				expect(env.terminal.frameSince(0)).toContain("Saved API key for Z.AI");
+				expect(env.terminal.frameSince(0)).toContain("▪ switch with /model zai/glm-5.3");
+				expect(loadApiKey("zai", authPath)).toBe("sk-tui-key");
+				// history exclusion is pinned at the shell level (the asks test
+				// there covers the same submit interception)
+				// Esc path: a fresh prompt cancels silently — nothing stored
+				// for another family
+				env.terminal.data("/login openai\r");
+				await settle();
+				expect(env.terminal.frameSince(0)).toContain("Enter OpenAI API key");
+				env.terminal.data("\x1b"); // Esc
+				await settle();
+				expect(loadApiKey("openai", authPath)).toBeNull();
+				env.terminal.data("/exit\r");
+				await expect(env.repl).resolves.toBe(0);
+			} finally {
+				for (const [key, value] of Object.entries(saved)) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+			}
 		});
 
 		it("footer tell: a zai model shows its zai/ prefix in the persistent footer (compat stays bare)", async () => {

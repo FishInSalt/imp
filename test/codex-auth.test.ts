@@ -150,9 +150,10 @@ describe("codex-auth (device-code OAuth)", () => {
 		]);
 		expect(refreshCount).toBe(1); // not 2 — the refresh race would rotate out the token
 		expect(a.accountId).toBe(b.accountId);
-		// the refreshed pair is persisted
-		const stored = JSON.parse(readFileSync(authFile, "utf8")) as { expiresAt: number };
-		expect(stored.expiresAt).toBeGreaterThan(Date.now());
+		// the refreshed pair is persisted (under the codex section since
+		// #login-repl shares the file with stored api keys)
+		const stored = JSON.parse(readFileSync(authFile, "utf8")) as { codex?: { expiresAt?: number } };
+		expect(stored.codex?.expiresAt).toBeGreaterThan(Date.now());
 	});
 
 	it("not logged in: the error teaches the fix; logout clears the file", async () => {

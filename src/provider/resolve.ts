@@ -2,7 +2,13 @@ import { createAnthropicProvider } from "./anthropic.js";
 import { createCodexResponsesProvider } from "./codex-responses.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
-import { createZaiProvider } from "./zai.js";
+import { createZaiProvider, zaiApiKey } from "./zai.js";
+
+/** Whether the zai family has any credential — the bare-glm routing gate.
+ *  Same predicate as familyConfigured("zai"), kept dependency-light. */
+function zaiConfigured(): boolean {
+	return zaiApiKey() !== null;
+}
 
 /**
  * Model reference parsing + provider routing (#multi-provider).
@@ -42,11 +48,13 @@ export function parseModelRef(reference: string): ModelRef {
 	if (slash === -1) {
 		// pi parity: GLM's ONE official path is the zai provider (coding
 		// endpoint, openai-completions). A bare glm-* id routes there when
-		// ZAI_API_KEY is present; without it the id falls back to the
+		// zai is configured — a stored /login key OR ZAI_API_KEY (#login-repl:
+		// logging in mid-session must flip routing exactly like exporting the
+		// env var would); without either the id falls back to the
 		// anthropic-compat connection (the pre-zai setup — kept so existing
 		// ANTHROPIC_BASE_URL workflows do not break). Explicit prefixes
 		// (zai/glm-…, anthropic/glm-…, openai/glm-…) always win.
-		if (trimmed.toLowerCase().startsWith("glm-") && process.env.ZAI_API_KEY !== undefined) {
+		if (trimmed.toLowerCase().startsWith("glm-") && zaiConfigured()) {
 			return { provider: "zai", modelId: trimmed };
 		}
 		return { provider: "anthropic", modelId: trimmed };

@@ -10,6 +10,9 @@ import type { AgentMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import { loadSettings } from "../src/core/settings.js";
 import { setTrust } from "../src/core/trust.js";
+import { loadApiKey } from "../src/provider/auth-store.js";
+import { familyConfigured } from "../src/provider/discover.js";
+import { parseModelRef } from "../src/provider/resolve.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
@@ -119,6 +122,7 @@ async function makeEnv(args?: {
 	const replayed: string[] = [];
 	const submitted: string[] = [];
 	const exitCodes: number[] = [];
+	const authStore = path.join(baseDir, "auth.json");
 	const banner = output(); // ▪ resumed … line from seeding, if any
 	const trustStore = path.join(baseDir, "trust.json");
 	const env: TestEnv = {
@@ -150,6 +154,7 @@ async function makeEnv(args?: {
 				submitted.push(text);
 			},
 			trustStorePath: trustStore,
+			authStorePath: authStore,
 		},
 	};
 	(env as { replayed: string[] }).replayed = replayed;
@@ -227,6 +232,7 @@ describe("slash commands", () => {
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
+				"  /login [provider]  sign in to a provider (stored credential beats the env var)",
 				"  /think [level]     show or set the thinking level; no argument cycles (shift+tab)",
 				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
@@ -425,7 +431,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /tree /sessions /resume /model /think /worktrees /trust /status /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /login /think /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -1252,9 +1258,9 @@ describe("/think (#thinking-levels)", () => {
 		// explicit anthropic/ prefix — a deliberate choice, no note
 		const quiet = await makeEnv();
 		try {
-		await dispatchCommand("/model anthropic/glm-5.3", quiet.ctx);
-		expect(quiet.runner.providerName).toBe("anthropic");
-		expect(quiet.output()).not.toContain("anthropic-compat");
+			await dispatchCommand("/model anthropic/glm-5.3", quiet.ctx);
+			expect(quiet.runner.providerName).toBe("anthropic");
+			expect(quiet.output()).not.toContain("anthropic-compat");
 		} finally {
 			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevZai;
@@ -1317,6 +1323,101 @@ describe("/think (#thinking-levels)", () => {
 		});
 		expect(compat.providerName).toBe("anthropic");
 		expect(compatOut()).toContain("runs via anthropic-compat");
+	});
+
+	it("/login: picker rows carry status; a pick prompts for the key, stores it, and points at /model when the family differs", async () => {
+		const env = await makeEnv();
+		let labels: Array<{ label: string; description?: string }> = [];
+		env.ctx.select = async (options) => {
+			labels = options.items;
+			return options.items.findIndex((item) => item.label === "Z.AI");
+		};
+		let secretPrompt = "";
+		env.ctx.secret = async (question) => {
+			secretPrompt = question;
+			return "sk-zai-1";
+		};
+		await dispatchCommand("/login", env.ctx);
+		// rows: one per family, status-filled (pi's OAuthSelector rows)
+		expect(labels.map((r) => r.label)).toEqual(["Z.AI", "Anthropic", "OpenAI", "OpenAI (ChatGPT plan)"]);
+		expect(labels.find((r) => r.label === "Z.AI")?.description).toBe("not signed in");
+		expect(labels.find((r) => r.label === "OpenAI (ChatGPT plan)")?.description).toBe("not signed in");
+		expect(secretPrompt).toBe("Enter Z.AI API key"); // pi's prompt form
+		expect(loadApiKey("zai", env.ctx.authStorePath)).toBe("sk-zai-1");
+		expect(env.output()).toContain("Saved API key for Z.AI"); // pi's wording
+		// current family (anthropic) differs from the login — the pointer
+		expect(env.output()).toContain("▪ switch with /model zai/glm-5.3");
+	});
+
+	it("/login: same-family login needs no pointer; env-configured rows say so; cancel is silent", async () => {
+		// same family: status only, no ▪ pointer
+		const same = await makeEnv({ model: "openai/gpt-5.2" });
+		same.ctx.secret = async () => "sk-o";
+		await dispatchCommand("/login openai", same.ctx);
+		expect(loadApiKey("openai", same.ctx.authStorePath)).toBe("sk-o");
+		expect(same.output()).toContain("Saved API key for OpenAI");
+		expect(same.output()).not.toContain("▪ switch with");
+		// env-configured row label (status source, pi-style)
+		const envRow = await makeEnv();
+		const rows: Array<{ label: string; description?: string }> = [];
+		envRow.ctx.select = async (options) => {
+			rows.push(...options.items);
+			return null; // cancel the picker
+		};
+		const prev = process.env.ANTHROPIC_API_KEY;
+		process.env.ANTHROPIC_API_KEY = "sk-ant";
+		try {
+			await dispatchCommand("/login", envRow.ctx);
+			expect(rows.find((r) => r.label === "Anthropic")?.description).toBe("env: ANTHROPIC_API_KEY");
+		} finally {
+			if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+			else process.env.ANTHROPIC_API_KEY = prev;
+		}
+		// cancelled secret: nothing stored, nothing printed (pi's silent cancel)
+		const cancel = await makeEnv();
+		cancel.ctx.secret = async () => null;
+		await dispatchCommand("/login zai", cancel.ctx);
+		expect(loadApiKey("zai", cancel.ctx.authStorePath)).toBeNull();
+		expect(cancel.output()).toBe("");
+	});
+
+	it("/login: unknown provider teaches; codex bridges to the CLI; a missing secret prompts the env var", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/login foo", env.ctx);
+		expect(env.output()).toContain('unknown provider "/login foo"');
+		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex");
+		// oauth family: the CLI bridge note, no secret prompt at all
+		const codex = await makeEnv();
+		codex.ctx.secret = async () => {
+			throw new Error("must not prompt");
+		};
+		await dispatchCommand("/login openai-codex", codex.ctx);
+		expect(codex.output()).toContain('run "imp login"');
+		// legacy ctx (no secret bound): the teaching error names the env var
+		const legacy = await makeEnv();
+		await dispatchCommand("/login zai", legacy.ctx);
+		expect(legacy.output()).toContain("export ZAI_API_KEY=<key>");
+	});
+
+	it("a stored /login key participates in routing: familyConfigured flips and bare glm ids route to zai", async () => {
+		const env = await makeEnv();
+		env.ctx.secret = async () => "sk-zai-2";
+		const prevKey = process.env.ZAI_API_KEY;
+		const prevAuth = process.env.IMP_AUTH_PATH;
+		delete process.env.ZAI_API_KEY;
+		// familyConfigured/parseModelRef read the DEFAULT store path — point
+		// IMP_AUTH_PATH at the same temp file the command wrote
+		process.env.IMP_AUTH_PATH = env.ctx.authStorePath;
+		try {
+			await dispatchCommand("/login zai", env.ctx);
+			expect(familyConfigured("zai")).toBe(true);
+			expect(parseModelRef("glm-5.3")).toEqual({ provider: "zai", modelId: "glm-5.3" });
+		} finally {
+			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevKey;
+			if (prevAuth === undefined) delete process.env.IMP_AUTH_PATH;
+			else process.env.IMP_AUTH_PATH = prevAuth;
+		}
 	});
 
 	it("on a model with no knob: pi's status line, level stays off", async () => {

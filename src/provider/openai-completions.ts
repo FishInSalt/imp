@@ -1,4 +1,5 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import { resolveApiKey } from "./auth-store.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
 import { clampThinkingLevel, effortFor, thinkingMetaFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
@@ -134,7 +135,10 @@ interface StreamChunk {
 }
 
 export function createOpenAICompletionsProvider(options: OpenAICompletionsProviderOptions = {}): LLMProvider {
-	const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
+	// options.apiKey (the zai provider passes its own resolved key) first;
+	// otherwise a stored /login credential wins over OPENAI_API_KEY (pi's
+	// envApiKeyAuth order).
+	const apiKey = options.apiKey ?? resolveApiKey("openai", "OPENAI_API_KEY")?.key;
 	const baseUrl = (options.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {

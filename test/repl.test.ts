@@ -919,6 +919,95 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 	});
 });
 
+describe("/login codex guarded state (batch B, machine level)", () => {
+	it("Ctrl+C aborts the OAuth poll (no force-quit counting); the REPL stays usable; nothing persists", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-loginb-"));
+		const requests: LLMRequest[] = [];
+		const fake = makeConsole({ tty: true });
+		const renderer = new Renderer({ write: (t) => fake.stdout.write(t), ansi: false, liveTools: false });
+		const runner = await createRunner({
+			cwd: path.join(baseDir, "proj"),
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
+		});
+		// a hang-forever device server: the usercode answers, polls never do
+		const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+		let hangServer: import("node:http").Server;
+		const { createServer } = await import("node:http");
+		hangServer = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c) => chunks.push(c as Buffer));
+			req.on("end", () => {
+				if (req.url === "/api/accounts/deviceauth/usercode") {
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end(JSON.stringify({ device_auth_id: "d", user_code: "HANG-0000", interval: 0 }));
+					return;
+				}
+				if (req.url === "/api/accounts/deviceauth/token") {
+					res.writeHead(403, { "content-type": "application/json" });
+					res.end("{}");
+					return;
+				}
+				res.writeHead(404);
+				res.end("{}");
+			});
+		});
+		await new Promise<void>((r) => hangServer.listen(0, "127.0.0.1", r));
+		const hangBase = `http://127.0.0.1:${(hangServer.address() as { port: number }).port}`;
+		const authPath = path.join(baseDir, "auth.json");
+		const prevAuth = process.env.IMP_AUTH_PATH;
+		const prevCodexBase = process.env.IMP_CODEX_AUTH_BASE;
+		process.env.IMP_AUTH_PATH = authPath;
+		process.env.IMP_CODEX_AUTH_BASE = hangBase;
+		const repl = runRepl({
+			runner,
+			commands: [],
+			renderer,
+			input: fake.stdin,
+			output: fake.stdout,
+			interactive: true,
+			shell: "legacy",
+			exit: () => {},
+		});
+		try {
+			await ticks(2);
+			fake.send("/login openai-codex\n");
+			await new Promise((r) => setTimeout(r, 300)); // usercode + first poll
+			expect(fake.output()).toContain("enter code: HANG-0000");
+			// Review P1 (batch B): a command typed mid-login used to disarm the
+			// cancel — its runCommand finally nulled the controller and a double
+			// Ctrl+C force-quit over the live poll. /help fully runs (unstateful);
+			// the abort below must STILL cancel the login.
+			fake.send("/help\n");
+			await new Promise((r) => setTimeout(r, 200));
+			expect(fake.output()).toContain("/compact");
+			fake.send("\x03"); // Ctrl+C — must ABORT, not count toward force quit
+			await new Promise((r) => setTimeout(r, 400));
+			// /help's own text mentions "force quit" — pin the REAL force-quit
+			// signals instead: the compaction hint and the 130 force exit
+			expect(fake.output()).not.toContain("compacting — press");
+			// the prompt still answers: /exit resolves cleanly (no 130 force exit)
+			fake.send("/exit\n");
+			await repl;
+			const { loadCodexCredential } = await import("../src/provider/codex-auth.js");
+			expect(loadCodexCredential(authPath)).toBeNull(); // nothing persisted
+		} finally {
+			if (prevAuth === undefined) delete process.env.IMP_AUTH_PATH;
+			else process.env.IMP_AUTH_PATH = prevAuth;
+			if (prevCodexBase === undefined) delete process.env.IMP_CODEX_AUTH_BASE;
+			else process.env.IMP_CODEX_AUTH_BASE = prevCodexBase;
+			await new Promise<void>((r) => hangServer.close(() => r()));
+		}
+	});
+});
+
 describe("! passthrough (M10)", () => {
 	/** The fake-tool injection pattern (fakes.ts style): a bash-named Tool the
 	 *  machine must reach through the runner's tool set, exactly like the

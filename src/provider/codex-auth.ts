@@ -21,7 +21,7 @@ import { authFilePath } from "./auth-store.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // OpenAI Codex CLI's public client id
 export const DEFAULT_AUTH_BASE_URL = "https://auth.openai.com";
-const DEVICE_VERIFICATION_URI = `${DEFAULT_AUTH_BASE_URL}/codex/device`;
+const deviceVerificationUri = (authBaseUrl: string): string => `${authBaseUrl}/codex/device`;
 const DEVICE_REDIRECT_URI = `${DEFAULT_AUTH_BASE_URL}/deviceauth/callback`;
 const DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60;
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -171,13 +171,28 @@ async function readTokenResponse(response: Response, operation: string): Promise
 	};
 }
 
+/** pi's fetchWithLoginCancellation (openai-codex.ts:106-114): an abort
+ *  landing mid-fetch rejects with a raw AbortError DOMException — map it
+ *  to "Login cancelled" so the CLI and /login render the silent cancel
+ *  instead of "This operation was aborted" (review P2, batch B). */
+function fetchOrLoginCancel(
+	signal: AbortSignal | undefined,
+	input: string,
+	init?: RequestInit,
+): Promise<Response> {
+	return fetch(input, init).catch((err: unknown) => {
+		if (signal?.aborted) throw new Error("Login cancelled");
+		throw err;
+	});
+}
+
 async function exchangeCode(
 	code: string,
 	codeVerifier: string,
 	authBaseUrl: string,
 	signal?: AbortSignal,
 ): Promise<CodexCredential> {
-	const response = await fetch(`${authBaseUrl}/oauth/token`, {
+	const response = await fetchOrLoginCancel(signal, `${authBaseUrl}/oauth/token`, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
@@ -213,7 +228,7 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 	const authBaseUrl = options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL;
 	const signal = options.signal;
 
-	const start = await fetch(`${authBaseUrl}/api/accounts/deviceauth/usercode`, {
+	const start = await fetchOrLoginCancel(signal, `${authBaseUrl}/api/accounts/deviceauth/usercode`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ client_id: CLIENT_ID }),
@@ -235,7 +250,9 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 		throw new Error(`Codex device-code response missing fields: ${JSON.stringify(device)}`);
 	}
 	options.onDeviceCode?.({
-		verificationUri: DEVICE_VERIFICATION_URI,
+		// follows the resolved base so injected test servers render their own
+		// URL — never a misleading production link
+		verificationUri: deviceVerificationUri(authBaseUrl),
 		userCode: device.user_code,
 		intervalSeconds,
 	});
@@ -260,7 +277,7 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 		});
 		if (signal?.aborted) throw new Error("Login cancelled");
 
-		const poll = await fetch(`${authBaseUrl}/api/accounts/deviceauth/token`, {
+		const poll = await fetchOrLoginCancel(signal, `${authBaseUrl}/api/accounts/deviceauth/token`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ device_auth_id: device.device_auth_id, user_code: device.user_code }),

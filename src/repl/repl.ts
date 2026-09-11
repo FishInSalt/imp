@@ -14,7 +14,7 @@ import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.j
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
-import { COMMANDS, type CommandContext, dispatchCommand, parseCommand } from "./commands.js";
+import { COMMANDS, type CommandContext, dispatchCommand, loginNeedsGuard, parseCommand } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
@@ -280,6 +280,9 @@ class ReplMachine {
 	 *  starting with "!" must not run as a shell command). */
 	private queue: QueueEntry[] = [];
 	private controller: AbortController | null = null;
+	/** #login-repl batch B: the guarded /login OAuth controller — Ctrl+C
+	 *  aborts it instead of counting toward a force quit. */
+	private longOpAbort: AbortController | null = null;
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
 	private eofPending = false;
@@ -401,6 +404,14 @@ class ReplMachine {
 				return;
 			}
 			case "compacting": {
+				// #login-repl batch B: a guarded login aborts ITS controller on
+				// the first Ctrl+C (pi's dialog cancels the same way); a real
+				// compaction keeps the old hint behavior.
+				if (this.longOpAbort !== null) {
+					this.longOpAbort.abort();
+					this.interruptCount = 0;
+					return;
+				}
 				this.interruptCount++;
 				if (this.interruptCount === 1) {
 					this.renderer.note("(compacting — press Ctrl+C again to force quit)");
@@ -445,7 +456,11 @@ class ReplMachine {
 		// typed line open a turn on stale history, and /new mid-await left
 		// runner.session and runner.history pointing at different sessions).
 		const stateful =
-			(name === "compact" || name === "tree") && this.state === "idle" && this.runner.session !== null;
+			((name === "compact" || name === "tree") && this.state === "idle" && this.runner.session !== null) ||
+			// #login-repl batch B: the codex OAuth poll runs up to 15 minutes —
+			// it needs the guarded state (Ctrl+C cancels, typed lines queue,
+			// /new refuses) exactly like a compaction
+			(name === "login" && this.state === "idle" && loginNeedsGuard(line));
 		if (stateful) {
 			this.state = "compacting";
 			this.input.setActive(true);
@@ -460,6 +475,11 @@ class ReplMachine {
 		} catch (err) {
 			this.reportError(err);
 		} finally {
+			// Review P1 (batch B): clear ONLY from the dispatch that armed it.
+			// A command typed mid-login (runCommand is unstateful for it) must
+			// not null the controller — that disarmed Ctrl+C and left a double
+			// press force-quitting over a live OAuth poll.
+			if (stateful) this.longOpAbort = null;
 			if (stateful && this.state === "compacting") {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
@@ -1067,6 +1087,16 @@ class ReplMachine {
 					return true;
 				}
 				return false;
+			},
+			// the guarded /login registers its OAuth controller here so the
+			// compacting-state Ctrl+C path can abort it. A SUPERSEDED flow
+			// (a second /login typed while one polls) cancels first — the old
+			// poll's catch sees "Login cancelled" and stays silent.
+			onLongOpAbort: (controller) => {
+				if (controller !== null && this.longOpAbort !== null && this.longOpAbort !== controller) {
+					this.longOpAbort.abort();
+				}
+				this.longOpAbort = controller;
 			},
 		};
 		// The item picker exists only on shells that implement it (TuiShell —

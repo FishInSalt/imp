@@ -11,8 +11,14 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
-import { type ApiKeyFamily, loadApiKey, saveApiKey } from "../provider/auth-store.js";
-import { loadCodexCredential } from "../provider/codex-auth.js";
+import {
+	type ApiKeyFamily,
+	clearApiKey,
+	loadApiKey,
+	saveApiKey,
+	storedApiKeyFamilies,
+} from "../provider/auth-store.js";
+import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
 	supportedThinkingLevels,
@@ -61,6 +67,13 @@ export interface CommandContext {
 	/** #login-repl: credential store location — hermetic tests inject a temp
 	 *  path; production defaults to ~/.imp/auth.json. */
 	authStorePath?: string;
+	/** #login-repl batch B: the codex device-code OAuth base URL — hermetic
+	 *  tests inject a local fake; production uses auth.openai.com. */
+	codexAuthBaseUrl?: string;
+	/** #login-repl batch B: register the long operation's AbortController so
+	 *  the machine's Ctrl+C can cancel it (the OAuth poll runs up to 15 min).
+	 *  Wired by the machine's commandContext; absent in dispatch-only tests. */
+	onLongOpAbort?: (controller: AbortController | null) => void;
 	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
 	worktreeCwd?: string;
 }
@@ -367,12 +380,57 @@ function loginStatus(target: LoginTarget, authPath?: string): string {
 	return "not signed in";
 }
 
+/** Resolve "/login <ref>" to its target — case-insensitive against family
+ *  id AND display name (pi's findLoginProviderOptions). */
+export function loginTargetFor(ref: string): LoginTarget | undefined {
+	const needle = ref.trim().toLowerCase();
+	if (needle === "") return undefined;
+	return LOGIN_TARGETS.find((t) => t.family === needle || t.name.toLowerCase() === needle);
+}
+
+/** Whether a /login line needs the machine's guarded long-op state (the
+ *  codex OAuth poll runs up to 15 minutes): no-arg /login (the picker may
+ *  land on codex) or a ref that resolves to the oauth target. */
+export function loginNeedsGuard(line: string): boolean {
+	const parsed = parseCommand(line);
+	if (parsed === null || parsed.name !== "login") return false;
+	if (parsed.args.trim() === "") return true; // picker — codex is pickable
+	return loginTargetFor(parsed.args)?.method === "oauth";
+}
+
 /** /login's body, shared by the picker's pick and "/login <family>". */
 async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<void> {
 	if (target.method === "oauth") {
-		// The device-code dialog lands with the in-REPL OAuth batch; the CLI
-		// flow exists today and writes the same store /login reads.
-		ctx.renderer.note(`▪ ${target.name}: run "imp login" — device-code OAuth (in-REPL flow is coming)`);
+		// pi's LoginDialog: the URL + user code render, the poll runs in the
+		// background, Esc/Ctrl+C cancels ("Login cancelled" stays silent).
+		// The machine guards the dispatch (loginNeedsGuard) so Ctrl+C aborts
+		// THIS controller instead of counting toward a force quit.
+		const controller = new AbortController();
+		ctx.onLongOpAbort?.(controller);
+		try {
+			await loginCodex({
+				authPath: ctx.authStorePath,
+				// IMP_CODEX_AUTH_BASE: machine-level e2e seam (dispatch tests
+				// use ctx.codexAuthBaseUrl; the machine builds no such ctx)
+				authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.IMP_CODEX_AUTH_BASE,
+				signal: controller.signal,
+				onDeviceCode: ({ verificationUri, userCode }) => {
+					ctx.renderer.note(`▪ open ${verificationUri} and enter code: ${userCode}`);
+				},
+			});
+			ctx.renderer.status(`Logged in to ${target.name}`); // pi's wording
+			const current = ctx.runner.modelReference();
+			const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
+			if (currentFamily !== target.family) {
+				ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (message === "Login cancelled") return; // pi: silent cancel
+			ctx.renderer.error(`imp: ${target.name} login failed — ${message}`);
+		} finally {
+			ctx.onLongOpAbort?.(null);
+		}
 		return;
 	}
 	if (target.family === "openai-codex") return; // unreachable: oauth returned above
@@ -659,13 +717,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 		summary: "sign in to a provider (stored credential beats the env var)",
 		allowedDuringRun: false,
 		run: async (args, ctx): Promise<CommandOutcome> => {
-			// pi matches provider refs case-insensitively against id AND
-			// display name (interactive-mode.ts findLoginProviderOptions)
-			const needle = args.trim().toLowerCase();
-			const target =
-				needle === ""
-					? undefined
-					: LOGIN_TARGETS.find((t) => t.family === needle || t.name.toLowerCase() === needle);
+			const target = loginTargetFor(args);
 			if (args.trim() !== "" && target === undefined) {
 				ctx.renderer.error(
 					`imp: unknown provider "/login ${args.trim()}" — known: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`,
@@ -690,6 +742,56 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const index = await select({ title: "sign in to a provider", items: rows });
 			const picked = index === null ? undefined : LOGIN_TARGETS[index];
 			if (picked !== undefined) await loginToTarget(ctx, picked);
+			return "handled";
+		},
+	},
+	{
+		name: "logout",
+		summary: "remove a stored credential (environment variables stay)",
+		allowedDuringRun: false,
+		run: async (_args, ctx): Promise<CommandOutcome> => {
+			// pi's /logout lists ONLY stored credentials — an env-configured
+			// provider is not imp's to remove (interactive-mode.ts
+			// getLogoutProviderOptions reads the credential store).
+			const rows: Array<{ label: string; description: string; act: () => string }> = [];
+			const codexTarget = LOGIN_TARGETS.find((t) => t.family === "openai-codex");
+			if (loadCodexCredential(ctx.authStorePath) !== null) {
+				rows.push({
+					label: codexTarget?.name ?? "OpenAI (ChatGPT plan)",
+					description: "stored token",
+					act: () => {
+						logoutCodex(ctx.authStorePath);
+						return `Logged out of ${codexTarget?.name ?? "OpenAI (ChatGPT plan)"}`; // pi's wording
+					},
+				});
+			}
+			for (const family of storedApiKeyFamilies(ctx.authStorePath)) {
+				const target = LOGIN_TARGETS.find((t) => t.family === family);
+				rows.push({
+					label: target?.name ?? family,
+					description: "stored key",
+					act: () => {
+						clearApiKey(family, ctx.authStorePath);
+						// pi's wording, adapted (imp has no models.json)
+						return `Removed stored API key for ${target?.name ?? family}. Environment variables are unchanged.`;
+					},
+				});
+			}
+			if (rows.length === 0) {
+				ctx.renderer.status(
+					"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged.",
+				);
+				return "handled";
+			}
+			const select = ctx.select;
+			if (select === undefined) {
+				ctx.renderer.writeLine(`stored: ${rows.map((r) => r.label).join(", ")}`);
+				ctx.renderer.writeLine("remove with: edit ~/.imp/auth.json (a picker lands with the TUI shell)");
+				return "handled";
+			}
+			const index = await select({ title: "log out of a provider", items: rows });
+			const picked = index === null ? undefined : rows[index];
+			if (picked !== undefined) ctx.renderer.status(picked.act());
 			return "handled";
 		},
 	},

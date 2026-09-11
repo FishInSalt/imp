@@ -3,6 +3,7 @@ import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import type { AgentMessage, AssistantMessage, Usage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
+import { saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
@@ -581,6 +582,25 @@ class ReplMachine {
 		);
 	}
 
+	/** ctrl+t (pi's app.thinking.toggle): flip trace visibility, persist it
+	 *  (pi's setHideThinkingBlock), and REBUILD the transcript from history —
+	 *  pi rebuilds its chat container; imp clears the sink and replays. Only
+	 *  when idle: a mid-run rebuild would truncate the streaming line. */
+	toggleThinkingVisibility(): void {
+		this.renderer.hideThinking = !this.renderer.hideThinking;
+		saveSettings({ hideThinkingBlock: this.renderer.hideThinking });
+		if (this.state !== "idle") return; // this run's remaining sections follow the flag
+		// pi rebuilds its chat container from session messages; imp clears
+		// the sink and re-renders history through the same replay path as
+		// /resume (the replay picks the live hideThinking flag up). Without
+		// a session store there is nothing durable to rebuild from — the
+		// flag applies to everything rendered after this point.
+		const session = this.runner.session;
+		if (session === null) return;
+		this.input.clearConversation?.(); // same wipe as /resume — replay never clears
+		this.replay(session);
+	}
+
 	/** shift+tab / bare /think: cycle the level (pi's cycleThinkingLevel —
 	 *  the runner clamps; the footer repaints its level segment). Public
 	 *  within the module: the TuiShell wiring closes over the machine. */
@@ -1101,6 +1121,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				markdown: true,
 				userSink: tuiSink ? (text) => tuiSink.feedUser(text) : undefined,
 				statusSink: tuiSink ? (text) => tuiSink.feedStatus(text) : undefined,
+				hideThinking: renderer.hideThinking,
 			},
 			session,
 		);
@@ -1126,6 +1147,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onEof: () => machine.handleEof(),
 					onDequeue: () => machine.handleDequeue(),
 					onCycleThinking: () => machine.cycleThinking(),
+					onToggleThinking: () => machine.toggleThinkingVisibility(),
 					transcript: tuiSink,
 					terminal: options.terminal,
 					autocomplete,

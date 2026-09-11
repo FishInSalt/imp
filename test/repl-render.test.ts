@@ -54,3 +54,33 @@ describe("Renderer thinking (#thinking-levels)", () => {
 		expect(out()).toContain("\x1b[2mhalf a thought");
 	});
 });
+
+describe("hideThinking (pi's ctrl+t)", () => {
+	it("hidden: the full trace NEVER renders — one dim label per section (pi's Thinking...)", () => {
+		const chunks: string[] = [];
+		const r = new Renderer({
+			write: (t) => chunks.push(t),
+			ansi: true,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		r.hideThinking = true;
+		r.event({ type: "thinking_delta", text: "secret reasoning step one" });
+		r.event({ type: "text_delta", text: "the answer" });
+		r.endRun();
+		const text = chunks.join("");
+		expect(text).toContain("Thinking...");
+		expect(text).not.toContain("secret reasoning step one");
+	});
+
+	it("constructor option seeds the flag (pi's persisted getHideThinkingBlock)", () => {
+		const r = new Renderer({
+			write: () => {},
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+			hideThinking: true,
+		});
+		expect(r.hideThinking).toBe(true);
+	});
+});

@@ -15,6 +15,8 @@ export interface ReplayOptions {
 	/** Pi-style dim status lines (replay itself emits none; the option
 	 *  rides along so the Renderer wiring stays uniform). */
 	statusSink?: (text: string) => void;
+	/** pi's hideThinkingBlock: replays render the "Thinking..." label. */
+	hideThinking?: boolean;
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
@@ -37,6 +39,7 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 		markdown: options.markdown,
 		userSink: options.userSink,
 		statusSink: options.statusSink,
+		hideThinking: options.hideThinking,
 	});
 	const { messages } = session.buildContext();
 	if (messages.length === 0) return 0;

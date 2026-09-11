@@ -18,6 +18,7 @@ import type { AgentMessage } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
+import { loadSettings, saveSettings } from "./core/settings.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -70,6 +71,8 @@ export interface RunnerOptions {
 	resume?: string;
 	continueRecent?: boolean;
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
+	/** Hermetic tests: the settings file path (default ~/.imp/settings.json). */
+	settingsPath?: string;
 	/** Hermetic tests: overrides ~/.imp/agents for the agent registry (M5c). */
 	agentsHomeDir?: string;
 	/** M8 trust gate: false skips `<cwd>/.imp/agents` (global agents still load). */
@@ -248,11 +251,15 @@ class RunnerImpl implements Runner {
 		// registry from construction — not only after an explicit /model switch.
 		this.settings = { ...this.settings, contextWindow: contextWindowFor(options.model) };
 		this.lastRunModel = initialModel;
-		// #thinking-levels: startup level (--thinking / IMP_THINKING), clamped
-		// to the startup model's family (pi clamps on init the same way).
+		// #thinking-levels: startup level (--thinking / IMP_THINKING) > the
+		// settings default (persisted by setThinkingLevel) > pi's
+		// DEFAULT_THINKING_LEVEL "medium" — clamped to the startup model's
+		// family (pi clamps on init the same way; knob-less models clamp to
+		// "off", so the medium default only ever applies where a knob exists).
+		const storedDefault = loadSettings(this.options.settingsPath).defaultThinkingLevel;
 		this.level = clampThinkingLevel(
 			thinkingMetaFor(this.providerName, this.model),
-			this.options.thinking ?? "off",
+			this.options.thinking ?? storedDefault ?? "medium",
 		);
 		// The "test seam" tools option generalizes (design §8.1): explicit tools
 		// keep their hermetic set, extension tools append after the base six. The
@@ -544,10 +551,17 @@ class RunnerImpl implements Runner {
 	}
 
 	setThinkingLevel(level: ThinkingLevel): ThinkingLevel {
+		const previous = this.level;
 		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), level);
 		// pi parity: level changes are session entries (auditable, replayed
 		// as notes on /resume; buildContext skips them like branch summaries).
 		this.sessionStore?.appendThinkingLevelChange(this.level);
+		// pi parity (agent-session.ts:1686): an actual CHANGE persists as the
+		// cross-session default — but never "off" for a knob-less model (that
+		// clamp is model-specific, not a user preference).
+		if (this.level !== previous && (this.supportsThinking() || this.level !== "off")) {
+			saveSettings({ defaultThinkingLevel: this.level }, this.options.settingsPath);
+		}
 		return this.level;
 	}
 

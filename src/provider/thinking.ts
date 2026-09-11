@@ -303,6 +303,25 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 	// unknown openai ids (dynamic discovery): conservative off..high
 	{ provider: "openai", prefix: "gpt-", meta: { style: "openai-effort" } },
 	{ provider: "openai", prefix: "o", meta: { style: "openai-effort" } },
+	// ---- zai (Z.ai coding endpoint, openai-completions wire) ----
+	// Same GLM ladders as the openai family: pi's zai provider IS the
+	// openai-completions api with the zai compat flags.
+	{
+		provider: "zai",
+		prefix: "glm-5.3",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_53_MAP },
+	},
+	{
+		provider: "zai",
+		prefix: "glm-5.2-highspeed",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
+	},
+	{
+		provider: "zai",
+		prefix: "glm-5.2",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
+	},
+	{ provider: "zai", prefix: "glm-", meta: { style: "glm-openai" } },
 	// ---- chatgpt backend responses ----
 	{
 		provider: "openai-codex",

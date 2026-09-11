@@ -97,6 +97,7 @@ Keys:
   Ctrl+D             exit
   Ctrl+O             expand/collapse all folds (results, errors, diffs)
   Shift+Tab          cycle the thinking level (models with thinking)
+  Ctrl+T             hide/show reasoning traces (pi's toggle, persisted)
   newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
   follow-up          Alt+Enter queues the line to run AFTER the running turn
                      (plain Enter steers into it)
@@ -166,6 +167,8 @@ function formatWhen(date: Date): string {
  *  registry lands. */
 const MODEL_CANDIDATES: readonly string[] = [
 	"claude-sonnet-4-5",
+	"zai/glm-5.3",
+	"zai/glm-5.3-highspeed",
 	"glm-4.6",
 	"glm-4.5",
 	"glm-4.7",
@@ -193,6 +196,16 @@ const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 		"openai-codex/gpt-5.6-luna",
 		"openai-codex/gpt-5.6-sol",
 		"openai-codex/gpt-5.6-terra",
+	],
+	// pi.dev's live zai catalog (2026-09)
+	zai: [
+		"zai/glm-5.3",
+		"zai/glm-5.3-highspeed",
+		"zai/glm-5.3-flash",
+		"zai/glm-5.2",
+		"zai/glm-5.2-highspeed",
+		"zai/glm-5-turbo",
+		"zai/glm-4.7",
 	],
 };
 

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
 import { listSessions } from "./core/session/manager.js";
+import { loadSettings } from "./core/settings.js";
 import {
 	askTrustOnce,
 	canonicalizeDir,
@@ -347,6 +348,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
 		userSink: transcript ? (text) => transcript.feedUser(text) : undefined,
 		statusSink: transcript ? (text) => transcript.feedStatus(text) : undefined,
+		hideThinking: loadSettings().hideThinkingBlock ?? false, // pi's getHideThinkingBlock
 		ansi: process.stdout.isTTY === true,
 		// In-place pending tool lines only on the legacy readline shell. TUI
 		// mode turns them OFF: the live activity region owns pending state

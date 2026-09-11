@@ -4,7 +4,8 @@ import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
-import type { AssistantMessage, UserMessage } from "../src/core/messages.js";
+import type { AgentMessage, AssistantMessage, UserMessage } from "../src/core/messages.js";
+import { createSession } from "../src/core/session/manager.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -1073,9 +1074,14 @@ describe("runRepl with shell:tui", () => {
 			agentsHomeDir?: string;
 			provider?: LLMProvider; // inject an abort-aware hold stream when needed
 			model?: string; // default test-model is knob-less; Claude opts into thinking
+			seed?: AgentMessage[]; // pre-written session history (replayed at startup)
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
+		if (options?.seed !== undefined && options.seed.length > 0) {
+			const store = createSession(baseDir, baseDir); // runner cwd is baseDir — same bucket
+			for (const message of options.seed) store.appendMessage(message);
+		}
 		const requests: LLMRequest[] = [];
 		const provider: LLMProvider = options?.provider ?? scriptedProvider(scripts, requests);
 		const terminal = new FakeTerminal();
@@ -1098,7 +1104,9 @@ describe("runRepl with shell:tui", () => {
 			maxTurns: 10,
 			noContextFiles: true,
 			noSession: false,
+			continueRecent: options?.seed !== undefined && options.seed.length > 0 ? true : undefined,
 			sessionBaseDir: baseDir,
+			settingsPath: path.join(baseDir, "settings.json"),
 			renderer,
 			provider,
 			tools: options?.tools,
@@ -2318,17 +2326,47 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			env.terminal.data("\x1b[Z"); // shift+tab — pi's binding
 			await settle();
-			expect(env.transcript.completedLines().join("\n")).toContain("Thinking level: minimal");
-			expect(env.terminal.frameSince(0)).toContain("think:minimal");
+			// pi's DEFAULT_THINKING_LEVEL is "medium" — the first cycle moves to high
+			expect(env.transcript.completedLines().join("\n")).toContain("Thinking level: high");
+			expect(env.terminal.frameSince(0)).toContain("think:high");
 			env.terminal.data("\x1b[Z");
 			await settle();
-			expect(env.terminal.frameSince(0)).toContain("think:low");
+			expect(env.terminal.frameSince(0)).toContain("think:off"); // high wraps to off
 			// CONSECUTIVE shift+tabs merge: two cycles, ONE status line (pi
 			// showStatus reuses the slot; the input echo of a slash command
 			// would break the run — merge chains only across bare switches)
-						const joined = env.transcript.completedLines().join("\n");
+			const joined = env.transcript.completedLines().join("\n");
 			expect(joined.match(/Thinking level:/g)?.length).toBe(1);
-			expect(joined).toContain("Thinking level: low"); // the latest won
+			expect(joined).toContain("Thinking level: off"); // the latest won
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("ctrl+t hides traces: a replayed thinking block becomes the dim Thinking... label; the text is gone", async () => {
+			// a session whose assistant turn carries a thinking block
+			const seed = [
+				{ role: "user" as const, content: "hi" },
+				{
+					role: "assistant" as const,
+					blocks: [
+						{ type: "thinking" as const, thinking: "very secret trace text", signature: "sig" },
+						{ type: "text" as const, text: "public answer" },
+					],
+					usage: { inputTokens: 1, outputTokens: 1 },
+					stopReason: "end_turn" as const,
+				},
+			];
+			const env = await startTuiRepl([reply("ok")], { model: "claude-sonnet-4-5", seed });
+			await settle();
+			const before = env.transcript.completedLines().join("\n");
+			expect(before).toContain("very secret trace text"); // visible by default
+			expect(before).toContain("public answer");
+			env.terminal.data("\x14"); // ctrl+t — pi's app.thinking.toggle
+			await settle();
+			const after = env.transcript.completedLines().join("\n");
+			expect(after).toContain("Thinking..."); // the static label replaced the trace
+			expect(after).not.toContain("very secret trace text");
+			expect(after).toContain("public answer"); // the answer itself survives the rebuild
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

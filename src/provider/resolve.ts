@@ -2,6 +2,7 @@ import { createAnthropicProvider } from "./anthropic.js";
 import { createCodexResponsesProvider } from "./codex-responses.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
+import { createZaiProvider } from "./zai.js";
 
 /**
  * Model reference parsing + provider routing (#multi-provider).
@@ -20,7 +21,7 @@ import type { LLMProvider } from "./types.js";
  * session persistence) — deliberately a pure function with no state.
  */
 
-export type ProviderName = "anthropic" | "openai" | "openai-codex";
+export type ProviderName = "anthropic" | "openai" | "openai-codex" | "zai";
 
 export interface ModelRef {
 	provider: ProviderName;
@@ -42,6 +43,7 @@ export function parseModelRef(reference: string): ModelRef {
 	if (provider === "anthropic") return { provider: "anthropic", modelId };
 	if (provider === "openai") return { provider: "openai", modelId };
 	if (provider === "openai-codex") return { provider: "openai-codex", modelId };
+	if (provider === "zai") return { provider: "zai", modelId };
 	// Unknown prefix (e.g. a model id that legitimately contains a slash,
 	// like some OpenRouter or Bedrock ids): treat the whole string as a bare
 	// anthropic id — same behavior as before this module existed.
@@ -56,6 +58,8 @@ export function createProviderFor(provider: ProviderName): LLMProvider {
 			return createOpenAICompletionsProvider();
 		case "openai-codex":
 			return createCodexResponsesProvider();
+		case "zai":
+			return createZaiProvider();
 		default: {
 			const exhaustive: never = provider;
 			throw new Error(`unreachable provider: ${JSON.stringify(exhaustive)}`);

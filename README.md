@@ -88,8 +88,16 @@ imp            # interactive REPL (streaming, one-line tool status)
   model; prefix a line with a space to send a literal leading `/`.
 - Thinking levels can also start a session: `imp --thinking medium` or
   `IMP_THINKING=medium` (invalid env values are ignored with a notice).
-  Reasoning traces render dim above the answer and are replayed on
-  `/resume`; on Anthropic they are kept in context as the API requires.
+  The default is pi's `medium` on models with a thinking knob, and the
+  level you choose persists in `~/.imp/settings.json` as the next
+  session's default. **Ctrl+T** hides/shows reasoning traces (replaced by
+  a dim `Thinking...` label; also persisted); on Anthropic traces are
+  kept in context as the API requires.
+- Z.ai GLM connects the way pi does — the coding endpoint over the
+  OpenAI protocol: `ZAI_API_KEY=... imp -m zai/glm-5.3`
+  (`ZAI_BASE_URL` overrides, e.g. the CN mirror
+  `https://open.bigmodel.cn/api/coding/paas/v4`). glm-5.2 = off/high/max;
+  glm-5.3 = low/high/max (thinking cannot be disabled on that model).
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).

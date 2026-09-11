@@ -47,6 +47,8 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** shift+tab: cycle the thinking level (#thinking-levels, pi's default
 	 *  binding). Wired to the /think cycle body in repl.ts. */
 	onCycleThinking(): void;
+	/** ctrl+t — pi's app.thinking.toggle: hide/show reasoning traces. */
+	onToggleThinking(): void;
 	/** Shared with the Renderer's write sink — the transcript IS the output. */
 	transcript: TranscriptSink;
 	/** Injected in tests; default binds the real process terminal. */
@@ -324,6 +326,10 @@ export class TuiShell implements LineInput {
 			// shift+tab cycles the thinking level (pi's default binding; the
 			// editor has no shift+tab binding of its own). A model without a
 			// knob reports it as a note instead of silently doing nothing.
+			if (this.selector === null && matchesKey(data, "ctrl+t")) {
+				this.options.onToggleThinking();
+				return { consume: true };
+			}
 			if (this.selector === null && matchesKey(data, "shift+tab")) {
 				this.options.onCycleThinking();
 				return { consume: true };

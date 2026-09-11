@@ -25,6 +25,12 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 export interface OpenAICompletionsProviderOptions {
 	apiKey?: string;
 	baseUrl?: string;
+	/** The provider name the thinking catalog keys off ("openai" default;
+	 *  the zai family passes "zai"). */
+	name?: string;
+	/** pi compat.zaiToolStream: request Z.ai's streaming tool dialect
+	 *  (body tool_stream: true whenever tools ride the request). */
+	zaiToolStream?: boolean;
 }
 
 interface WireToolCall {
@@ -132,7 +138,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 	const baseUrl = (options.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {
-		name: "openai",
+		name: options.name ?? "openai",
 		async *stream(request: LLMRequest): AsyncIterable<LLMEvent> {
 			if (!apiKey) {
 				throw new Error(
@@ -150,6 +156,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				[maxTokensField(request.model)]: request.maxTokens,
 			};
 			if (request.tools.length > 0) {
+				if (options.zaiToolStream === true) body.tool_stream = true; // pi compat.zaiToolStream
 				body.tools = request.tools.map((t) => ({
 					type: "function",
 					function: { name: t.name, description: t.description, parameters: t.parameters },
@@ -165,7 +172,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			//    "off" the map's own off value when it names one (gpt-5.1+
 			//    map off→"none"; older models accept omission — pi :638);
 			//  - deepseek-reasoner: reasons by default, no request knob.
-			const meta = thinkingMetaFor("openai", request.model);
+			const meta = thinkingMetaFor(options.name ?? "openai", request.model);
 			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
 			if (meta?.style === "glm-openai") {
 				body.thinking =

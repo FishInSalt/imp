@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
+import { loadSettings } from "../src/core/settings.js";
 import { setTrust } from "../src/core/trust.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
@@ -39,6 +40,7 @@ interface TestEnv {
 	/** Hermetic test paths (create extra sessions with these). */
 	cwd: string;
 	baseDir: string;
+	settingsPath: string;
 	runner: Runner;
 	ctx: CommandContext;
 	output(): string;
@@ -91,6 +93,7 @@ async function makeEnv(args?: {
 	model?: string;
 }): Promise<TestEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-cmds-"));
+	const settingsPath = path.join(baseDir, "settings.json");
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
 	const { renderer, output } = makeRenderer();
@@ -102,6 +105,7 @@ async function makeEnv(args?: {
 	const runner = await createRunner({
 		cwd,
 		argv: [],
+		settingsPath,
 		model: args?.model ?? "claude-sonnet-4-5",
 		maxTokens: 1024,
 		maxTurns: 10,
@@ -120,6 +124,7 @@ async function makeEnv(args?: {
 	const env: TestEnv = {
 		cwd,
 		baseDir,
+		settingsPath,
 		runner,
 		trustStore,
 		output: () => output().slice(banner.length),
@@ -237,6 +242,7 @@ describe("slash commands", () => {
 				"  Ctrl+D             exit",
 				"  Ctrl+O             expand/collapse all folds (results, errors, diffs)",
 				"  Shift+Tab          cycle the thinking level (models with thinking)",
+				"  Ctrl+T             hide/show reasoning traces (pi's toggle, persisted)",
 				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
 				"  follow-up          Alt+Enter queues the line to run AFTER the running turn",
 				"                     (plain Enter steers into it)",
@@ -307,6 +313,8 @@ describe("slash commands", () => {
 		const labels = calls[0]?.items.map((item) => item.label);
 		expect(labels).toEqual([
 			"claude-sonnet-4-5",
+			"zai/glm-5.3",
+			"zai/glm-5.3-highspeed",
 			"glm-4.6",
 			"glm-4.5",
 			"glm-4.7",
@@ -1165,6 +1173,22 @@ describe("/think (#thinking-levels)", () => {
 		// invalid level teaches the ladder (pi's --thinking error shape)
 		await dispatchCommand("/think turbo", env.ctx);
 		expect(env.output()).toContain("thinking levels: off, minimal, low, medium, high, xhigh, max");
+	});
+
+	it("pi's DEFAULT_THINKING_LEVEL is medium: knob models start there, knob-less clamp to off, a change persists", async () => {
+		// knob model: fresh session, no settings → medium (pi sdk.ts:230)
+		const env = await makeEnv();
+		expect(env.runner.thinkingLevel).toBe("medium");
+		// the choice persists as the cross-session default (pi agent-session :1690)
+		await dispatchCommand("/think low", env.ctx);
+		const second = await makeEnv({ model: "claude-sonnet-4-5" });
+		expect(loadSettings(env.settingsPath).defaultThinkingLevel).toBe("low");
+		// BUT a fresh env with its own empty settings still defaults medium
+		expect(second.runner.thinkingLevel).toBe("medium");
+		// knob-less model: medium clamps to off, and off does NOT persist
+		const bare = await makeEnv({ model: "openai/llama-3-70b" });
+		expect(bare.runner.thinkingLevel).toBe("off");
+		expect(loadSettings(bare.settingsPath).defaultThinkingLevel).toBeUndefined();
 	});
 
 	it("on a model with no knob: pi's status line, level stays off", async () => {

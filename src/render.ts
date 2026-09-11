@@ -31,6 +31,8 @@ export interface RendererOptions {
 	/** Pi-style dim status lines ("Model: x", "Thinking level: x") with
 	 *  merge-on-consecutive semantics; absent → note() fallback. */
 	statusSink?: (text: string) => void;
+	/** pi's hideThinkingBlock at startup (ctrl+t flips the live field). */
+	hideThinking?: boolean;
 	/** TUI mode: successful tool results fold instead of writing the `⎿`
 	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
 	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
@@ -80,6 +82,9 @@ export class Renderer {
 	 *  flush as ONE dim italic section before the first answer content —
 	 *  pi renders runs of thinking blocks as a single dim section. */
 	private thinkingBuffer = "";
+	/** pi's hideThinkingBlock (ctrl+t): hidden traces render one dim static
+	 *  label per section ("Thinking...") instead of the full text. */
+	hideThinking = false;
 	private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 	private thinkTimer: ReturnType<typeof setTimeout> | null = null;
 	private spinnerLabel: string | null = null;
@@ -92,6 +97,7 @@ export class Renderer {
 		this.options = options;
 		this.clock = options.clock ?? Date.now;
 		this.markdown = options.markdown === true && options.toolStyle === "one-line";
+		this.hideThinking = options.hideThinking ?? false;
 	}
 
 	event(event: AgentEvent): void {
@@ -330,6 +336,12 @@ export class Renderer {
 		// paragraphs print FIRST — order follows the stream (review P2).
 		this.flushMarkdown();
 		this.ensureNewline();
+		if (this.hideThinking) {
+			// pi's hidden mode: one static label per run of thinking blocks
+			// (interactive-mode.ts:351 defaultHiddenThinkingLabel "Thinking...")
+			this.write(`${dim("Thinking...", this.options.ansi)}\n\n`);
+			return;
+		}
 		let styled = dim(text, this.options.ansi);
 		if (this.options.ansi) {
 			// italic completes the pi look; like dim(), NEVER in piped output

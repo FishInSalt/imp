@@ -1,5 +1,6 @@
 import { loadCodexCredential } from "./codex-auth.js";
 import type { ProviderName } from "./resolve.js";
+import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS } from "./zai.js";
 
 /**
  * Model-list discovery (#model-discovery): ask each configured endpoint what
@@ -78,6 +79,8 @@ export function familyConfigured(family: ProviderName): boolean {
 			return process.env.OPENAI_API_KEY !== undefined;
 		case "openai-codex":
 			return loadCodexCredential() !== null;
+		case "zai":
+			return process.env.ZAI_API_KEY !== undefined;
 		default: {
 			const exhaustive: never = family;
 			throw new Error(`unreachable family: ${JSON.stringify(exhaustive)}`);
@@ -100,6 +103,17 @@ export function familyConfigured(family: ProviderName): boolean {
 export async function discoverModels(family: ProviderName): Promise<string[] | null> {
 	if (!familyConfigured(family)) return null;
 	if (family === "openai-codex") return discoverCodexModels();
+	// zai: the coding endpoint serves an OpenAI-style /models; the pi.dev
+	// live catalog is the offline seed when it 404s or the family is
+	// configured but unreachable.
+	if (family === "zai") {
+		const ids = await fetchJson(
+			`${process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL}/models`,
+			{ accept: "application/json", authorization: `Bearer ${String(process.env.ZAI_API_KEY)}` },
+			"zai",
+		).catch(() => null);
+		return ids ?? ([...ZAI_SEED_MODELS] as string[]);
+	}
 
 	const baseUrl = family === "anthropic" ? anthropicBaseUrl() : openaiBaseUrl();
 	const cacheKey = `${family}|${baseUrl}`;

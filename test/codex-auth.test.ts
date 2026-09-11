@@ -122,7 +122,7 @@ describe("codex-auth (device-code OAuth)", () => {
 			onDeviceCode: (p) => prompts.push(p),
 		});
 		expect(prompts).toEqual([
-			{ verificationUri: "https://auth.openai.com/codex/device", userCode: "ABCD-1234", intervalSeconds: 0 },
+			{ verificationUri: `${baseUrl}/codex/device`, userCode: "ABCD-1234", intervalSeconds: 0 }, // follows the injected base (batch B)
 		]);
 		expect(credential.accountId).toBe("acct-42");
 		expect(credential.refreshToken).toBe("rt-acct-42");

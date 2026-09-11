@@ -10,12 +10,13 @@ import type { AgentMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import { loadSettings } from "../src/core/settings.js";
 import { setTrust } from "../src/core/trust.js";
-import { loadApiKey } from "../src/provider/auth-store.js";
+import { loadApiKey, saveApiKey } from "../src/provider/auth-store.js";
+import { loadCodexCredential } from "../src/provider/codex-auth.js";
 import { familyConfigured } from "../src/provider/discover.js";
 import { parseModelRef } from "../src/provider/resolve.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
-import { dispatchCommand, helpText, parseCommand } from "../src/repl/commands.js";
+import { dispatchCommand, helpText, loginNeedsGuard, parseCommand } from "../src/repl/commands.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider, waitUntil } from "./helpers/fakes.js";
@@ -86,6 +87,57 @@ async function makeGitRepo(args?: {
 	run(["add", "."], wtPath);
 	run(["commit", "-q", "-m", "child"], wtPath);
 	return { root, path: wtPath, branch };
+}
+
+/** A local fake of auth.openai.com's device-code endpoints for /login's
+ *  OAuth path (batch B). Default script: one pending poll, then success —
+ *  { hang: true } polls forever (cancellation tests). */
+async function fakeCodexAuth(options?: {
+	hang?: boolean;
+}): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+	const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+	const jwt = (acct: string) =>
+		`${b64({ alg: "none" })}.${b64({ "https://api.openai.com/auth": { chatgpt_account_id: acct } })}.sig`;
+	let polls = 0;
+	const server = createServer((req, res) => {
+		const chunks: Buffer[] = [];
+		req.on("data", (c) => chunks.push(c as Buffer));
+		req.on("end", () => {
+			const json = (status: number, payload: unknown) => {
+				res.writeHead(status, { "content-type": "application/json" });
+				res.end(JSON.stringify(payload));
+			};
+			if (req.url === "/api/accounts/deviceauth/usercode") {
+				json(200, { device_auth_id: "dev-login", user_code: "WXYZ-6789", interval: 0 });
+				return;
+			}
+			if (req.url === "/api/accounts/deviceauth/token") {
+				polls++;
+				if (options?.hang !== true && polls >= 2) {
+					json(200, { authorization_code: "ac-login", code_verifier: "cv-login" });
+				} else {
+					json(403, {});
+				}
+				return;
+			}
+			if (req.url === "/oauth/token") {
+				json(200, {
+					access_token: jwt("acct-login"),
+					refresh_token: "rt-login",
+					expires_in: 3600,
+				});
+				return;
+			}
+			json(404, {});
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("no address");
+	return {
+		baseUrl: `http://127.0.0.1:${address.port}`,
+		close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+	};
 }
 
 async function makeEnv(args?: {
@@ -233,6 +285,7 @@ describe("slash commands", () => {
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
 				"  /login [provider]  sign in to a provider (stored credential beats the env var)",
+				"  /logout            remove a stored credential (environment variables stay)",
 				"  /think [level]     show or set the thinking level; no argument cycles (shift+tab)",
 				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
@@ -433,7 +486,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /tree /sessions /resume /model /login /think /worktrees /trust /status /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -1383,22 +1436,106 @@ describe("/think (#thinking-levels)", () => {
 		expect(cancel.output()).toBe("");
 	});
 
-	it("/login: unknown provider teaches; codex bridges to the CLI; a missing secret prompts the env var", async () => {
+	it("/login: unknown provider teaches; codex runs the device-code flow in-REPL; a missing secret prompts the env var", async () => {
 		const env = await makeEnv();
 		await dispatchCommand("/login foo", env.ctx);
 		expect(env.output()).toContain('unknown provider "/login foo"');
 		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex");
-		// oauth family: the CLI bridge note, no secret prompt at all
+		// oauth family (batch B): URL + code render, no secret prompt at all
 		const codex = await makeEnv();
 		codex.ctx.secret = async () => {
 			throw new Error("must not prompt");
 		};
+		const fake = await fakeCodexAuth(); // local device-code server
+		codex.ctx.codexAuthBaseUrl = fake.baseUrl;
 		await dispatchCommand("/login openai-codex", codex.ctx);
-		expect(codex.output()).toContain('run "imp login"');
+		expect(codex.output()).toContain("/codex/device and enter code: WXYZ-6789"); // the URL follows the injected base
+		expect(codex.output()).toContain("Logged in to OpenAI (ChatGPT plan)");
+		expect(codex.output()).toContain("▪ switch with /model openai-codex/gpt-5.5");
+		expect(loadCodexCredential(codex.ctx.authStorePath)?.accountId).toBe("acct-login");
 		// legacy ctx (no secret bound): the teaching error names the env var
 		const legacy = await makeEnv();
 		await dispatchCommand("/login zai", legacy.ctx);
 		expect(legacy.output()).toContain("export ZAI_API_KEY=<key>");
+	});
+
+	it("loginNeedsGuard: only the OAuth-capable /login lines take the guarded state", () => {
+		expect(loginNeedsGuard("/login")).toBe(true); // the picker can land on codex
+		expect(loginNeedsGuard("/login openai-codex")).toBe(true);
+		expect(loginNeedsGuard("/login OpenAI (ChatGPT plan)")).toBe(true); // display name, any case
+		expect(loginNeedsGuard("/login zai")).toBe(false); // short api-key path
+		expect(loginNeedsGuard("/login Z.AI")).toBe(false);
+		expect(loginNeedsGuard("/model")).toBe(false);
+		expect(loginNeedsGuard("hello")).toBe(false);
+	});
+
+	it("/logout: lists STORED credentials only (pi); removal messages match pi; env-configured providers never appear", async () => {
+		// nothing stored → pi's empty message
+		const empty = await makeEnv();
+		await dispatchCommand("/logout", empty.ctx);
+		expect(empty.output()).toContain("No stored credentials to remove");
+		// a stored zai key + codex token → two rows; env vars never listed
+		const env = await makeEnv();
+		saveApiKey("zai", "sk-z", env.ctx.authStorePath);
+		const cred = { accessToken: "at", refreshToken: "rt", expiresAt: Date.now() + 3600_000, accountId: "a" };
+		writeFileSync(
+			env.ctx.authStorePath,
+			JSON.stringify({ version: 1, apiKeys: { zai: "sk-z" }, codex: { provider: "openai-codex", ...cred } }),
+		);
+		let rows: Array<{ label: string; description?: string }> = [];
+		env.ctx.select = async (options) => {
+			rows = options.items;
+			return options.items.findIndex((item) => item.label === "Z.AI");
+		};
+		const prevKey = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "sk-env-o"; // env-configured but NOT stored
+		try {
+			await dispatchCommand("/logout", env.ctx);
+			expect(rows.map((r) => r.label)).toEqual(["OpenAI (ChatGPT plan)", "Z.AI"]); // stored only
+			expect(env.output()).toContain("Removed stored API key for Z.AI. Environment variables are unchanged.");
+			expect(loadApiKey("zai", env.ctx.authStorePath)).toBeNull();
+			expect(loadCodexCredential(env.ctx.authStorePath)?.accountId).toBe("a"); // untouched
+			// now remove the codex token (pi's oauth wording)
+			let rows2: Array<{ label: string; description?: string }> = [];
+			env.ctx.select = async (options) => {
+				rows2 = options.items;
+				return 0;
+			};
+			await dispatchCommand("/logout", env.ctx);
+			expect(rows2.map((r) => r.label)).toEqual(["OpenAI (ChatGPT plan)"]);
+			expect(env.output()).toContain("Logged out of OpenAI (ChatGPT plan)");
+			expect(loadCodexCredential(env.ctx.authStorePath)).toBeNull();
+		} finally {
+			if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevKey;
+		}
+		// legacy ctx (no picker): the text path
+		const legacy = await makeEnv();
+		saveApiKey("anthropic", "sk-a", legacy.ctx.authStorePath);
+		await dispatchCommand("/logout", legacy.ctx);
+		expect(legacy.output()).toContain("stored: Anthropic");
+		expect(legacy.output()).toContain("edit ~/.imp/auth.json");
+	});
+
+	it("/login codex: Ctrl+C cancellation is silent (pi's Login cancelled); a server failure renders the error", async () => {
+		// cancellation: the machine aborts the registered controller — here the
+		// command path is exercised with a self-aborting one
+		const cancel = await makeEnv();
+		const fake = await fakeCodexAuth({ hang: true }); // polls never succeed
+		cancel.ctx.codexAuthBaseUrl = fake.baseUrl;
+		cancel.ctx.onLongOpAbort = (controller) => {
+			if (controller !== null) setTimeout(() => controller.abort(), 150);
+		};
+		await dispatchCommand("/login openai-codex", cancel.ctx);
+		expect(cancel.output()).toContain("enter code: WXYZ-6789"); // the URL line rendered first
+		expect(cancel.output()).not.toContain("Logged in");
+		expect(cancel.output()).not.toContain("failed"); // silent cancel (pi)
+		expect(loadCodexCredential(cancel.ctx.authStorePath)).toBeNull();
+		// failure: an unreachable auth base surfaces as an error, not a hang
+		const dead = await makeEnv();
+		dead.ctx.codexAuthBaseUrl = "http://127.0.0.1:1";
+		await dispatchCommand("/login openai-codex", dead.ctx);
+		expect(dead.output()).toContain("login failed");
 	});
 
 	it("/login: display names and case-insensitive refs match (pi); a whitespace-only answer cancels", async () => {
@@ -1407,8 +1544,10 @@ describe("/think (#thinking-levels)", () => {
 		env.ctx.secret = async () => "sk-dn";
 		await dispatchCommand("/login Z.AI", env.ctx);
 		expect(loadApiKey("zai", env.ctx.authStorePath)).toBe("sk-dn");
+		const fake = await fakeCodexAuth();
+		env.ctx.codexAuthBaseUrl = fake.baseUrl;
 		await dispatchCommand("/login openai (chatgpt plan)", env.ctx);
-		expect(env.output()).toContain('run "imp login"'); // matched the codex row by name
+		expect(env.output()).toContain("Logged in to OpenAI (ChatGPT plan)"); // matched the codex row by name
 		// whitespace-only = cancel (readline delivers raw spaces)
 		const blank = await makeEnv();
 		blank.ctx.secret = async (q) => (q.trim() === "" ? null : "  ");

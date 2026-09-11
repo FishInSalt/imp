@@ -23,21 +23,23 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ### Signing in (/login)
 
-`/login` in the REPL (or `imp login` for the ChatGPT plan's device-code
-OAuth) stores credentials in `~/.imp/auth.json` (0600) — a stored key
-beats the environment variable, and a bare `glm-*` model id routes to
-the zai family as soon as either is present. Pick a provider, paste the
-key (Enter saves, Esc cancels):
+`/login` in the REPL stores credentials in `~/.imp/auth.json` (0600) — a
+stored key beats the environment variable, and a bare `glm-*` model id
+routes to the zai family as soon as either is present:
 
 ```
 /login            → Z.AI · Anthropic · OpenAI · OpenAI (ChatGPT plan)
-/login zai        → straight to the key prompt
+/login zai        → straight to the key prompt (Enter saves, Esc cancels)
+/logout           → remove a stored credential (environment variables stay)
 ```
 
-Rows show each provider's status (`signed in — stored key`, `env: ZAI_API_KEY`,
-`not signed in`), and after a login from a different family imp points at
-the matching `/model` switch. `imp logout` removes only the ChatGPT-plan
-credential; keys saved by `/login` stay until removed by hand.
+The OpenAI (ChatGPT plan) row runs the device-code OAuth flow in the
+REPL: imp prints the verification URL and code, polls in the background,
+and Ctrl+C cancels (the prompt stays usable — no force quit). Rows show
+each provider's status (`signed in — stored key`, `env: ZAI_API_KEY`,
+`not signed in`), and after a login from a different family imp points
+at the matching `/model` switch. `imp logout` (CLI) removes only the
+ChatGPT-plan credential; `/logout` (REPL) removes any stored one.
 
 ### Using Z.ai GLM Coding Plan (or any Anthropic-compatible service)
 

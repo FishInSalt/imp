@@ -21,7 +21,7 @@ import { authFilePath } from "./auth-store.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // OpenAI Codex CLI's public client id
 export const DEFAULT_AUTH_BASE_URL = "https://auth.openai.com";
-const DEVICE_VERIFICATION_URI = `${DEFAULT_AUTH_BASE_URL}/codex/device`;
+const deviceVerificationUri = (authBaseUrl: string): string => `${authBaseUrl}/codex/device`;
 const DEVICE_REDIRECT_URI = `${DEFAULT_AUTH_BASE_URL}/deviceauth/callback`;
 const DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60;
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -235,7 +235,9 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 		throw new Error(`Codex device-code response missing fields: ${JSON.stringify(device)}`);
 	}
 	options.onDeviceCode?.({
-		verificationUri: DEVICE_VERIFICATION_URI,
+		// follows the resolved base so injected test servers render their own
+		// URL — never a misleading production link
+		verificationUri: deviceVerificationUri(authBaseUrl),
 		userCode: device.user_code,
 		intervalSeconds,
 	});

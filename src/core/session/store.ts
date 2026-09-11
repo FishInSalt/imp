@@ -71,7 +71,9 @@ export interface CompactionEntry extends EntryBase {
 
 /** #thinking-levels: a level change (pi's ThinkingLevelChangeEntry). Tree
  *  metadata like branch summaries — participates in the tree structure
- *  (parent/leaf) but never in buildContext; /resume replays it as a note. */
+ *  (parent/leaf) but never in buildContext. The RUNNER restores the
+ *  branch's last level on resume (restoreThinkingFromSession); replay
+ *  renders messages only, so these entries are audit-visible on disk. */
 export interface ThinkingLevelChangeEntry extends EntryBase {
 	type: "thinkingLevelChange";
 	thinkingLevel: string;

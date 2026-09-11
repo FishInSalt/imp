@@ -31,6 +31,22 @@ describe("Renderer thinking (#thinking-levels)", () => {
 		expect(text.slice(Math.max(0, answerAt - 10), answerAt)).not.toContain("\x1b[2m");
 	});
 
+	it("piped output (ansi=false): the trace is plain text — ZERO escape bytes (print contract)", () => {
+		const chunks: string[] = [];
+		const r = new Renderer({
+			write: (s2) => chunks.push(s2),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		r.event({ type: "thinking_delta", text: "quiet trace" });
+		r.event({ type: "text_delta", text: "answer" });
+		r.endRun();
+		const text = chunks.join("");
+		expect(text).toContain("quiet trace");
+		expect(text).not.toContain("\x1b"); // review P1: no dim, no italic, nothing
+	});
+
 	it("a trace-only turn (aborted before text) still renders its section via endRun", () => {
 		const { out, r } = makeRenderer();
 		r.event({ type: "thinking_delta", text: "half a thought" });

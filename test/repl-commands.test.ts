@@ -1184,6 +1184,27 @@ describe("/think (#thinking-levels)", () => {
 		expect(env.runner.session?.buildContext().messages.some((m) => m.role === "assistant")).toBe(false);
 	});
 
+	it("resume restores the branch's last recorded level (pi parity)", async () => {
+		const env = await makeEnv();
+		env.runner.setThinkingLevel("low");
+		// a second runner resuming the SAME session file restores "low"
+		const { renderer: r2 } = makeRenderer();
+		const runner2 = await createRunner({
+			cwd: env.cwd,
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			resume: env.runner.session?.header.id,
+			sessionBaseDir: env.baseDir,
+			renderer: r2,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
+		});
+		expect(runner2.thinkingLevel).toBe("low");
+	});
+
 	it("a /model switch off a thinking family drops the level (pi clamps on switch)", async () => {
 		const env = await makeEnv();
 		env.runner.setThinkingLevel("high");

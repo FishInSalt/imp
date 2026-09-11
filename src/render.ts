@@ -309,12 +309,19 @@ export class Renderer {
 		this.thinkingBuffer = "";
 		if (text === "") return;
 		this.stopSpinner();
+		// Interleaved case (reasoning after text): the buffered answer
+		// paragraphs print FIRST — order follows the stream (review P2).
+		this.flushMarkdown();
 		this.ensureNewline();
-		const dimmed = dim(text, this.options.ansi)
-			.split("\n")
-			.map((l) => `\x1b[3m${l}\x1b[23m`)
-			.join("\n");
-		this.write(`${dimmed}\n\n`);
+		let styled = dim(text, this.options.ansi);
+		if (this.options.ansi) {
+			// italic completes the pi look; like dim(), NEVER in piped output
+			styled = styled
+				.split("\n")
+				.map((l) => `\x1b[3m${l}\x1b[23m`)
+				.join("\n");
+		}
+		this.write(`${styled}\n\n`);
 	}
 
 	/** Streaming text (event or direct). Spinner-aware; markdown-buffered when enabled. */

@@ -34,15 +34,21 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 					if (block.type === "text") {
 						if (block.text !== "") content.push({ type: "text", text: block.text });
 					} else if (block.type === "thinking") {
-						// Anthropic REQUIRES the thinking blocks (with their
-						// signatures) of the previous assistant turn on
-						// tool-result continuations — drop them and the API
-						// 400s. Z.ai's compat endpoint accepts them too.
-						content.push({
-							type: "thinking",
-							thinking: block.thinking,
-							...(block.signature !== undefined ? { signature: block.signature } : {}),
-						});
+						// Same-model replay: Anthropic REQUIRES the signed
+						// thinking blocks of the previous assistant turn on
+						// tool-result continuations — drop them and the API 400s.
+						// UNSIGNED traces (GLM emits none; openai-family
+						// reasoning_content never had one) replay as PLAIN TEXT —
+						// pi's rule (real Anthropic rejects empty thinking
+						// signatures), which also keeps a cross-family /model
+						// switch from posting foreign thinking blocks. Empty → drop.
+						if (block.thinking.trim() === "") {
+							// nothing worth preserving
+						} else if (block.signature !== undefined && block.signature !== "") {
+							content.push({ type: "thinking", thinking: block.thinking, signature: block.signature });
+						} else {
+							content.push({ type: "text", text: block.thinking });
+						}
 					} else {
 						content.push({ type: "tool_use", id: block.id, name: block.name, input: block.arguments });
 					}

@@ -118,7 +118,12 @@ Environment:
 Examples:
   imp -p "List the .ts files here and count their total lines"
   imp -p "Read src/cli.ts and fix the bug in argument parsing"
-  imp -p "..." -m glm-4.6
+  imp -p "..." -m glm-4.6 --thinking medium
+
+Thinking levels (#thinking-levels): off, minimal, low, medium, high on
+models with a thinking knob (claude budget, gpt-5*/o-series effort, GLM
+on/off, codex effort). Set with --thinking <level> or IMP_THINKING, in
+a session with /think <level> (bare /think or Shift+Tab cycles).
 `;
 function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {

@@ -23,8 +23,10 @@ import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
  *   - usage.input_tokens INCLUDES cached tokens — subtract for the
  *     anthropic-compatible inputTokens semantics
  *
- * Reasoning output (response.reasoning_* events) is ignored, matching the
- * v0.1 thinking-block policy of the other adapters.
+ * Reasoning output (response.reasoning_* events) stays ignored: the codex
+ * Responses protocol surfaces no reasoning deltas here, so there is
+ * nothing to stream or store (the request-side reasoning.effort knob
+ * landed with #thinking-levels).
  */
 
 const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";

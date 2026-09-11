@@ -17,7 +17,7 @@ import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import type { AgentMessage } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
-import type { MessageEntry, SessionStore } from "./core/session/store.js";
+import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -33,7 +33,12 @@ import { formatTokens, shorten } from "./format.js";
 import { withLogging } from "./provider/logging.js";
 import { contextWindowFor } from "./provider/models.js";
 import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
-import { clampThinkingLevel, type ThinkingLevel, thinkingStyleFor } from "./provider/thinking.js";
+import {
+	clampThinkingLevel,
+	THINKING_LEVELS,
+	type ThinkingLevel,
+	thinkingStyleFor,
+} from "./provider/thinking.js";
 import type { LLMProvider } from "./provider/types.js";
 import type { Renderer } from "./render.js";
 
@@ -272,6 +277,7 @@ class RunnerImpl implements Runner {
 		this.agents = loadAgentDefinitions(options.cwd, options.agentsHomeDir, options.agentsProjectAllowed);
 		this.tools.push(
 			createTaskTool({
+				getThinking: () => (this.level === "off" ? undefined : this.level),
 				getProvider: () => this.provider,
 				getModel: () => this.model,
 				getSystem: () => this.system,
@@ -348,6 +354,7 @@ class RunnerImpl implements Runner {
 					this.sessionStore = resumed;
 					const loaded = resumed.buildContext();
 					this.history.push(...loaded.messages);
+					this.restoreThinkingFromSession(resumed); // --resume/-c restore the branch's level too
 					const stats = resumed.stats();
 					const est = estimateContextTokens(this.history);
 					options.renderer.note(
@@ -509,8 +516,27 @@ class RunnerImpl implements Runner {
 		this.sessionStore = store;
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()
+		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.system = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
+	}
+
+	/** #thinking-levels: restore the branch's last recorded level (pi's
+	 *  resume behavior — sdk.ts reads ThinkingLevelChangeEntry). No entry
+	 *  on the branch → keep the startup level; a knob-less model clamps
+	 *  to "off" via the usual setModel-style clamp. Direct write: this is
+	 *  a REPLAY of an old decision, not a new one (no fresh session entry). */
+	private restoreThinkingFromSession(store: SessionStore): void {
+		const change = [...store.getEntries()]
+			.reverse()
+			.find(
+				(e): e is Extract<SessionEntry, { type: "thinkingLevelChange" }> => e.type === "thinkingLevelChange",
+			);
+		if (change === undefined) return;
+		const restored = change.thinkingLevel as ThinkingLevel;
+		if ((THINKING_LEVELS as readonly string[]).includes(restored)) {
+			this.level = clampThinkingLevel(thinkingStyleFor(this.providerName, this.model), restored);
+		}
 	}
 
 	get thinkingLevel(): ThinkingLevel {

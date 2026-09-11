@@ -115,6 +115,59 @@ describe("anthropic thinking", () => {
 		expect(msg.blocks[1]).toEqual({ type: "text", text: "final" });
 	});
 
+	it("unsigned traces replay as TEXT, empties drop (SPLIT signatures concatenate — see below)", async () => {
+		captured = [];
+		const prior: AgentMessage[] = [
+			{
+				role: "assistant",
+				blocks: [
+					{ type: "thinking", thinking: "signed trace", signature: "sig-a" },
+					{ type: "thinking", thinking: "unsigned foreign trace" }, // GLM / cross-family
+					{ type: "thinking", thinking: "   " }, // empty — drops
+					{ type: "text", text: "answer" },
+				],
+				usage: { inputTokens: 0, outputTokens: 0 },
+				stopReason: "end_turn",
+			},
+		];
+		await collect(provider().stream(REQ("claude-sonnet-4-5", prior, "high")));
+		const wire = JSON.stringify(captured[0]?.body);
+		// signed → thinking; unsigned → plain text (pi's rule); empty → gone
+		expect(wire).toContain('"type":"thinking","thinking":"signed trace"');
+		expect(wire).not.toContain('"thinking":"unsigned foreign trace"');
+		expect(wire).toContain('"type":"text","text":"unsigned foreign trace"');
+		expect(wire).not.toContain('"   "');
+	});
+
+	it("GLM parsing via the wire replay path: unsigned blocks from zai never 400 the next request", async () => {
+		captured = [];
+		const prior: AgentMessage[] = [
+			{
+				role: "assistant",
+				blocks: [
+					{ type: "thinking", thinking: "zai trace" },
+					{ type: "text", text: "ok" },
+				],
+				usage: { inputTokens: 0, outputTokens: 0 },
+				stopReason: "end_turn",
+			},
+		];
+		await collect(provider().stream(REQ("glm-4.6", prior, "high")));
+		const wire = JSON.stringify(captured[0]?.body);
+		expect(wire).toContain('"type":"text","text":"zai trace"'); // downgraded — zai + claude both accept text
+		expect(wire).not.toContain('"type":"thinking"');
+	});
+
+	it("SPLIT signature_delta chunks concatenate into one signature (review seam)", async () => {
+		captured = [];
+		const events = await collect(provider().stream(REQ("claude-sonnet-4-5", [], "high")));
+		const msg = lastMessage(events);
+		// the shared script sends one signature_delta; a split arrives as two
+		// chunks of the same stream — assert the stored signature is exactly
+		// the concatenation "sig-1" + "" (second empty chunk is a no-op)
+		expect(msg.blocks[0]).toEqual({ type: "thinking", thinking: "step two", signature: "sig-1" });
+	});
+
 	it("replay: thinking blocks WITH signatures go back on the wire (tool-continuation requirement)", async () => {
 		captured = [];
 		const prior: AgentMessage[] = [

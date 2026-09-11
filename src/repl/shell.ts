@@ -589,6 +589,8 @@ export class TuiShell implements LineInput {
 		return new Promise<string | null>((resolve) => {
 			const wasFirst = this.pendingAsks.length === 0;
 			this.pendingAsks.push({ kind: "text", question, resolve });
+			this.updatePlaceholder(); // review P3: a pending question hides the
+			// hint row, same as ask() — command typing is now answer typing
 			if (wasFirst && this.selector === null) this.showAsk(question);
 		});
 	}
@@ -818,7 +820,7 @@ export class TuiShell implements LineInput {
 		const oldest = this.pendingAsks.shift();
 		if (oldest === undefined) return;
 		if (oldest.kind === "yesno") oldest.resolve(value !== null && isYes(value));
-		else oldest.resolve(value !== null && value !== "" ? value : null); // empty = cancel (pi stores no empty key)
+		else oldest.resolve(value !== null && value.trim() !== "" ? value : null); // blank = cancel (pi stores no empty key)
 		const next = this.pendingAsks[0];
 		if (next !== undefined) {
 			this.showAsk(next.question);

@@ -65,7 +65,7 @@ function readCompat(authPath?: string): AuthFile {
 function writeStore(store: AuthFile, authPath?: string): void {
 	const file = authFilePath(authPath);
 	mkdirSync(path.dirname(file), { recursive: true });
-	writeFileSync(file, `${JSON.stringify({ version: 1, ...store }, undefined, "\t")}\n`);
+	writeFileSync(file, `${JSON.stringify({ version: 1, ...store }, undefined, "\t")}\n`, { mode: 0o600 }); // 0600 from creation — no brief world-readable window (review P3)
 	try {
 		chmodSync(file, 0o600); // best-effort alongside the write mode below
 	} catch {
@@ -91,6 +91,7 @@ export function clearApiKey(family: ApiKeyFamily, authPath?: string): void {
 	const store = readCompat(authPath);
 	if (store.apiKeys?.[family] === undefined) return;
 	delete store.apiKeys[family];
+	if (store.apiKeys !== undefined && Object.keys(store.apiKeys).length === 0) delete store.apiKeys; // all-empty ≠ content
 	writeStore(store, authPath);
 }
 

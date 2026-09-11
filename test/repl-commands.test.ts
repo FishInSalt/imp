@@ -264,6 +264,8 @@ describe("slash commands", () => {
 				"    ↑/↓              move the selection",
 				"    Enter            pick · Esc or Ctrl+C cancels (no interrupt)",
 				"    typing           filters the list (/resume — Enter picks the original row)",
+				"  while a question is pending (/login keys, confirms):",
+				"    Enter            submits the answer · Esc or Ctrl+C cancels",
 				"",
 				"Lines typed while imp is working are queued and injected when the current turn ends.",
 			].join("\n"),
@@ -1397,6 +1399,21 @@ describe("/think (#thinking-levels)", () => {
 		const legacy = await makeEnv();
 		await dispatchCommand("/login zai", legacy.ctx);
 		expect(legacy.output()).toContain("export ZAI_API_KEY=<key>");
+	});
+
+	it("/login: display names and case-insensitive refs match (pi); a whitespace-only answer cancels", async () => {
+		// pi matches provider refs against id AND display name, lowercased
+		const env = await makeEnv();
+		env.ctx.secret = async () => "sk-dn";
+		await dispatchCommand("/login Z.AI", env.ctx);
+		expect(loadApiKey("zai", env.ctx.authStorePath)).toBe("sk-dn");
+		await dispatchCommand("/login openai (chatgpt plan)", env.ctx);
+		expect(env.output()).toContain('run "imp login"'); // matched the codex row by name
+		// whitespace-only = cancel (readline delivers raw spaces)
+		const blank = await makeEnv();
+		blank.ctx.secret = async (q) => (q.trim() === "" ? null : "  ");
+		await dispatchCommand("/login zai", blank.ctx);
+		expect(loadApiKey("zai", blank.ctx.authStorePath)).toBeNull();
 	});
 
 	it("a stored /login key participates in routing: familyConfigured flips and bare glm ids route to zai", async () => {

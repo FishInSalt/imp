@@ -47,6 +47,10 @@ export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
 export IMP_MODEL=glm-4.6   # or glm-4.5, glm-4.7, ... per your plan
 ```
 
+Note: `/login anthropic` stores a key that overrides `ANTHROPIC_AUTH_TOKEN`
+(and sends `x-api-key` style instead of `Bearer`) — on a compat endpoint,
+prefer the env pair above or `/login zai`.
+
 ## Usage
 
 ```bash

@@ -186,7 +186,7 @@ export class ReplInput {
 		const oldest = this.pendingAsks.shift();
 		if (oldest === undefined) return;
 		if (oldest.kind === "yesno") oldest.resolve(value !== null && isYes(value));
-		else oldest.resolve(value !== null && value !== "" ? value : null);
+		else oldest.resolve(value !== null && value.trim() !== "" ? value : null); // blank = cancel
 		const next = this.pendingAsks[0];
 		if (next !== undefined) {
 			this.setPromptIfLive(next.question);

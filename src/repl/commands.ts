@@ -121,6 +121,8 @@ Keys:
     ↑/↓              move the selection
     Enter            pick · Esc or Ctrl+C cancels (no interrupt)
     typing           filters the list (/resume — Enter picks the original row)
+  while a question is pending (/login keys, confirms):
+    Enter            submits the answer · Esc or Ctrl+C cancels
 `;
 
 /** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */
@@ -383,7 +385,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	}
 	// pi's prompt: `Enter ${name}` (packages/ai/src/auth/helpers.ts).
 	const key = await secret(`Enter ${target.name} API key`);
-	if (key === null) return; // cancelled — silent, like pi's "Login cancelled"
+	if (key === null || key.trim() === "") return; // cancelled/blank — silent, like pi's "Login cancelled"
 	saveApiKey(target.family, key, ctx.authStorePath);
 	ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
 	// pi switches the model only when none was selected; imp always has one,
@@ -657,7 +659,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 		summary: "sign in to a provider (stored credential beats the env var)",
 		allowedDuringRun: false,
 		run: async (args, ctx): Promise<CommandOutcome> => {
-			const target = args.trim() === "" ? undefined : LOGIN_TARGETS.find((t) => t.family === args.trim());
+			// pi matches provider refs case-insensitively against id AND
+			// display name (interactive-mode.ts findLoginProviderOptions)
+			const needle = args.trim().toLowerCase();
+			const target =
+				needle === ""
+					? undefined
+					: LOGIN_TARGETS.find((t) => t.family === needle || t.name.toLowerCase() === needle);
 			if (args.trim() !== "" && target === undefined) {
 				ctx.renderer.error(
 					`imp: unknown provider "/login ${args.trim()}" — known: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`,

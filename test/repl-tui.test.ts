@@ -1231,7 +1231,7 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			expect(env.runner.model).toBe("claude-sonnet-4-5");
 			expect(env.transcript.completedLines().join("\n")).toContain(
-				"▪ model: test-model → claude-sonnet-4-5 (applies from the next turn)",
+				"Model: claude-sonnet-4-5", // pi showStatus form (anthropic family stays unprefixed)
 			);
 			// Mutation pin: the footer refreshes after a COMMAND (no turn ran) —
 			// runCommand's finally push is what makes this green.
@@ -2317,7 +2317,7 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			env.terminal.data("\x1b[Z"); // shift+tab — pi's binding
 			await settle();
-			expect(env.transcript.completedLines().join("\n")).toContain("▪ thinking: minimal");
+			expect(env.transcript.completedLines().join("\n")).toContain("Thinking level: minimal");
 			expect(env.terminal.frameSince(0)).toContain("think:minimal");
 			env.terminal.data("\x1b[Z");
 			await settle();
@@ -2331,7 +2331,7 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			env.terminal.data("\x1b[Z");
 			await settle();
-			expect(env.transcript.completedLines().join("\n")).toContain("no thinking control");
+			expect(env.transcript.completedLines().join("\n")).toContain("Current model does not support thinking");
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

@@ -266,7 +266,7 @@ describe("slash commands", () => {
 				"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)\n",
 		);
 		await dispatchCommand("/model glm-4.6", env.ctx);
-		expect(env.output()).toContain("▪ model: claude-sonnet-4-5 → glm-4.6 (applies from the next turn)\n");
+		expect(env.output()).toContain("Model: glm-4.6\n");
 		expect(env.runner.model).toBe("glm-4.6");
 		const result = await env.runner.runTurn({ userMessage: "hi" });
 		expect(env.requests[0]?.model).toBe("glm-4.6");
@@ -315,7 +315,7 @@ describe("slash commands", () => {
 		]); // v1 candidates
 		expect(calls[0]?.title).toContain("model");
 		expect(env.runner.model).toBe("glm-4.6");
-		expect(env.output()).toBe("▪ model: claude-sonnet-4-5 → glm-4.6 (applies from the next turn)\n");
+		expect(env.output()).toBe("Model: glm-4.6\n");
 	});
 
 	it("M9-2: a custom current model leads the candidate list (it must stay pickable)", async () => {
@@ -329,7 +329,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/model", env.ctx);
 		expect(labels?.[0]).toBe("my-own-model");
 		expect(env.runner.model).toBe("my-own-model");
-		expect(env.output()).toBe("▪ model: my-own-model → my-own-model (applies from the next turn)\n"); // identical to /model <id> on the same id
+		expect(env.output()).toBe("Model: my-own-model\n"); // identical to /model <id> on the same id
 	});
 
 	it("M9-2: a cancelled selector changes nothing and notes nothing", async () => {
@@ -961,8 +961,9 @@ describe("/tree (#10 batch 2)", () => {
 		await dispatchCommand("/model openai-codex/gpt-5.4", env.ctx); // cross-family: provider swaps
 		expect(env.runner.model).toBe("gpt-5.4");
 		expect(env.runner.contextWindow).toBe(272_000);
-		expect(env.output()).toContain("claude-sonnet-4-5 → glm-4.6");
-		expect(env.output()).toContain("glm-4.6 → openai-codex/gpt-5.4"); // canonical — the family is visible (P2-5)
+		// pi's showStatus form: consecutive switches print one dim line each
+		expect(env.output()).toContain("Model: glm-4.6");
+		expect(env.output()).toContain("Model: openai-codex/gpt-5.4"); // canonical — the family is visible (P2-5)
 		await dispatchCommand("/model glm-4.6", env.ctx); // and back
 		expect(env.runner.model).toBe("glm-4.6");
 	});
@@ -1153,11 +1154,11 @@ describe("/think (#thinking-levels)", () => {
 		expect(env.runner.supportsThinking()).toBe(true); // claude-sonnet-4-5
 		await dispatchCommand("/think medium", env.ctx);
 		expect(env.runner.thinkingLevel).toBe("medium");
-		expect(env.output()).toContain("▪ thinking: medium");
+		expect(env.output()).toContain("Thinking level: medium");
 		// xhigh is beyond the budget ladder — clamps to high and says so
 		await dispatchCommand("/think xhigh", env.ctx);
 		expect(env.runner.thinkingLevel).toBe("high");
-		expect(env.output()).toContain("clamped to high");
+		expect(env.output()).toContain("Thinking level: high (xhigh is not available on this model)");
 		// bare /think cycles: high → off
 		await dispatchCommand("/think", env.ctx);
 		expect(env.runner.thinkingLevel).toBe("off");
@@ -1166,11 +1167,11 @@ describe("/think (#thinking-levels)", () => {
 		expect(env.output()).toContain("thinking levels: off, minimal, low, medium, high, xhigh, max");
 	});
 
-	it("on a model with no knob: the pi error line, level stays off", async () => {
+	it("on a model with no knob: pi's status line, level stays off", async () => {
 		const env = await makeEnv({ model: "openai/llama-3-70b" });
 		expect(env.runner.supportsThinking()).toBe(false);
 		await dispatchCommand("/think high", env.ctx);
-		expect(env.output()).toContain("has no thinking control");
+		expect(env.output()).toContain("Current model does not support thinking"); // pi's exact line
 		expect(env.runner.thinkingLevel).toBe("off");
 	});
 

@@ -397,3 +397,40 @@ describe("footer thinking segment", () => {
 		await env.repl;
 	});
 });
+
+// ── #thinking-levels: pi showStatus semantics on the transcript ─────────
+
+describe("status lines (pi showStatus parity)", () => {
+	it("consecutive statuses MERGE into one line; other output breaks the run", () => {
+		const sink = new TranscriptSink();
+		sink.feed("answer line\n");
+		sink.feedStatus("Model: glm-5.3");
+		const oneLine = sink.completedLines().join("\n");
+		expect(oneLine.match(/Model: glm-5\.3/g)?.length).toBe(1);
+		// a second status REPLACES the first (pi reuses the status slot)
+		sink.feedStatus("Thinking level: high");
+		const lines = sink.completedLines();
+		expect(lines.join("\n")).not.toContain("Model: glm-5.3");
+		expect(lines.at(-1)).toContain("Thinking level: high");
+		expect(lines.filter((l) => l.includes("Thinking level")).length).toBe(1);
+		// output between statuses starts a fresh line
+		sink.feed("next turn\n");
+		sink.feedStatus("Thinking level: off");
+		expect(
+			sink
+				.completedLines()
+				.join("\n")
+				.match(/Thinking level/g)?.length,
+		).toBe(2);
+	});
+
+	it("status lines render dim and survive as plain rows after rewrap", () => {
+		const sink = new TranscriptSink();
+		sink.feedStatus("Model: gpt-6-astra");
+		const first = sink.completedLines().at(-1) ?? "";
+		expect(first).toContain("\x1b[2mModel: gpt-6-astra\x1b[22m");
+		sink.render(60); // a width change rebuilds the wrap cache from kinds[]
+		const after = sink.render(60).at(-1) ?? "";
+		expect(after).toContain("Model: gpt-6-astra"); // dim row survived the rebuild
+	});
+});

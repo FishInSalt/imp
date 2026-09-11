@@ -9,7 +9,7 @@ import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
 import { costFor } from "../provider/models.js";
-import { supportedThinkingLevels, thinkingStyleFor } from "../provider/thinking.js";
+import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
@@ -572,10 +572,10 @@ class ReplMachine {
 	 *  every point any input changes — construction, command dispatch
 	 *  (/model, /new, /resume), and both run settle paths (session totals
 	 *  move) — and the terminal title rides along (TUI shells only). */
-	private runnerThinkingStyle(): ReturnType<typeof thinkingStyleFor> {
+	private runnerThinkingStyle(): ReturnType<typeof thinkingMetaFor> {
 		const reference = this.runner.modelReference();
 		const slash = reference.indexOf("/");
-		return thinkingStyleFor(
+		return thinkingMetaFor(
 			slash === -1 ? "anthropic" : reference.slice(0, slash),
 			slash === -1 ? reference : reference.slice(slash + 1),
 		);
@@ -586,7 +586,7 @@ class ReplMachine {
 	 *  within the module: the TuiShell wiring closes over the machine. */
 	cycleThinking(): void {
 		if (!this.runner.supportsThinking()) {
-			this.renderer.note(`▪ ${this.runner.modelReference()} has no thinking control`);
+			this.renderer.status("Current model does not support thinking"); // pi's exact line
 			return;
 		}
 		const style = this.runnerThinkingStyle();
@@ -594,7 +594,7 @@ class ReplMachine {
 		const levels = supportedThinkingLevels(style);
 		const next = levels[(levels.indexOf(this.runner.thinkingLevel) + 1) % levels.length] ?? "off";
 		const effective = this.runner.setThinkingLevel(next);
-		this.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
+		this.renderer.status(`Thinking level: ${effective}`); // pi's showStatus form
 		this.refreshFooter();
 	}
 
@@ -1100,6 +1100,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				ansi: tuiSink !== null || output.isTTY === true,
 				markdown: true,
 				userSink: tuiSink ? (text) => tuiSink.feedUser(text) : undefined,
+				statusSink: tuiSink ? (text) => tuiSink.feedStatus(text) : undefined,
 			},
 			session,
 		);

@@ -37,8 +37,6 @@ have the task tool; complete the job yourself.`;
 export interface SubagentOptions {
 	provider: LLMProvider;
 	model: string;
-	/** The parent's thinking level (#thinking-levels); undefined/"off" = none. */
-	thinking?: import("../provider/thinking.js").ThinkingLevel;
 	/** The parent's assembled system prompt (AGENTS.md + extension contexts ride along). */
 	system: string;
 	/** The parent's tool pool — the caller filters out the task tool itself. */
@@ -274,7 +272,6 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			tools: options.tools,
 			history,
 			userMessage: options.prompt,
-			thinking: options.thinking,
 			maxIterations: CHILD_MAX_TURNS,
 			onMessage: options.onMessage,
 			onToolCall: options.onToolCall,

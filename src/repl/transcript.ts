@@ -8,7 +8,7 @@ const RESET = "\x1b[0m";
 /** How each transcript line renders. "user" lines render as a pi-style
  *  full-width background block row; the block's pad rows are stored as
  *  empty "user" lines (kind survives resize via the wrap cache rebuild). */
-type LineKind = "plain" | "user";
+type LineKind = "plain" | "user" | "status";
 
 const LINE_RESET = "\r\x1b[2K";
 
@@ -95,6 +95,34 @@ export class TranscriptSink implements Component {
 		this.pushLine("", "user"); // top pad
 		for (const line of text.split("\n")) this.pushLine(line, "user");
 		this.pushLine("", "user"); // bottom pad
+		this.onUpdate?.();
+	}
+
+	/** A pi-style dim status line (pi's showStatus: interactive-mode.ts:3184
+	 *  — "Model: x", "Thinking level: x"). Consecutive status lines MERGE:
+	 *  pi reuses the last status slot instead of stacking, so a run of
+	 *  /model + /think switches leaves ONE line. Non-status output between
+	 *  them breaks the run and the next status appends. */
+	feedStatus(text: string): void {
+		if (this.current !== "") this.feed("\n");
+		const dimmed = `\x1b[2m${text}\x1b[22m`;
+		const last = this.lines.length - 1;
+		if (last >= 0 && this.kinds[last] === "status") {
+			// replace in place — same single row (statuses are short; a
+			// would-wrap replacement falls through to a fresh line below)
+			const oldRows =
+				this.wrappedWidth > 0
+					? (this.cumulative[last] ?? 0) - (last > 0 ? (this.cumulative[last - 1] ?? 0) : 0)
+					: 1;
+			const newRows = this.wrappedWidth > 0 ? this.wrapLine(dimmed, this.wrappedWidth).length : 1;
+			if (oldRows === 1 && newRows === 1) {
+				this.lines[last] = dimmed;
+				if (this.wrappedWidth > 0) this.wrapped[this.wrapped.length - 1] = dimmed;
+				this.onUpdate?.();
+				return;
+			}
+		}
+		this.pushLine(dimmed, "status");
 		this.onUpdate?.();
 	}
 

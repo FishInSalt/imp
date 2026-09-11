@@ -28,6 +28,9 @@ export interface RendererOptions {
 	 *  the transcript (pi parity) — the sink-side entry point replaces the
 	 *  byte-stream echo. Absent (print/legacy) keeps the `> ` echo bytes. */
 	userSink?: (text: string) => void;
+	/** Pi-style dim status lines ("Model: x", "Thinking level: x") with
+	 *  merge-on-consecutive semantics; absent → note() fallback. */
+	statusSink?: (text: string) => void;
 	/** TUI mode: successful tool results fold instead of writing the `⎿`
 	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
 	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
@@ -126,6 +129,20 @@ export class Renderer {
 		this.flushMarkdown();
 		this.ensureNewline();
 		this.write(`${dim(text, this.options.ansi)}\n`);
+	}
+
+	/** A pi-style status line (pi showStatus). The TUI's transcript merges
+	 *  consecutive statuses into one line; without a sink (print/legacy)
+	 *  it degrades to a note — those modes never switch mid-stream. */
+	status(text: string): void {
+		if (this.options.statusSink === undefined) {
+			this.note(text);
+			return;
+		}
+		this.stopSpinner();
+		this.flushMarkdown();
+		this.ensureNewline();
+		this.options.statusSink(text);
 	}
 
 	/** Submitted user prompt echo (`> …`, one `> ` per physical line).

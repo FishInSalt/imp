@@ -320,6 +320,45 @@ describe("codex-responses provider", () => {
 			await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
 			expect(captured.at(-1)?.body.reasoning).toBeUndefined();
 		});
+
+		it('off → reasoning {effort:"none"} — the backend defaults to medium, omission is NOT off (pi :240)', async () => {
+			script = {
+				status: 200,
+				chunks: [
+					sse("response.completed", {
+						response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+					}),
+				],
+			};
+			await collect(
+				provider().stream({ ...REQ("gpt-5.5", [{ role: "user", content: "hi" }]), thinking: "off" }),
+			);
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "none" });
+		});
+
+		it("pi.dev maps: gpt-5.5 minimal→low + xhigh native; gpt-6-astra off unavailable (clamps up), minimal→low, max native", async () => {
+			script = {
+				status: 200,
+				chunks: [
+					sse("response.completed", {
+						response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+					}),
+				],
+			};
+			await collect(
+				provider().stream({ ...REQ("gpt-5.5", [{ role: "user", content: "hi" }]), thinking: "minimal" }),
+			);
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "low", summary: "auto" });
+			await collect(
+				provider().stream({ ...REQ("gpt-6-astra", [{ role: "user", content: "hi" }]), thinking: "off" }),
+			);
+			// off:null in pi.dev's map — clampThinkingLevel moves it UP to minimal, which maps to "low"
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "low", summary: "auto" });
+			await collect(
+				provider().stream({ ...REQ("gpt-6-astra", [{ role: "user", content: "hi" }]), thinking: "max" }),
+			);
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "max", summary: "auto" });
+		});
 	});
 });
 

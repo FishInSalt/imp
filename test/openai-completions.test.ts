@@ -366,12 +366,50 @@ describe("openai-completions thinking", () => {
 		void events; // the shared script always streams reasoning_content — body is the pin
 	});
 
-	it("GLM family: the native thinking object, not reasoning_effort", async () => {
+	it("GLM 4.x/5-turbo: the native zai object (clear_thinking), binary — no effort", async () => {
 		captured = [];
 		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
 		await collect(provider.stream({ ...REQ("glm-4.6", []), thinking: "low" }));
-		expect(captured[0]?.body.thinking).toEqual({ type: "enabled" });
+		expect(captured[0]?.body.thinking).toEqual({ type: "enabled", clear_thinking: false });
 		expect(captured[0]?.body.reasoning_effort).toBeUndefined();
+	});
+
+	it('GLM off → {type:"disabled"} (pi zai rule :561 — GLM defaults to thinking on)', async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("glm-4.6", []), thinking: "off" }));
+		expect(captured[0]?.body.thinking).toEqual({ type: "disabled" });
+	});
+
+	it('GLM >=5.2 effort ladder (pi zai.json): low/medium/high all → effort "high", max native', async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("glm-5.2", []), thinking: "low" }));
+		expect(captured[0]?.body.thinking).toEqual({ type: "enabled", clear_thinking: false });
+		expect(captured[0]?.body.reasoning_effort).toBe("high");
+		captured = [];
+		await collect(provider.stream({ ...REQ("glm-5.2", []), thinking: "max" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("max");
+	});
+
+	it('gpt-5.1+ off → reasoning_effort:"none" (pi :638 map.off); gpt-5 base: off unreachable (clamped up)', async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("gpt-5.1", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("none");
+		captured = [];
+		await collect(provider.stream({ ...REQ("gpt-5", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("minimal"); // clamped up, not disabled
+	});
+
+	it("gpt-6 / xhigh per-model efforts (pi.dev): minimal→low, xhigh native", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("gpt-6-astra", []), thinking: "minimal" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("low");
+		captured = [];
+		await collect(provider.stream({ ...REQ("gpt-6-astra", []), thinking: "xhigh" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("xhigh");
 	});
 
 	it("reasoning_content deltas stream as thinking events and store as a thinking block", async () => {

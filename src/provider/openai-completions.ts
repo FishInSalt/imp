@@ -1,6 +1,6 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
-import { clampThinkingLevel, effortFor, thinkingStyleFor } from "./thinking.js";
+import { clampThinkingLevel, effortFor, thinkingMetaFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 /**
@@ -156,15 +156,31 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				}));
 				body.tool_choice = "auto";
 			}
-			// Thinking (#thinking-levels): gpt-5*/o-series take OpenAI's
-			// reasoning_effort; Z.ai GLM on this protocol takes its native
-			// thinking object; deepseek-reasoner reasons by default (no knob).
-			if (request.thinking !== undefined && request.thinking !== "off") {
-				const style = thinkingStyleFor("openai", request.model);
-				if (style === "openai-effort") {
-					body.reasoning_effort = effortFor(clampThinkingLevel(style, request.thinking));
-				} else if (style === "glm-openai") {
-					body.thinking = { type: "enabled" };
+			// Thinking (#thinking-levels, pi parity):
+			//  - zai GLM (thinkingFormat:"zai"): the native thinking object,
+			//    explicitly enabled OR disabled (pi openai-completions.js:561
+			//    — GLM defaults to thinking on, omission is not "off");
+			//    glm >=5.2 additionally takes a mapped reasoning_effort;
+			//  - OpenAI: reasoning_effort from the model's level map, and on
+			//    "off" the map's own off value when it names one (gpt-5.1+
+			//    map off→"none"; older models accept omission — pi :638);
+			//  - deepseek-reasoner: reasons by default, no request knob.
+			const meta = thinkingMetaFor("openai", request.model);
+			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
+			if (meta?.style === "glm-openai") {
+				body.thinking =
+					level !== undefined && level !== "off"
+						? { type: "enabled", clear_thinking: false }
+						: { type: "disabled" };
+				if (level !== undefined && level !== "off" && meta.supportsEffort === true) {
+					body.reasoning_effort = effortFor(meta, level);
+				}
+			} else if (meta?.style === "openai-effort") {
+				if (level !== undefined && level !== "off") {
+					body.reasoning_effort = effortFor(meta, level);
+				} else if (level === "off") {
+					const off = meta.levelMap?.off;
+					if (typeof off === "string") body.reasoning_effort = off;
 				}
 			}
 

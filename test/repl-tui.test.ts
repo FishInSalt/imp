@@ -1232,7 +1232,7 @@ describe("runRepl with shell:tui", () => {
 			expect(frame).toContain("models — switch applies from the next turn"); // title
 			expect(frame).toContain("→ test-model"); // current id first, preselected
 			expect(frame).toContain("claude-sonnet-4-5");
-			expect(frame).toContain("glm-4.6"); // README-documented candidates listed
+			expect(frame).toContain("zai/glm-5.3"); // GLM candidates are zai-canonical
 			expect(frame).toContain("current"); // the current row is marked
 			env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
 			await settle();

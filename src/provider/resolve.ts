@@ -36,7 +36,18 @@ export function parseModelRef(reference: string): ModelRef {
 	// families are typos, not exotic ids.
 	const trimmed = reference.trim();
 	const slash = trimmed.indexOf("/");
-	if (slash === -1) return { provider: "anthropic", modelId: trimmed };
+	if (slash === -1) {
+		// pi parity: GLM's ONE official path is the zai provider (coding
+		// endpoint, openai-completions). A bare glm-* id routes there when
+		// ZAI_API_KEY is present; without it the id falls back to the
+		// anthropic-compat connection (the pre-zai setup — kept so existing
+		// ANTHROPIC_BASE_URL workflows do not break). Explicit prefixes
+		// (zai/glm-…, anthropic/glm-…, openai/glm-…) always win.
+		if (trimmed.toLowerCase().startsWith("glm-") && process.env.ZAI_API_KEY !== undefined) {
+			return { provider: "zai", modelId: trimmed };
+		}
+		return { provider: "anthropic", modelId: trimmed };
+	}
 	const provider = trimmed.slice(0, slash).toLowerCase();
 	const modelId = trimmed.slice(slash + 1);
 	if (modelId === "") return { provider: "anthropic", modelId: trimmed };

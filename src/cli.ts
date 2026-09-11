@@ -99,10 +99,12 @@ Environment:
   IMP_CONTEXT_WINDOW         Model context window for auto-compaction (default: 131072)
   IMP_AUTOCOMPACT=0          Disable auto-compaction
 
-  Z.ai GLM Coding Plan example:
-    export ANTHROPIC_AUTH_TOKEN=<your z.ai key>
-    export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
-    export IMP_MODEL=glm-4.6
+  Z.ai GLM Coding Plan example (the official GLM path, pi parity):
+    export ZAI_API_KEY=<your z.ai key>
+    export IMP_MODEL=zai/glm-5.3
+  (A bare glm-* id routes the same way when ZAI_API_KEY is set; the older
+  ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic connection still works
+  as a fallback when it is not.)
 
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
     imp login

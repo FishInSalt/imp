@@ -589,6 +589,9 @@ class ReplMachine {
 	toggleThinkingVisibility(): void {
 		this.renderer.hideThinking = !this.renderer.hideThinking;
 		saveSettings({ hideThinkingBlock: this.renderer.hideThinking });
+		// pi's exact showStatus line (interactive-mode.ts:3833) — also the
+		// only feedback a mid-run toggle gets (no rebuild while streaming)
+		this.renderer.status(`Thinking blocks: ${this.renderer.hideThinking ? "hidden" : "visible"}`);
 		if (this.state !== "idle") return; // this run's remaining sections follow the flag
 		// pi rebuilds its chat container from session messages; imp clears
 		// the sink and re-renders history through the same replay path as

@@ -45,8 +45,11 @@ function envThinking(): import("./provider/thinking.js").ThinkingLevel | undefin
 interface CliOptions {
 	prompt: string | undefined;
 	model: string;
-	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity). */
-	thinking: import("./provider/thinking.js").ThinkingLevel;
+	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity).
+	 *  UNDEFINED when neither is set — the runner then applies the settings
+	 *  default, then pi's "medium" (a defined "off" sentinel here would make
+	 *  those unreachable; pi's main.ts:422 likewise only sets on --thinking). */
+	thinking: import("./provider/thinking.js").ThinkingLevel | undefined;
 	maxTokens: number;
 	maxTurns: number;
 	noContextFiles: boolean;
@@ -130,7 +133,7 @@ function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
 		model: defaultModel(),
-		thinking: envThinking() ?? "off",
+		thinking: envThinking(),
 		maxTokens: 16384,
 		maxTurns: 40,
 		noContextFiles: false,

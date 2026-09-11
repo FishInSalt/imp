@@ -534,6 +534,9 @@ class RunnerImpl implements Runner {
 	 *  to "off" via the usual setModel-style clamp. Direct write: this is
 	 *  a REPLAY of an old decision, not a new one (no fresh session entry). */
 	private restoreThinkingFromSession(store: SessionStore): void {
+		// pi sdk.ts:222: an explicit startup level (--thinking/IMP_THINKING)
+		// outranks the session entry — restore only when the flag is absent.
+		if (this.options.thinking !== undefined) return;
 		const change = [...store.getEntries()]
 			.reverse()
 			.find(
@@ -553,8 +556,10 @@ class RunnerImpl implements Runner {
 	setThinkingLevel(level: ThinkingLevel): ThinkingLevel {
 		const previous = this.level;
 		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), level);
-		// pi parity: level changes are session entries (auditable, replayed
-		// as notes on /resume; buildContext skips them like branch summaries).
+		// pi parity: only an ACTUAL change appends a session entry and
+		// persists (agent-session.ts isChanging — /think on the current
+		// level is a no-op, not a new thinkingLevelChange row).
+		if (this.level === previous) return this.level;
 		this.sessionStore?.appendThinkingLevelChange(this.level);
 		// pi parity (agent-session.ts:1686): an actual CHANGE persists as the
 		// cross-session default — but never "off" for a knob-less model (that

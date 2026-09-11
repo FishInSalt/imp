@@ -18,6 +18,12 @@ describe("settings store (#thinking-levels persistence)", () => {
 		expect(loadSettings(corrupt)).toEqual({}); // malformed never blocks startup
 	});
 
+	it("a failing write NEVER throws (the session must survive a read-only home)", () => {
+		expect(() =>
+			saveSettings({ defaultThinkingLevel: "high" }, "/nonexistent-root-dir/x/y/settings.json"),
+		).not.toThrow();
+	});
+
 	it("IMP_SETTINGS_PATH overrides the home default (the hermetic seam)", () => {
 		const prev = process.env.IMP_SETTINGS_PATH;
 		try {

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { familyConfigured } from "../src/provider/discover.js";
+import { discoverModels, familyConfigured } from "../src/provider/discover.js";
 import { parseModelRef, resolveModel } from "../src/provider/resolve.js";
 import { thinkingMetaFor } from "../src/provider/thinking.js";
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
@@ -102,6 +102,22 @@ describe("zai provider (pi's GLM connection path)", () => {
 		} finally {
 			delete process.env.ZAI_BASE_URL;
 			delete process.env.ZAI_API_KEY;
+		}
+	});
+
+	it("discovery: unreachable /models falls back to the pi.dev seeds; a configured family resolves them", async () => {
+		const prevKey = process.env.ZAI_API_KEY;
+		const prevUrl = process.env.ZAI_BASE_URL;
+		try {
+			process.env.ZAI_API_KEY = "sk-test";
+			process.env.ZAI_BASE_URL = "http://127.0.0.1:1"; // nothing listens — immediate refusal
+			const ids = await discoverModels("zai");
+			expect(ids).toEqual([...ZAI_SEED_MODELS]);
+		} finally {
+			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevKey;
+			if (prevUrl === undefined) delete process.env.ZAI_BASE_URL;
+			else process.env.ZAI_BASE_URL = prevUrl;
 		}
 	});
 

@@ -107,10 +107,19 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 	// live catalog is the offline seed when it 404s or the family is
 	// configured but unreachable.
 	if (family === "zai") {
+		// same cache + TTL discipline as the other families (a trailing
+		// slash in ZAI_BASE_URL must not become .../v4//models)
+		const cacheKey = "zai";
+		const hit = cache.get(cacheKey);
+		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
+		const base = (process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL).replace(/\/+$/, "");
 		const ids = await fetchJson(
-			`${process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL}/models`,
-			{ accept: "application/json", authorization: `Bearer ${String(process.env.ZAI_API_KEY)}` },
-			"zai",
+			`${base}/models`,
+			{
+				accept: "application/json",
+				authorization: `Bearer ${String(process.env.ZAI_API_KEY)}`,
+			},
+			cacheKey,
 		).catch(() => null);
 		return ids ?? ([...ZAI_SEED_MODELS] as string[]);
 	}

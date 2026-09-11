@@ -212,15 +212,16 @@ const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 /** Row descriptions identify the family — a bare id cannot (P2-5 lesson). */
 function familyLabel(id: string): string {
 	if (id.startsWith("openai-codex/")) return "ChatGPT plan (Codex)";
+	if (id.startsWith("zai/")) return "Z.ai GLM coding plan";
 	if (id.startsWith("openai/")) return "OpenAI-compatible endpoint";
 	return "anthropic-compatible endpoint";
 }
 
 export interface ModelListDeps {
 	/** Families that currently hold a credential. */
-	configured: (family: "anthropic" | "openai" | "openai-codex") => boolean;
+	configured: (family: "anthropic" | "openai" | "openai-codex" | "zai") => boolean;
 	/** Endpoint listing, null when unreachable — injectable for tests. */
-	discover: (family: "anthropic" | "openai" | "openai-codex") => Promise<string[] | null>;
+	discover: (family: "anthropic" | "openai" | "openai-codex" | "zai") => Promise<string[] | null>;
 }
 
 /**
@@ -238,7 +239,7 @@ export async function buildModelList(
 	rows: Array<{ label: string; description?: string }>;
 	fallbackNotes: string[];
 }> {
-	const families = ["anthropic", "openai", "openai-codex"] as const;
+	const families = ["anthropic", "openai", "openai-codex", "zai"] as const;
 	const fallbackNotes: string[] = [];
 	let ids: string[] = [];
 	const configuredFamilies = families.filter((f) => deps.configured(f));

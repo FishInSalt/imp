@@ -1191,6 +1191,52 @@ describe("/think (#thinking-levels)", () => {
 		expect(loadSettings(bare.settingsPath).defaultThinkingLevel).toBeUndefined();
 	});
 
+	it("zai/glm-5.3: the cycle never reaches off; a zai→claude switch clamps into the budget ladder", async () => {
+		const env = await makeEnv({ model: "zai/glm-5.3" });
+		// the medium DEFAULT applies and immediately clamps UP — glm-5.3's
+		// ladder is low/high/max (no medium; pi.dev live map)
+		expect(env.runner.thinkingLevel).toBe("high");
+		await dispatchCommand("/think off", env.ctx); // off is IMPOSSIBLE on this model
+		expect(env.runner.thinkingLevel).toBe("low"); // clamped UP (pi.dev off:null)
+		await dispatchCommand("/think max", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("max");
+		await dispatchCommand("/think", env.ctx); // cycle: max wraps to low — off is never in the list
+		expect(env.runner.thinkingLevel).toBe("low");
+		// family switch carries the CURRENT level: max survives into opus-4-8
+		// (its ladder goes to max), clamps DOWN to high on sonnet-4-5
+		await dispatchCommand("/think max", env.ctx);
+		await dispatchCommand("/model claude-opus-4-8", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("max");
+		await dispatchCommand("/model claude-sonnet-4-5", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("high");
+		// and into a capped model it clamps DOWN to high
+		await dispatchCommand("/model claude-sonnet-4-5", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("high");
+	});
+
+	it("an explicit --thinking beats the session entry on resume (pi sdk.ts:222 precedence)", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/think low", env.ctx); // session entry now says low
+		// a second runner resuming the SAME session WITH an explicit level ignores the entry
+		const { renderer: r2 } = makeRenderer();
+		const runner2 = await createRunner({
+			cwd: env.cwd,
+			argv: [],
+			settingsPath: env.settingsPath,
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			resume: env.runner.session?.header.id,
+			sessionBaseDir: env.baseDir,
+			thinking: "high",
+			renderer: r2,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
+		});
+		expect(runner2.thinkingLevel).toBe("high"); // NOT the session's low
+	});
+
 	it("on a model with no knob: pi's status line, level stays off", async () => {
 		const env = await makeEnv({ model: "openai/llama-3-70b" });
 		expect(env.runner.supportsThinking()).toBe(false);

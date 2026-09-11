@@ -2371,6 +2371,29 @@ describe("runRepl with shell:tui", () => {
 			await expect(env.repl).resolves.toBe(0);
 		});
 
+		it("ctrl+t DURING a run: the flag flips with a status line, but NO rebuild truncates the streaming turn", async () => {
+			let releaseTurn: () => void = () => {};
+			const gated = new Promise<void>((resolve) => {
+				releaseTurn = resolve;
+			});
+			const env = await startTuiRepl([() => gated.then(() => reply("streamed answer"))], {
+				model: "claude-sonnet-4-5",
+			});
+			await settle();
+			env.terminal.data("hi\r");
+			await settle();
+			env.terminal.data("\x14"); // ctrl+t mid-run
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("Thinking blocks: hidden"); // pi's status line
+			// the banner/startup content SURVIVES — no clear+replay happened
+			expect(env.transcript.completedLines().join("\n")).toContain("Tips for getting started:");
+			releaseTurn();
+			await settle();
+			await settle();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
 		it("shift+tab on a knob-less model: the teaching note, no state change", async () => {
 			const env = await startTuiRepl([reply("ok")]); // test-model — no knob
 			await settle();

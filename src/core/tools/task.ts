@@ -52,9 +52,6 @@ export interface TaskToolOptions {
 	getProvider: () => LLMProvider;
 	/** Read at spawn: `/model` writes the runner's model mid-session. */
 	getModel: () => string;
-	/** Read at spawn: the parent's live thinking level (#thinking-levels,
-	 *  pi's per-subagent inheritance) — "off" sends none. */
-	getThinking?: () => import("../../provider/thinking.js").ThinkingLevel | undefined;
 	/** Read at spawn: `/new`/`/resume` re-assemble the system prompt. */
 	getSystem: () => string;
 	/** The parent's tool array; task itself is filtered out of the child pool. */
@@ -224,7 +221,6 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				outcome = await runSubagent({
 					provider: options.getProvider(),
 					model: agent?.model ?? options.getModel(),
-					thinking: options.getThinking?.(),
 					system: options.getSystem(),
 					extraSystem: agent?.system,
 					tools,

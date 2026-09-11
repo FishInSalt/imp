@@ -12,6 +12,9 @@ export interface ReplayOptions {
 	/** TUI mode: user messages render as full-width background blocks (pi
 	 *  parity) instead of the truncated `> first-line` preview. */
 	userSink?: (text: string) => void;
+	/** Pi-style dim status lines (replay itself emits none; the option
+	 *  rides along so the Renderer wiring stays uniform). */
+	statusSink?: (text: string) => void;
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
@@ -33,6 +36,7 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 		toolStyle: "one-line",
 		markdown: options.markdown,
 		userSink: options.userSink,
+		statusSink: options.statusSink,
 	});
 	const { messages } = session.buildContext();
 	if (messages.length === 0) return 0;

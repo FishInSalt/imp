@@ -12,7 +12,7 @@ import {
 } from "../src/core/compaction.js";
 import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
 import { SessionStore } from "../src/core/session/store.js";
-import type { LLMProvider } from "../src/provider/types.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
@@ -150,10 +150,15 @@ describe("serializeForSummary", () => {
 });
 
 describe("compactSession", () => {
-	function summarizerProvider(summary: string, calls: AssistantMessage[] = []): LLMProvider {
+	function summarizerProvider(
+		summary: string,
+		calls: AssistantMessage[] = [],
+		requests: LLMRequest[] = [],
+	): LLMProvider {
 		return {
 			name: "mock",
 			async *stream(request) {
+				requests.push(request);
 				calls.push({
 					role: "assistant",
 					blocks: [],
@@ -188,12 +193,15 @@ describe("compactSession", () => {
 		session.appendMessage(user("recent question"));
 		session.appendMessage(assistantText("recent answer"));
 
+		const requests: LLMRequest[] = [];
 		const result = await compactSession({
 			session,
-			provider: summarizerProvider("## Goal\nfind the bug"),
+			provider: summarizerProvider("## Goal\nfind the bug", [], requests),
 			model: "m",
 			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
+			thinking: "high", // #thinking-levels: the summarizer rides the session level (pi :549)
 		});
+		expect(requests[0]?.thinking).toBe("high");
 
 		expect(result).not.toBeNull();
 		expect(result?.summary).toContain("## Goal");

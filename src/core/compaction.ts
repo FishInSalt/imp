@@ -1,4 +1,5 @@
 import { formatTokens } from "../format.js";
+import type { ThinkingLevel } from "../provider/thinking.js";
 import type { LLMProvider } from "../provider/types.js";
 import type { AgentMessage, AssistantMessage, Usage } from "./messages.js";
 import { addUsage, emptyUsage } from "./messages.js";
@@ -281,6 +282,10 @@ export async function summarizeBranchSegment(args: {
 	provider: LLMProvider;
 	model: string;
 	signal?: AbortSignal;
+	/** #thinking-levels: pi's summarizer rides the session's thinking level
+	 *  (compaction.ts:549 — options.reasoning = level when the model has a
+	 *  knob and the level is not "off"). */
+	thinking?: ThinkingLevel;
 }): Promise<string> {
 	const transcript = serializeForSummary(args.messages);
 	let summary = "";
@@ -291,6 +296,7 @@ export async function summarizeBranchSegment(args: {
 		model: args.model,
 		maxTokens: 1024,
 		signal: args.signal,
+		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
 		if (event.type === "text_delta") summary += event.text;
 	}
@@ -338,6 +344,8 @@ export async function compactHistory(args: {
 	model: string;
 	signal?: AbortSignal;
 	settings?: CompactionSettings;
+	/** #thinking-levels: pi's summarizer rides the session's level. */
+	thinking?: ThinkingLevel;
 }): Promise<CompactHistoryResult | null> {
 	const settings = args.settings ?? DEFAULT_COMPACTION_SETTINGS;
 	const tokensBefore = estimateContextTokens(args.messages).tokens;
@@ -358,6 +366,7 @@ export async function compactHistory(args: {
 		model: args.model,
 		maxTokens: 2048,
 		signal: args.signal,
+		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
 		if (event.type === "text_delta") summary += event.text;
 		if (event.type === "message_end") {
@@ -394,6 +403,8 @@ export async function compactSession(args: {
 	model: string;
 	signal?: AbortSignal;
 	settings?: CompactionSettings;
+	/** #thinking-levels: pi's summarizer rides the session's level. */
+	thinking?: ThinkingLevel;
 }): Promise<CompactResult | null> {
 	const { messages } = args.session.buildContext();
 	const result = await compactHistory({
@@ -402,6 +413,7 @@ export async function compactSession(args: {
 		model: args.model,
 		signal: args.signal,
 		settings: args.settings,
+		thinking: args.thinking,
 	});
 	if (result === null) return null;
 

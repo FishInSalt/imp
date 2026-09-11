@@ -13,11 +13,11 @@ import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
+	type ModelThinkingMeta,
 	supportedThinkingLevels,
 	THINKING_LEVELS,
 	type ThinkingLevel,
-	type ThinkingStyle,
-	thinkingStyleFor,
+	thinkingMetaFor,
 } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
@@ -71,12 +71,12 @@ export interface SlashCommand {
 
 /** The current model's thinking style, derived from the display reference
  *  (bare = anthropic; prefixed = that family — resolve.ts's rule). */
-function thinkingStyleForRunner(runner: Runner): ThinkingStyle | null {
+function thinkingMetaForRunner(runner: Runner): ReturnType<typeof thinkingMetaFor> {
 	const reference = runner.modelReference();
 	const slash = reference.indexOf("/");
 	const provider = slash === -1 ? "anthropic" : reference.slice(0, slash);
 	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
-	return thinkingStyleFor(provider, modelId);
+	return thinkingMetaFor(provider, modelId);
 }
 
 /** "/model glm-4.6 extra" → { name: "model", args: "glm-4.6 extra" }; non-slash → null. */
@@ -269,7 +269,7 @@ function switchModel(ctx: CommandContext, id: string): void {
 	ctx.runner.setModel(id); // re-resolves the provider too (multi-provider)
 	// Canonical refs on both sides (review P2-5): "gpt-5.4" alone cannot tell
 	// the user WHICH protocol family the switch landed on.
-	ctx.renderer.note(`▪ model: ${previous} → ${ctx.runner.modelReference()} (applies from the next turn)`);
+	ctx.renderer.status(`Model: ${ctx.runner.modelReference()}`); // pi's showStatus form
 }
 
 /** /resume <id>'s body, shared by the by-arg path and the picker's pick — the
@@ -556,20 +556,20 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: true,
 		run: (args, ctx): CommandOutcome => {
 			if (!ctx.runner.supportsThinking()) {
-				// pi: "Current model does not support thinking" — an error
-				// line, not a silent no-op.
-				ctx.renderer.error(`this model (${ctx.runner.modelReference()}) has no thinking control`);
+				// pi: "Current model does not support thinking" — a dim
+				// status line, not a silent no-op.
+				ctx.renderer.status("Current model does not support thinking");
 				return "handled";
 			}
 			if (args === "") {
 				// pi's shift+tab semantics: cycle through the model's levels.
-				const style = thinkingStyleForRunner(ctx.runner);
-				if (style === null) return "handled"; // unreachable: supportsThinking passed
-				const levels = supportedThinkingLevels(style);
+				const meta = thinkingMetaForRunner(ctx.runner);
+				if (meta === null) return "handled"; // unreachable: supportsThinking passed
+				const levels = supportedThinkingLevels(meta);
 				const current = ctx.runner.thinkingLevel;
 				const next = levels[(levels.indexOf(current) + 1) % levels.length] ?? "off";
 				const effective = ctx.runner.setThinkingLevel(next);
-				ctx.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
+				ctx.renderer.status(`Thinking level: ${effective}`);
 				ctx.refreshFooter?.();
 				return "handled";
 			}
@@ -578,11 +578,11 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			const effective = ctx.runner.setThinkingLevel(args as ThinkingLevel);
-			if (effective !== args) {
-				ctx.renderer.note(`▪ thinking: ${args} is not available on this model — clamped to ${effective}`);
-			} else {
-				ctx.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
-			}
+			ctx.renderer.status(
+				effective === args
+					? `Thinking level: ${effective}`
+					: `Thinking level: ${effective} (${args} is not available on this model)`,
+			);
 			ctx.refreshFooter?.();
 			return "handled";
 		},

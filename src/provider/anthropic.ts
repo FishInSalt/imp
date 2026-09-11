@@ -1,6 +1,11 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
-import { anthropicThinkingBudget, clampThinkingLevel, thinkingStyleFor } from "./thinking.js";
+import {
+	adaptiveEffortFor,
+	anthropicThinkingBudget,
+	clampThinkingLevel,
+	thinkingMetaFor,
+} from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -117,26 +122,43 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					input_schema: t.parameters,
 				}));
 			}
-			// Thinking (#thinking-levels, pi parity): Claude takes a token
-			// budget carved out BESIDE max_tokens (pi's adjustment math);
-			// Z.ai GLM on this protocol takes the binary enable form.
-			if (request.thinking !== undefined && request.thinking !== "off") {
-				const style = thinkingStyleFor("anthropic", request.model);
-				if (style === "glm-anthropic") {
+			// Thinking (#thinking-levels, pi parity), style-driven:
+			//  - Claude >=4.6: adaptive — {type:"adaptive"} + output_config
+			//    effort, no budget math (pi compat.forceAdaptiveThinking);
+			//  - Claude <=4.5: a token budget carved out BESIDE max_tokens
+			//    (pi's adjustment math, capped by the model's output limit);
+			//  - Z.ai GLM on this protocol: the binary enable form;
+			//  - "off": {type:"disabled"} — newer models default to thinking
+			//    ON, so omitting the parameter would not disable anything
+			//    (pi anthropic-messages.js:780).
+			const meta = thinkingMetaFor("anthropic", request.model);
+			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
+			if (level !== undefined && level !== "off") {
+				if (meta?.style === "glm-anthropic") {
 					body.thinking = { type: "enabled" };
-				} else if (style === "anthropic-budget") {
-					const level = clampThinkingLevel(style, request.thinking);
+				} else if (meta?.adaptive === true) {
+					body.thinking = { type: "adaptive", display: "summarized" };
+					body.output_config = { effort: adaptiveEffortFor(meta, level) };
+					// pi's adaptive path keeps the caller cap as-is — the
+					// model decides internally how much to think.
+				} else {
 					const budget = anthropicThinkingBudget(level);
 					// pi: budget rides on top of the caller cap (the model
 					// cap bounds it), and a cap too small for both yields to
 					// a 1024-token answer minimum.
-					const maxTokens = Math.min(request.maxTokens + budget, 64000);
+					const cap = meta?.maxOutputTokens ?? 64000;
+					const maxTokens = Math.min(request.maxTokens + budget, cap);
 					body.max_tokens = maxTokens;
 					body.thinking = {
 						type: "enabled",
 						budget_tokens: Math.min(budget, Math.max(0, maxTokens - 1024)),
+						display: "summarized",
 					};
 				}
+			} else if ((level === undefined || level === "off") && meta !== null && meta.levelMap?.off !== null) {
+				// pi: thinkingEnabled === false → {type:"disabled"}, unless the
+				// model's own map says off is impossible (off:null).
+				body.thinking = { type: "disabled" };
 			}
 
 			// Retry policy (connection drops, 429/5xx — nothing yielded yet)

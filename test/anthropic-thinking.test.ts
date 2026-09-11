@@ -81,7 +81,7 @@ describe("anthropic thinking", () => {
 		const events = await collect(provider().stream(REQ("claude-sonnet-4-5", [], "xhigh")));
 		const body = captured[0]?.body as Record<string, unknown>;
 		// xhigh → high (16384); max_tokens = 16384 + 16384 capped at 64000
-		expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+		expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 16384, display: "summarized" });
 		expect(body.max_tokens).toBe(32768);
 		void events;
 	});
@@ -94,13 +94,37 @@ describe("anthropic thinking", () => {
 		expect(body.max_tokens).toBe(16384); // untouched
 	});
 
-	it("off / undefined: no thinking key at all", async () => {
+	it('off AND undefined (the runner maps off→undefined) → {type:"disabled"} — pi reinterprets at the provider layer (:754-780)', async () => {
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-5", [], "off")));
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toBeUndefined();
+		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
 		captured = [];
-		await collect(provider().stream(REQ("claude-sonnet-4-5")));
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toBeUndefined();
+		await collect(provider().stream(REQ("claude-sonnet-4-5"))); // runner.ts:681 sends undefined for off
+		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
+	});
+
+	it("Claude >=4.6 adaptive path (pi compat.forceAdaptiveThinking): {adaptive} + output_config effort, no budget math", async () => {
+		captured = [];
+		const events = await collect(provider().stream(REQ("claude-opus-4-8", [], "medium")));
+		const body = captured[0]?.body as Record<string, unknown>;
+		expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(body.output_config).toEqual({ effort: "medium" });
+		expect(body.max_tokens).toBe(16384); // caller cap untouched — the model thinks internally
+		// xhigh is NATIVE on 4.7+ (pi catalog map), not clamped away
+		captured = [];
+		await collect(provider().stream(REQ("claude-opus-4-8", [], "xhigh")));
+		expect((captured[0]?.body as Record<string, unknown>).output_config).toEqual({ effort: "xhigh" });
+		// sonnet-4-6 has max but not xhigh (pi catalog) → xhigh clamps UP to max
+		captured = [];
+		await collect(provider().stream(REQ("claude-sonnet-4-6", [], "xhigh")));
+		expect((captured[0]?.body as Record<string, unknown>).output_config).toEqual({ effort: "max" });
+		void events;
+	});
+
+	it("GLM off → disabled on this protocol too (protocol mirror of pi's zai rule)", async () => {
+		captured = [];
+		await collect(provider().stream(REQ("glm-5.3", [], "off")));
+		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
 	});
 
 	it("thinking blocks stream as thinking_delta and land with their signature", async () => {

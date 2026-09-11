@@ -76,10 +76,14 @@ imp            # interactive REPL (streaming, one-line tool status)
   saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
   `/model [id]` (applies from the next turn),
-  `/think [level]` (thinking intensity — `off/minimal/low/medium/high`;
-  bare `/think` or **Shift+Tab** cycles; models without a thinking knob
-  say so; the footer shows `think:<level>`; GLM models take the binary
-  on/off form), `/compact` (summarize
+  `/think [level]` (thinking intensity; bare `/think` or **Shift+Tab**
+  cycles; models without a thinking knob say so; the footer shows
+  `think:<level>`). Available levels follow each model's catalog entry
+  (pi parity): some models cannot turn thinking off (gpt-5 base, o3,
+  gpt-6), newer ones expose `xhigh`/`max`, zai GLM 5.2+ maps
+  low/medium/high to `high` effort. Switching model or level prints one
+  dim status line (`Model: x` / `Thinking level: x`) — consecutive
+  switches merge into a single line. `/compact` (summarize
   older context now). Unknown commands get a hint instead of reaching the
   model; prefix a line with a space to send a literal leading `/`.
 - Thinking levels can also start a session: `imp --thinking medium` or

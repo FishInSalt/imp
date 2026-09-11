@@ -1,84 +1,379 @@
 /**
- * Thinking levels (#thinking-levels, pi parity 2026-09-10).
+ * Thinking levels (#thinking-levels) — pi parity.
  *
- * pi's model: one 7-level ladder (agent/types.ts ThinkingLevel) that every
- * provider maps to its native knob — anthropic budget_tokens/adaptive
- * effort, OpenAI reasoning_effort, codex reasoning.effort, GLM's
- * thinking:{type:enabled}. imp keeps the same ladder and the same
- * clamp-to-nearest semantics, with a static per-family style table standing
- * in for pi's per-model thinkingLevelMap catalogs.
+ * pi's model of the world:
+ *  - a 7-level ladder (off/minimal/low/medium/high/xhigh/max);
+ *  - per-model metadata (pi's generated catalog: packages/ai/src/providers/
+ *    data/*.json, and pi.dev/api/models for openai-codex): `reasoning`
+ *    (has a knob at all), `thinkingLevelMap` (level → wire value, where
+ *    null = the model cannot do that level), and `compat` flags
+ *    (forceAdaptiveThinking for Claude ≥4.6, supportsReasoningEffort for
+ *    zai GLM ≥5.2);
+ *  - getSupportedThinkingLevels/clampThinkingLevel driven by that map;
+ *  - protocol mappings in each provider (budget / adaptive+effort /
+ *    reasoning_effort / zai thinking object).
+ *
+ * imp mirrors this with a static per-model table below. Family defaults
+ * cover unknown/dynamically discovered ids conservatively (effort styles:
+ * off..high; binary styles: off/high).
  */
 
-/** pi's ladder, in order. */
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-/** How a model's thinking knob is driven, per protocol family. */
+/** The protocol family a model's thinking knob drives. */
 export type ThinkingStyle =
-	/** Claude Messages API: budget_tokens (pi's non-adaptive path; the
-	 *  budgets are pi's adjustMaxTokensForThinking defaults). */
-	| "anthropic-budget"
-	/** Z.ai GLM on the Anthropic-compat endpoint: thinking {type:enabled}.
-	 *  The knob is binary in practice — every non-off level maps to
-	 *  enabled (ledgered deviation from the 7-level ladder). */
-	| "glm-anthropic"
-	/** OpenAI Chat Completions: reasoning_effort (gpt-5*, o-series). */
-	| "openai-effort"
-	/** Z.ai GLM on the OpenAI-compatible endpoint: thinking {type:enabled}
-	 *  body param (their native form; reasoning_effort is not accepted). */
-	| "glm-openai"
-	/** OpenAI Responses protocol (codex): reasoning {effort}. */
-	| "codex-effort"
-	/** DeepSeek-reasoner style: the model reasons by default, no request
-	 *  parameter — reasoning_content arrives unrequested. Levels beyond
-	 *  off are cosmetic placeholders (clamped display only). */
-	| "auto";
+	| "anthropic-budget" // Claude ≤4.5: budget_tokens beside max_tokens
+	| "anthropic-adaptive" // Claude ≥4.6: {type:"adaptive"} + output_config.effort
+	| "glm-anthropic" // Z.ai GLM on the anthropic-compat protocol: binary enable
+	| "openai-effort" // OpenAI Chat Completions: reasoning_effort
+	| "glm-openai" // Z.ai GLM on openai-compat: native thinking object
+	| "codex-effort" // ChatGPT backend Responses: reasoning.effort
+	| "auto"; // deepseek-reasoner: reasons by default, no request knob
 
-/** Static family table. Bare ids route to anthropic (resolve.ts); the
- *  provider argument disambiguates openai/ vs openai-codex/ vs anthropic/.
- *  Prefix matches run longest-first; null = no thinking control. */
-const STYLE_RULES: ReadonlyArray<{ provider: string; prefix: string; style: ThinkingStyle }> = [
-	// anthropic protocol: GLM via Z.ai's compat endpoint, everything else Claude
-	{ provider: "anthropic", prefix: "glm-", style: "glm-anthropic" },
-	{ provider: "anthropic", prefix: "claude-", style: "anthropic-budget" },
-	// OpenAI Chat Completions (incl. OPENAI_BASE_URL vendors)
-	{ provider: "openai", prefix: "glm-", style: "glm-openai" },
-	{ provider: "openai", prefix: "deepseek-r", style: "auto" },
-	{ provider: "openai", prefix: "gpt-", style: "openai-effort" },
-	{ provider: "openai", prefix: "o", style: "openai-effort" },
-	// ChatGPT-subscription Responses protocol
-	{ provider: "openai-codex", prefix: "gpt-", style: "codex-effort" },
-	{ provider: "openai-codex", prefix: "o", style: "codex-effort" },
+/** pi's thinkingLevelMap: level → the wire value; null = the level is
+ *  UNAVAILABLE on this model; absent = available under its own name.
+ *  (xhigh/max additionally require an explicit entry to exist.) */
+export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>;
+
+export interface ModelThinkingMeta {
+	style: ThinkingStyle;
+	levelMap?: ThinkingLevelMap;
+	/** pi compat.forceAdaptiveThinking — Claude ≥4.6 adaptive thinking. */
+	adaptive?: boolean;
+	/** pi compat.supportsReasoningEffort — zai GLM ≥5.2. */
+	supportsEffort?: boolean;
+	/** pi model.maxTokens — the cap for the budget math and output clamp. */
+	maxOutputTokens?: number;
+}
+
+/** The zai GLM 5.2 map (pi.dev live, 2026-09): minimal/low/medium all
+ *  unavailable; high is the single effort; max native; off maps to the
+ *  explicit "none" effort. */
+const GLM_52_MAP: ThinkingLevelMap = {
+	off: "none",
+	minimal: null,
+	low: null,
+	medium: null,
+	high: "high",
+	xhigh: null,
+	max: "max",
+};
+
+/** The zai GLM 5.3 map (pi.dev live, 2026-09): thinking CANNOT be disabled
+ *  (off:null) and minimal/medium are unavailable — the ladder is
+ *  low / high / max. */
+const GLM_53_MAP: ThinkingLevelMap = {
+	off: null,
+	minimal: null,
+	low: "low",
+	medium: null,
+	high: "high",
+	xhigh: null,
+	max: "max",
+};
+
+/** Longest matching prefix wins within a provider (dynamic discovery may
+ *  surface ids the static seeds never listed). */
+const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: ModelThinkingMeta }> = [
+	// ---- anthropic protocol ----
+	{ provider: "anthropic", prefix: "glm-", meta: { style: "glm-anthropic" } },
+	// Claude ≥4.6 (pi: forceAdaptiveThinking + xhigh/max maps, 128k output)
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-4-6",
+		meta: { style: "anthropic-adaptive", adaptive: true, levelMap: { max: "max" }, maxOutputTokens: 128_000 },
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-4-7",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { xhigh: "xhigh", max: "max" },
+			maxOutputTokens: 128_000,
+		},
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-4-8",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { xhigh: "xhigh", max: "max" },
+			maxOutputTokens: 128_000,
+		},
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-5",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { xhigh: "xhigh", max: "max" },
+			maxOutputTokens: 128_000,
+		},
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-sonnet-4-6",
+		meta: { style: "anthropic-adaptive", adaptive: true, levelMap: { max: "max" }, maxOutputTokens: 128_000 },
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-sonnet-5",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { xhigh: "xhigh", max: "max" },
+			maxOutputTokens: 128_000,
+		},
+	},
+	{
+		provider: "anthropic",
+		prefix: "claude-fable-5",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { off: null, xhigh: "xhigh", max: "max" }, // pi: thinking always on for fable-5
+			maxOutputTokens: 128_000,
+		},
+	},
+	// opus-4-1: budget path with pi's own 32k output cap (the 64k default would 400)
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-4-1",
+		meta: { style: "anthropic-budget", maxOutputTokens: 32_000 },
+	},
+	// Claude ≤4.5 + unknown claude ids: the budget path (pi's default)
+	{ provider: "anthropic", prefix: "claude-", meta: { style: "anthropic-budget", maxOutputTokens: 64_000 } },
+	// ---- openai chat completions ----
+	{
+		provider: "openai",
+		prefix: "glm-5.3",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_53_MAP },
+	},
+	{
+		provider: "openai",
+		prefix: "glm-5.2-highspeed",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
+	},
+	{
+		provider: "openai",
+		prefix: "glm-5.2",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
+	},
+	{ provider: "openai", prefix: "glm-", meta: { style: "glm-openai" } }, // 4.x / 5-turbo: binary (pi.dev live)
+	{ provider: "openai", prefix: "deepseek-r", meta: { style: "auto" } },
+	// gpt-6 (pi.dev live catalog): off UNAVAILABLE, minimal→low, xhigh/max native
+	{
+		provider: "openai",
+		prefix: "gpt-6",
+		meta: {
+			style: "openai-effort",
+			levelMap: {
+				off: null,
+				minimal: "low",
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+			},
+		},
+	},
+	// pro variants (pi openai.json): off AND the lower efforts unavailable —
+	// sparse ladders (high-only for 5-pro, medium+ for 5.2/5.4/5.5-pro)
+	{
+		provider: "openai",
+		prefix: "gpt-5-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: null, high: "high" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.2-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.4-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.5-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.6",
+		meta: {
+			style: "openai-effort",
+			levelMap: {
+				off: "none",
+				minimal: null,
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+			},
+		},
+	},
+	// 5.4/5.4-mini/5.5 (pi openai.json): off→"none", minimal out, xhigh native
+	{
+		provider: "openai",
+		prefix: "gpt-5.4",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.5",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.2",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.1",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high" },
+		},
+	},
+	// gpt-5 / 5-mini / 5-nano (pi openai.json): off unavailable, minimal native
+	{
+		provider: "openai",
+		prefix: "gpt-5",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high" },
+		},
+	},
+	// o1/o1-pro (pi openai.json): off AND minimal unavailable — low start
+	{
+		provider: "openai",
+		prefix: "o1",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high" },
+		},
+	},
+	// o3/o4 (pi openai.json): off unavailable, minimal unavailable
+	{
+		provider: "openai",
+		prefix: "o3",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "o4",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high" },
+		},
+	},
+	// unknown openai ids (dynamic discovery): conservative off..high
+	{ provider: "openai", prefix: "gpt-", meta: { style: "openai-effort" } },
+	{ provider: "openai", prefix: "o", meta: { style: "openai-effort" } },
+	// ---- chatgpt backend responses ----
+	{
+		provider: "openai-codex",
+		prefix: "gpt-6",
+		meta: {
+			style: "codex-effort",
+			levelMap: {
+				off: null,
+				minimal: "low",
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+			},
+		},
+	},
+	{
+		provider: "openai-codex",
+		prefix: "gpt-5.6",
+		meta: { style: "codex-effort", levelMap: { minimal: "low", xhigh: "xhigh", max: "max" } },
+	},
+	// pi.dev's pattern for 5.3-spark/5.4/5.5 (+ unknown codex ids)
+	{
+		provider: "openai-codex",
+		prefix: "gpt-",
+		meta: { style: "codex-effort", levelMap: { minimal: "low", xhigh: "xhigh" } },
+	},
 ];
 
-/** The thinking style driving a model, or null when the model has no knob
- *  (pi's model.reasoning === false → only "off" is available). */
-export function thinkingStyleFor(provider: string, modelId: string): ThinkingStyle | null {
-	let best: { prefix: string; style: ThinkingStyle } | null = null;
-	for (const rule of STYLE_RULES) {
+/** The thinking metadata driving a model, or null when the model has no
+ *  knob (pi's model.reasoning === false → only "off" is available). */
+export function thinkingMetaFor(provider: string, modelId: string): ModelThinkingMeta | null {
+	let best: { prefix: string; meta: ModelThinkingMeta } | null = null;
+	for (const rule of MODEL_RULES) {
 		if (rule.provider !== provider) continue;
 		if (!modelId.startsWith(rule.prefix)) continue;
 		if (best === null || rule.prefix.length > best.prefix.length) best = rule;
 	}
-	return best?.style ?? null;
+	return best?.meta ?? null;
 }
 
-/** Levels the ladder offers for a style. The budget/effort protocols cap at
- *  "high" — xhigh/max are newer than every knob imp drives (pi exposes them
- *  only via per-model maps imp does not carry). GLM and auto are binary. */
-export function supportedThinkingLevels(style: ThinkingStyle): readonly ThinkingLevel[] {
-	if (style === "anthropic-budget" || style === "openai-effort" || style === "codex-effort") {
-		return ["off", "minimal", "low", "medium", "high"];
+/** Back-compat shim for call sites that only need the family style. */
+export function thinkingStyleFor(provider: string, modelId: string): ThinkingStyle | null {
+	return thinkingMetaFor(provider, modelId)?.style ?? null;
+}
+
+/** pi's getSupportedThinkingLevels (models.ts:663): map-driven. Without a
+ *  map, the family default applies (effort/budget styles off..high, binary
+ *  styles off/high — xhigh/max need explicit map entries everywhere). */
+export function supportedThinkingLevels(meta: ModelThinkingMeta | null): readonly ThinkingLevel[] {
+	if (meta === null) return ["off"];
+	if (meta.levelMap === undefined) {
+		if (meta.style === "anthropic-budget" || meta.style === "anthropic-adaptive")
+			return ["off", "minimal", "low", "medium", "high"];
+		if (meta.style === "openai-effort" || meta.style === "codex-effort")
+			return ["off", "minimal", "low", "medium", "high"];
+		return ["off", "high"]; // glm-anthropic / glm-openai / auto: on/off in practice
 	}
-	return ["off", "high"]; // glm-anthropic / glm-openai / auto: on/off in practice
+	return THINKING_LEVELS.filter((level) => {
+		const mapped = meta.levelMap?.[level];
+		if (mapped === null) return false;
+		if (level === "xhigh" || level === "max") return mapped !== undefined;
+		return true;
+	});
 }
 
-/** pi's clampThinkingLevel semantics: unavailable target → nearest
- *  available level, searching upward first, then downward. */
-export function clampThinkingLevel(style: ThinkingStyle | null, level: ThinkingLevel): ThinkingLevel {
-	if (style === null) return "off";
-	const available = supportedThinkingLevels(style);
+/** pi's clampThinkingLevel semantics (models.ts:679): unavailable target →
+ *  nearest available level, searching upward first, then downward. */
+export function clampThinkingLevel(meta: ModelThinkingMeta | null, level: ThinkingLevel): ThinkingLevel {
+	const available = supportedThinkingLevels(meta);
 	if (available.includes(level)) return level;
 	const wanted = THINKING_LEVELS.indexOf(level);
 	if (wanted === -1) return available[0] ?? "off";
@@ -108,7 +403,26 @@ export function anthropicThinkingBudget(level: ThinkingLevel): number {
 	}
 }
 
-/** The reasoning_effort value for the effort styles (level ≠ "off"). */
-export function effortFor(level: ThinkingLevel): string {
-	return level === "xhigh" || level === "max" ? "high" : level;
+/** pi: `model.thinkingLevelMap?.[effort] ?? effort` — the wire effort for a
+ *  level ≠ "off" (map lookups like codex minimal→"low"). */
+export function effortFor(meta: ModelThinkingMeta | null, level: ThinkingLevel): string {
+	const mapped = meta?.levelMap?.[level];
+	return typeof mapped === "string" ? mapped : level;
+}
+
+/** pi's mapThinkingLevelToEffort (anthropic-messages.js:598) for the
+ *  adaptive path: mapped value when the model names one, else
+ *  minimal/low→"low", medium→"medium", everything else→"high". */
+export function adaptiveEffortFor(meta: ModelThinkingMeta | null, level: ThinkingLevel): string {
+	const mapped = meta?.levelMap?.[level];
+	if (typeof mapped === "string") return mapped;
+	switch (level) {
+		case "minimal":
+		case "low":
+			return "low";
+		case "medium":
+			return "medium";
+		default:
+			return "high";
+	}
 }

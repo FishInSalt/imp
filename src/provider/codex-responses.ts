@@ -1,7 +1,7 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { getCodexAccessToken } from "./codex-auth.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
-import { clampThinkingLevel, effortFor } from "./thinking.js";
+import { clampThinkingLevel, effortFor, thinkingMetaFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 /**
@@ -134,15 +134,20 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				// plan/policy-managed server-side. request.maxTokens is simply
 				// not applicable to this family.
 			};
-			// Thinking (#thinking-levels): the Responses protocol takes a
-			// reasoning object; the ChatGPT backend accepts
-			// minimal/low/medium/high (summary "auto" keeps summaries off the
-			// wire unless enabled server-side).
-			if (request.thinking !== undefined && request.thinking !== "off") {
-				body.reasoning = {
-					effort: effortFor(clampThinkingLevel("codex-effort", request.thinking)),
-					summary: "auto",
-				};
+			// Thinking (#thinking-levels, pi parity): the Responses protocol
+			// takes a reasoning object. Effort values come from the model's
+			// level map (pi.dev catalog: gpt-5.3+ minimal→"low", xhigh native;
+			// gpt-6 max native). "off" sends effort:"none" — the backend
+			// defaults reasoning-capable models to medium, so omission would
+			// not disable anything (pi openai-responses.js:240).
+			const meta = thinkingMetaFor("openai-codex", request.model);
+			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
+			if (level !== undefined && level !== "off") {
+				body.reasoning = { effort: effortFor(meta, level), summary: "auto" };
+			} else if ((level === undefined || level === "off") && meta !== null && meta.levelMap?.off !== null) {
+				// "off" AND undefined (the runner maps off→undefined — pi
+				// :238): explicit "none"; off:null models (gpt-6) never land here.
+				body.reasoning = { effort: meta.levelMap?.off ?? "none" };
 			}
 			if (request.tools.length > 0) {
 				body.tools = request.tools.map((t) => ({

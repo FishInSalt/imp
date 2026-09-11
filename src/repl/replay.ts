@@ -87,6 +87,11 @@ function renderMessage(
 				if (block.type === "text") {
 					const text = block.text.trim();
 					if (text !== "") renderer.raw(`${text}\n\n`);
+				} else if (block.type === "thinking") {
+					// dim like the live stream (#thinking-levels): runs of
+					// thinking render as one dim section above the text
+					const thinking = block.thinking.trim();
+					if (thinking !== "") renderer.thinking(thinking);
 				} else {
 					unmatchedTools.set(block.id, { name: block.name, args: block.arguments });
 					renderer.event({

@@ -23,7 +23,9 @@ export function withLogging(provider: LLMProvider, logger: RunLogger): LLMProvid
 						blocks: event.message.blocks.map((b) =>
 							b.type === "text"
 								? { type: "text", length: b.text.length }
-								: { type: "toolCall", name: b.name, arguments: b.arguments },
+								: b.type === "toolCall"
+									? { type: "toolCall", name: b.name, arguments: b.arguments }
+									: { type: "thinking", length: b.thinking.length },
 						),
 					});
 				}

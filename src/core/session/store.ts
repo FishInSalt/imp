@@ -69,7 +69,15 @@ export interface CompactionEntry extends EntryBase {
 	usage?: Usage;
 }
 
-export type SessionEntry = MessageEntry | CompactionEntry | BranchSummaryEntry;
+/** #thinking-levels: a level change (pi's ThinkingLevelChangeEntry). Tree
+ *  metadata like branch summaries — participates in the tree structure
+ *  (parent/leaf) but never in buildContext; /resume replays it as a note. */
+export interface ThinkingLevelChangeEntry extends EntryBase {
+	type: "thinkingLevelChange";
+	thinkingLevel: string;
+}
+
+export type SessionEntry = MessageEntry | CompactionEntry | BranchSummaryEntry | ThinkingLevelChangeEntry;
 
 export interface SessionStats {
 	messageCount: number;
@@ -129,6 +137,10 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 	} else if (entry.type === "branchSummary") {
 		if (typeof entry.summary !== "string") {
 			throw new SessionError(`session line ${lineNo}: branchSummary entry missing summary`);
+		}
+	} else if (entry.type === "thinkingLevelChange") {
+		if (typeof entry.thinkingLevel !== "string") {
+			throw new SessionError(`session line ${lineNo}: thinkingLevelChange entry missing level`);
 		}
 	} else {
 		throw new SessionError(`session line ${lineNo}: unknown entry type "${String(entry.type)}"`);
@@ -261,6 +273,18 @@ export class SessionStore {
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			message,
+		};
+		this.append(entry);
+		return entry.id;
+	}
+
+	appendThinkingLevelChange(thinkingLevel: string): string {
+		const entry: ThinkingLevelChangeEntry = {
+			type: "thinkingLevelChange",
+			id: this.nextId(),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			thinkingLevel,
 		};
 		this.append(entry);
 		return entry.id;

@@ -1,6 +1,7 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { getCodexAccessToken } from "./codex-auth.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import { clampThinkingLevel, effortFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 /**
@@ -131,6 +132,16 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				// plan/policy-managed server-side. request.maxTokens is simply
 				// not applicable to this family.
 			};
+			// Thinking (#thinking-levels): the Responses protocol takes a
+			// reasoning object; the ChatGPT backend accepts
+			// minimal/low/medium/high (summary "auto" keeps summaries off the
+			// wire unless enabled server-side).
+			if (request.thinking !== undefined && request.thinking !== "off") {
+				body.reasoning = {
+					effort: effortFor(clampThinkingLevel("codex-effort", request.thinking)),
+					summary: "auto",
+				};
+			}
 			if (request.tools.length > 0) {
 				body.tools = request.tools.map((t) => ({
 					type: "function",

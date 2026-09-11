@@ -299,6 +299,28 @@ describe("codex-responses provider", () => {
 		const events = await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
 		expect(lastMessage(events).blocks).toEqual([{ type: "text", text: "(empty)" }]);
 	});
+
+	describe("codex responses thinking", () => {
+		it("a level rides the body as reasoning {effort}; off sends none", async () => {
+			script = {
+				status: 200,
+				chunks: [
+					sse("response.created", { response: { id: "resp_1" } }),
+					sse("response.output_item.added", { output_index: 0, item: { type: "message", id: "msg_1" } }),
+					sse("response.output_item.done", { output_index: 0, item: { type: "message", id: "msg_1" } }),
+					sse("response.completed", {
+						response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+					}),
+				],
+			};
+			await collect(
+				provider().stream({ ...REQ("gpt-5.5", [{ role: "user", content: "hi" }]), thinking: "low" }),
+			);
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "low", summary: "auto" });
+			await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
+			expect(captured.at(-1)?.body.reasoning).toBeUndefined();
+		});
+	});
 });
 
 describe("contextWindowFor registry", () => {
@@ -331,3 +353,5 @@ describe("contextWindowFor registry", () => {
 		else process.env.IMP_CONTEXT_WINDOW = prev;
 	});
 });
+
+// ── #thinking-levels: the reasoning object ──────────────────────────────

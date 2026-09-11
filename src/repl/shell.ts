@@ -44,6 +44,9 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** alt+up / esc+p: pull all queued input back into the editor for
 	 *  editing (pi's "dequeue"). */
 	onDequeue(): void;
+	/** shift+tab: cycle the thinking level (#thinking-levels, pi's default
+	 *  binding). Wired to the /think cycle body in repl.ts. */
+	onCycleThinking(): void;
 	/** Shared with the Renderer's write sink — the transcript IS the output. */
 	transcript: TranscriptSink;
 	/** Injected in tests; default binds the real process terminal. */
@@ -316,6 +319,13 @@ export class TuiShell implements LineInput {
 			// protocol (pi-tui maps both) — pulls queued input back for editing.
 			if (this.selector === null && matchesKey(data, "alt+up")) {
 				this.options.onDequeue();
+				return { consume: true };
+			}
+			// shift+tab cycles the thinking level (pi's default binding; the
+			// editor has no shift+tab binding of its own). A model without a
+			// knob reports it as a note instead of silently doing nothing.
+			if (this.selector === null && matchesKey(data, "shift+tab")) {
+				this.options.onCycleThinking();
 				return { consume: true };
 			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt

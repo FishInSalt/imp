@@ -376,3 +376,24 @@ describe("LineInput.setTitle contract", () => {
 		expect(legacy.setTitle).toBeUndefined();
 	});
 });
+
+// ── #thinking-levels: the footer's think: segment ────────────────────────
+
+describe("footer thinking segment", () => {
+	it("a model with a knob shows think:<level> (off included); a knob-less model shows none", async () => {
+		// "test-model" is not in the style table → no segment at startup
+		const env = await startTuiRepl([reply("ok")]);
+		await settle();
+		expect(env.terminal.frameSince(0)).not.toContain("think:");
+		// switching to a Claude model adds the segment (default off)
+		env.terminal.data("/model claude-sonnet-4-5\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("think:off");
+		// /think medium repaints it
+		env.terminal.data("/think medium\r");
+		await settle();
+		expect(env.terminal.frameSince(0)).toContain("think:medium");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+});

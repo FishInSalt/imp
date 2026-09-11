@@ -75,9 +75,17 @@ imp            # interactive REPL (streaming, one-line tool status)
   one's context — disable with `IMP_BRANCH_SUMMARY=0`), `/sessions` (list
   saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
-  `/model [id]` (applies from the next turn), `/compact` (summarize
+  `/model [id]` (applies from the next turn),
+  `/think [level]` (thinking intensity — `off/minimal/low/medium/high`;
+  bare `/think` or **Shift+Tab** cycles; models without a thinking knob
+  say so; the footer shows `think:<level>`; GLM models take the binary
+  on/off form), `/compact` (summarize
   older context now). Unknown commands get a hint instead of reaching the
   model; prefix a line with a space to send a literal leading `/`.
+- Thinking levels can also start a session: `imp --thinking medium` or
+  `IMP_THINKING=medium` (invalid env values are ignored with a notice).
+  Reasoning traces render dim above the answer and are replayed on
+  `/resume`; on Anthropic they are kept in context as the API requires.
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).

@@ -26,6 +26,8 @@ export interface RunAgentLoopOptions {
 	/** New user prompt. Omit to continue from existing history. */
 	userMessage?: string;
 	maxTokens?: number;
+	/** Thinking level (#thinking-levels); forwarded to the provider. */
+	thinking?: import("../provider/thinking.js").ThinkingLevel;
 	/** Safety valve against runaway tool loops. Default 40. */
 	maxIterations?: number;
 	/** Fires for every message that enters history (user, steering, assistant, tool results). */
@@ -87,6 +89,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		history,
 		userMessage,
 		maxTokens = 8192,
+		thinking,
 		maxIterations = 40,
 		onMessage,
 		onBeforeTurn,
@@ -122,7 +125,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 
 		const assistant = await streamAssistant({
 			provider,
-			request: { system, messages: history, tools, model, maxTokens, signal },
+			request: { system, messages: history, tools, model, maxTokens, thinking, signal },
 			onEvent,
 			usage,
 		});

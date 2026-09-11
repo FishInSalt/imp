@@ -197,6 +197,7 @@ describe("slash commands", () => {
 			"/sessions",
 			"/resume <id>",
 			"/model [id]",
+			"/think [level]",
 			"/worktrees",
 			"/trust",
 			"/compact",
@@ -221,6 +222,7 @@ describe("slash commands", () => {
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
+				"  /think [level]     show or set the thinking level; no argument cycles (shift+tab)",
 				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
 				"  /status            session, model, context, and trust at a glance",
@@ -234,6 +236,7 @@ describe("slash commands", () => {
 				"                     autocomplete panel open, one Esc closes the panel only",
 				"  Ctrl+D             exit",
 				"  Ctrl+O             expand/collapse all folds (results, errors, diffs)",
+				"  Shift+Tab          cycle the thinking level (models with thinking)",
 				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
 				"  follow-up          Alt+Enter queues the line to run AFTER the running turn",
 				"                     (plain Enter steers into it)",
@@ -413,7 +416,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /tree /sessions /resume /model /worktrees /trust /status /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /think /worktrees /trust /status /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -1139,5 +1142,62 @@ describe("/resume picker (M10)", () => {
 		await dispatchCommand("/resume", env.ctx);
 		expect(opened).toBe(false);
 		expect(env.output()).toContain("no saved sessions for this directory yet");
+	});
+});
+
+// ── #thinking-levels: /think command + runner plumbing ──────────────────
+
+describe("/think (#thinking-levels)", () => {
+	it("on a thinking model: sets, clamps, cycles; the footer hook fires", async () => {
+		const env = await makeEnv();
+		expect(env.runner.supportsThinking()).toBe(true); // claude-sonnet-4-5
+		await dispatchCommand("/think medium", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("medium");
+		expect(env.output()).toContain("▪ thinking: medium");
+		// xhigh is beyond the budget ladder — clamps to high and says so
+		await dispatchCommand("/think xhigh", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("high");
+		expect(env.output()).toContain("clamped to high");
+		// bare /think cycles: high → off
+		await dispatchCommand("/think", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("off");
+		// invalid level teaches the ladder (pi's --thinking error shape)
+		await dispatchCommand("/think turbo", env.ctx);
+		expect(env.output()).toContain("thinking levels: off, minimal, low, medium, high, xhigh, max");
+	});
+
+	it("on a model with no knob: the pi error line, level stays off", async () => {
+		const env = await makeEnv({ model: "openai/llama-3-70b" });
+		expect(env.runner.supportsThinking()).toBe(false);
+		await dispatchCommand("/think high", env.ctx);
+		expect(env.output()).toContain("has no thinking control");
+		expect(env.runner.thinkingLevel).toBe("off");
+	});
+
+	it("setThinkingLevel persists a session entry (pi's thinking_level_change)", async () => {
+		const env = await makeEnv();
+		env.runner.setThinkingLevel("low");
+		const entries = env.runner.session?.getEntries() ?? [];
+		const change = entries.find((e) => e.type === "thinkingLevelChange");
+		expect(change).toMatchObject({ type: "thinkingLevelChange", thinkingLevel: "low" });
+		// buildContext skips it (tree metadata, like branch summaries)
+		expect(env.runner.session?.buildContext().messages.some((m) => m.role === "assistant")).toBe(false);
+	});
+
+	it("a /model switch off a thinking family drops the level (pi clamps on switch)", async () => {
+		const env = await makeEnv();
+		env.runner.setThinkingLevel("high");
+		await dispatchCommand("/model openai/llama-3-70b", env.ctx);
+		expect(env.runner.thinkingLevel).toBe("off");
+	});
+
+	it("the request carries the level; off sends none", async () => {
+		const env = await makeEnv();
+		env.runner.setThinkingLevel("low");
+		await env.runner.runTurn({ userMessage: "hi" });
+		expect(env.requests[env.requests.length - 1]?.thinking).toBe("low");
+		env.runner.setThinkingLevel("off");
+		await env.runner.runTurn({ userMessage: "again" });
+		expect(env.requests[env.requests.length - 1]?.thinking).toBeUndefined();
 	});
 });

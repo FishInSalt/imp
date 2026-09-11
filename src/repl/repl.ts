@@ -9,6 +9,7 @@ import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
 import { costFor } from "../provider/models.js";
+import { supportedThinkingLevels, thinkingStyleFor } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
@@ -571,8 +572,38 @@ class ReplMachine {
 	 *  every point any input changes — construction, command dispatch
 	 *  (/model, /new, /resume), and both run settle paths (session totals
 	 *  move) — and the terminal title rides along (TUI shells only). */
+	private runnerThinkingStyle(): ReturnType<typeof thinkingStyleFor> {
+		const reference = this.runner.modelReference();
+		const slash = reference.indexOf("/");
+		return thinkingStyleFor(
+			slash === -1 ? "anthropic" : reference.slice(0, slash),
+			slash === -1 ? reference : reference.slice(slash + 1),
+		);
+	}
+
+	/** shift+tab / bare /think: cycle the level (pi's cycleThinkingLevel —
+	 *  the runner clamps; the footer repaints its level segment). Public
+	 *  within the module: the TuiShell wiring closes over the machine. */
+	cycleThinking(): void {
+		if (!this.runner.supportsThinking()) {
+			this.renderer.note(`▪ ${this.runner.modelReference()} has no thinking control`);
+			return;
+		}
+		const style = this.runnerThinkingStyle();
+		if (style === null) return;
+		const levels = supportedThinkingLevels(style);
+		const next = levels[(levels.indexOf(this.runner.thinkingLevel) + 1) % levels.length] ?? "off";
+		const effective = this.runner.setThinkingLevel(next);
+		this.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
+		this.refreshFooter();
+	}
+
 	private refreshFooter(): void {
 		const parts: string[] = [this.runner.model];
+		// pi parity (#thinking-levels): the level segment sits beside the
+		// model whenever the model HAS a knob — "off" included, so the
+		// control is discoverable from the footer alone.
+		if (this.runner.supportsThinking()) parts.push(`think:${this.runner.thinkingLevel}`);
 		const session = this.runner.session;
 		if (session !== null) parts.push(session.header.id.slice(0, 8));
 
@@ -1004,6 +1035,7 @@ class ReplMachine {
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string) => this.enqueuePrompt(text),
 			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
+			refreshFooter: () => this.refreshFooter(), // /think repaints the level segment
 			abortActive: () => {
 				if (this.controller !== null) {
 					this.controller.abort();
@@ -1092,6 +1124,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onInterrupt: () => machine.handleInterrupt(),
 					onEof: () => machine.handleEof(),
 					onDequeue: () => machine.handleDequeue(),
+					onCycleThinking: () => machine.cycleThinking(),
 					transcript: tuiSink,
 					terminal: options.terminal,
 					autocomplete,

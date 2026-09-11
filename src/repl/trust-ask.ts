@@ -44,6 +44,7 @@ export async function askTrustViaTui(options: {
 		transcript: options.transcript,
 		terminal: options.terminal,
 		onDequeue: () => {},
+		onCycleThinking: () => {},
 		// Unreachable in practice: the picker holds focus for the whole ask
 		// (Esc/Ctrl+C cancel it). Wired as no-ops so the shell contract holds.
 		onLine: () => {},

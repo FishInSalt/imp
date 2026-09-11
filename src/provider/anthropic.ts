@@ -1,5 +1,6 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import { anthropicThinkingBudget, clampThinkingLevel, thinkingStyleFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -32,6 +33,16 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 				for (const block of msg.blocks) {
 					if (block.type === "text") {
 						if (block.text !== "") content.push({ type: "text", text: block.text });
+					} else if (block.type === "thinking") {
+						// Anthropic REQUIRES the thinking blocks (with their
+						// signatures) of the previous assistant turn on
+						// tool-result continuations — drop them and the API
+						// 400s. Z.ai's compat endpoint accepts them too.
+						content.push({
+							type: "thinking",
+							thinking: block.thinking,
+							...(block.signature !== undefined ? { signature: block.signature } : {}),
+						});
 					} else {
 						content.push({ type: "tool_use", id: block.id, name: block.name, input: block.arguments });
 					}
@@ -99,6 +110,27 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					description: t.description,
 					input_schema: t.parameters,
 				}));
+			}
+			// Thinking (#thinking-levels, pi parity): Claude takes a token
+			// budget carved out BESIDE max_tokens (pi's adjustment math);
+			// Z.ai GLM on this protocol takes the binary enable form.
+			if (request.thinking !== undefined && request.thinking !== "off") {
+				const style = thinkingStyleFor("anthropic", request.model);
+				if (style === "glm-anthropic") {
+					body.thinking = { type: "enabled" };
+				} else if (style === "anthropic-budget") {
+					const level = clampThinkingLevel(style, request.thinking);
+					const budget = anthropicThinkingBudget(level);
+					// pi: budget rides on top of the caller cap (the model
+					// cap bounds it), and a cap too small for both yields to
+					// a 1024-token answer minimum.
+					const maxTokens = Math.min(request.maxTokens + budget, 64000);
+					body.max_tokens = maxTokens;
+					body.thinking = {
+						type: "enabled",
+						budget_tokens: Math.min(budget, Math.max(0, maxTokens - 1024)),
+					};
+				}
 			}
 
 			// Retry policy (connection drops, 429/5xx — nothing yielded yet)
@@ -169,8 +201,14 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 							blocks.push(ours);
 							toolRawByIndex.set(index, "");
 							yield { type: "tool_call_start", id: ours.id, name: ours.name };
+						} else if (block.type === "thinking") {
+							// #thinking-levels: the reasoning trace streams as
+							// its own block; its signature arrives via
+							// signature_delta and is required for replay.
+							const ours: AssistantBlock = { type: "thinking", thinking: "" };
+							blockByIndex.set(index, ours);
+							blocks.push(ours);
 						}
-						// thinking blocks: intentionally ignored in v0.1
 						break;
 					}
 					case "content_block_delta": {
@@ -185,6 +223,13 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 							const chunk = String(delta.partial_json ?? "");
 							toolRawByIndex.set(index, (toolRawByIndex.get(index) ?? "") + chunk);
 							yield { type: "tool_call_delta", id: ours.id, jsonDelta: chunk };
+						} else if (delta.type === "thinking_delta" && ours?.type === "thinking") {
+							const chunk = String(delta.thinking ?? "");
+							ours.thinking += chunk;
+							yield { type: "thinking_delta", text: chunk };
+						} else if (delta.type === "signature_delta" && ours?.type === "thinking") {
+							const sig = String(delta.signature ?? "");
+							if (sig !== "") ours.signature = (ours.signature ?? "") + sig;
 						}
 						break;
 					}

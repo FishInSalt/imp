@@ -127,3 +127,28 @@ describe("replaySession", () => {
 		expect(chunks.join("")).toBe("");
 	});
 });
+
+describe("replaySession thinking (#thinking-levels)", () => {
+	it("assistant thinking blocks replay as one dim section above the text", () => {
+		const out = run(
+			[
+				{
+					role: "assistant",
+					blocks: [
+						{ type: "thinking", thinking: "let me consider the options" },
+						{ type: "text", text: "The answer is 42." },
+					],
+					usage: { inputTokens: 1, outputTokens: 1 },
+					stopReason: "end_turn",
+				},
+			],
+			true,
+			false,
+		);
+		// dim (2) + the trace; the answer stays plain
+		expect(out).toContain("\x1b[2mlet me consider the options");
+		expect(out).toContain("The answer is 42.");
+		// the trace section ends before the answer (order)
+		expect(out.indexOf("let me consider")).toBeLessThan(out.indexOf("The answer is 42."));
+	});
+});

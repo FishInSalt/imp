@@ -12,6 +12,13 @@ import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
+import {
+	supportedThinkingLevels,
+	THINKING_LEVELS,
+	type ThinkingLevel,
+	type ThinkingStyle,
+	thinkingStyleFor,
+} from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import type { SelectOptions } from "./line-input.js";
@@ -36,6 +43,9 @@ export interface CommandContext {
 	 *  (debt clearance); wired in repl.ts, absent in test recorders unless
 	 *  injected. */
 	clearView?: () => void;
+	/** Repaint the TUI footer (wired in repl.ts; /think changes its level
+	 *  segment). Absent in test recorders unless injected. */
+	refreshFooter?: () => void;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
 	 *  fallback for a missing select. Resolves the chosen index, or null on
@@ -59,6 +69,16 @@ export interface SlashCommand {
 	run(args: string, ctx: CommandContext): CommandOutcome | Promise<CommandOutcome>;
 }
 
+/** The current model's thinking style, derived from the display reference
+ *  (bare = anthropic; prefixed = that family — resolve.ts's rule). */
+function thinkingStyleForRunner(runner: Runner): ThinkingStyle | null {
+	const reference = runner.modelReference();
+	const slash = reference.indexOf("/");
+	const provider = slash === -1 ? "anthropic" : reference.slice(0, slash);
+	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
+	return thinkingStyleFor(provider, modelId);
+}
+
 /** "/model glm-4.6 extra" → { name: "model", args: "glm-4.6 extra" }; non-slash → null. */
 export function parseCommand(line: string): { name: string; args: string } | null {
 	if (line[0] !== "/") return null; // leading space (" /foo") makes it plain text
@@ -76,6 +96,7 @@ Keys:
                      autocomplete panel open, one Esc closes the panel only
   Ctrl+D             exit
   Ctrl+O             expand/collapse all folds (results, errors, diffs)
+  Shift+Tab          cycle the thinking level (models with thinking)
   newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
   follow-up          Alt+Enter queues the line to run AFTER the running turn
                      (plain Enter steers into it)
@@ -525,6 +546,44 @@ export const COMMANDS: readonly SlashCommand[] = [
 				throw new Error(`/model takes one id — got extra text. Usage: /model <id>, e.g. /model glm-4.6`);
 			}
 			switchModel(ctx, id);
+			return "handled";
+		},
+	},
+	{
+		name: "think",
+		usage: "/think [level]",
+		summary: "show or set the thinking level; no argument cycles (shift+tab)",
+		allowedDuringRun: true,
+		run: (args, ctx): CommandOutcome => {
+			if (!ctx.runner.supportsThinking()) {
+				// pi: "Current model does not support thinking" — an error
+				// line, not a silent no-op.
+				ctx.renderer.error(`this model (${ctx.runner.modelReference()}) has no thinking control`);
+				return "handled";
+			}
+			if (args === "") {
+				// pi's shift+tab semantics: cycle through the model's levels.
+				const style = thinkingStyleForRunner(ctx.runner);
+				if (style === null) return "handled"; // unreachable: supportsThinking passed
+				const levels = supportedThinkingLevels(style);
+				const current = ctx.runner.thinkingLevel;
+				const next = levels[(levels.indexOf(current) + 1) % levels.length] ?? "off";
+				const effective = ctx.runner.setThinkingLevel(next);
+				ctx.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
+				ctx.refreshFooter?.();
+				return "handled";
+			}
+			if (!(THINKING_LEVELS as readonly string[]).includes(args)) {
+				ctx.renderer.error(`thinking levels: ${THINKING_LEVELS.join(", ")} — e.g. /think medium`);
+				return "handled";
+			}
+			const effective = ctx.runner.setThinkingLevel(args as ThinkingLevel);
+			if (effective !== args) {
+				ctx.renderer.note(`▪ thinking: ${args} is not available on this model — clamped to ${effective}`);
+			} else {
+				ctx.renderer.note(`▪ thinking: ${effective} (applies from the next turn)`);
+			}
+			ctx.refreshFooter?.();
 			return "handled";
 		},
 	},

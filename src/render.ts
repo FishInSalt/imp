@@ -379,7 +379,12 @@ export class Renderer {
 
 	/** The trace bypasses the markdown pipeline (pi styles it as markdown;
 	 *  imp's answer stream owns that pipeline — the trace stays plain
-	 *  prose), dim + italic per pi's thinkingText theme. */
+	 *  prose), dim + italic per pi's thinkingText theme.
+	 *
+	 *  Accepted deviation (review P2, #thinking-stream): streaming wraps
+	 *  EACH block in its own dim/italic span, so a multi-paragraph trace
+	 *  with ansi on differs in escape-pair structure from the replay path's
+	 *  single span (visually equivalent; no golden covers it). */
 	private writeStyledThinking(text: string): void {
 		let styled = dim(text, this.options.ansi);
 		if (this.options.ansi) {

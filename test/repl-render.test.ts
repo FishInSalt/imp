@@ -35,6 +35,36 @@ describe("Renderer thinking (#thinking-levels)", () => {
 		expect(text.indexOf("paragraph two")).toBeLessThan(text.indexOf("the answer"));
 	});
 
+	it("#thinking-stream deviation pin: multi-paragraph traces get PER-BLOCK dim/italic spans (accepted; replay keeps one span)", () => {
+		const writes: string[] = [];
+		const r = new Renderer({
+			write: (s) => writes.push(s),
+			ansi: true,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		r.event({ type: "thinking_delta", text: "first paragraph" });
+		r.event({ type: "thinking_delta", text: "\n\nsecond paragraph" });
+		r.event({ type: "text_delta", text: "answer" });
+		r.endRun();
+		const text = writes.join("");
+		// each block carries its own dim pair — documented deviation from the
+		// pre-streaming single span (review P2): visually equivalent
+		expect(text.match(/\x1b\[2m/g)?.length).toBeGreaterThanOrEqual(2);
+		expect(text).toContain("\x1b[2mfirst paragraph");
+		expect(text).toContain("\x1b[2msecond paragraph");
+		// the replay path (settled trace, one flush) still renders ONE span
+		const replayWrites: string[] = [];
+		const r2 = new Renderer({
+			write: (s) => replayWrites.push(s),
+			ansi: true,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		r2.thinking("first paragraph\n\nsecond paragraph");
+		expect(replayWrites.join("").match(/\x1b\[2m/g)?.length).toBe(1);
+	});
+
 	it("thinking deltas flush as ONE dim italic section before the answer; answer stays plain", () => {
 		const { out, r } = makeRenderer();
 		r.event({ type: "thinking_delta", text: "step one " });

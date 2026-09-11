@@ -103,9 +103,9 @@ Environment:
   Z.ai GLM Coding Plan example (the official GLM path, pi parity):
     export ZAI_API_KEY=<your z.ai key>
     export IMP_MODEL=zai/glm-5.3
-  (A bare glm-* id routes the same way when ZAI_API_KEY is set; the older
-  ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic connection still works
-  as a fallback when it is not.)
+  (A bare glm-* id routes there unconditionally; without a credential imp
+  prints a sign-in pointer — /login zai — instead of silently connecting
+  elsewhere. anthropic/glm-* forces the compat endpoint explicitly.)
 
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
     imp login

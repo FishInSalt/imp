@@ -44,8 +44,9 @@ export function createZaiProvider(): LLMProvider {
 
 /** The bearer key — a stored /login credential wins over ZAI_API_KEY
  *  (pi's envApiKeyAuth order), null when neither is present. Used by the
- *  provider, discovery, AND parseModelRef's bare-glm routing so all three
- *  agree on what "zai is configured" means. */
+ *  provider, discovery, AND runner.noteMissingZaiCredential's teaching
+ *  gate so all three agree on what "zai is configured" means
+ *  (#glm-retire: parseModelRef no longer consults it — routing is pure). */
 export function zaiApiKey(): string | null {
 	return resolveApiKey("zai", "ZAI_API_KEY")?.key ?? null;
 }

@@ -41,6 +41,7 @@ import {
 	thinkingMetaFor,
 } from "./provider/thinking.js";
 import type { LLMProvider } from "./provider/types.js";
+import { zaiApiKey } from "./provider/zai.js";
 import type { Renderer } from "./render.js";
 
 export type RunMode = "print" | "repl";
@@ -353,10 +354,10 @@ class RunnerImpl implements Runner {
 		if (this.initialized) return;
 		this.initialized = true;
 		const options = this.options;
-		// #zai-default: a bare glm-* STARTUP model on the compat family gets
-		// the same one-line pointer a /model switch prints (README promises
-		// it unconditionally — imp/.env's own IMP_MODEL=glm-5.3 hits this).
-		this.noteGlmCompatRouting(options.model, this.providerName);
+		// #glm-retire: bare glm-* routes to zai unconditionally now — a
+		// missing credential teaches /login instead of silently falling
+		// back to the (retired) anthropic-compat path.
+		this.noteMissingZaiCredential(options.model, this.providerName);
 		if (!options.noSession) {
 			if (options.resume !== undefined || options.continueRecent === true) {
 				const resumed = resolveSession(options.cwd, {
@@ -582,23 +583,24 @@ class RunnerImpl implements Runner {
 		return thinkingMetaFor(this.providerName, this.model) !== null;
 	}
 
-	/** GLM connection tell (#zai-default): a BARE glm-* id that fell back to
-	 *  the anthropic-compat family gets a one-line teaching note — the zai
-	 *  path (the official one) always shows its zai/ prefix instead. Explicit
-	 *  anthropic/glm-* references stay silent (the user chose compat). */
-	private noteGlmCompatRouting(reference: string, provider: ProviderName): void {
-		if (provider !== "anthropic") return;
-		if (reference.includes("/")) return; // explicit family — a deliberate choice
-		if (!reference.trim().toLowerCase().startsWith("glm-")) return;
+	/** Credential teaching (#glm-retire): a glm model on the zai family with
+	 *  NO credential gets a one-line sign-in note — the bare-id compat
+	 *  fallback is retired. Explicit anthropic/glm-* (the generic compat
+	 *  passthrough) stays silent — a deliberate choice needing no key here. */
+	private noteMissingZaiCredential(reference: string, provider: ProviderName): void {
+		if (provider !== "zai") return;
+		if (reference.trim().toLowerCase().startsWith("anthropic/")) return;
+		if (!reference.trim().toLowerCase().split("/").pop()?.startsWith("glm-")) return;
+		if (zaiApiKey() !== null) return; // signed in (stored > env) — nothing to teach
 		this.options.renderer.note(
-			`▪ ${reference.trim()} runs via anthropic-compat (ANTHROPIC_BASE_URL) — the official path is ZAI_API_KEY + zai/${reference.trim()} (full thinking ladder)`,
+			`▪ ${reference.trim()} is a Z.ai model — sign in with /login zai (or export ZAI_API_KEY); anthropic/${reference.trim().split("/").pop()} forces the compat endpoint`,
 		);
 	}
 
 	setModel(reference: string): void {
 		const ref = parseModelRef(reference);
 		this.model = ref.modelId;
-		this.noteGlmCompatRouting(reference, ref.provider);
+		this.noteMissingZaiCredential(reference, ref.provider);
 		// Swap the provider INSTANCE only when the protocol family changes —
 		// a same-family switch keeps the current instance (test fakes inject
 		// here; in production the kept instance IS the real one).

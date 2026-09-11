@@ -78,9 +78,11 @@ export class Renderer {
 	 *  pre-M5b single-slot behavior byte-for-byte; >1 collapses to one
 	 *  aggregate spinner line (M5b design §7). */
 	private pendingTools: PendingTool[] = [];
-	/** Streamed reasoning trace (#thinking-levels). Deltas buffer here and
-	 *  flush as ONE dim italic section before the first answer content —
-	 *  pi renders runs of thinking blocks as a single dim section. */
+	/** Streamed reasoning trace (#thinking-levels). Deltas stream through the
+	 *  same paragraph rule as the answer text (#thinking-stream: pi renders
+	 *  thinking incrementally — block by block, never whole-run-buffered).
+	 *  Completed blocks (blank line / closed fence) render immediately; the
+	 *  incomplete tail stays here until flushThinking. */
 	private thinkingBuffer = "";
 	/** pi's hideThinkingBlock (ctrl+t): hidden traces render one dim static
 	 *  label per section ("Thinking...") instead of the full text. */
@@ -113,7 +115,7 @@ export class Renderer {
 				break;
 			case "thinking_delta":
 				this.stopSpinner();
-				this.thinkingBuffer += event.text;
+				this.streamThinking(event.text);
 				break;
 			case "tool_start":
 				this.flushThinking(); // tool rows follow the trace section
@@ -323,9 +325,23 @@ export class Renderer {
 		this.flushThinking();
 	}
 
-	/** Flush the buffered reasoning trace as one dim italic section. The
-	 *  trace bypasses the markdown pipeline (pi styles it as markdown; imp's
-	 *  answer stream owns that pipeline — the trace stays plain prose). */
+	/** Feed a thinking delta: completed paragraphs render immediately (pi
+	 *  parity — the trace grows as it streams, like the answer text). The
+	 *  hidden mode buffers whole (pi's hidden label is static). */
+	private streamThinking(delta: string): void {
+		this.thinkingBuffer += delta;
+		if (this.hideThinking) return;
+		for (;;) {
+			const flushpoint = this.findFlushPoint(this.thinkingBuffer);
+			if (flushpoint === null) break;
+			const chunk = this.thinkingBuffer.slice(0, flushpoint);
+			this.thinkingBuffer = this.thinkingBuffer.slice(flushpoint);
+			this.writeThinkingBlock(chunk);
+		}
+	}
+
+	/** Flush the remaining (incomplete) reasoning paragraph — the run's
+	 *  answer is beginning, a tool follows, or the stream ended. */
 	private flushThinking(): void {
 		if (this.thinkingBuffer === "") return;
 		const text = this.thinkingBuffer.trim();
@@ -342,6 +358,34 @@ export class Renderer {
 			this.write(`${dim("Thinking...", this.options.ansi)}\n\n`);
 			return;
 		}
+		this.writeStyledThinking(text);
+		this.write("\n\n");
+	}
+
+	/** One completed thinking paragraph. Whitespace-only chunks (leading
+	 *  blank lines of the trace) drop out — byte-identical to the old
+	 *  whole-trace trim. Order note: pending answer paragraphs flush FIRST
+	 *  (the stream sent them before this reasoning run — review P2). */
+	private writeThinkingBlock(chunk: string): void {
+		const text = chunk.trim();
+		if (text === "") return;
+		this.stopSpinner();
+		this.flushMarkdown();
+		this.ensureNewline();
+		this.writeStyledThinking(text);
+		this.write("\n\n");
+		this.needsNewline = false;
+	}
+
+	/** The trace bypasses the markdown pipeline (pi styles it as markdown;
+	 *  imp's answer stream owns that pipeline — the trace stays plain
+	 *  prose), dim + italic per pi's thinkingText theme.
+	 *
+	 *  Accepted deviation (review P2, #thinking-stream): streaming wraps
+	 *  EACH block in its own dim/italic span, so a multi-paragraph trace
+	 *  with ansi on differs in escape-pair structure from the replay path's
+	 *  single span (visually equivalent; no golden covers it). */
+	private writeStyledThinking(text: string): void {
 		let styled = dim(text, this.options.ansi);
 		if (this.options.ansi) {
 			// italic completes the pi look; like dim(), NEVER in piped output
@@ -350,7 +394,7 @@ export class Renderer {
 				.map((l) => `\x1b[3m${l}\x1b[23m`)
 				.join("\n");
 		}
-		this.write(`${styled}\n\n`);
+		this.write(styled);
 	}
 
 	/** Streaming text (event or direct). Spinner-aware; markdown-buffered when enabled. */

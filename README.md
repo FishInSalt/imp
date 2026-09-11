@@ -25,7 +25,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 `/login` in the REPL stores credentials in `~/.imp/auth.json` (0600) — a
 stored key beats the environment variable, and a bare `glm-*` model id
-routes to the zai family as soon as either is present:
+routes to the zai family (pi parity: zai is the one official GLM path;
+a missing credential gets a sign-in pointer, never a silent fallback):
 
 ```
 /login            → Z.AI · Anthropic · OpenAI · OpenAI (ChatGPT plan)
@@ -41,17 +42,32 @@ each provider's status (`signed in — stored key`, `env: ZAI_API_KEY`,
 at the matching `/model` switch. `imp logout` (CLI) removes only the
 ChatGPT-plan credential; `/logout` (REPL) removes any stored one.
 
-### Using Z.ai GLM Coding Plan (or any Anthropic-compatible service)
+### Using Z.ai GLM Coding Plan
+
+The official path is the zai family — `/login` in the REPL (pick Z.AI)
+or:
 
 ```bash
-export ANTHROPIC_AUTH_TOKEN=<your z.ai api key>
-export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
-export IMP_MODEL=glm-4.6   # or glm-4.5, glm-4.7, ... per your plan
+export ZAI_API_KEY=<your z.ai api key>
+export IMP_MODEL=glm-5.3   # or glm-5.2, glm-4.7, ... per your plan
+```
+
+The pre-zai anthropic-compat setup (`ANTHROPIC_BASE_URL` pointing at
+z.ai) still works when forced explicitly (`imp -m anthropic/glm-5.3`),
+but bare `glm-*` ids no longer fall back to it. Prefer `/login` — the
+compat endpoint carries the binary thinking knob only.
+
+### Using any Anthropic-compatible service
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=<token>          # or ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL=<your endpoint>
+export IMP_MODEL=<id the endpoint serves>
 ```
 
 Note: `/login anthropic` stores a key that overrides `ANTHROPIC_AUTH_TOKEN`
 (and sends `x-api-key` style instead of `Bearer`) — on a compat endpoint,
-prefer the env pair above or `/login zai`.
+prefer the env pair above.
 
 ## Usage
 
@@ -119,17 +135,16 @@ imp            # interactive REPL (streaming, one-line tool status)
   kept in context as the API requires.
 - Z.ai GLM connects the way pi does — the coding endpoint over the
   OpenAI protocol is the ONE official GLM path:
-  `ZAI_API_KEY=... imp -m zai/glm-5.3` (`ZAI_BASE_URL` overrides, e.g.
-  the CN mirror `https://open.bigmodel.cn/api/coding/paas/v4`). A bare
-  `glm-*` id routes there too whenever `ZAI_API_KEY` is set. glm-5.2 =
-  off/high/max; glm-5.3 = low/high/max (thinking cannot be disabled on
-  that model). The older anthropic-compat connection
-  (`ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`) keeps working as
-  a fallback when `ZAI_API_KEY` is absent, with the binary thinking
-  knob only. Which path a session took is always visible: the footer and
-  `/model` show `zai/glm-…` for the coding endpoint and a bare `glm-…`
-  for compat, and a bare id on compat prints a one-line pointer to the
-  zai setup.
+  `ZAI_API_KEY=... imp -m zai/glm-5.3`, or `/login` → Z.AI in the REPL
+  (`ZAI_BASE_URL` overrides, e.g. the CN mirror
+  `https://open.bigmodel.cn/api/coding/paas/v4`). A bare `glm-*` id
+  routes there unconditionally; without a credential imp prints a
+  one-line sign-in pointer instead of silently connecting elsewhere.
+  glm-5.2 = off/high/max; glm-5.3 = low/high/max (thinking cannot be
+  disabled on that model). The old env-only anthropic-compat fallback
+  is retired — `anthropic/glm-…` still forces that endpoint explicitly
+  (generic compat passthrough, binary thinking knob only), and the
+  footer and `/model` always show `zai/glm-…` for the coding path.
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).

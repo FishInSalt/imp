@@ -308,13 +308,15 @@ describe("openai-completions provider", () => {
 
 describe("parseModelRef routing", () => {
 	// imported here to keep the top of the file focused on the wire tests
-	it("bare ids default to anthropic; canonical prefixes route; unknown prefixes fall back", async () => {
+	it("bare ids default to anthropic (glm-* → zai unconditionally); canonical prefixes route; unknown prefixes fall back", async () => {
 		const { parseModelRef } = await import("../src/provider/resolve.js");
-		// cleared so a dev-shell ZAI_API_KEY cannot flip the glm fallback leg
+		// #glm-retire: routing is pure string routing again — a dev-shell
+		// ZAI_API_KEY can no longer flip anything, but clear it anyway so the
+		// zai leg documents the key-less case (teaching happens at runner level)
 		const prevZai = process.env.ZAI_API_KEY;
 		delete process.env.ZAI_API_KEY;
 		try {
-			expect(parseModelRef("glm-4.6")).toEqual({ provider: "anthropic", modelId: "glm-4.6" });
+			expect(parseModelRef("glm-4.6")).toEqual({ provider: "zai", modelId: "glm-4.6" });
 			expect(parseModelRef("anthropic/claude-sonnet-4-5")).toEqual({
 				provider: "anthropic",
 				modelId: "claude-sonnet-4-5",

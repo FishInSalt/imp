@@ -2,13 +2,7 @@ import { createAnthropicProvider } from "./anthropic.js";
 import { createCodexResponsesProvider } from "./codex-responses.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
-import { createZaiProvider, zaiApiKey } from "./zai.js";
-
-/** Whether the zai family has any credential — the bare-glm routing gate.
- *  Same predicate as familyConfigured("zai"), kept dependency-light. */
-function zaiConfigured(): boolean {
-	return zaiApiKey() !== null;
-}
+import { createZaiProvider } from "./zai.js";
 
 /**
  * Model reference parsing + provider routing (#multi-provider).
@@ -24,10 +18,11 @@ function zaiConfigured(): boolean {
  *                               credential (imp login; see codex-auth.ts)
  *
  * This is the seed of the full registry (contextWindow per model, picker,
- * session persistence). NOT fully pure anymore (#zai-default): bare glm-*
- * ids consult ZAI_API_KEY to pick the family (zai when set, the
- * anthropic-compat fallback otherwise); everything else stays
- * deterministic string routing.
+ * session persistence). #glm-retire: bare glm-* ids route to zai
+ * UNCONDITIONALLY (pi has no glm special-casing — zai is the one
+ * official GLM path); a missing credential teaches at runner level, it
+ * no longer silently falls back to anthropic-compat. parseModelRef is
+ * pure string routing again.
  */
 
 export type ProviderName = "anthropic" | "openai" | "openai-codex" | "zai";
@@ -47,14 +42,12 @@ export function parseModelRef(reference: string): ModelRef {
 	const slash = trimmed.indexOf("/");
 	if (slash === -1) {
 		// pi parity: GLM's ONE official path is the zai provider (coding
-		// endpoint, openai-completions). A bare glm-* id routes there when
-		// zai is configured — a stored /login key OR ZAI_API_KEY (#login-repl:
-		// logging in mid-session must flip routing exactly like exporting the
-		// env var would); without either the id falls back to the
-		// anthropic-compat connection (the pre-zai setup — kept so existing
-		// ANTHROPIC_BASE_URL workflows do not break). Explicit prefixes
+		// endpoint, openai-completions). A bare glm-* id routes there
+		// UNCONDITIONALLY (#glm-retire: the credential-less fallback to
+		// anthropic-compat is gone — /login zai replaced it; the runner
+		// teaches when the credential is missing). Explicit prefixes
 		// (zai/glm-…, anthropic/glm-…, openai/glm-…) always win.
-		if (trimmed.toLowerCase().startsWith("glm-") && zaiConfigured()) {
+		if (trimmed.toLowerCase().startsWith("glm-")) {
 			return { provider: "zai", modelId: trimmed };
 		}
 		return { provider: "anthropic", modelId: trimmed };

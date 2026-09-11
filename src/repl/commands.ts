@@ -11,6 +11,8 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
+import { type ApiKeyFamily, loadApiKey, saveApiKey } from "../provider/auth-store.js";
+import { loadCodexCredential } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
 	supportedThinkingLevels,
@@ -50,8 +52,15 @@ export interface CommandContext {
 	 *  fallback for a missing select. Resolves the chosen index, or null on
 	 *  cancel. */
 	select?: (options: SelectOptions) => Promise<number | null>;
+	/** Secret text question (/login's key prompt) — bound like select; both
+	 *  shells implement it (the readline one echoes). Resolves the typed
+	 *  text, or null on cancel. */
+	secret?: (question: string) => Promise<string | null>;
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
+	/** #login-repl: credential store location — hermetic tests inject a temp
+	 *  path; production defaults to ~/.imp/auth.json. */
+	authStorePath?: string;
 	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
 	worktreeCwd?: string;
 }
@@ -112,6 +121,8 @@ Keys:
     ↑/↓              move the selection
     Enter            pick · Esc or Ctrl+C cancels (no interrupt)
     typing           filters the list (/resume — Enter picks the original row)
+  while a question is pending (/login keys, confirms):
+    Enter            submits the answer · Esc or Ctrl+C cancels
 `;
 
 /** SlashCommand | RegisteredExtensionCommand → its dispatch name (teaching lines). */
@@ -304,6 +315,87 @@ function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 function sessionRowDescription(modified: Date, messageCount: number, title: string): string {
 	const preview = title.length > 40 ? `${title.slice(0, 40)}…` : title;
 	return `${formatWhen(modified)} · ${messageCount} msgs · ${preview}`;
+}
+
+/** One /login row — pi's auth metadata table, scoped to imp's families.
+ *  Every api-key family shows its status (pi's OAuthSelector rows show
+ *  status.type + source the same way); codex is OAuth-only, bridged to the
+ *  CLI flow until the in-REPL dialog lands. */
+interface LoginTarget {
+	family: ApiKeyFamily | "openai-codex";
+	/** pi's provider display name. */
+	name: string;
+	/** The env-var alternative (the description's source label). */
+	envVar: string;
+	method: "api_key" | "oauth";
+	/** Post-login /model hint when the current family differs. */
+	switchHint: string;
+}
+
+const LOGIN_TARGETS: readonly LoginTarget[] = [
+	{ family: "zai", name: "Z.AI", envVar: "ZAI_API_KEY", method: "api_key", switchHint: "zai/glm-5.3" },
+	{
+		family: "anthropic",
+		name: "Anthropic",
+		envVar: "ANTHROPIC_API_KEY",
+		method: "api_key",
+		switchHint: "claude-sonnet-4-5",
+	},
+	{
+		family: "openai",
+		name: "OpenAI",
+		envVar: "OPENAI_API_KEY",
+		method: "api_key",
+		switchHint: "openai/gpt-5.2",
+	},
+	{
+		family: "openai-codex",
+		name: "OpenAI (ChatGPT plan)",
+		envVar: "none — OAuth",
+		method: "oauth",
+		switchHint: "openai-codex/gpt-5.5",
+	},
+];
+
+/** A row's status line (pi: configured rows carry type + source). */
+function loginStatus(target: LoginTarget, authPath?: string): string {
+	if (target.family === "openai-codex") {
+		return loadCodexCredential(authPath) !== null ? "signed in — stored token" : "not signed in";
+	}
+	if (loadApiKey(target.family, authPath) !== null) return "signed in — stored key";
+	if (process.env[target.envVar] !== undefined) return `env: ${target.envVar}`;
+	return "not signed in";
+}
+
+/** /login's body, shared by the picker's pick and "/login <family>". */
+async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<void> {
+	if (target.method === "oauth") {
+		// The device-code dialog lands with the in-REPL OAuth batch; the CLI
+		// flow exists today and writes the same store /login reads.
+		ctx.renderer.note(`▪ ${target.name}: run "imp login" — device-code OAuth (in-REPL flow is coming)`);
+		return;
+	}
+	if (target.family === "openai-codex") return; // unreachable: oauth returned above
+	const secret = ctx.secret;
+	if (secret === undefined) {
+		ctx.renderer.error(
+			`imp: /login needs an interactive prompt — or set the key directly:\n  export ${target.envVar}=<key>`,
+		);
+		return;
+	}
+	// pi's prompt: `Enter ${name}` (packages/ai/src/auth/helpers.ts).
+	const key = await secret(`Enter ${target.name} API key`);
+	if (key === null || key.trim() === "") return; // cancelled/blank — silent, like pi's "Login cancelled"
+	saveApiKey(target.family, key, ctx.authStorePath);
+	ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
+	// pi switches the model only when none was selected; imp always has one,
+	// so the pointer takes pi's place when the login changed the available
+	// family.
+	const current = ctx.runner.modelReference();
+	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
+	if (currentFamily !== target.family) {
+		ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
+	}
 }
 
 export const COMMANDS: readonly SlashCommand[] = [
@@ -558,6 +650,46 @@ export const COMMANDS: readonly SlashCommand[] = [
 				throw new Error(`/model takes one id — got extra text. Usage: /model <id>, e.g. /model glm-4.6`);
 			}
 			switchModel(ctx, id);
+			return "handled";
+		},
+	},
+	{
+		name: "login",
+		usage: "/login [provider]",
+		summary: "sign in to a provider (stored credential beats the env var)",
+		allowedDuringRun: false,
+		run: async (args, ctx): Promise<CommandOutcome> => {
+			// pi matches provider refs case-insensitively against id AND
+			// display name (interactive-mode.ts findLoginProviderOptions)
+			const needle = args.trim().toLowerCase();
+			const target =
+				needle === ""
+					? undefined
+					: LOGIN_TARGETS.find((t) => t.family === needle || t.name.toLowerCase() === needle);
+			if (args.trim() !== "" && target === undefined) {
+				ctx.renderer.error(
+					`imp: unknown provider "/login ${args.trim()}" — known: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`,
+				);
+				return "handled";
+			}
+			if (target !== undefined) {
+				await loginToTarget(ctx, target);
+				return "handled";
+			}
+			const select = ctx.select;
+			if (select === undefined) {
+				// Legacy text path (readline shell has a picker-less contract).
+				ctx.renderer.writeLine(`providers: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`);
+				ctx.renderer.writeLine("sign in with: /login <provider> — the key is stored in ~/.imp/auth.json");
+				return "handled";
+			}
+			const rows = LOGIN_TARGETS.map((t) => ({
+				label: t.name,
+				description: loginStatus(t, ctx.authStorePath),
+			}));
+			const index = await select({ title: "sign in to a provider", items: rows });
+			const picked = index === null ? undefined : LOGIN_TARGETS[index];
+			if (picked !== undefined) await loginToTarget(ctx, picked);
 			return "handled";
 		},
 	},

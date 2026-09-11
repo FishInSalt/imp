@@ -13,6 +13,7 @@
  * fixes the defaults (endpoint, key, zai compat flags) and the provider
  * NAME, which the thinking model catalog keys off (glm-* rules).
  */
+import { resolveApiKey } from "./auth-store.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
 
@@ -33,7 +34,7 @@ export function createZaiProvider(): LLMProvider {
 	// ZAI_BASE_URL overrides (the CN mirror: https://open.bigmodel.cn/api/coding/paas/v4)
 	return createOpenAICompletionsProvider({
 		baseUrl: process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL,
-		apiKey: process.env.ZAI_API_KEY,
+		apiKey: zaiApiKey() ?? undefined,
 		// provider name drives the thinking catalog's zai rules
 		name: "zai",
 		// pi compat.zaiToolStream: request Z.ai's streaming tool dialect
@@ -41,7 +42,10 @@ export function createZaiProvider(): LLMProvider {
 	});
 }
 
-/** The bearer key for discovery requests (null when unconfigured). */
+/** The bearer key — a stored /login credential wins over ZAI_API_KEY
+ *  (pi's envApiKeyAuth order), null when neither is present. Used by the
+ *  provider, discovery, AND parseModelRef's bare-glm routing so all three
+ *  agree on what "zai is configured" means. */
 export function zaiApiKey(): string | null {
-	return process.env.ZAI_API_KEY ?? null;
+	return resolveApiKey("zai", "ZAI_API_KEY")?.key ?? null;
 }

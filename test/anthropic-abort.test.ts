@@ -1,6 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAnthropicProvider } from "../src/provider/anthropic.js";
+import { clearApiKey, saveApiKey } from "../src/provider/auth-store.js";
 import type { LLMEvent } from "../src/provider/types.js";
 
 /**
@@ -9,6 +13,84 @@ import type { LLMEvent } from "../src/provider/types.js";
  * reported a user interrupt as a provider failure. abortSafe() must turn that
  * rejection into a clean generator end — no throw, no message_end event.
  */
+describe("anthropic key resolution (#login-repl review P2)", () => {
+	// A tiny SSE server that captures the auth headers and ends cleanly.
+	let hdrServer: Server;
+	let hdrBase = "";
+	beforeAll(async () => {
+		hdrServer = createServer((req, res) => {
+			captured = { authorization: req.headers.authorization, xApiKey: req.headers["x-api-key"] };
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.write(
+				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n',
+			);
+			res.write(
+				'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n',
+			);
+			res.write(
+				'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\n',
+			);
+			res.write(
+				'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+			);
+			res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+			res.end();
+		});
+		await new Promise<void>((resolve) => hdrServer.listen(0, "127.0.0.1", resolve));
+		const a = hdrServer.address();
+		if (a === null || typeof a === "string") throw new Error("no address");
+		hdrBase = `http://127.0.0.1:${a.port}`;
+	});
+	afterAll(async () => {
+		await new Promise<void>((resolve) => hdrServer.close(() => resolve()));
+	});
+	let captured: { authorization?: string; xApiKey?: string } = {};
+	const REQ = {
+		system: "s",
+		messages: [{ role: "user" as const, content: "hi" }],
+		tools: [],
+		model: "claude-sonnet-4-5",
+		maxTokens: 64,
+	};
+
+	async function drain(): Promise<void> {
+		for await (const _ of createAnthropicProvider({ baseUrl: hdrBase }).stream(REQ));
+	}
+
+	it("stored key beats AUTH_TOKEN and forces x-api-key; the env pair keeps its original order", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-ant-"));
+		const prevPath = process.env.IMP_AUTH_PATH;
+		const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
+		const prevKey = process.env.ANTHROPIC_API_KEY;
+		process.env.IMP_AUTH_PATH = path.join(dir, "auth.json");
+		delete process.env.ANTHROPIC_AUTH_TOKEN;
+		delete process.env.ANTHROPIC_API_KEY;
+		try {
+			// no stored key: AUTH_TOKEN wins with bearer (compat setups)
+			process.env.ANTHROPIC_AUTH_TOKEN = "tok-env";
+			process.env.ANTHROPIC_API_KEY = "key-env";
+			await drain();
+			expect(captured).toEqual({ authorization: "Bearer tok-env", xApiKey: undefined });
+			// a stored key takes over (x-api-key) even with both envs present
+			saveApiKey("anthropic", "key-stored");
+			await drain();
+			expect(captured).toEqual({ authorization: undefined, xApiKey: "key-stored" });
+			// and without the stored key, API_KEY alone sends x-api-key
+			clearApiKey("anthropic");
+			delete process.env.ANTHROPIC_AUTH_TOKEN;
+			await drain();
+			expect(captured).toEqual({ authorization: undefined, xApiKey: "key-env" });
+		} finally {
+			if (prevPath === undefined) delete process.env.IMP_AUTH_PATH;
+			else process.env.IMP_AUTH_PATH = prevPath;
+			if (prevToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+			else process.env.ANTHROPIC_AUTH_TOKEN = prevToken;
+			if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+			else process.env.ANTHROPIC_API_KEY = prevKey;
+		}
+	});
+});
+
 describe("anthropic provider abort mid-stream", () => {
 	let server: Server;
 	let baseUrl = "";

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
+import { authFilePath } from "./auth-store.js";
 
 /**
  * OpenAI Codex (ChatGPT subscription credential) authentication — device-code
@@ -75,18 +75,16 @@ function decodeJwtAccountId(token: string): string {
 	}
 }
 
-function authFilePath(authPath?: string): string {
-	// IMP_AUTH_PATH redirects the credential store (sandboxing / hermetic
-	// tests — the picker's family check must not depend on the host login).
-	return authPath ?? process.env.IMP_AUTH_PATH ?? path.join(homedir(), ".imp", "auth.json");
-}
-
-/** Read the stored credential; null when absent, foreign-provider, or corrupt. */
+/** Read the stored credential; null when absent, foreign-provider, or corrupt.
+ *  #login-repl: the credential lives under the file's "codex" section —
+ *  files written before that batch hold it flat at the top level, which
+ *  the `?? raw` fallback below still accepts, so both layouts load. */
 export function loadCodexCredential(authPath?: string): CodexCredential | null {
 	const file = authFilePath(authPath);
 	if (!existsSync(file)) return null;
 	try {
-		const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<StoredCredential>;
+		const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+		const parsed = ((raw as { codex?: unknown }).codex ?? raw) as Partial<StoredCredential>;
 		if (
 			parsed.provider !== "openai-codex" ||
 			typeof parsed.accessToken !== "string" ||
@@ -108,15 +106,46 @@ export function loadCodexCredential(authPath?: string): CodexCredential | null {
 }
 
 function persistCredential(credential: CodexCredential, authPath?: string): void {
+	// #login-repl: preserve the apiKeys section that shares the file — a
+	// token refresh must not log the user out of every other family.
 	const file = authFilePath(authPath);
 	mkdirSync(path.dirname(file), { recursive: true });
-	const stored: StoredCredential = { provider: "openai-codex", ...credential };
-	writeFileSync(file, `${JSON.stringify(stored, undefined, "\t")}\n`, { mode: 0o600 });
+	let rest: Record<string, unknown> = {};
+	try {
+		const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+		if (parsed.apiKeys !== undefined || parsed.codex !== undefined) {
+			const { codex: _old, version: _v, ...keep } = parsed;
+			rest = keep;
+		}
+	} catch {
+		// absent or corrupt file — write the credential fresh
+	}
+	const stored: Record<string, unknown> = { ...rest, codex: { provider: "openai-codex", ...credential } };
+	writeFileSync(file, `${JSON.stringify({ version: 1, ...stored }, undefined, "\t")}\n`, { mode: 0o600 });
 }
 
-/** Remove the stored credential (logout). Missing file is a no-op. */
+/** Remove the stored credential (logout). Missing file is a no-op.
+ *  #login-repl: other families' stored api keys share the file — remove
+ *  only the codex section and keep the rest (cli `imp logout`). */
 export function logoutCodex(authPath?: string): void {
-	rmSync(authFilePath(authPath), { force: true });
+	const file = authFilePath(authPath);
+	try {
+		const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+		if (parsed.codex !== undefined || parsed.apiKeys !== undefined) {
+			const { codex: _drop, version: _v2, ...keep } = parsed;
+			// an EMPTY apiKeys object (every key cleared) is not content —
+			// the file should go away entirely, like the pre-batch logout
+			const keys = keep.apiKeys;
+			if (keys !== null && typeof keys === "object" && Object.keys(keys).length === 0) delete keep.apiKeys;
+			if (Object.keys(keep).length > 0) {
+				writeFileSync(file, `${JSON.stringify({ version: 1, ...keep }, undefined, "\t")}\n`, { mode: 0o600 });
+				return;
+			}
+		}
+	} catch {
+		// absent or unreadable file falls through to rm
+	}
+	rmSync(file, { force: true });
 }
 
 interface TokenResponse {

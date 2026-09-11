@@ -21,6 +21,24 @@ npm run build
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+### Signing in (/login)
+
+`/login` in the REPL (or `imp login` for the ChatGPT plan's device-code
+OAuth) stores credentials in `~/.imp/auth.json` (0600) — a stored key
+beats the environment variable, and a bare `glm-*` model id routes to
+the zai family as soon as either is present. Pick a provider, paste the
+key (Enter saves, Esc cancels):
+
+```
+/login            → Z.AI · Anthropic · OpenAI · OpenAI (ChatGPT plan)
+/login zai        → straight to the key prompt
+```
+
+Rows show each provider's status (`signed in — stored key`, `env: ZAI_API_KEY`,
+`not signed in`), and after a login from a different family imp points at
+the matching `/model` switch. `imp logout` removes only the ChatGPT-plan
+credential; keys saved by `/login` stay until removed by hand.
+
 ### Using Z.ai GLM Coding Plan (or any Anthropic-compatible service)
 
 ```bash
@@ -28,6 +46,10 @@ export ANTHROPIC_AUTH_TOKEN=<your z.ai api key>
 export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
 export IMP_MODEL=glm-4.6   # or glm-4.5, glm-4.7, ... per your plan
 ```
+
+Note: `/login anthropic` stores a key that overrides `ANTHROPIC_AUTH_TOKEN`
+(and sends `x-api-key` style instead of `Bearer`) — on a compat endpoint,
+prefer the env pair above or `/login zai`.
 
 ## Usage
 

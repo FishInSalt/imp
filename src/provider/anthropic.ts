@@ -1,4 +1,5 @@
 import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import { loadApiKey } from "./auth-store.js";
 import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
 import {
 	adaptiveEffortFor,
@@ -83,12 +84,17 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 export function createAnthropicProvider(options: AnthropicProviderOptions = {}): LLMProvider {
 	// Key resolution mirrors Claude Code conventions so Anthropic-compatible
 	// services (e.g. Z.ai GLM Coding Plan) work via env vars alone:
-	//   ANTHROPIC_AUTH_TOKEN  -> Authorization: Bearer (checked first)
+	//   a stored /login key  -> x-api-key (checked first — pi's order)
+	//   ANTHROPIC_AUTH_TOKEN  -> Authorization: Bearer (checked next)
 	//   ANTHROPIC_API_KEY    -> x-api-key
 	//   ANTHROPIC_BASE_URL   -> endpoint override
+	// #login-repl: ONLY the stored key beats the env order — a stray
+	// ANTHROPIC_API_KEY must not overrule an AUTH_TOKEN compat setup
+	// (review P2: resolveApiKey's env fallback once flipped the pair).
 	const envToken = process.env.ANTHROPIC_AUTH_TOKEN;
-	const apiKey = options.apiKey ?? envToken ?? process.env.ANTHROPIC_API_KEY;
-	const auth: "bearer" | "x-api-key" = options.auth ?? (envToken ? "bearer" : "x-api-key");
+	const stored = loadApiKey("anthropic");
+	const apiKey = options.apiKey ?? stored ?? envToken ?? process.env.ANTHROPIC_API_KEY;
+	const auth: "bearer" | "x-api-key" = options.auth ?? (stored === null && envToken ? "bearer" : "x-api-key");
 	const baseUrl = (options.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {

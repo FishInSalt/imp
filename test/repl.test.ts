@@ -981,9 +981,18 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 			fake.send("/login openai-codex\n");
 			await new Promise((r) => setTimeout(r, 300)); // usercode + first poll
 			expect(fake.output()).toContain("enter code: HANG-0000");
+			// Review P1 (batch B): a command typed mid-login used to disarm the
+			// cancel — its runCommand finally nulled the controller and a double
+			// Ctrl+C force-quit over the live poll. /help fully runs (unstateful);
+			// the abort below must STILL cancel the login.
+			fake.send("/help\n");
+			await new Promise((r) => setTimeout(r, 200));
+			expect(fake.output()).toContain("/compact");
 			fake.send("\x03"); // Ctrl+C — must ABORT, not count toward force quit
 			await new Promise((r) => setTimeout(r, 400));
-			expect(fake.output()).not.toContain("force");
+			// /help's own text mentions "force quit" — pin the REAL force-quit
+			// signals instead: the compaction hint and the 130 force exit
+			expect(fake.output()).not.toContain("compacting — press");
 			// the prompt still answers: /exit resolves cleanly (no 130 force exit)
 			fake.send("/exit\n");
 			await repl;

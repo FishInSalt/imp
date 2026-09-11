@@ -475,7 +475,11 @@ class ReplMachine {
 		} catch (err) {
 			this.reportError(err);
 		} finally {
-			this.longOpAbort = null; // the guarded login is over (any path)
+			// Review P1 (batch B): clear ONLY from the dispatch that armed it.
+			// A command typed mid-login (runCommand is unstateful for it) must
+			// not null the controller — that disarmed Ctrl+C and left a double
+			// press force-quitting over a live OAuth poll.
+			if (stateful) this.longOpAbort = null;
 			if (stateful && this.state === "compacting") {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
@@ -1085,8 +1089,13 @@ class ReplMachine {
 				return false;
 			},
 			// the guarded /login registers its OAuth controller here so the
-			// compacting-state Ctrl+C path can abort it
+			// compacting-state Ctrl+C path can abort it. A SUPERSEDED flow
+			// (a second /login typed while one polls) cancels first — the old
+			// poll's catch sees "Login cancelled" and stays silent.
 			onLongOpAbort: (controller) => {
+				if (controller !== null && this.longOpAbort !== null && this.longOpAbort !== controller) {
+					this.longOpAbort.abort();
+				}
 				this.longOpAbort = controller;
 			},
 		};

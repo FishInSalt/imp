@@ -94,6 +94,8 @@ async function makeGitRepo(args?: {
  *  { hang: true } polls forever (cancellation tests). */
 async function fakeCodexAuth(options?: {
 	hang?: boolean;
+	/** Delay the usercode response — the abort-DURING-fetch window (P2). */
+	delayUserCodeMs?: number;
 }): Promise<{ baseUrl: string; close: () => Promise<void> }> {
 	const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 	const jwt = (acct: string) =>
@@ -108,7 +110,9 @@ async function fakeCodexAuth(options?: {
 				res.end(JSON.stringify(payload));
 			};
 			if (req.url === "/api/accounts/deviceauth/usercode") {
-				json(200, { device_auth_id: "dev-login", user_code: "WXYZ-6789", interval: 0 });
+				const reply = () => json(200, { device_auth_id: "dev-login", user_code: "WXYZ-6789", interval: 0 });
+				if (options?.delayUserCodeMs !== undefined) setTimeout(reply, options.delayUserCodeMs);
+				else reply();
 				return;
 			}
 			if (req.url === "/api/accounts/deviceauth/token") {
@@ -1515,6 +1519,22 @@ describe("/think (#thinking-levels)", () => {
 		await dispatchCommand("/logout", legacy.ctx);
 		expect(legacy.output()).toContain("stored: Anthropic");
 		expect(legacy.output()).toContain("edit ~/.imp/auth.json");
+	});
+
+	it("/login codex: an abort landing MID-FETCH is silent too (pi's fetchWithLoginCancellation)", async () => {
+		// Review P2 (batch B): aborting inside a fetch's network window used
+		// to surface as "login failed — This operation was aborted".
+		const env = await makeEnv();
+		const fake = await fakeCodexAuth({ delayUserCodeMs: 400 }); // slow usercode
+		env.ctx.codexAuthBaseUrl = fake.baseUrl;
+		env.ctx.onLongOpAbort = (controller) => {
+			if (controller !== null) setTimeout(() => controller.abort(), 150); // inside the fetch
+		};
+		await dispatchCommand("/login openai-codex", env.ctx);
+		expect(env.output()).not.toContain("Logged in");
+		expect(env.output()).not.toContain("failed"); // silent — mapped to Login cancelled
+		expect(env.output()).not.toContain("aborted");
+		expect(loadCodexCredential(env.ctx.authStorePath)).toBeNull();
 	});
 
 	it("/login codex: Ctrl+C cancellation is silent (pi's Login cancelled); a server failure renders the error", async () => {

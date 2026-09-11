@@ -357,13 +357,15 @@ describe("openai-completions thinking", () => {
 	const base = "http://127.0.0.1";
 	const port = () => (server.address() as { port: number }).port;
 
-	it("gpt-5 family: reasoning_effort rides the body; xhigh clamps to high", async () => {
+	it("gpt-5.4 (pi openai.json): xhigh rides NATIVE; plain gpt-5 clamps it down", async () => {
 		captured = [];
 		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
 		const events = await collect(provider.stream({ ...REQ("gpt-5.4", []), thinking: "xhigh" }));
-		expect(captured[0]?.body.reasoning_effort).toBe("high");
-		expect(captured[0]?.body.thinking).toBeUndefined();
-		void events; // the shared script always streams reasoning_content — body is the pin
+		expect(captured[0]?.body.reasoning_effort).toBe("xhigh"); // 5.4 has xhigh
+		captured = [];
+		await collect(provider.stream({ ...REQ("gpt-5", []), thinking: "xhigh" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("high"); // gpt-5 base does not
+		void events;
 	});
 
 	it("GLM 4.x/5-turbo: the native zai object (clear_thinking), binary — no effort", async () => {
@@ -381,15 +383,21 @@ describe("openai-completions thinking", () => {
 		expect(captured[0]?.body.thinking).toEqual({ type: "disabled" });
 	});
 
-	it('GLM >=5.2 effort ladder (pi zai.json): low/medium/high all → effort "high", max native', async () => {
+	it("GLM 5.2/5.3 ladders (pi.dev live): 5.2 = off/high/max; 5.3 = low/high/max with off IMPOSSIBLE", async () => {
 		captured = [];
 		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
-		await collect(provider.stream({ ...REQ("glm-5.2", []), thinking: "low" }));
+		await collect(provider.stream({ ...REQ("glm-5.2", []), thinking: "medium" }));
 		expect(captured[0]?.body.thinking).toEqual({ type: "enabled", clear_thinking: false });
-		expect(captured[0]?.body.reasoning_effort).toBe("high");
+		expect(captured[0]?.body.reasoning_effort).toBe("high"); // medium clamps up to the single effort
 		captured = [];
 		await collect(provider.stream({ ...REQ("glm-5.2", []), thinking: "max" }));
 		expect(captured[0]?.body.reasoning_effort).toBe("max");
+		captured = [];
+		await collect(provider.stream({ ...REQ("glm-5.3", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("low"); // off clamps UP to low (off:null in the live map)
+		captured = [];
+		await collect(provider.stream({ ...REQ("glm-5.3", []), thinking: "low" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("low"); // native low
 	});
 
 	it('gpt-5.1+ off → reasoning_effort:"none" (pi :638 map.off); gpt-5 base: off unreachable (clamped up)', async () => {
@@ -397,6 +405,15 @@ describe("openai-completions thinking", () => {
 		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
 		await collect(provider.stream({ ...REQ("gpt-5.1", []), thinking: "off" }));
 		expect(captured[0]?.body.reasoning_effort).toBe("none");
+		// undefined = what the runner actually sends for off — same explicit none
+		captured = [];
+		await collect(provider.stream(REQ("gpt-5.1", [])));
+		expect(captured[0]?.body.reasoning_effort).toBe("none");
+		// unknown ids (fallback ladder, off available, no off mapping) accept
+		// omission — pi sends nothing for such models on off
+		captured = [];
+		await collect(provider.stream({ ...REQ("gpt-future", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBeUndefined();
 		captured = [];
 		await collect(provider.stream({ ...REQ("gpt-5", []), thinking: "off" }));
 		expect(captured[0]?.body.reasoning_effort).toBe("minimal"); // clamped up, not disabled

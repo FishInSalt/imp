@@ -47,14 +47,29 @@ export interface ModelThinkingMeta {
 	maxOutputTokens?: number;
 }
 
-/** The glm-5.2 zai map (pi zai.json): low/medium/high all map to "high"
- *  effort; max is native; minimal is unavailable. Carried forward to the
- *  5.3 series (pi's catalog has no 5.3 entry yet — ledgered extrapolation). */
-const GLM_ZAI_EFFORT_MAP: ThinkingLevelMap = {
+/** The zai GLM 5.2 map (pi.dev live, 2026-09): minimal/low/medium all
+ *  unavailable; high is the single effort; max native; off maps to the
+ *  explicit "none" effort. */
+const GLM_52_MAP: ThinkingLevelMap = {
+	off: "none",
 	minimal: null,
-	low: "high",
-	medium: "high",
+	low: null,
+	medium: null,
 	high: "high",
+	xhigh: null,
+	max: "max",
+};
+
+/** The zai GLM 5.3 map (pi.dev live, 2026-09): thinking CANNOT be disabled
+ *  (off:null) and minimal/medium are unavailable — the ladder is
+ *  low / high / max. */
+const GLM_53_MAP: ThinkingLevelMap = {
+	off: null,
+	minimal: null,
+	low: "low",
+	medium: null,
+	high: "high",
+	xhigh: null,
 	max: "max",
 };
 
@@ -114,21 +129,41 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 			maxOutputTokens: 128_000,
 		},
 	},
+	{
+		provider: "anthropic",
+		prefix: "claude-fable-5",
+		meta: {
+			style: "anthropic-adaptive",
+			adaptive: true,
+			levelMap: { off: null, xhigh: "xhigh", max: "max" }, // pi: thinking always on for fable-5
+			maxOutputTokens: 128_000,
+		},
+	},
+	// opus-4-1: budget path with pi's own 32k output cap (the 64k default would 400)
+	{
+		provider: "anthropic",
+		prefix: "claude-opus-4-1",
+		meta: { style: "anthropic-budget", maxOutputTokens: 32_000 },
+	},
 	// Claude ≤4.5 + unknown claude ids: the budget path (pi's default)
 	{ provider: "anthropic", prefix: "claude-", meta: { style: "anthropic-budget", maxOutputTokens: 64_000 } },
 	// ---- openai chat completions ----
 	{
 		provider: "openai",
 		prefix: "glm-5.3",
-		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_ZAI_EFFORT_MAP },
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_53_MAP },
 	},
-	{ provider: "openai", prefix: "glm-5.2-highspeed", meta: { style: "glm-openai" } },
+	{
+		provider: "openai",
+		prefix: "glm-5.2-highspeed",
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
+	},
 	{
 		provider: "openai",
 		prefix: "glm-5.2",
-		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_ZAI_EFFORT_MAP },
+		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
 	},
-	{ provider: "openai", prefix: "glm-", meta: { style: "glm-openai" } }, // 4.x / 5-turbo: binary (pi zai.json)
+	{ provider: "openai", prefix: "glm-", meta: { style: "glm-openai" } }, // 4.x / 5-turbo: binary (pi.dev live)
 	{ provider: "openai", prefix: "deepseek-r", meta: { style: "auto" } },
 	// gpt-6 (pi.dev live catalog): off UNAVAILABLE, minimal→low, xhigh/max native
 	{
@@ -147,6 +182,40 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 			},
 		},
 	},
+	// pro variants (pi openai.json): off AND the lower efforts unavailable —
+	// sparse ladders (high-only for 5-pro, medium+ for 5.2/5.4/5.5-pro)
+	{
+		provider: "openai",
+		prefix: "gpt-5-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: null, high: "high" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.2-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.4-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.5-pro",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
 	{
 		provider: "openai",
 		prefix: "gpt-5.6",
@@ -161,6 +230,23 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 				xhigh: "xhigh",
 				max: "max",
 			},
+		},
+	},
+	// 5.4/5.4-mini/5.5 (pi openai.json): off→"none", minimal out, xhigh native
+	{
+		provider: "openai",
+		prefix: "gpt-5.4",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+		},
+	},
+	{
+		provider: "openai",
+		prefix: "gpt-5.5",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
 		},
 	},
 	{
@@ -186,6 +272,15 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 		meta: {
 			style: "openai-effort",
 			levelMap: { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high" },
+		},
+	},
+	// o1/o1-pro (pi openai.json): off AND minimal unavailable — low start
+	{
+		provider: "openai",
+		prefix: "o1",
+		meta: {
+			style: "openai-effort",
+			levelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high" },
 		},
 	},
 	// o3/o4 (pi openai.json): off unavailable, minimal unavailable

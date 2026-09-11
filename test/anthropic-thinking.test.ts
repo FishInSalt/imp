@@ -94,13 +94,13 @@ describe("anthropic thinking", () => {
 		expect(body.max_tokens).toBe(16384); // untouched
 	});
 
-	it('off → {type:"disabled"} (pi :780 — newer Claude defaults to thinking ON); undefined (no knob request) stays absent', async () => {
+	it('off AND undefined (the runner maps off→undefined) → {type:"disabled"} — pi reinterprets at the provider layer (:754-780)', async () => {
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-5", [], "off")));
 		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
 		captured = [];
-		await collect(provider().stream(REQ("claude-sonnet-4-5")));
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toBeUndefined();
+		await collect(provider().stream(REQ("claude-sonnet-4-5"))); // runner.ts:681 sends undefined for off
+		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
 	});
 
 	it("Claude >=4.6 adaptive path (pi compat.forceAdaptiveThinking): {adaptive} + output_config effort, no budget math", async () => {

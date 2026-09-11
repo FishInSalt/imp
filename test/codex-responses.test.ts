@@ -318,7 +318,7 @@ describe("codex-responses provider", () => {
 			);
 			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "low", summary: "auto" });
 			await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
-			expect(captured.at(-1)?.body.reasoning).toBeUndefined();
+			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "none" }); // undefined = the runner's off
 		});
 
 		it('off → reasoning {effort:"none"} — the backend defaults to medium, omission is NOT off (pi :240)', async () => {

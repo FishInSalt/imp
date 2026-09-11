@@ -155,7 +155,9 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 						display: "summarized",
 					};
 				}
-			} else if (level === "off" && meta !== null) {
+			} else if ((level === undefined || level === "off") && meta !== null && meta.levelMap?.off !== null) {
+				// pi: thinkingEnabled === false → {type:"disabled"}, unless the
+				// model's own map says off is impossible (off:null).
 				body.thinking = { type: "disabled" };
 			}
 

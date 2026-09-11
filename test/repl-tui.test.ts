@@ -1083,6 +1083,7 @@ describe("runRepl with shell:tui", () => {
 		const renderer = new Renderer({
 			write: transcript.feed,
 			userSink: (text) => transcript.feedUser(text),
+			statusSink: (text) => transcript.feedStatus(text),
 			ansi: false,
 			liveTools: false, // no spinner timers; the byte path is what matters
 			toolStyle: "one-line",
@@ -2322,6 +2323,12 @@ describe("runRepl with shell:tui", () => {
 			env.terminal.data("\x1b[Z");
 			await settle();
 			expect(env.terminal.frameSince(0)).toContain("think:low");
+			// CONSECUTIVE shift+tabs merge: two cycles, ONE status line (pi
+			// showStatus reuses the slot; the input echo of a slash command
+			// would break the run — merge chains only across bare switches)
+						const joined = env.transcript.completedLines().join("\n");
+			expect(joined.match(/Thinking level:/g)?.length).toBe(1);
+			expect(joined).toContain("Thinking level: low"); // the latest won
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

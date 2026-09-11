@@ -78,26 +78,15 @@ describe("thinking model metadata (#thinking-levels, pi catalog parity)", () => 
 		]);
 		// o3/o4: off AND minimal unavailable
 		expect(supportedThinkingLevels(thinkingMetaFor("openai", "o3"))).toEqual(["low", "medium", "high"]);
-		// zai glm-5.2 (pi zai.json): minimal out, low/medium/high all → "high", max native
-		expect(supportedThinkingLevels(thinkingMetaFor("openai", "glm-5.2"))).toEqual([
-			"off",
-			"low",
-			"medium",
-			"high",
-			"max",
-		]);
-		// glm-5.3 carries the 5.2 pattern forward (pi has no 5.3 entry — ledgered)
-		expect(supportedThinkingLevels(thinkingMetaFor("openai", "glm-5.3"))).toEqual([
-			"off",
-			"low",
-			"medium",
-			"high",
-			"max",
-		]);
-		// glm-5.2-highspeed (pi): binary — the longer prefix wins over glm-5.2
+		// zai glm-5.2 (pi.dev live): off explicit "none"; minimal/low/medium out — off/high/max
+		expect(supportedThinkingLevels(thinkingMetaFor("openai", "glm-5.2"))).toEqual(["off", "high", "max"]);
+		// glm-5.3 (pi.dev live): off NULL — thinking cannot be disabled; low/high/max
+		expect(supportedThinkingLevels(thinkingMetaFor("openai", "glm-5.3"))).toEqual(["low", "high", "max"]);
+		// glm-5.2-highspeed gained the effort ladder in the live catalog
 		expect(supportedThinkingLevels(thinkingMetaFor("openai", "glm-5.2-highspeed[1m]"))).toEqual([
 			"off",
 			"high",
+			"max",
 		]);
 		// Claude ≥4.6 adaptive: xhigh (4.7+) / max (4.6+)
 		expect(supportedThinkingLevels(thinkingMetaFor("anthropic", "claude-sonnet-4-6"))).toEqual([
@@ -126,11 +115,33 @@ describe("thinking model metadata (#thinking-levels, pi catalog parity)", () => 
 			"high",
 			"xhigh",
 		]);
+		// openai 5.4/5.5 (pi openai.json): off "none", minimal out, xhigh native
+		expect(supportedThinkingLevels(thinkingMetaFor("openai", "gpt-5.4"))).toEqual([
+			"off",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+		]);
+		// fable-5 (pi anthropic.json): thinking ALWAYS on — no off
+		expect(supportedThinkingLevels(thinkingMetaFor("anthropic", "claude-fable-5"))).toEqual([
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		// o1 (pi openai.json): low start like o3
+		expect(supportedThinkingLevels(thinkingMetaFor("openai", "o1"))).toEqual(["low", "medium", "high"]);
 	});
 
 	it("clamp: nearest level, upward first (pi's clampThinkingLevel)", () => {
 		expect(clampThinkingLevel(thinkingMetaFor("anthropic", "glm-5.3"), "medium")).toBe("high"); // up to the only on-state
-		expect(clampThinkingLevel(thinkingMetaFor("openai", "gpt-5.4"), "max")).toBe("high"); // no xhigh/max on 5.4 → down
+		expect(clampThinkingLevel(thinkingMetaFor("openai", "gpt-5.2"), "max")).toBe("xhigh"); // 5.2 has xhigh, not max
+		expect(clampThinkingLevel(thinkingMetaFor("openai", "gpt-5.4"), "minimal")).toBe("low"); // minimal out on 5.4 → up
+		expect(clampThinkingLevel(thinkingMetaFor("openai", "glm-5.3"), "off")).toBe("low"); // off impossible on 5.3
+		expect(clampThinkingLevel(thinkingMetaFor("openai", "gpt-5-pro"), "medium")).toBe("high"); // high-only ladder
 		expect(clampThinkingLevel(thinkingMetaFor("openai-codex", "gpt-5.5"), "max")).toBe("xhigh"); // up first: max → xhigh exists
 		expect(clampThinkingLevel(thinkingMetaFor("anthropic", "claude-sonnet-4-5"), "xhigh")).toBe("high");
 		expect(clampThinkingLevel(null, "high")).toBe("off"); // no knob
@@ -148,7 +159,7 @@ describe("thinking model metadata (#thinking-levels, pi catalog parity)", () => 
 		// effortFor = map[level] ?? level
 		expect(effortFor(thinkingMetaFor("openai", "gpt-5.4"), "medium")).toBe("medium");
 		expect(effortFor(thinkingMetaFor("openai-codex", "gpt-5.5"), "minimal")).toBe("low"); // pi.dev map
-		expect(effortFor(thinkingMetaFor("openai", "glm-5.2"), "low")).toBe("high"); // zai map
+		expect(effortFor(thinkingMetaFor("openai", "glm-5.3"), "low")).toBe("low"); // pi.dev native
 		expect(effortFor(thinkingMetaFor("openai", "glm-5.2"), "max")).toBe("max");
 		expect(effortFor(thinkingMetaFor("openai", "gpt-6-astra"), "minimal")).toBe("low");
 		// adaptive effort (pi mapThinkingLevelToEffort)

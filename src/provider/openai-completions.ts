@@ -87,7 +87,7 @@ function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[]
  *  max_completion_tokens; everything else in the wild takes max_tokens.
  *  Sending the wrong one is a hard 400 on api.openai.com. */
 function maxTokensField(model: string): "max_tokens" | "max_completion_tokens" {
-	return /^(o\d|gpt-5)/.test(model) ? "max_completion_tokens" : "max_tokens";
+	return /^(o\d|gpt-[56])/.test(model) ? "max_completion_tokens" : "max_tokens";
 }
 
 function mapFinishReason(reason: string | undefined | null): StopReason {
@@ -178,7 +178,10 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			} else if (meta?.style === "openai-effort") {
 				if (level !== undefined && level !== "off") {
 					body.reasoning_effort = effortFor(meta, level);
-				} else if (level === "off") {
+				} else {
+					// "off" AND undefined (the runner maps off→undefined — pi
+					// :638): the map's own off value when it names one
+					// (gpt-5.1+ → "none"); older models accept omission.
 					const off = meta.levelMap?.off;
 					if (typeof off === "string") body.reasoning_effort = off;
 				}

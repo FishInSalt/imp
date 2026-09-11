@@ -144,7 +144,9 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
 			if (level !== undefined && level !== "off") {
 				body.reasoning = { effort: effortFor(meta, level), summary: "auto" };
-			} else if (level === "off" && meta !== null && meta.levelMap?.off !== null) {
+			} else if ((level === undefined || level === "off") && meta !== null && meta.levelMap?.off !== null) {
+				// "off" AND undefined (the runner maps off→undefined — pi
+				// :238): explicit "none"; off:null models (gpt-6) never land here.
 				body.reasoning = { effort: meta.levelMap?.off ?? "none" };
 			}
 			if (request.tools.length > 0) {

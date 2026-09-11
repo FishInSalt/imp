@@ -287,7 +287,16 @@ export async function buildModelList(
 				fallbackNotes.push(familyLabel(`${family}/`));
 				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
 			} else {
-				ids.push(...discovered.map((id) => (family === "anthropic" ? id : `${family}/${id}`)));
+				// #glm-retire: GLM is never ADVERTISED under anthropic — a
+				// compat endpoint (ANTHROPIC_BASE_URL → z.ai) serves glm ids
+				// that duplicate the zai family's rows. zai is the one
+				// official GLM path; explicit anthropic/glm-* still works by
+				// typing it. Claude/other ids pass through untouched.
+				const listed =
+					family === "anthropic"
+						? discovered.filter((id) => !id.toLowerCase().startsWith("glm-"))
+						: discovered;
+				ids.push(...listed.map((id) => (family === "anthropic" ? id : `${family}/${id}`)));
 			}
 		}
 	}

@@ -17,7 +17,12 @@ describe("Renderer thinking (#thinking-levels)", () => {
 
 	it("#thinking-stream: completed paragraphs render DURING the stream (pi parity), not at flush time", () => {
 		const writes: string[] = [];
-		const r = new Renderer({ write: (s) => writes.push(s), ansi: false, liveTools: false, toolStyle: "one-line" });
+		const r = new Renderer({
+			write: (s) => writes.push(s),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
 		r.event({ type: "thinking_delta", text: "paragraph one, still growing" });
 		r.event({ type: "thinking_delta", text: "\n\n" }); // blank line — block completes
 		expect(writes.join("")).toContain("paragraph one, still growing"); // ALREADY on screen

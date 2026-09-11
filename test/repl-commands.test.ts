@@ -10,7 +10,7 @@ import type { AgentMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
 import { loadSettings } from "../src/core/settings.js";
 import { setTrust } from "../src/core/trust.js";
-import { loadApiKey, saveApiKey } from "../src/provider/auth-store.js";
+import { clearApiKey, loadApiKey, saveApiKey } from "../src/provider/auth-store.js";
 import { loadCodexCredential } from "../src/provider/codex-auth.js";
 import { familyConfigured } from "../src/provider/discover.js";
 import { parseModelRef } from "../src/provider/resolve.js";
@@ -336,15 +336,23 @@ describe("slash commands", () => {
 			"model: claude-sonnet-4-5\n" +
 				"switch with: /model <id> — e.g. claude-sonnet-4-5, zai/glm-5.3 (any id your endpoint accepts)\n",
 		);
-		const prevZai = process.env.ZAI_API_KEY; // fallback leg — keep the dev shell out
+		// the "switch takes effect next run" leg runs FIRST (same family —
+		// the fake provider survives; a zai swap would construct the real one)
+		await dispatchCommand("/model claude-opus-4-6", env.ctx);
+		expect(env.output()).toContain("Model: claude-opus-4-6\n");
+		const result = await env.runner.runTurn({ userMessage: "hi" });
+		expect(env.requests[0]?.model).toBe("claude-opus-4-6");
+		expect(result.stopReason).toBe("completed");
+		// #glm-retire: bare glm routes to zai UNCONDITIONALLY — canonical
+		// display, plus the sign-in teaching when no credential is present
+		const prevZai = process.env.ZAI_API_KEY; // keep the dev shell out of the teaching leg
 		delete process.env.ZAI_API_KEY;
 		await dispatchCommand("/model glm-4.6", env.ctx);
 		if (prevZai !== undefined) process.env.ZAI_API_KEY = prevZai;
-		expect(env.output()).toContain("Model: glm-4.6\n");
+		expect(env.output()).toContain("Model: zai/glm-4.6\n");
+		expect(env.output()).toContain("sign in with /login zai");
 		expect(env.runner.model).toBe("glm-4.6");
-		const result = await env.runner.runTurn({ userMessage: "hi" });
-		expect(env.requests[0]?.model).toBe("glm-4.6");
-		expect(result.stopReason).toBe("completed");
+		expect(env.runner.providerName).toBe("zai");
 	});
 
 	it("HELP_KEYS documents the M10 affordances: Esc interrupt, newline keys, ! prefix, autocomplete keys", () => {
@@ -389,7 +397,10 @@ describe("slash commands", () => {
 		]); // v1 candidates — GLM is zai-canonical (pi parity)
 		expect(calls[0]?.title).toContain("model");
 		expect(env.runner.model).toBe("glm-5.3"); // the family strips the prefix
-		expect(env.output()).toBe("Model: zai/glm-5.3\n"); // the zai prefix IS the connection tell
+		// #glm-retire: with no zai credential the sign-in teaching precedes
+		// the switch line (a stored /login key or ZAI_API_KEY silences it)
+		expect(env.output()).toContain("is a Z.ai model — sign in with /login zai");
+		expect(env.output()).toContain("Model: zai/glm-5.3\n"); // the zai prefix IS the connection tell
 	});
 
 	it("M9-2: a custom current model leads the candidate list (it must stay pickable)", async () => {
@@ -911,7 +922,7 @@ describe("/tree (#10 batch 2)", () => {
 		const prev = process.env.IMP_CONTEXT_WINDOW;
 		process.env.IMP_CONTEXT_WINDOW = "150"; // everything overflows; keepRecent dominates
 		try {
-			await dispatchCommand("/model glm-4.6", env.ctx); // same family → keeps the fake; window re-read from env
+			await dispatchCommand("/model claude-opus-4-6", env.ctx); // same family → keeps the fake; window re-read from env (#glm-retire: glm-4.6 would swap to zai)
 			await expect(env.runner.runTurn({ userMessage: "next" })).rejects.toThrow(
 				/larger-context model.*\/compact/s,
 			);
@@ -1029,14 +1040,14 @@ describe("/tree (#10 batch 2)", () => {
 	it("/model with a provider prefix re-routes the protocol family (multi-provider)", async () => {
 		const env = await makeEnv({ seed: [] });
 		expect(env.runner.model).toBe("claude-sonnet-4-5");
-		await dispatchCommand("/model glm-4.6", env.ctx); // same family: keeps the provider instance
+		await dispatchCommand("/model glm-4.6", env.ctx); // #glm-retire: zai now — provider swaps from anthropic
 		expect(env.runner.model).toBe("glm-4.6");
 		expect(env.runner.contextWindow).toBe(200_000);
 		await dispatchCommand("/model openai-codex/gpt-5.4", env.ctx); // cross-family: provider swaps
 		expect(env.runner.model).toBe("gpt-5.4");
 		expect(env.runner.contextWindow).toBe(272_000);
 		// pi's showStatus form: consecutive switches print one dim line each
-		expect(env.output()).toContain("Model: glm-4.6");
+		expect(env.output()).toContain("Model: zai/glm-4.6");
 		expect(env.output()).toContain("Model: openai-codex/gpt-5.4"); // canonical — the family is visible (P2-5)
 		await dispatchCommand("/model glm-4.6", env.ctx); // and back
 		expect(env.runner.model).toBe("glm-4.6");
@@ -1303,43 +1314,40 @@ describe("/think (#thinking-levels)", () => {
 		expect(runner2.thinkingLevel).toBe("high"); // NOT the session's low
 	});
 
-	it("GLM connection tell: a bare glm id on anthropic-compat teaches the zai path once; prefixed/zai routes stay silent", async () => {
-		// bare id, no ZAI_API_KEY → anthropic-compat + the teaching note
-		// (cleared explicitly — a dev shell exporting ZAI_API_KEY must not
-		// flip this fallback test)
+	it("#glm-retire: bare glm routes to zai unconditionally — a MISSING credential teaches /login; a stored/env key or explicit compat stays silent", async () => {
+		// no ZAI_API_KEY → zai family (routing never falls back to compat
+		// anymore) + the sign-in teaching note
 		const prevZai = process.env.ZAI_API_KEY;
 		delete process.env.ZAI_API_KEY;
 		const env = await makeEnv();
 		await dispatchCommand("/model glm-5.3", env.ctx);
-		expect(env.runner.providerName).toBe("anthropic");
-		expect(env.output()).toContain("Model: glm-5.3"); // bare — no zai prefix
-		expect(env.output()).toContain("runs via anthropic-compat");
-		// explicit anthropic/ prefix — a deliberate choice, no note
-		const quiet = await makeEnv();
+		expect(env.runner.providerName).toBe("zai");
+		expect(env.output()).toContain("Model: zai/glm-5.3");
+		expect(env.output()).toContain("glm-5.3 is a Z.ai model — sign in with /login zai");
+		// a stored /login key silences the teaching (stored > env). NOTE:
+		// zaiApiKey() reads the global IMP_AUTH_PATH sandbox, NOT
+		// ctx.authStorePath — save there and clear it for the neighbors
+		const stored = await makeEnv();
+		await saveApiKey("zai", "sk-stored");
 		try {
-			await dispatchCommand("/model anthropic/glm-5.3", quiet.ctx);
-			expect(quiet.runner.providerName).toBe("anthropic");
-			expect(quiet.output()).not.toContain("anthropic-compat");
+			await dispatchCommand("/model glm-5.3", stored.ctx);
+			expect(stored.runner.providerName).toBe("zai");
+			expect(stored.output()).toContain("Model: zai/glm-5.3");
+			expect(stored.output()).not.toContain("sign in with /login zai");
 		} finally {
+			await clearApiKey("zai");
 			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevZai;
 		}
-		// ZAI_API_KEY present → the same bare id routes to zai, prefix shows, no note
-		const zaiEnv = await makeEnv();
-		const prev = process.env.ZAI_API_KEY;
-		process.env.ZAI_API_KEY = "sk-test";
-		try {
-			await dispatchCommand("/model glm-5.3", zaiEnv.ctx);
-			expect(zaiEnv.runner.providerName).toBe("zai");
-			expect(zaiEnv.output()).toContain("Model: zai/glm-5.3"); // the prefix IS the tell
-			expect(zaiEnv.output()).not.toContain("anthropic-compat");
-		} finally {
-			if (prev === undefined) delete process.env.ZAI_API_KEY;
-			else process.env.ZAI_API_KEY = prev;
-		}
+		// explicit anthropic/ prefix — the generic compat passthrough still
+		// works and never teaches (a deliberate choice needing no zai key)
+		const quiet = await makeEnv();
+		await dispatchCommand("/model anthropic/glm-5.3", quiet.ctx);
+		expect(quiet.runner.providerName).toBe("anthropic");
+		expect(quiet.output()).not.toContain("sign in with /login zai");
 	});
 
-	it("construction seam: IMP_MODEL=glm-5.3 + ZAI_API_KEY builds the zai family and clamps into its ladder; startup on compat prints the pointer", async () => {
+	it("construction seam: IMP_MODEL=glm-5.3 builds the zai family and clamps into its ladder; a keyless startup teaches /login", async () => {
 		// zai construction (the documented "keep IMP_MODEL, add ZAI_API_KEY" flow)
 		const env = await makeEnv({ model: "glm-5.3" });
 		const prev = process.env.ZAI_API_KEY;
@@ -1364,11 +1372,12 @@ describe("/think (#thinking-levels)", () => {
 			if (prev === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prev;
 		}
-		// compat startup: the pointer fires at warmup (README's unconditional
-		// claim) — fresh renderer so the warmup note is not sliced into the
-		// seeding banner like makeEnv's env.output() does
-		const { renderer: compatR, output: compatOut } = makeRenderer();
-		const compat = await createRunner({
+		// #glm-retire: startup WITHOUT a credential no longer falls back to
+		// compat — the family is zai and the sign-in teaching fires at warmup
+		// (fresh renderer so the warmup note is not sliced into the seeding
+		// banner like makeEnv's env.output() does)
+		const { renderer: bareR, output: bareOut } = makeRenderer();
+		const bare = await createRunner({
 			cwd: env.cwd,
 			argv: [],
 			settingsPath: env.settingsPath,
@@ -1377,11 +1386,11 @@ describe("/think (#thinking-levels)", () => {
 			maxTurns: 10,
 			noContextFiles: true,
 			noSession: true,
-			renderer: compatR,
+			renderer: bareR,
 			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
 		});
-		expect(compat.providerName).toBe("anthropic");
-		expect(compatOut()).toContain("runs via anthropic-compat");
+		expect(bare.providerName).toBe("zai");
+		expect(bareOut()).toContain("sign in with /login zai");
 	});
 
 	it("/login: picker rows carry status; a pick prompts for the key, stores it, and points at /model when the family differs", async () => {
@@ -1575,7 +1584,7 @@ describe("/think (#thinking-levels)", () => {
 		expect(loadApiKey("zai", blank.ctx.authStorePath)).toBeNull();
 	});
 
-	it("a stored /login key participates in routing: familyConfigured flips and bare glm ids route to zai", async () => {
+	it("a stored /login key flips familyConfigured (the /model picker gate); #glm-retire: bare glm routing is now STATIC", async () => {
 		const env = await makeEnv();
 		env.ctx.secret = async () => "sk-zai-2";
 		const prevKey = process.env.ZAI_API_KEY;
@@ -1587,7 +1596,11 @@ describe("/think (#thinking-levels)", () => {
 		try {
 			await dispatchCommand("/login zai", env.ctx);
 			expect(familyConfigured("zai")).toBe(true);
+			// routing itself no longer consults credentials (#glm-retire):
+			// bare glm-* → zai both with AND without a key
 			expect(parseModelRef("glm-5.3")).toEqual({ provider: "zai", modelId: "glm-5.3" });
+			expect(parseModelRef("zai/glm-5.3")).toEqual({ provider: "zai", modelId: "glm-5.3" });
+			expect(parseModelRef("anthropic/glm-5.3")).toEqual({ provider: "anthropic", modelId: "glm-5.3" });
 		} finally {
 			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevKey;

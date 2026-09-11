@@ -26,21 +26,23 @@ const NO_FAMILIES: ModelListDeps = {
 const ZAI_LIKE = ["glm-4.5", "glm-4.6", "glm-5.2", "glm-5.3", "glm-5.3-flash"];
 
 describe("buildModelList", () => {
-	it("configured anthropic endpoint: its listing IS the list (canonical bare ids, family labels)", async () => {
+	it("#glm-retire: a compat endpoint's glm ids are filtered from the anthropic listing (zai is the one GLM path); claude ids pass", async () => {
 		const { rows, fallbackNotes } = await buildModelList("glm-4.6", {
 			configured: (f) => f === "anthropic",
-			discover: async (f) => (f === "anthropic" ? [...ZAI_LIKE] : null),
+			discover: async (f) => (f === "anthropic" ? [...ZAI_LIKE, "claude-sonnet-4-5"] : null),
 		});
 		expect(fallbackNotes).toEqual([]);
-		expect(rows.map((r) => r.label)).toEqual(ZAI_LIKE);
-		expect(rows[0]?.description).toBe("anthropic-compatible endpoint"); // glm-4.5
-		expect(rows[1]?.description).toBe("current"); // glm-4.6 is current — marked, not duplicated
+		// glm rows dropped (they duplicate the zai family); claude passes;
+		// the bare current glm id still LEADS — pickable even when unlisted
+		expect(rows.map((r) => r.label)).toEqual(["glm-4.6", "claude-sonnet-4-5"]);
+		expect(rows[0]?.description).toBe("current"); // glm-4.6 is marked, not duplicated
+		expect(rows[1]?.description).toBe("anthropic-compatible endpoint"); // claude-sonnet-4-5
 	});
 
 	it("claude ids do NOT appear unless the endpoint lists them (the user's report #1)", async () => {
 		const { rows } = await buildModelList("glm-4.6", {
 			configured: (f) => f === "anthropic",
-			discover: async (f) => (f === "anthropic" ? [...ZAI_LIKE] : null),
+			discover: async (f) => (f === "anthropic" ? [...ZAI_LIKE] : null), // no claude served
 		});
 		expect(rows.some((r) => r.label.includes("claude"))).toBe(false);
 	});

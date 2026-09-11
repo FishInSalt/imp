@@ -310,6 +310,10 @@ describe("parseModelRef routing", () => {
 	// imported here to keep the top of the file focused on the wire tests
 	it("bare ids default to anthropic; canonical prefixes route; unknown prefixes fall back", async () => {
 		const { parseModelRef } = await import("../src/provider/resolve.js");
+		// cleared so a dev-shell ZAI_API_KEY cannot flip the glm fallback leg
+		const prevZai = process.env.ZAI_API_KEY;
+		delete process.env.ZAI_API_KEY;
+		try {
 		expect(parseModelRef("glm-4.6")).toEqual({ provider: "anthropic", modelId: "glm-4.6" });
 		expect(parseModelRef("anthropic/claude-sonnet-4-5")).toEqual({
 			provider: "anthropic",
@@ -325,6 +329,10 @@ describe("parseModelRef routing", () => {
 		expect(parseModelRef("OpenAI/gpt-5.2")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
 		expect(parseModelRef(" openai/gpt-5.2 ")).toEqual({ provider: "openai", modelId: "gpt-5.2" });
 		expect(parseModelRef("OpenAI-Codex/gpt-5.4")).toEqual({ provider: "openai-codex", modelId: "gpt-5.4" });
+		} finally {
+			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevZai;
+		}
 	});
 });
 

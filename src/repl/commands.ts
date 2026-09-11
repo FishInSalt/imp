@@ -13,7 +13,6 @@ import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
-	type ModelThinkingMeta,
 	supportedThinkingLevels,
 	THINKING_LEVELS,
 	type ThinkingLevel,
@@ -169,9 +168,7 @@ const MODEL_CANDIDATES: readonly string[] = [
 	"claude-sonnet-4-5",
 	"zai/glm-5.3",
 	"zai/glm-5.3-highspeed",
-	"glm-4.6",
-	"glm-4.5",
-	"glm-4.7",
+	"zai/glm-4.7",
 	"openai-codex/gpt-5.5",
 	"openai/gpt-5.2",
 ];
@@ -182,7 +179,9 @@ function modelCandidates(current: string): string[] {
 
 /** Static seeds shown when a CONFIGURED family's listing is unreachable. */
 const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
-	anthropic: ["claude-sonnet-4-5", "glm-4.6", "glm-4.5", "glm-4.7"],
+	// GLM is NOT advertised under anthropic anymore — pi parity: zai is the
+	// one official GLM path (bare glm-* ids still route there via ZAI_API_KEY)
+	anthropic: ["claude-sonnet-4-5"],
 	openai: ["openai/gpt-5.2"],
 	// The complete official coding-plan catalog (pi's generated
 	// openai-codex.json is the sourced truth — probe confirmed the backend's
@@ -279,7 +278,6 @@ export async function buildModelList(
 /** The switch itself, shared by "/model <id>" and the picker's pick — the
  *  write and the note are byte-identical whichever way the id arrived. */
 function switchModel(ctx: CommandContext, id: string): void {
-	const previous = ctx.runner.modelReference();
 	ctx.runner.setModel(id); // re-resolves the provider too (multi-provider)
 	// Canonical refs on both sides (review P2-5): "gpt-5.4" alone cannot tell
 	// the user WHICH protocol family the switch landed on.
@@ -533,7 +531,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					// Legacy readline shell: the text flow, byte-for-byte.
 					ctx.renderer.writeLine(`model: ${ctx.runner.modelReference()}`);
 					ctx.renderer.writeLine(
-						"switch with: /model <id> — e.g. claude-sonnet-4-5, glm-4.6 (any id your endpoint accepts)",
+						"switch with: /model <id> — e.g. claude-sonnet-4-5, zai/glm-5.3 (any id your endpoint accepts)",
 					);
 					return "handled";
 				}

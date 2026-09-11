@@ -125,6 +125,10 @@ export interface Runner {
 	/** Runtime model switch (#multi-provider batch 2): re-resolves the provider
 	 *  from the canonical reference so /model can cross protocols mid-session,
 	 *  and recomputes the compaction window to match the new model. */
+	/** The protocol family serving the current model — the connection tell
+	 *  (anthropic = the compat endpoint / first-party API; zai = Z.ai's
+	 *  coding endpoint; modelReference() prefixes every family but anthropic). */
+	readonly providerName: ProviderName;
 	setModel(reference: string): void;
 	/** Current thinking level (#thinking-levels, pi parity). "off" default. */
 	readonly thinkingLevel: ThinkingLevel;
@@ -217,7 +221,7 @@ class RunnerImpl implements Runner {
 	private readonly options: RunnerOptions;
 	private readonly logger: RunLogger;
 	private provider: LLMProvider; // wrapped with logging once; /model may swap it (multi-provider)
-	private providerName: ProviderName;
+	providerName: ProviderName; // implements Runner's public readonly tell
 	private readonly tools: Tool[];
 	private readonly autoCompact: boolean;
 
@@ -349,6 +353,10 @@ class RunnerImpl implements Runner {
 		if (this.initialized) return;
 		this.initialized = true;
 		const options = this.options;
+		// #zai-default: a bare glm-* STARTUP model on the compat family gets
+		// the same one-line pointer a /model switch prints (README promises
+		// it unconditionally — imp/.env's own IMP_MODEL=glm-5.3 hits this).
+		this.noteGlmCompatRouting(options.model, this.providerName);
 		if (!options.noSession) {
 			if (options.resume !== undefined || options.continueRecent === true) {
 				const resumed = resolveSession(options.cwd, {
@@ -574,9 +582,23 @@ class RunnerImpl implements Runner {
 		return thinkingMetaFor(this.providerName, this.model) !== null;
 	}
 
+	/** GLM connection tell (#zai-default): a BARE glm-* id that fell back to
+	 *  the anthropic-compat family gets a one-line teaching note — the zai
+	 *  path (the official one) always shows its zai/ prefix instead. Explicit
+	 *  anthropic/glm-* references stay silent (the user chose compat). */
+	private noteGlmCompatRouting(reference: string, provider: ProviderName): void {
+		if (provider !== "anthropic") return;
+		if (reference.includes("/")) return; // explicit family — a deliberate choice
+		if (!reference.trim().toLowerCase().startsWith("glm-")) return;
+		this.options.renderer.note(
+			`▪ ${reference.trim()} runs via anthropic-compat (ANTHROPIC_BASE_URL) — the official path is ZAI_API_KEY + zai/${reference.trim()} (full thinking ladder)`,
+		);
+	}
+
 	setModel(reference: string): void {
 		const ref = parseModelRef(reference);
 		this.model = ref.modelId;
+		this.noteGlmCompatRouting(reference, ref.provider);
 		// Swap the provider INSTANCE only when the protocol family changes —
 		// a same-family switch keeps the current instance (test fakes inject
 		// here; in production the kept instance IS the real one).

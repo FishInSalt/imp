@@ -99,10 +99,12 @@ Environment:
   IMP_CONTEXT_WINDOW         Model context window for auto-compaction (default: 131072)
   IMP_AUTOCOMPACT=0          Disable auto-compaction
 
-  Z.ai GLM Coding Plan example:
-    export ANTHROPIC_AUTH_TOKEN=<your z.ai key>
-    export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
-    export IMP_MODEL=glm-4.6
+  Z.ai GLM Coding Plan example (the official GLM path, pi parity):
+    export ZAI_API_KEY=<your z.ai key>
+    export IMP_MODEL=zai/glm-5.3
+  (A bare glm-* id routes the same way when ZAI_API_KEY is set; the older
+  ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic connection still works
+  as a fallback when it is not.)
 
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
     imp login
@@ -233,7 +235,7 @@ async function runLogin(): Promise<void> {
 	const controller = new AbortController();
 	process.on("SIGINT", () => controller.abort());
 	try {
-		const credential = await loginCodex({
+		await loginCodex({
 			signal: controller.signal,
 			onDeviceCode: ({ verificationUri, userCode, intervalSeconds }) => {
 				process.stdout.write(
@@ -514,7 +516,7 @@ async function resolveProjectTrust(
 	const store = defaultTrustStorePath(homedir());
 	if (opts.trustDecision === "trust") {
 		setTrust(store, cwd, true, true); // rebuildOnCorrupt: the recovery flag must repair
-		renderer.note(dim(broadAncestorWarning(store, cwd, true)));
+		renderer.note(dim(broadAncestorWarning(cwd, true)));
 		return true;
 	}
 	if (opts.trustDecision === "no-trust") {
@@ -573,7 +575,7 @@ async function resolveProjectTrust(
 
 /** Recording at (or an ancestor of) the whole home tree is broad; say so
  *  once instead of silently (M8 review F6). */
-function broadAncestorWarning(store: string, cwd: string, trusted: boolean): string {
+function broadAncestorWarning(cwd: string, trusted: boolean): string {
 	const home = homedir();
 	const note = `▪ trust: recorded ${trusted ? "“trust”" : "“do not trust”"} for ${cwd}`;
 	if (canonicalizeDir(cwd) === canonicalizeDir(home) || cwd === "/") {

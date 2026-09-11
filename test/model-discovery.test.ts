@@ -110,7 +110,7 @@ describe("buildModelList", () => {
 		expect(fallbackNotes).toEqual([]);
 		const labels = rows.map((r) => r.label);
 		expect(labels[0]).toBe("claude-sonnet-4-5");
-		expect(labels).toContain("glm-4.6");
+		expect(labels).toContain("zai/glm-5.3"); // GLM is zai-canonical now
 		expect(labels).toContain("openai-codex/gpt-5.5");
 	});
 

@@ -1232,7 +1232,7 @@ describe("runRepl with shell:tui", () => {
 			expect(frame).toContain("models — switch applies from the next turn"); // title
 			expect(frame).toContain("→ test-model"); // current id first, preselected
 			expect(frame).toContain("claude-sonnet-4-5");
-			expect(frame).toContain("glm-4.6"); // README-documented candidates listed
+			expect(frame).toContain("zai/glm-5.3"); // GLM candidates are zai-canonical
 			expect(frame).toContain("current"); // the current row is marked
 			env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
 			await settle();
@@ -2390,6 +2390,16 @@ describe("runRepl with shell:tui", () => {
 			releaseTurn();
 			await settle();
 			await settle();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("footer tell: a zai model shows its zai/ prefix in the persistent footer (compat stays bare)", async () => {
+			const env = await startTuiRepl([reply("ok")], { model: "zai/glm-5.3" });
+			await settle();
+			// the P1 fix: refreshFooter uses modelReference() — the connection
+			// tell lives in the footer, not only in /model output
+			expect(env.terminal.frameSince(0)).toMatch(/zai\/glm-5\.3 · /);
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

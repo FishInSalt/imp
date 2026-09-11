@@ -94,10 +94,18 @@ imp            # interactive REPL (streaming, one-line tool status)
   a dim `Thinking...` label; also persisted); on Anthropic traces are
   kept in context as the API requires.
 - Z.ai GLM connects the way pi does — the coding endpoint over the
-  OpenAI protocol: `ZAI_API_KEY=... imp -m zai/glm-5.3`
-  (`ZAI_BASE_URL` overrides, e.g. the CN mirror
-  `https://open.bigmodel.cn/api/coding/paas/v4`). glm-5.2 = off/high/max;
-  glm-5.3 = low/high/max (thinking cannot be disabled on that model).
+  OpenAI protocol is the ONE official GLM path:
+  `ZAI_API_KEY=... imp -m zai/glm-5.3` (`ZAI_BASE_URL` overrides, e.g.
+  the CN mirror `https://open.bigmodel.cn/api/coding/paas/v4`). A bare
+  `glm-*` id routes there too whenever `ZAI_API_KEY` is set. glm-5.2 =
+  off/high/max; glm-5.3 = low/high/max (thinking cannot be disabled on
+  that model). The older anthropic-compat connection
+  (`ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`) keeps working as
+  a fallback when `ZAI_API_KEY` is absent, with the binary thinking
+  knob only. Which path a session took is always visible: the footer and
+  `/model` show `zai/glm-…` for the coding endpoint and a bare `glm-…`
+  for compat, and a bare id on compat prints a one-line pointer to the
+  zai setup.
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).

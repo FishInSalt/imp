@@ -271,7 +271,10 @@ describe("slash commands", () => {
 			"model: claude-sonnet-4-5\n" +
 				"switch with: /model <id> — e.g. claude-sonnet-4-5, zai/glm-5.3 (any id your endpoint accepts)\n",
 		);
+		const prevZai = process.env.ZAI_API_KEY; // fallback leg — keep the dev shell out
+		delete process.env.ZAI_API_KEY;
 		await dispatchCommand("/model glm-4.6", env.ctx);
+		if (prevZai !== undefined) process.env.ZAI_API_KEY = prevZai;
 		expect(env.output()).toContain("Model: glm-4.6\n");
 		expect(env.runner.model).toBe("glm-4.6");
 		const result = await env.runner.runTurn({ userMessage: "hi" });
@@ -1237,6 +1240,10 @@ describe("/think (#thinking-levels)", () => {
 
 	it("GLM connection tell: a bare glm id on anthropic-compat teaches the zai path once; prefixed/zai routes stay silent", async () => {
 		// bare id, no ZAI_API_KEY → anthropic-compat + the teaching note
+		// (cleared explicitly — a dev shell exporting ZAI_API_KEY must not
+		// flip this fallback test)
+		const prevZai = process.env.ZAI_API_KEY;
+		delete process.env.ZAI_API_KEY;
 		const env = await makeEnv();
 		await dispatchCommand("/model glm-5.3", env.ctx);
 		expect(env.runner.providerName).toBe("anthropic");
@@ -1244,9 +1251,14 @@ describe("/think (#thinking-levels)", () => {
 		expect(env.output()).toContain("runs via anthropic-compat");
 		// explicit anthropic/ prefix — a deliberate choice, no note
 		const quiet = await makeEnv();
+		try {
 		await dispatchCommand("/model anthropic/glm-5.3", quiet.ctx);
 		expect(quiet.runner.providerName).toBe("anthropic");
 		expect(quiet.output()).not.toContain("anthropic-compat");
+		} finally {
+			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevZai;
+		}
 		// ZAI_API_KEY present → the same bare id routes to zai, prefix shows, no note
 		const zaiEnv = await makeEnv();
 		const prev = process.env.ZAI_API_KEY;
@@ -1260,6 +1272,51 @@ describe("/think (#thinking-levels)", () => {
 			if (prev === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prev;
 		}
+	});
+
+	it("construction seam: IMP_MODEL=glm-5.3 + ZAI_API_KEY builds the zai family and clamps into its ladder; startup on compat prints the pointer", async () => {
+		// zai construction (the documented "keep IMP_MODEL, add ZAI_API_KEY" flow)
+		const env = await makeEnv({ model: "glm-5.3" });
+		const prev = process.env.ZAI_API_KEY;
+		process.env.ZAI_API_KEY = "sk-test";
+		try {
+			const { renderer: r } = makeRenderer();
+			const runner = await createRunner({
+				cwd: env.cwd,
+				argv: [],
+				settingsPath: env.settingsPath,
+				model: "glm-5.3",
+				maxTokens: 1024,
+				maxTurns: 10,
+				noContextFiles: true,
+				noSession: true,
+				renderer: r,
+				provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
+			});
+			expect(runner.providerName).toBe("zai");
+			expect(runner.thinkingLevel).toBe("high"); // medium clamps UP into low/high/max
+		} finally {
+			if (prev === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prev;
+		}
+		// compat startup: the pointer fires at warmup (README's unconditional
+		// claim) — fresh renderer so the warmup note is not sliced into the
+		// seeding banner like makeEnv's env.output() does
+		const { renderer: compatR, output: compatOut } = makeRenderer();
+		const compat = await createRunner({
+			cwd: env.cwd,
+			argv: [],
+			settingsPath: env.settingsPath,
+			model: "glm-5.3",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			renderer: compatR,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
+		});
+		expect(compat.providerName).toBe("anthropic");
+		expect(compatOut()).toContain("runs via anthropic-compat");
 	});
 
 	it("on a model with no knob: pi's status line, level stays off", async () => {

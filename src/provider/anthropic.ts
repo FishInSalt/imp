@@ -79,11 +79,6 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 	});
 }
 
-interface SseEvent {
-	event: string;
-	data: unknown;
-}
-
 /** Parse an SSE byte stream into events. Frames are separated by a blank line. */
 export function createAnthropicProvider(options: AnthropicProviderOptions = {}): LLMProvider {
 	// Key resolution mirrors Claude Code conventions so Anthropic-compatible

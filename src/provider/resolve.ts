@@ -18,7 +18,10 @@ import { createZaiProvider } from "./zai.js";
  *                               credential (imp login; see codex-auth.ts)
  *
  * This is the seed of the full registry (contextWindow per model, picker,
- * session persistence) — deliberately a pure function with no state.
+ * session persistence). NOT fully pure anymore (#zai-default): bare glm-*
+ * ids consult ZAI_API_KEY to pick the family (zai when set, the
+ * anthropic-compat fallback otherwise); everything else stays
+ * deterministic string routing.
  */
 
 export type ProviderName = "anthropic" | "openai" | "openai-codex" | "zai";

@@ -235,7 +235,7 @@ async function runLogin(): Promise<void> {
 	const controller = new AbortController();
 	process.on("SIGINT", () => controller.abort());
 	try {
-		const credential = await loginCodex({
+		await loginCodex({
 			signal: controller.signal,
 			onDeviceCode: ({ verificationUri, userCode, intervalSeconds }) => {
 				process.stdout.write(
@@ -516,7 +516,7 @@ async function resolveProjectTrust(
 	const store = defaultTrustStorePath(homedir());
 	if (opts.trustDecision === "trust") {
 		setTrust(store, cwd, true, true); // rebuildOnCorrupt: the recovery flag must repair
-		renderer.note(dim(broadAncestorWarning(store, cwd, true)));
+		renderer.note(dim(broadAncestorWarning(cwd, true)));
 		return true;
 	}
 	if (opts.trustDecision === "no-trust") {
@@ -575,7 +575,7 @@ async function resolveProjectTrust(
 
 /** Recording at (or an ancestor of) the whole home tree is broad; say so
  *  once instead of silently (M8 review F6). */
-function broadAncestorWarning(store: string, cwd: string, trusted: boolean): string {
+function broadAncestorWarning(cwd: string, trusted: boolean): string {
 	const home = homedir();
 	const note = `▪ trust: recorded ${trusted ? "“trust”" : "“do not trust”"} for ${cwd}`;
 	if (canonicalizeDir(cwd) === canonicalizeDir(home) || cwd === "/") {

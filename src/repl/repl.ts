@@ -622,7 +622,9 @@ class ReplMachine {
 	}
 
 	private refreshFooter(): void {
-		const parts: string[] = [this.runner.model];
+		// modelReference() is the CONNECTION TELL (#zai-default): zai/glm-5.3
+		// vs a bare glm-5.3 distinguishes the coding endpoint from compat.
+		const parts: string[] = [this.runner.modelReference()];
 		// pi parity (#thinking-levels): the level segment sits beside the
 		// model whenever the model HAS a knob — "off" included, so the
 		// control is discoverable from the footer alone.

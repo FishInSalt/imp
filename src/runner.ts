@@ -353,6 +353,10 @@ class RunnerImpl implements Runner {
 		if (this.initialized) return;
 		this.initialized = true;
 		const options = this.options;
+		// #zai-default: a bare glm-* STARTUP model on the compat family gets
+		// the same one-line pointer a /model switch prints (README promises
+		// it unconditionally — imp/.env's own IMP_MODEL=glm-5.3 hits this).
+		this.noteGlmCompatRouting(options.model, this.providerName);
 		if (!options.noSession) {
 			if (options.resume !== undefined || options.continueRecent === true) {
 				const resumed = resolveSession(options.cwd, {

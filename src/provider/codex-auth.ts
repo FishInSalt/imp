@@ -56,10 +56,6 @@ export interface CodexAuthOptions {
 	signal?: AbortSignal;
 }
 
-function base64url(input: Buffer | string): string {
-	return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 function decodeJwtAccountId(token: string): string {
 	const parts = token.split(".");
 	if (parts.length !== 3) throw new Error("Codex token is not a JWT");

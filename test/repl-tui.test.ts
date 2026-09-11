@@ -2394,6 +2394,16 @@ describe("runRepl with shell:tui", () => {
 			await expect(env.repl).resolves.toBe(0);
 		});
 
+		it("footer tell: a zai model shows its zai/ prefix in the persistent footer (compat stays bare)", async () => {
+			const env = await startTuiRepl([reply("ok")], { model: "zai/glm-5.3" });
+			await settle();
+			// the P1 fix: refreshFooter uses modelReference() — the connection
+			// tell lives in the footer, not only in /model output
+			expect(env.terminal.frameSince(0)).toMatch(/zai\/glm-5\.3 · /);
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
 		it("shift+tab on a knob-less model: the teaching note, no state change", async () => {
 			const env = await startTuiRepl([reply("ok")]); // test-model — no knob
 			await settle();

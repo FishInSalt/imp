@@ -13,7 +13,6 @@ import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
-	type ModelThinkingMeta,
 	supportedThinkingLevels,
 	THINKING_LEVELS,
 	type ThinkingLevel,
@@ -279,7 +278,6 @@ export async function buildModelList(
 /** The switch itself, shared by "/model <id>" and the picker's pick — the
  *  write and the note are byte-identical whichever way the id arrived. */
 function switchModel(ctx: CommandContext, id: string): void {
-	const previous = ctx.runner.modelReference();
 	ctx.runner.setModel(id); // re-resolves the provider too (multi-provider)
 	// Canonical refs on both sides (review P2-5): "gpt-5.4" alone cannot tell
 	// the user WHICH protocol family the switch landed on.

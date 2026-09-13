@@ -153,11 +153,10 @@ describe("trustRequiringResources", () => {
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 	});
 
-	it("cwd at or under the home dir gates nothing — the user's own installation (M8 review)", () => {
+	it("cwd AT the home dir gates nothing — the user's own installation (M8 review; #trust-home-fix narrowed the tree exemption)", () => {
 		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
 		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
 		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && imp
-		expect(trustRequiringResources(join(home, "some", "repo"), home)).toEqual([]); // still under ~
 		// a genuinely foreign cwd still gates
 		const foreign = mkdtempSync(join(tmpdir(), "imp-trust-foreign-"));
 		mkdirSync(join(foreign, ".imp", "extensions"), { recursive: true });

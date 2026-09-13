@@ -122,6 +122,17 @@ describe("trustRequiringResources", () => {
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/commands"]);
 	});
 
+	it("#trust-home-fix: a directory UNDER $HOME gates normally — only $HOME itself is exempt (pi parity)", () => {
+		const home = mkdtempSync(join(tmpdir(), "imp-trust-home6-"));
+		const proj = join(home, "code", "proj"); // under home, like every macOS path
+		mkdirSync(join(proj, ".imp", "agents"), { recursive: true });
+		// the fix's regression pin: this used to return [] (blanket home exemption)
+		expect(trustRequiringResources(proj, home)).toEqual([".imp/agents"]);
+		// $HOME itself stays exempt — there `.imp/*` is the user's own global installation
+		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
+		expect(trustRequiringResources(home, home)).toEqual([]);
+	});
+
 	it("only .imp extensions and agents count; AGENTS.md never does", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-proj-"));
 		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home-"));
@@ -142,11 +153,10 @@ describe("trustRequiringResources", () => {
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 	});
 
-	it("cwd at or under the home dir gates nothing — the user's own installation (M8 review)", () => {
+	it("cwd AT the home dir gates nothing — the user's own installation (M8 review; #trust-home-fix narrowed the tree exemption)", () => {
 		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
 		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
 		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && imp
-		expect(trustRequiringResources(join(home, "some", "repo"), home)).toEqual([]); // still under ~
 		// a genuinely foreign cwd still gates
 		const foreign = mkdtempSync(join(tmpdir(), "imp-trust-foreign-"));
 		mkdirSync(join(foreign, ".imp", "extensions"), { recursive: true });

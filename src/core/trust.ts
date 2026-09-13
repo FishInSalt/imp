@@ -202,7 +202,12 @@ export function askTrustOnce(
  *  the user installed it themselves. Plain `AGENTS.md` context files stay
  *  ungated (prompt-level, matching pi and Claude Code). */
 export function trustRequiringResources(cwd: string, home: string): string[] {
-	if (isWithin(cwd, home)) return []; // ~ is the user's own installation — never gated
+	// ONLY $HOME itself is exempt — there `.imp/*` IS the user's own global
+	// installation and must never gate itself. The whole home TREE is NOT
+	// exempt (#trust-home-fix): pi gates any directory with project
+	// resources regardless of location (macOS keeps everything under ~ —
+	// a blanket exemption would silently disable the gate everywhere).
+	if (canonicalizeDir(cwd) === canonicalizeDir(home)) return [];
 	const found: string[] = [];
 	// ".imp/commands" (M11 #6) is prompt-level, not code — but it talks to
 	// the model, so it gates like the rest (review P1: a commands-only repo
@@ -212,12 +217,6 @@ export function trustRequiringResources(cwd: string, home: string): string[] {
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}
 	return found;
-}
-
-function isWithin(child: string, ancestor: string): boolean {
-	const c = canonicalizeDir(child);
-	const a = canonicalizeDir(ancestor);
-	return c === a || c.startsWith(`${a}/`);
 }
 
 /** "dir (N file[s])" for the ask line — the user should not vouch blind

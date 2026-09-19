@@ -1,5 +1,4 @@
 import { existsSync, appendFileSync as fsAppend, readFileSync } from "node:fs";
-import * as fsp from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -130,7 +129,7 @@ describe("SessionStore", () => {
 	it("forkBefore: the leaf moves, appends grow a NEW branch, the old tail stays on disk (#10)", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
-		const u1 = store.appendMessage(user("first question"));
+		store.appendMessage(user("first question"));
 		store.appendMessage(assistantText("first answer"));
 		const u2 = store.appendMessage(user("second question"));
 		store.appendMessage(assistantText("second answer"));
@@ -488,17 +487,17 @@ describe("thinkingLevelChange entries", () => {
 		// crash tolerance — so a valid entry follows to make it interior)
 		fsAppend(
 			store.filePath,
-			JSON.stringify({ type: "thinkingLevelChange", id: "x", parentId: null, timestamp: "t" }) + "\n",
+			`${JSON.stringify({ type: "thinkingLevelChange", id: "x", parentId: null, timestamp: "t" })}\n`,
 		);
 		fsAppend(
 			store.filePath,
-			JSON.stringify({
+			`${JSON.stringify({
 				type: "message",
 				id: "y",
 				parentId: null,
 				timestamp: "t",
 				message: { role: "user", content: "tail" },
-			}) + "\n",
+			})}\n`,
 		);
 		expect(() => SessionStore.open(store.filePath)).toThrow(/missing level/);
 	});

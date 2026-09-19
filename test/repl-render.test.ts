@@ -50,6 +50,7 @@ describe("Renderer thinking (#thinking-levels)", () => {
 		const text = writes.join("");
 		// each block carries its own dim pair — documented deviation from the
 		// pre-streaming single span (review P2): visually equivalent
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: counting dim-ANSI spans IS the assertion
 		expect(text.match(/\x1b\[2m/g)?.length).toBeGreaterThanOrEqual(2);
 		expect(text).toContain("\x1b[2mfirst paragraph");
 		expect(text).toContain("\x1b[2msecond paragraph");
@@ -62,6 +63,7 @@ describe("Renderer thinking (#thinking-levels)", () => {
 			toolStyle: "one-line",
 		});
 		r2.thinking("first paragraph\n\nsecond paragraph");
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: counting dim-ANSI spans IS the assertion
 		expect(replayWrites.join("").match(/\x1b\[2m/g)?.length).toBe(1);
 	});
 

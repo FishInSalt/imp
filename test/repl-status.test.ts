@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Usage } from "../src/core/messages.js";
+import { type AssistantMessage, emptyUsage, type Usage } from "../src/core/messages.js";
 import type { LLMProvider } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { ReplInput } from "../src/repl/input.js";
@@ -363,6 +363,9 @@ describe("LineInput.setTitle contract", () => {
 			onLine: () => {},
 			onInterrupt: () => {},
 			onEof: () => {},
+			onDequeue: () => {},
+			onCycleThinking: () => {},
+			onToggleThinking: () => {},
 		});
 		expect(typeof tui.setTitle).toBe("function");
 		const legacy: LineInput = new ReplInput({
@@ -382,7 +385,7 @@ describe("LineInput.setTitle contract", () => {
 describe("footer thinking segment", () => {
 	it("a model with a knob shows think:<level> (off included); a knob-less model shows none", async () => {
 		// "test-model" is not in the style table → no segment at startup
-		const env = await startTuiRepl([reply("ok")]);
+		const env = await startTuiRepl([reply("ok", emptyUsage())]);
 		await settle();
 		expect(env.terminal.frameSince(0)).not.toContain("think:");
 		// switching to a Claude model adds the segment (default off)

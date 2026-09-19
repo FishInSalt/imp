@@ -12,7 +12,6 @@ import {
 	removeTrust,
 	setTrust,
 	trustRequiringResources,
-	writeTrustFile,
 } from "../src/core/trust.js";
 
 let home: string;

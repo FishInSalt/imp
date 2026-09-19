@@ -1,9 +1,8 @@
 import { createServer } from "node:http";
-import { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { discoverModels, familyConfigured } from "../src/provider/discover.js";
 import { parseModelRef, resolveModel } from "../src/provider/resolve.js";
-import { thinkingMetaFor } from "../src/provider/thinking.js";
+import { type ThinkingLevel, thinkingMetaFor } from "../src/provider/thinking.js";
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 import { createZaiProvider, ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS } from "../src/provider/zai.js";
 
@@ -48,11 +47,18 @@ afterAll(async () => {
 	await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 
-function REQ(model: string, thinking?: string): LLMRequest {
+function REQ(model: string, thinking?: ThinkingLevel): LLMRequest {
 	return {
 		system: "sys",
 		messages: [{ role: "user", content: "hi" }],
-		tools: [{ name: "read", description: "d", parameters: { type: "object", properties: {} } }],
+		tools: [
+			{
+				name: "read",
+				description: "d",
+				parameters: { type: "object", properties: {} },
+				execute: async () => ({ output: "" }),
+			},
+		],
 		model,
 		maxTokens: 1024,
 		thinking,
@@ -91,6 +97,7 @@ describe("zai provider (pi's GLM connection path)", () => {
 			expect(urlPath).toBe("/chat/completions");
 			expect(auth).toBe("Bearer sk-zai");
 			const body = captured[0];
+			if (!body) throw new Error("no request captured");
 			expect(body.tool_stream).toBe(true); // pi compat.zaiToolStream
 			expect(body.max_tokens).toBe(1024); // zai takes max_tokens, not max_completion_tokens
 			expect(body.thinking).toEqual({ type: "enabled", clear_thinking: false });

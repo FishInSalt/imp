@@ -68,7 +68,7 @@ describe("buildModelList", () => {
 	});
 
 	it("openai family: discovered ids get the prefix; discovery failure falls back + notes", async () => {
-		const { rows, fallbackNotes } = await buildModelList("openai/deepseek-chat", {
+		const { rows } = await buildModelList("openai/deepseek-chat", {
 			configured: (f) => f === "openai",
 			discover: async (f) => (f === "openai" ? ["deepseek-chat", "deepseek-reasoner"] : null),
 		});
@@ -228,7 +228,7 @@ describe("discoverModels + familyConfigured", () => {
 			}),
 		);
 		let hit = false;
-		const cat = createServer((req, res) => {
+		const cat = createServer((_req, res) => {
 			hit = true;
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify({ "gpt-6-astra": { id: "gpt-6-astra" }, gpt55: { id: "gpt-5.5" } })); // pi.dev's record-keyed shape

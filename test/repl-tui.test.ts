@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
@@ -15,14 +15,8 @@ import { Renderer } from "../src/render.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
-import { createRunner, type Runner } from "../src/runner.js";
-import {
-	type AutocompleteSlashCommand,
-	resolveShell,
-	StdinBuffer,
-	type Terminal,
-	visibleWidth,
-} from "../src/tui.js";
+import { createRunner } from "../src/runner.js";
+import { type AutocompleteSlashCommand, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
 import {
 	assistant,
 	gate,
@@ -190,6 +184,8 @@ function makeShell(options?: {
 			events.push("dequeue");
 			options?.onDequeue?.();
 		},
+		onCycleThinking: () => events.push("cycle-thinking"),
+		onToggleThinking: () => events.push("toggle-thinking"),
 	});
 	return { terminal, transcript, shell, events };
 }
@@ -2261,7 +2257,7 @@ describe("runRepl with shell:tui", () => {
 			await waitUntil(() => env.requests.length >= 2);
 			const request2 = env.requests[1]?.messages ?? [];
 			expect(request2.some((m) => m.role === "user" && m.content === "steer me")).toBe(true);
-			expect(request2.some((m) => m.content === "later please")).toBe(false); // NOT injected
+			expect(request2.some((m) => m.role === "user" && m.content === "later please")).toBe(false); // NOT injected
 			g2.resolve(); // turn settles → flush dispatches the follow-up as its own turn
 			await waitUntil(() => env.requests.length >= 3);
 			const request3 = env.requests[2]?.messages ?? [];
@@ -2294,7 +2290,7 @@ describe("runRepl with shell:tui", () => {
 			g.resolve();
 			await waitUntil(() => env.requests.length >= 1);
 			const first = env.requests[0]?.messages ?? [];
-			expect(first.some((m) => m.content === "q one")).toBe(false); // never steered, never flushed
+			expect(first.some((m) => m.role === "user" && m.content === "q one")).toBe(false); // never steered, never flushed
 			env.terminal.data("\x7f".repeat(40));
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);

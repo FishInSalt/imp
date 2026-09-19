@@ -883,7 +883,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				const unmerged = entries.filter((e) => !e.missing && !e.merged && !e.patchEquivalent);
 				if (unmerged.length > 0) {
 					ctx.renderer.note(
-						"▪ merge from the repo root: " + unmerged.map((e) => `git merge ${e.branch}`).join("; "),
+						`▪ merge from the repo root: ${unmerged.map((e) => `git merge ${e.branch}`).join("; ")}`,
 					);
 				}
 				if (deletable.length > 0) {

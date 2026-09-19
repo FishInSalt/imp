@@ -19,7 +19,7 @@ import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, loginNeedsGuard, parseCommand } from "../src/repl/commands.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
-import { assistant, makeRenderer, scriptedProvider, waitUntil } from "./helpers/fakes.js";
+import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 beforeEach(() => {
 	vi.stubEnv("IMP_LOG", "0");
@@ -905,6 +905,7 @@ describe("/tree (#10 batch 2)", () => {
 		// overflows and the PRE-prompt compaction itself "overflows"
 		const scripted: LLMProvider = {
 			name: "deadlock",
+			// biome-ignore lint/correctness/useYield: error injection — throws before any yield
 			async *stream() {
 				// the summary call rejects with an overflow-shaped error
 				throw new Error("OpenAI Codex API error 400: This model's maximum context length is 272000 tokens");
@@ -1491,6 +1492,8 @@ describe("/think (#thinking-levels)", () => {
 		const env = await makeEnv();
 		saveApiKey("zai", "sk-z", env.ctx.authStorePath);
 		const cred = { accessToken: "at", refreshToken: "rt", expiresAt: Date.now() + 3600_000, accountId: "a" };
+		// makeEnv always seeds authStorePath; narrow for writeFileSync
+		if (!env.ctx.authStorePath) throw new Error("makeEnv must set authStorePath");
 		writeFileSync(
 			env.ctx.authStorePath,
 			JSON.stringify({ version: 1, apiKeys: { zai: "sk-z" }, codex: { provider: "openai-codex", ...cred } }),

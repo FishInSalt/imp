@@ -62,6 +62,7 @@ function settle(ms = 30): Promise<void> {
 }
 
 function stripAnsi(text: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping OSC/C0 controls IS this helper's job
 	return text.replace(/\[[0-9;?]*[A-Za-z]/g, "").replace(/\][^\x07]*\x07/g, "");
 }
 

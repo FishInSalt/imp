@@ -97,10 +97,14 @@ describe("anthropic thinking", () => {
 	it('off AND undefined (the runner maps off→undefined) → {type:"disabled"} — pi reinterprets at the provider layer (:754-780)', async () => {
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-5", [], "off")));
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
+		expect((captured[0]?.body as Record<string, unknown> | undefined)?.thinking).toEqual({
+			type: "disabled",
+		});
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-5"))); // runner.ts:681 sends undefined for off
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
+		expect((captured[0]?.body as Record<string, unknown> | undefined)?.thinking).toEqual({
+			type: "disabled",
+		});
 	});
 
 	it("Claude >=4.6 adaptive path (pi compat.forceAdaptiveThinking): {adaptive} + output_config effort, no budget math", async () => {
@@ -113,18 +117,24 @@ describe("anthropic thinking", () => {
 		// xhigh is NATIVE on 4.7+ (pi catalog map), not clamped away
 		captured = [];
 		await collect(provider().stream(REQ("claude-opus-4-8", [], "xhigh")));
-		expect((captured[0]?.body as Record<string, unknown>).output_config).toEqual({ effort: "xhigh" });
+		expect((captured[0]?.body as Record<string, unknown> | undefined)?.output_config).toEqual({
+			effort: "xhigh",
+		});
 		// sonnet-4-6 has max but not xhigh (pi catalog) → xhigh clamps UP to max
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-6", [], "xhigh")));
-		expect((captured[0]?.body as Record<string, unknown>).output_config).toEqual({ effort: "max" });
+		expect((captured[0]?.body as Record<string, unknown> | undefined)?.output_config).toEqual({
+			effort: "max",
+		});
 		void events;
 	});
 
 	it("GLM off → disabled on this protocol too (protocol mirror of pi's zai rule)", async () => {
 		captured = [];
 		await collect(provider().stream(REQ("glm-5.3", [], "off")));
-		expect((captured[0]?.body as Record<string, unknown>).thinking).toEqual({ type: "disabled" });
+		expect((captured[0]?.body as Record<string, unknown> | undefined)?.thinking).toEqual({
+			type: "disabled",
+		});
 	});
 
 	it("thinking blocks stream as thinking_delta and land with their signature", async () => {

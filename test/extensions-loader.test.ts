@@ -123,7 +123,8 @@ describe("extension load isolation (design §7)", () => {
 		expect(loaded.summaries).toEqual([]);
 		expect(loaded.runtime.tools).toEqual([]);
 		expect(loaded.failures[0]?.path).toContain("broken.mjs");
-		expect(loaded.failures[0]?.error.length).toBeLessThanOrEqual(160);
+		// firstLine caps CONTENT at 160; the trailing ellipsis is on top of it
+		expect(loaded.failures[0]?.error.length).toBeLessThanOrEqual(161);
 	});
 
 	it("case 3 (E2): a .js entry whose import fails gets the rename hint appended", async () => {

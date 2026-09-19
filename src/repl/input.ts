@@ -151,7 +151,11 @@ export class ReplInput {
 	 * onLine — a "y" typed at a prompt must never leak into the queue as
 	 * steering text. Empty, EOF, and anything but y/yes resolve false. */
 	ask(question: string): Promise<boolean> {
-		if (this.rl === null || this.closed) return Promise.resolve(false);
+		// streamClosed: the input already hit EOF — a queued question can never
+		// be answered (no lines will ever arrive), so decline immediately. The
+		// close handler drains asks queued BEFORE it; this guards the ones that
+		// arrive after, while the in-flight run keeps producing tool gates.
+		if (this.rl === null || this.closed || this.streamClosed) return Promise.resolve(false);
 		const rl = this.rl;
 		return new Promise<boolean>((resolve) => {
 			const wasIdle = this.pendingAsks.length === 0;
@@ -166,7 +170,7 @@ export class ReplInput {
 	/** Text question (/login's api-key prompt). The readline shell echoes
 	 *  the typed line — same as pi's dialog, which does not mask either. */
 	secret(question: string): Promise<string | null> {
-		if (this.rl === null || this.closed) return Promise.resolve(null);
+		if (this.rl === null || this.closed || this.streamClosed) return Promise.resolve(null);
 		const rl = this.rl;
 		return new Promise<string | null>((resolve) => {
 			const wasIdle = this.pendingAsks.length === 0;

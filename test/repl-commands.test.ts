@@ -71,7 +71,7 @@ async function makeGitRepo(args?: {
 	const root = path.join(base, args?.repoDirName ?? "repo");
 	mkdirSync(root, { recursive: true });
 	const run = (cmd: string[], cwd: string) => execFileSync("git", cmd, { cwd, encoding: "utf8" });
-	run(["init", "-q"], root);
+	run(["init", "-q", "-b", "main"], root);
 	run(["config", "user.email", "t@example.com"], root);
 	run(["config", "user.name", "t"], root);
 	writeFileSync(path.join(root, "a.txt"), "base\n");

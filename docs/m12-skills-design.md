@@ -269,7 +269,8 @@ When a skill file references a relative path, resolve it against the skill direc
 - Name/description/location XML-escaped (`& < > " '`).
 - Empty skills → no block at all (never an empty `<available_skills/>`).
 - No size budget in M12 (pi has none; CC's 1% budget is Appendix B future hardening).
-- Startup note (interactive only, after the context-file note): `▪ skills: N loaded`
+- Startup note (both modes, before the context-file note — extension precedent;
+  zero skills → silence): `▪ skills: N loaded`
   and, when diagnostics exist, one `renderer.error` line each (capped at 5, then
   `… +K more`; md-command precedent).
 
@@ -346,10 +347,12 @@ Loader/CLI (via `renderer.error` at startup, or returned as diagnostics):
 ```
 imp: skill path "PATH" does not exist — skipped
 imp: skill path "PATH" is not a markdown file — skipped
+imp: skill path "PATH" failed to stat: <error first line>
 imp: skill "NAME" (PATH) ignored — description is required
 imp: skill "NAME" (PATH): description exceeds 1024 characters (N)
 imp: skill name "NAME" (PATH) invalid: must be 1-64 chars, lowercase letters, digits, hyphens
 imp: skill file "PATH" failed to parse: <yaml error, first line only>
+imp: skill file "PATH" failed to read: <error first line>
 imp: skill name collision: "NAME" from PATH loses to PATH (first loaded wins)
 ```
 

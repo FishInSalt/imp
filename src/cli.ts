@@ -92,8 +92,8 @@ Options:
   -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable;
                            explicit -e paths load regardless of the trust gate)
   -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
-      --skill <path>       Load a skill (.md file, or a directory with SKILL.md; repeatable;
-                           explicit --skill paths load regardless of --no-skills)
+      --skill <path>       Load a skill (.md file, or a skill directory / directory
+                           tree; repeatable; explicit --skill paths load regardless of --no-skills)
       --no-skills          Skip skill discovery (user + project + settings) — explicit
                            --skill paths still load
       --trust              Trust this directory's .imp/ resources, when present, and record it
@@ -558,7 +558,9 @@ async function resolveProjectTrust(
 	const resources = trustRequiringResources(cwd, homedir()).filter(
 		(r) =>
 			!(opts.noExtensions && r === ".imp/extensions") && // -ne already refuses that tier
-			!(opts.noSkills && (r === ".imp/skills" || r.endsWith(".agents/skills"))), // --no-skills likewise
+			// --no-skills likewise (review A8: "." is the degenerate ancestor entry
+			// when cwd itself sits inside a .agents/skills chain)
+			!(opts.noSkills && (r === ".imp/skills" || r.endsWith(".agents/skills") || r === ".")),
 	);
 	if (resources.length === 0) return true; // zero friction for plain repos
 	const store = defaultTrustStorePath(homedir());

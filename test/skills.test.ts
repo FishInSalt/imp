@@ -264,9 +264,10 @@ describe("loadSkills — validation (warn-not-block)", () => {
 		);
 		expect(descWarning?.path).toContain(join(root, "e", "SKILL.md"));
 	});
-	it("a 65-char valid name is fine; 1025-char description warns but loads", () => {
+	it("a 65-char valid name is fine; exactly-1024 description passes, 1025 warns but loads", () => {
 		const root = tmp("limits");
 		writeSkill(join(root, "ok-name"), "name: ok-name\ndescription: d\n");
+		writeSkill(join(root, "edge-desc"), `name: edge-desc\ndescription: ${"d".repeat(1024)}\n`);
 		writeSkill(join(root, "long-desc"), `name: long-desc\ndescription: ${"d".repeat(1025)}\n`);
 		const result = loadSkills({
 			cwd: tmp("cwd"),
@@ -275,8 +276,26 @@ describe("loadSkills — validation (warn-not-block)", () => {
 			noSkills: false,
 			explicitPaths: [root],
 		});
-		expect(result.skills).toHaveLength(2);
+		expect(result.skills).toHaveLength(3);
+		expect(result.diagnostics.filter((d) => d.message.includes("exceeds"))).toHaveLength(1);
 		expect(result.diagnostics.some((d) => d.message.includes("exceeds 1024 characters (1025)"))).toBe(true);
+	});
+	it("a non-string description (e.g. number) counts as missing — warn and skip", () => {
+		const root = tmp("nonstr");
+		writeSkill(join(root, "num-desc"), "name: num-desc\ndescription: 42\n");
+		const result = loadSkills({
+			cwd: tmp("cwd"),
+			home: tmp("home"),
+			projectTrusted: false,
+			noSkills: false,
+			explicitPaths: [root],
+		});
+		expect(result.skills).toHaveLength(0);
+		expect(
+			result.diagnostics.some(
+				(d) => d.message.includes('"num-desc"') && d.message.includes("description is required"),
+			),
+		).toBe(true);
 	});
 	it("malformed YAML in SKILL.md warns and skips; bare .md without description is silent", () => {
 		const root = tmp("yaml");
@@ -385,6 +404,14 @@ describe("formatSkillsForPrompt", () => {
 			disableModelInvocation: false,
 		},
 		{
+			name: "it-s",
+			description: "apostrophe: 'quoted'",
+			filePath: "/s/it-s/SKILL.md",
+			baseDir: "/s/it-s",
+			source: "path",
+			disableModelInvocation: false,
+		},
+		{
 			name: "hidden",
 			description: "user-only",
 			filePath: "/s/h/SKILL.md",
@@ -406,12 +433,17 @@ describe("formatSkillsForPrompt", () => {
 				"    <description>Handles &lt;PDFs&gt; &amp; &quot;forms&quot;</description>\n" +
 				"    <location>/s/pdf/SKILL.md</location>\n" +
 				"  </skill>\n" +
+				"  <skill>\n" +
+				"    <name>it-s</name>\n" +
+				"    <description>apostrophe: &apos;quoted&apos;</description>\n" +
+				"    <location>/s/it-s/SKILL.md</location>\n" +
+				"  </skill>\n" +
 				"</available_skills>",
 		);
 	});
 	it("empty (or all-hidden) skill lists produce no block at all", () => {
 		expect(formatSkillsForPrompt([])).toBe("");
-		const hidden = skills[1];
+		const hidden = skills.find((s) => s.name === "hidden");
 		if (hidden === undefined) throw new Error("fixture missing");
 		expect(formatSkillsForPrompt([hidden])).toBe("");
 	});

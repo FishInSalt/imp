@@ -16,8 +16,9 @@ export interface ImpSettings {
 	defaultThinkingLevel?: ThinkingLevel;
 	hideThinkingBlock?: boolean;
 	/** M12 skills: extra skill files/directories, settings tier (a bare string
-	 *  is coerced to a one-element array; non-string entries drop with a
-	 *  warning at load time — lenient here, teaching line where they're used). */
+	 *  is coerced to a one-element array; non-string entries are dropped
+	 *  silently at parse time — design §9: settings loading is deliberately
+	 *  forgiving, the teaching line would be a layer mismatch). */
 	skills?: string[];
 	/** /skill:name command registration (default true; M12 batch 2 consumes it). */
 	enableSkillCommands?: boolean;

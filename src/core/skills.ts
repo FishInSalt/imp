@@ -126,13 +126,20 @@ function loadSkillFromFile(
 	}
 
 	const { frontmatter } = parsed;
+	// Resolved name FIRST (review A4): description diagnostics label the skill
+	// by the name it would load under — frontmatter name if present, parent
+	// directory otherwise. The name may differ from the directory (pi's
+	// deliberate standard divergence — shared .agents/skills trees serve many
+	// harnesses).
+	const frontmatterName = typeof frontmatter.name === "string" ? frontmatter.name : "";
+	const name = frontmatterName || basename(dirname(filePath));
 	const description = frontmatter.description;
 	const hasDescription = typeof description === "string" && description.trim() !== "";
 	if (!hasDescription && !isDeclaredSkill) return { skill: null, diagnostics };
 	if (!hasDescription) {
 		diagnostics.push({
 			type: "warning",
-			message: `skill "${basename(dirname(filePath))}" (${filePath}) ignored — description is required`,
+			message: `skill "${name}" (${filePath}) ignored — description is required`,
 			path: filePath,
 		});
 		return { skill: null, diagnostics };
@@ -141,16 +148,11 @@ function loadSkillFromFile(
 	if (descriptionText.length > MAX_DESCRIPTION_LENGTH) {
 		diagnostics.push({
 			type: "warning",
-			message: `skill "${basename(dirname(filePath))}" (${filePath}): description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${descriptionText.length})`,
+			message: `skill "${name}" (${filePath}): description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${descriptionText.length})`,
 			path: filePath,
 		});
 	}
 
-	// Frontmatter name wins; empty/absent falls back to the parent directory
-	// name. The name may differ from the directory (pi's deliberate standard
-	// divergence — shared .agents/skills trees serve many harnesses).
-	const frontmatterName = typeof frontmatter.name === "string" ? frontmatter.name : "";
-	const name = frontmatterName || basename(dirname(filePath));
 	const warning = nameWarning(name, filePath);
 	if (warning !== null) diagnostics.push(warning);
 
@@ -271,7 +273,12 @@ export function ancestorAgentsSkillDirs(cwd: string, home: string): string[] {
 	let dir = resolve(cwd);
 	for (;;) {
 		const candidate = join(dir, ".agents", "skills");
-		if (resolve(candidate) !== userGlobal) dirs.push(candidate);
+		// Canonicalized compare (review A2): resolve() alone misses symlinked
+		// homes (/var vs /private/var aliasing), misclassifying the user-global
+		// dir as a project resource — over-gating (fail-closed), never a bypass,
+		// but a spurious trust ask under aliased homes. pi's trust side
+		// canonicalizes too (trust-manager.ts uses canonicalizePath).
+		if (canonicalize(candidate) !== canonicalize(userGlobal)) dirs.push(candidate);
 		if (gitRoot !== null && dir === gitRoot) break;
 		const parent = dirname(dir);
 		if (parent === dir) break;
@@ -315,7 +322,6 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		for (const skill of result.skills) {
 			const real = canonicalize(skill.filePath);
 			if (seenRealPaths.has(real)) continue; // same file via symlink/overlap
-			seenRealPaths.add(real);
 			const existing = byName.get(skill.name);
 			if (existing !== undefined) {
 				diagnostics.push({
@@ -325,14 +331,17 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 				});
 				continue;
 			}
+			// Mark seen only on the winner (pi's shape, review A3): a third copy of
+			// a losing file re-warns the collision instead of vanishing silently.
+			seenRealPaths.add(real);
 			byName.set(skill.name, skill);
 			skills.push(skill);
 		}
 	};
 
-	// Explicit paths FIRST — explicit intent outranks discovery (cli --skill,
-	// then settings entries; the caller orders them), matching how pi merges
-	// CLI-enabled resources ahead of discovered ones.
+	// Explicit paths FIRST — explicit intent outranks discovery (design §6
+	// revision note: imp's md-commands rule "explicit/local outranks discovered";
+	// pi's own loadSkills, unlike its resource loader, adds defaults first).
 	for (const raw of explicitPaths) {
 		const expanded = raw.startsWith("~") ? join(home, raw.slice(1)) : raw;
 		const resolved = resolve(cwd, expanded);
@@ -344,16 +353,28 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 			});
 			continue;
 		}
-		const stats = statSync(resolved);
-		if (stats.isDirectory()) {
-			add(scanSkillsDir(resolved, "imp", "path", resolved));
-		} else if (stats.isFile() && resolved.endsWith(".md")) {
-			const result = loadSkillFromFile(resolved, "path");
-			add({ skills: result.skill !== null ? [result.skill] : [], diagnostics: result.diagnostics });
-		} else {
+		// stat inside the try (review A1): existsSync→statSync is a TOCTOU —
+		// a path deleted between the two must downgrade to a warning, not
+		// take the whole startup down (pi wraps its explicit paths too).
+		try {
+			const stats = statSync(resolved);
+			if (stats.isDirectory()) {
+				add(scanSkillsDir(resolved, "imp", "path", resolved));
+			} else if (stats.isFile() && resolved.endsWith(".md")) {
+				const result = loadSkillFromFile(resolved, "path");
+				add({ skills: result.skill !== null ? [result.skill] : [], diagnostics: result.diagnostics });
+			} else {
+				diagnostics.push({
+					type: "warning",
+					message: `skill path "${raw}" is not a markdown file — skipped`,
+					path: resolved,
+				});
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message.split("\n")[0] : "failed to stat skill path";
 			diagnostics.push({
 				type: "warning",
-				message: `skill path "${raw}" is not a markdown file — skipped`,
+				message: `skill path "${raw}" failed to stat: ${message}`,
 				path: resolved,
 			});
 		}

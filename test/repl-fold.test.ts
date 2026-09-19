@@ -120,10 +120,14 @@ async function settle(extraMs = 30): Promise<void> {
 
 /** Strip every ANSI escape (CSI + OSC), not just colors — width math on raw writes. */
 function stripEscapes(line: string): string {
-	return line
-		.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
-		.replace(/\u001b\][^\u0007]*\u0007/g, "")
-		.replace(/\r/g, "");
+	return (
+		line
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escapes IS this helper's job
+			.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escapes IS this helper's job
+			.replace(/\u001b\][^\u0007]*\u0007/g, "")
+			.replace(/\r/g, "")
+	);
 }
 
 function makeShell() {
@@ -136,6 +140,9 @@ function makeShell() {
 		onLine: (line) => events.push(`line:${line}`),
 		onInterrupt: () => events.push("interrupt"),
 		onEof: () => events.push("eof"),
+		onDequeue: () => events.push("dequeue"),
+		onCycleThinking: () => events.push("cycle-thinking"),
+		onToggleThinking: () => events.push("toggle-thinking"),
 	});
 	return { terminal, transcript, shell, events };
 }
@@ -493,11 +500,11 @@ describe("TranscriptSink.feedUser — pi-style user blocks", () => {
 			return idx;
 		};
 		const wide = await order();
-		for (let i = 1; i < wide.length; i++) expect(wide[i]).toBeGreaterThan(wide[i - 1]);
+		for (let i = 1; i < wide.length; i++) expect(wide[i]).toBeGreaterThan(wide[i - 1] ?? -1);
 		terminal.resize(30); // both folds AND the block rewrap
 		await settle();
 		const narrow = await order();
-		for (let i = 1; i < narrow.length; i++) expect(narrow[i]).toBeGreaterThan(narrow[i - 1]);
+		for (let i = 1; i < narrow.length; i++) expect(narrow[i]).toBeGreaterThan(narrow[i - 1] ?? -1);
 		shell.close();
 	});
 

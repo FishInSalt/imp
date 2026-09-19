@@ -19,7 +19,10 @@ describe("anthropic key resolution (#login-repl review P2)", () => {
 	let hdrBase = "";
 	beforeAll(async () => {
 		hdrServer = createServer((req, res) => {
-			captured = { authorization: req.headers.authorization, xApiKey: req.headers["x-api-key"] };
+			captured = {
+				authorization: req.headers.authorization,
+				xApiKey: req.headers["x-api-key"] as string | undefined,
+			};
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			res.write(
 				'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n',

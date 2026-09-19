@@ -1,7 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
-import type { Tool } from "../src/core/tools/types.js";
 import { createCodexResponsesProvider } from "../src/provider/codex-responses.js";
 import type { LLMRequest } from "../src/provider/types.js";
 

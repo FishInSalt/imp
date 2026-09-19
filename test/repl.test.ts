@@ -152,6 +152,7 @@ describe("runRepl welcome panel", () => {
 		const colored = welcomeLines("deadbeef", "test-model", true);
 		// first painted column ≈ blue stop, last ≈ pink stop (exact lerp
 		// values depend on the column index — anchor on near-stop hues)
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: the assertion IS an ANSI color-code match
 		expect(colored[0]).toMatch(/\x1b\[38;2;7[0-9];13[0-9];24[0-9]m/); // ≈ blue
 		expect(colored[0]).toContain("\x1b[38;2;255;110;199m"); // last column ≈ pink
 		// tips and identity are never colorized
@@ -862,7 +863,12 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-secret-"));
 		const requests: LLMRequest[] = [];
 		const fake = makeConsole({ tty: true });
-		const renderer = new Renderer({ write: (t) => fake.stdout.write(t), ansi: false, liveTools: false });
+		const renderer = new Renderer({
+			write: (t) => fake.stdout.write(t),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "two-line",
+		});
 		const runner = await createRunner({
 			cwd: path.join(baseDir, "proj"),
 			argv: [],
@@ -879,12 +885,12 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 		const repl = runRepl({
 			runner,
 			commands: [],
-			renderer,
 			input: fake.stdin,
 			output: fake.stdout,
 			interactive: true,
 			shell: "legacy",
-			exit: () => {},
+			// typed no-op: these tests resolve via stream EOF, never exit()
+			exit: () => undefined as never,
 		});
 		await ticks(2);
 		// drive a secret through the bound input — the machine exposes it via
@@ -924,7 +930,12 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-loginb-"));
 		const requests: LLMRequest[] = [];
 		const fake = makeConsole({ tty: true });
-		const renderer = new Renderer({ write: (t) => fake.stdout.write(t), ansi: false, liveTools: false });
+		const renderer = new Renderer({
+			write: (t) => fake.stdout.write(t),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "two-line",
+		});
 		const runner = await createRunner({
 			cwd: path.join(baseDir, "proj"),
 			argv: [],
@@ -938,7 +949,6 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
 		});
 		// a hang-forever device server: the usercode answers, polls never do
-		const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 		let hangServer: import("node:http").Server;
 		const { createServer } = await import("node:http");
 		hangServer = createServer((req, res) => {
@@ -969,12 +979,12 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 		const repl = runRepl({
 			runner,
 			commands: [],
-			renderer,
 			input: fake.stdin,
 			output: fake.stdout,
 			interactive: true,
 			shell: "legacy",
-			exit: () => {},
+			// typed no-op: these tests resolve via stream EOF, never exit()
+			exit: () => undefined as never,
 		});
 		try {
 			await ticks(2);

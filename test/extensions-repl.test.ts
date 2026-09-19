@@ -87,7 +87,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 			const r = spawnSync("git", flags, { cwd, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git ${flags.join(" ")}: ${r.stderr}`);
 		};
-		g(["init", "-q"]);
+		g(["init", "-q", "-b", "main"]);
 		g(["config", "user.email", "t@imp.dev"]);
 		g(["config", "user.name", "t"]);
 		await writeFile(path.join(cwd, "seed.txt"), "committed\n", "utf8");

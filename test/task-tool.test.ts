@@ -585,7 +585,7 @@ describe("worktree isolation (M6b)", () => {
 			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 		};
-		rgit(["init", "-q"]);
+		rgit(["init", "-q", "-b", "main"]);
 		rgit(["config", "user.email", "t@imp.dev"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
@@ -700,7 +700,7 @@ describe("worktree isolation (M6b)", () => {
 			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git: ${r.stderr}`);
 		};
-		rgit(["init", "-q"]);
+		rgit(["init", "-q", "-b", "main"]);
 		rgit(["config", "user.email", "t@imp.dev"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(root, "seed.txt"), "x\n", "utf8");
@@ -821,7 +821,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 
 	async function seedRepo(dir: string): Promise<void> {
 		const g = gitAt(dir);
-		g(["init", "-q"]);
+		g(["init", "-q", "-b", "main"]);
 		g(["config", "user.email", "t@imp.dev"]);
 		g(["config", "user.name", "t"]);
 		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");

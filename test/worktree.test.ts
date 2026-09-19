@@ -17,7 +17,7 @@ import {
 /** A throwaway git repo with one commit — the hermetic base for every test. */
 async function makeRepo(): Promise<string> {
 	const root = await mkdtemp(path.join(tmpdir(), "imp-wt-repo-"));
-	git(root, ["init", "-q"]);
+	git(root, ["init", "-q", "-b", "main"]);
 	git(root, ["config", "user.email", "test@imp.dev"]);
 	git(root, ["config", "user.name", "imp test"]);
 	writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
@@ -53,7 +53,7 @@ describe("worktree isolation (M6b)", () => {
 
 	it("resolveRepoState: a repo with no commits yet → teaching error", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-empty-"));
-		git(root, ["init", "-q"]);
+		git(root, ["init", "-q", "-b", "main"]);
 		await expect(resolveRepoState(root)).rejects.toThrow(/no commits yet/);
 	});
 

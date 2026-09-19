@@ -258,14 +258,12 @@ describe("openai-completions provider", () => {
 	});
 
 	it("retries a 429 once and succeeds; 401 carries the key hint", async () => {
-		let calls = 0;
 		// one-shot wrapper: first request 429, then the scripted 200
 		const original = script;
 		script = { status: 429, chunks: [] };
 		const patchedProvider = createOpenAICompletionsProvider({ baseUrl, apiKey: "test-key" });
 		// swap the script asynchronously after the first call lands
 		server.once("request", () => {
-			calls++;
 			// the 429 already used this handler's write; arm the success script
 			original.status = 200;
 			original.chunks = [

@@ -704,6 +704,7 @@ export class TuiShell implements LineInput {
 				}
 				// Bracketed paste arrives as one ESC-wrapped chunk (review P2) —
 				// unwrap and take the first line; a multi-line paste is not a query.
+				// biome-ignore lint/suspicious/noControlCharactersInRegex: bracketed-paste markers ARE ESC-wrapped by the terminal
 				const paste = /^\x1b\[200~([^\x1b]*)\x1b\[201~$/.exec(data);
 				if (paste !== null) {
 					const firstLine = (paste[1] ?? "").split("\n")[0] ?? "";

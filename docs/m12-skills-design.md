@@ -134,15 +134,21 @@ export interface LoadSkillsResult {
 
 Load order (first-wins on name collisions; realpath dedup across all tiers):
 
-1. **user** — `~/.imp/skills/` then `~/.agents/skills/` (both always trusted; the user
-   installed them).
-2. **project** — `.imp/skills/` in cwd, then `.agents/skills/` in cwd and every ancestor
-   up to and including the **git repo root** (filesystem root when not in a repo).
-   Scanned only when `projectTrusted === true`. The `$HOME` carve-out: an
-   `.agents/skills` that *is* the user-global `~/.agents/skills` directory is never a
-   project resource (#trust-home-fix semantics).
-3. **path** — settings `skills: string[]` entries (file or directory, `~` expanded,
-   resolved against cwd), then CLI `--skill` entries in argv order.
+1. **path** — explicit paths in caller order (CLI `--skill` entries first, then
+   settings `skills` entries). Explicit intent outranks discovery.
+2. **project** — `.imp/skills/` in cwd, then `.agents/skills/` in cwd and every
+   ancestor up to and including the **git repo root** (filesystem root when not
+   in a repo). Scanned only when `projectTrusted === true`. The `$HOME`
+   carve-out: an `.agents/skills` that *is* the user-global `~/.agents/skills`
+   directory is never a project resource (#trust-home-fix semantics).
+3. **user** — `~/.imp/skills/` then `~/.agents/skills/` (both always trusted;
+   the user installed them).
+
+*(Revision during batch-1 implementation: the original draft listed user first.
+That would let a user-global skill silently shadow a project's same-named
+skill — the opposite of imp's md-commands/agents rule "local intent outranks
+the global default", and of pi, whose resource-loader also feeds project
+resources ahead of user ones. Fixed to path > project > user.)*
 
 `--no-skills` skips tiers 1–2 and the settings array; explicit `--skill` entries still
 load (pi parity: additive even under `--no-skills`).
@@ -217,7 +223,9 @@ flows through the existing `askTrustOnce` dialog.
 ```
 
 - `skills`: string or string[] accepted (a bare string coerced to one-element array);
-  non-strings in the array are dropped with a warning.
+  non-string entries are dropped **silently** at parse time — settings loading is
+  deliberately forgiving (corrupt files never block startup); the original draft's
+  teaching-line warning was dropped as a layer mismatch.
 - `enableSkillCommands`: boolean; missing = true.
 
 CLI:
@@ -343,7 +351,6 @@ imp: skill "NAME" (PATH): description exceeds 1024 characters (N)
 imp: skill name "NAME" (PATH) invalid: must be 1-64 chars, lowercase letters, digits, hyphens
 imp: skill file "PATH" failed to parse: <yaml error, first line only>
 imp: skill name collision: "NAME" from PATH loses to PATH (first loaded wins)
-imp: settings "skills" entry dropped: not a string
 ```
 
 Command dispatch (teaching style):

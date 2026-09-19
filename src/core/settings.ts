@@ -15,6 +15,12 @@ import type { ThinkingLevel } from "../provider/thinking.js";
 export interface ImpSettings {
 	defaultThinkingLevel?: ThinkingLevel;
 	hideThinkingBlock?: boolean;
+	/** M12 skills: extra skill files/directories, settings tier (a bare string
+	 *  is coerced to a one-element array; non-string entries drop with a
+	 *  warning at load time — lenient here, teaching line where they're used). */
+	skills?: string[];
+	/** /skill:name command registration (default true; M12 batch 2 consumes it). */
+	enableSkillCommands?: boolean;
 }
 
 /** The settings file path (IMP_SETTINGS_PATH overrides — hermetic tests). */
@@ -36,6 +42,11 @@ export function loadSettings(path?: string): ImpSettings {
 			out.defaultThinkingLevel = obj.defaultThinkingLevel as ThinkingLevel;
 		}
 		if (typeof obj.hideThinkingBlock === "boolean") out.hideThinkingBlock = obj.hideThinkingBlock;
+		if (typeof obj.skills === "string") out.skills = [obj.skills];
+		else if (Array.isArray(obj.skills)) {
+			out.skills = obj.skills.filter((entry): entry is string => typeof entry === "string");
+		}
+		if (typeof obj.enableSkillCommands === "boolean") out.enableSkillCommands = obj.enableSkillCommands;
 		return out;
 	} catch {
 		return {}; // missing, unreadable, or malformed JSON

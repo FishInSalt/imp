@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
 import { listSessions } from "./core/session/manager.js";
 import { loadSettings } from "./core/settings.js";
+import { loadSkills, type Skill } from "./core/skills.js";
 import {
 	askTrustOnce,
 	canonicalizeDir,
@@ -60,6 +61,10 @@ interface CliOptions {
 	noSession: boolean;
 	extensionPaths: string[];
 	noExtensions: boolean;
+	/** M12: explicit --skill paths (repeatable) — always honored. */
+	skillPaths: string[];
+	/** M12: skip default skill locations (user + project + settings array). */
+	noSkills: boolean;
 	help: boolean;
 	version: boolean;
 }
@@ -87,6 +92,10 @@ Options:
   -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable;
                            explicit -e paths load regardless of the trust gate)
   -ne, --no-extensions     Skip extension discovery — explicit -e paths still load
+      --skill <path>       Load a skill (.md file, or a directory with SKILL.md; repeatable;
+                           explicit --skill paths load regardless of --no-skills)
+      --no-skills          Skip skill discovery (user + project + settings) — explicit
+                           --skill paths still load
       --trust              Trust this directory's .imp/ resources, when present, and record it
       --no-trust           Refuse this directory's .imp/ resources, when present, and record it
   -h, --help               Show this help
@@ -146,6 +155,8 @@ function parseArgs(argv: string[]): CliOptions {
 		noSession: false,
 		extensionPaths: [],
 		noExtensions: false,
+		skillPaths: [],
+		noSkills: false,
 		help: false,
 		version: false,
 	};
@@ -206,6 +217,12 @@ function parseArgs(argv: string[]): CliOptions {
 			case "-ne":
 			case "--no-extensions":
 				opts.noExtensions = true;
+				break;
+			case "--skill":
+				opts.skillPaths.push(next());
+				break;
+			case "--no-skills":
+				opts.noSkills = true;
 				break;
 			case "--trust":
 				opts.trustDecision = "trust";
@@ -406,6 +423,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 				: undefined,
 		);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
+		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		// Markdown quick commands (M11 #6) ride the same pipeline as extension
 		// commands: /help listing, conflict rules, dispatch. Project tier is
 		// behind the same trust gate.
@@ -426,6 +444,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
+			skills,
 		});
 	} catch (err) {
 		reportStartupError(err);
@@ -458,6 +477,32 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	// Setting the code and returning lets the loop drain naturally; the
 	// force-exit paths (double Ctrl+C) keep their explicit process.exit.
 	process.exitCode = code;
+}
+
+/** M12 skills — loaded right after the trust gate resolves, mirroring the
+ *  extension/md-command pipeline: diagnostics as teaching lines, one `▪`
+ *  note when any loaded (queued behind the banner in interactive mode by the
+ *  startup-note wrapper). Settings entries sit under --no-skills like the
+ *  default locations; --skill paths outrank everything (explicit intent). */
+function loadSkillSetup(opts: CliOptions, renderer: Renderer, projectTrusted: boolean): Skill[] {
+	const settings = loadSettings();
+	const settingsEntries = opts.noSkills ? [] : (settings.skills ?? []);
+	const result = loadSkills({
+		cwd: process.cwd(),
+		home: homedir(),
+		projectTrusted,
+		noSkills: opts.noSkills,
+		explicitPaths: [...opts.skillPaths, ...settingsEntries],
+	});
+	const max = 5;
+	for (const diagnostic of result.diagnostics.slice(0, max)) {
+		renderer.error(`imp: ${diagnostic.message}`);
+	}
+	if (result.diagnostics.length > max) {
+		renderer.error(`imp: … +${result.diagnostics.length - max} more skill warnings`);
+	}
+	if (result.skills.length > 0) renderer.note(`▪ skills: ${result.skills.length} loaded`);
+	return result.skills;
 }
 
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {
@@ -511,7 +556,9 @@ async function resolveProjectTrust(
 ): Promise<boolean> {
 	const cwd = process.cwd();
 	const resources = trustRequiringResources(cwd, homedir()).filter(
-		(r) => !(opts.noExtensions && r === ".imp/extensions"), // -ne already refuses that tier
+		(r) =>
+			!(opts.noExtensions && r === ".imp/extensions") && // -ne already refuses that tier
+			!(opts.noSkills && (r === ".imp/skills" || r.endsWith(".agents/skills"))), // --no-skills likewise
 	);
 	if (resources.length === 0) return true; // zero friction for plain repos
 	const store = defaultTrustStorePath(homedir());
@@ -596,11 +643,13 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	try {
 		const projectTrusted = await resolveProjectTrust(opts, renderer, false);
 		const extensions = await loadExtensionSetup(opts, renderer, undefined, projectTrusted);
+		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
+			skills,
 		});
 	} catch (err) {
 		reportStartupError(err);

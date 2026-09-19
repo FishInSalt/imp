@@ -27,8 +27,9 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import * as readline from "node:readline";
+import { ancestorAgentsSkillDirs } from "./skills.js";
 
 /** `true`/`false` records; absent key = undecided. `null` is not stored. */
 export type TrustFile = Record<string, boolean>;
@@ -198,8 +199,11 @@ export function askTrustOnce(
 }
 
 /** Project resources that REQUIRE trust: only `<cwd>/.imp/` items that load
- *  executable or model-directed content. Global `~/.imp/` needs no gate —
- *  the user installed it themselves. Plain `AGENTS.md` context files stay
+ *  executable or model-directed content, plus `.agents/skills` directories in
+ *  cwd and its ancestors up to the git root (M12 — pi parity: the ancestor
+ *  walk stops at the repo boundary; the user-global `~/.agents/skills` itself
+ *  is never a project resource). Global `~/.imp/` needs no gate — the user
+ *  installed it themselves. Plain `AGENTS.md` context files stay
  *  ungated (prompt-level, matching pi and Claude Code). */
 export function trustRequiringResources(cwd: string, home: string): string[] {
 	// ONLY $HOME itself is exempt — there `.imp/*` IS the user's own global
@@ -212,9 +216,17 @@ export function trustRequiringResources(cwd: string, home: string): string[] {
 	// ".imp/commands" (M11 #6) is prompt-level, not code — but it talks to
 	// the model, so it gates like the rest (review P1: a commands-only repo
 	// used to slip through the empty-resources early-exit).
-	for (const rel of [".imp/extensions", ".imp/agents", ".imp/commands"]) {
+	// ".imp/skills" (M12) — same reasoning: skills ARE model-directed content.
+	for (const rel of [".imp/extensions", ".imp/agents", ".imp/commands", ".imp/skills"]) {
 		const target = join(cwd, rel);
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
+	}
+	// `.agents/skills` ancestor walk (M12): cwd first, up to the git root,
+	// excluding the user-global ~/.agents/skills. Entries are relative to
+	// cwd ("../.agents/skills" for ancestors) so describeTrustResources can
+	// count their files the same way.
+	for (const dir of ancestorAgentsSkillDirs(cwd, home)) {
+		if (existsSync(dir)) found.push(relative(cwd, dir) || ".");
 	}
 	return found;
 }

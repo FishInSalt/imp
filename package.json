@@ -19,7 +19,8 @@
 	},
 	"dependencies": {
 		"@earendil-works/pi-tui": "0.82.0",
-		"typebox": "^1.0.0"
+		"typebox": "^1.0.0",
+		"yaml": "^2.9.1"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.10",

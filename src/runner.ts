@@ -19,6 +19,7 @@ import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { loadSettings, saveSettings } from "./core/settings.js";
+import { formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
@@ -92,6 +93,10 @@ export interface RunnerOptions {
 	 *  dispatch from the REPL (M4b, via ReplOptions.commands); context sections
 	 *  inject into the system prompt and loop/turn events emit (M4c). */
 	extensions?: ExtensionRegistry;
+	/** M12 skills — loaded in cli.ts (like extensions), appended to the system
+	 *  prompt after extension sections. `read` must be available for the block
+	 *  (progressive disclosure's activation channel); imp's base set always has it. */
+	skills?: readonly Skill[];
 	/** Extension load failures — logged once the run logger exists (run_error,
 	 *  source "extension"), so one line on screen stays debuggable on disk. */
 	extensionFailures?: readonly ExtensionFailure[];
@@ -410,6 +415,11 @@ class RunnerImpl implements Runner {
 		// assembleSystem, so sections outlive sessions without re-registration.
 		for (const section of this.options.extensions?.contextSections ?? []) {
 			system += `\n\n# Extension context: ${section.id}\n\n${section.text}`;
+		}
+		// Skills come last (M12): the progressive-disclosure catalog is only
+		// useful once a file-read tool exists to load bodies on demand.
+		if (this.options.skills !== undefined && this.tools.some((t) => t.name === "read")) {
+			system += formatSkillsForPrompt(this.options.skills);
 		}
 		return system;
 	}

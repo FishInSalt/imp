@@ -46,6 +46,15 @@ describe("session manager", () => {
 		expect(b.endsWith("w-a--b")).toBe(true);
 	});
 
+	it("a session whose first message is an expanded skill block titles as its summary line (M12 §11.3)", async () => {
+		const { baseDir, cwd } = await setup();
+		const block =
+			'<skill name="ledger" location="/abs/ledger/SKILL.md">\nReferences are relative to /abs/ledger.\n\nKeep the ledger.\n</skill>\n\nadd an entry';
+		seed(baseDir, cwd, [user(block), assistantText("ok")]);
+		const list = listSessions(cwd, baseDir);
+		expect(list[0]?.title).toBe("▪ skill: ledger");
+	});
+
 	it("creates session files under the project dir and lists them newest first", async () => {
 		const { baseDir, cwd } = await setup();
 		const s1 = seed(baseDir, cwd, [user("first session question"), assistantText("a")]);

@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
 import { listSessions } from "./core/session/manager.js";
 import { loadSettings } from "./core/settings.js";
-import { loadSkills, type Skill } from "./core/skills.js";
+import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
 	askTrustOnce,
 	canonicalizeDir,
@@ -437,14 +437,26 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			]),
 			onDiagnostic: (line) => renderer.error(line),
 		});
-		commands = [...extensions.runtime.commands, ...md.commands];
+		const all = [...extensions.runtime.commands, ...md.commands];
+		// Skill commands register LAST (§11.1: builtins → extensions → md →
+		// skills) — the skill: prefix makes collisions impossible by
+		// construction; a literal clash yields to the earlier command with a
+		// warning. Interactive only: print mode never dispatches commands.
+		commands = [
+			...all,
+			...buildSkillCommands(skills.skills, {
+				enabled: skills.enableSkillCommands,
+				reserved: new Set(all.map((c) => c.command.name)),
+				onDiagnostic: (line) => renderer.error(line),
+			}),
+		];
 		runner = await createRunner({
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
-			skills,
+			skills: skills.skills,
 		});
 	} catch (err) {
 		reportStartupError(err);
@@ -484,7 +496,15 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
  *  note when any loaded (queued behind the banner in interactive mode by the
  *  startup-note wrapper). Settings entries sit under --no-skills like the
  *  default locations; --skill paths outrank everything (explicit intent). */
-function loadSkillSetup(opts: CliOptions, renderer: Renderer, projectTrusted: boolean): Skill[] {
+/** Batch-1 loading + the batch-2 registration switch (enableSkillCommands). */
+function loadSkillSetup(
+	opts: CliOptions,
+	renderer: Renderer,
+	projectTrusted: boolean,
+): {
+	skills: Skill[];
+	enableSkillCommands: boolean;
+} {
 	const settings = loadSettings();
 	const settingsEntries = opts.noSkills ? [] : (settings.skills ?? []);
 	const result = loadSkills({
@@ -502,7 +522,7 @@ function loadSkillSetup(opts: CliOptions, renderer: Renderer, projectTrusted: bo
 		renderer.error(`imp: … +${result.diagnostics.length - max} more skill warnings`);
 	}
 	if (result.skills.length > 0) renderer.note(`▪ skills: ${result.skills.length} loaded`);
-	return result.skills;
+	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
 }
 
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {
@@ -651,7 +671,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,
-			skills,
+			skills: skills.skills, // commands stay interactive-only (§11.1)
 		});
 	} catch (err) {
 		reportStartupError(err);

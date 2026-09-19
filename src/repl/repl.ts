@@ -173,10 +173,16 @@ function queuePreviewText(text: string): string {
  *  call; "followUp" (alt+enter) holds for after the run settles. Bang
  *  lines and md prompts never steer — they are flush-only by design (the
  *  prompt is model input verbatim, never re-interpreted). */
-type QueueEntry = { text: string; mode: SubmitMode } | { prompt: string };
+type QueueEntry = { text: string; mode: SubmitMode } | { prompt: string; display?: string };
 
 function entryText(entry: QueueEntry): string {
 	return "prompt" in entry ? entry.prompt : entry.text;
+}
+
+/** Echo override for queued prompts (M12 §11.3): skills queue the expanded
+ *  block but preview their summary line; typed lines have none. */
+function entryDisplay(entry: QueueEntry): string | undefined {
+	return "prompt" in entry ? entry.display : undefined;
 }
 
 /** Routing label for the TUI queue preview rows. */
@@ -362,18 +368,20 @@ class ReplMachine {
 
 	/** Submit a prompt as if typed, without command/bang re-routing (M11 #6):
 	 *  idle starts a turn, otherwise it queues behind the running one —
-	 *  exactly the typed-line semantics minus interpretation. */
-	enqueuePrompt(text: string): void {
+	 *  exactly the typed-line semantics minus interpretation. `display`
+	 *  (M12 §11.3) overrides only the transcript echo; the session record
+	 *  keeps the full text. */
+	enqueuePrompt(text: string, display?: string): void {
 		if (this.state === "exited") return;
 		const trimmed = text.trim();
 		if (trimmed === "") return;
 		if (this.state === "idle") {
-			void this.submitTurn(trimmed);
+			void this.submitTurn(trimmed, display);
 			return;
 		}
-		this.queue.push({ prompt: trimmed });
+		this.queue.push({ prompt: trimmed, display });
 		if (this.interactive && this.input.setQueue === undefined) {
-			this.renderer.note(`▪ queued: ${shorten(trimmed)}`);
+			this.renderer.note(`▪ queued: ${shorten(display ?? trimmed)}`);
 		}
 		this.syncQueue();
 		this.input.refresh();
@@ -488,7 +496,7 @@ class ReplMachine {
 		}
 	}
 
-	private async submitTurn(line: string): Promise<void> {
+	private async submitTurn(line: string, display?: string): Promise<void> {
 		if (this.state === "exited") return;
 		this.state = "running";
 		this.input.setActive(true);
@@ -496,7 +504,9 @@ class ReplMachine {
 		// transcript so the conversation reads as a conversation (dogfood
 		// report 2026-09-09: answers appeared with no question above them).
 		// Print keeps the terminal's own readline echo; bytes unchanged.
-		if (this.input.setFooter !== undefined) this.renderer.user(line);
+		// `display` (M12 §11.3): skill commands echo their one-line summary —
+		// the full expanded block still goes to the model AND the session.
+		if (this.input.setFooter !== undefined) this.renderer.user(display ?? line);
 		this.renderer.think(); // live spinner until the first event arrives (print/legacy)
 		this.pushActivity(); // TUI activity region: thinking phase from the start
 		const controller = new AbortController();
@@ -817,7 +827,7 @@ class ReplMachine {
 			await this.runBangCommand(next.text.slice(1).trim());
 			return;
 		}
-		await this.submitTurn(entryText(next));
+		await this.submitTurn(entryText(next), entryDisplay(next));
 	}
 
 	/** "! cmd" (M10): run a shell command directly through the bash tool — no
@@ -981,7 +991,7 @@ class ReplMachine {
 	private syncQueue(): void {
 		const views: QueueEntryView[] = this.queue.map((entry) => ({
 			label: entryLabel(entry),
-			preview: queuePreviewText(entryText(entry)),
+			preview: queuePreviewText(entryDisplay(entry) ?? entryText(entry)),
 		}));
 		this.input.setQueue?.(views);
 	}
@@ -1078,7 +1088,7 @@ class ReplMachine {
 			requestExit: (code: number) => this.requestExit(code),
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
 			// line — body text starting with "/" or "!" must stay model content.
-			submitPrompt: (text: string) => this.enqueuePrompt(text),
+			submitPrompt: (text: string, opts?: { display?: string }) => this.enqueuePrompt(text, opts?.display),
 			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
 			refreshFooter: () => this.refreshFooter(), // /think repaints the level segment
 			abortActive: () => {

@@ -24,6 +24,8 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import type { RegisteredExtensionCommand } from "../extensions/types.js";
+import type { CommandOutcome } from "../repl/commands.js";
 
 /** Max name length per the Agent Skills spec. */
 const MAX_NAME_LENGTH = 64;
@@ -432,4 +434,109 @@ export function formatSkillsForPrompt(
 	}
 	lines.push("</available_skills>");
 	return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Invocation plane (batch 2): /skill:name commands. Design §11.
+// ---------------------------------------------------------------------------
+
+/** /help row summary: the description collapsed to one line, first 80 chars. */
+function skillSummary(description: string): string {
+	const oneLine = description.replace(/\s+/g, " ").trim();
+	return oneLine.length > 80 ? `${oneLine.slice(0, 80)}…` : oneLine;
+}
+
+/** The transcript echo / replay summary line for a skill invocation. */
+export function skillDisplayLine(name: string, args: string): string {
+	return `▪ skill: ${name}${args.trim() === "" ? "" : ` (${args.trim()})`}`;
+}
+
+/** Replay collapse (design §11.3): a user message that IS an expanded skill
+ *  block renders as its summary line. Returns null for anything else. */
+export function skillBlockSummary(content: string): string | null {
+	if (!content.startsWith('<skill name="')) return null;
+	const end = content.indexOf('"', 13);
+	if (end === -1) return null;
+	const name = content.slice(13, end);
+	if (name === "") return null;
+	return `▪ skill: ${name}`;
+}
+
+/** Expand a skill invocation to the exact pi-parity block (§11.2, pi
+ *  agent-session.ts _expandSkillCommand):
+ *
+ *   <skill name="NAME" location="/abs/SKILL.md">
+ *   References are relative to /abs/skill-dir.
+ *
+ *   BODY-WITHOUT-FRONTMATTER
+ *   </skill>
+ *
+ *   ARGS          ← omitted (with its blank line) when args are empty
+ *
+ * Throws on read/parse failure — the command wrapper turns it into the
+ * teaching error line. */
+export function expandSkillBlock(skill: Skill, args: string): string {
+	const content = readFileSync(skill.filePath, "utf8");
+	const body = parseSkillFile(content).body.trim();
+	const block =
+		`<skill name="${skill.name}" location="${skill.filePath}">\n` +
+		`References are relative to ${skill.baseDir}.\n\n` +
+		`${body}\n</skill>`;
+	const trimmedArgs = args.trim();
+	return trimmedArgs === "" ? block : `${block}\n\n${trimmedArgs}`;
+}
+
+export interface BuildSkillCommandsOptions {
+	/** enableSkillCommands === false disables registration entirely (§11.1). */
+	enabled: boolean;
+	/** Names already claimed by builtins/extensions/md commands — skills
+	 *  yield with a warning (registration order §11.1). */
+	reserved: ReadonlySet<string>;
+	/** Teaching lines for skipped registrations. */
+	onDiagnostic?: (message: string) => void;
+}
+
+/** Register one `skill:NAME` command per loaded skill, riding the md-command
+ *  pipeline shape. disable-model-invocation skills still register — that is
+ *  the point of the flag (user-only invocation). */
+export function buildSkillCommands(
+	skills: readonly Skill[],
+	options: BuildSkillCommandsOptions,
+): RegisteredExtensionCommand[] {
+	if (!options.enabled) return [];
+	const commands: RegisteredExtensionCommand[] = [];
+	for (const skill of skills) {
+		const name = `skill:${skill.name}`;
+		if (options.reserved.has(name)) {
+			options.onDiagnostic?.(
+				`imp: skill command /${name} skipped — a command with that name is already registered`,
+			);
+			continue;
+		}
+		commands.push({
+			command: {
+				name,
+				summary: skillSummary(skill.description),
+				allowedDuringRun: false,
+				run: (args, ctx): CommandOutcome => {
+					// Read at invocation time (pi parity): a skill deleted or
+					// edited after startup is honored as it exists NOW.
+					try {
+						ctx.submitPrompt(expandSkillBlock(skill, args), {
+							display: skillDisplayLine(skill.name, args),
+						});
+					} catch (err) {
+						// Teaching error, nothing reaches the model (Appendix A:
+						// pi forwards the raw text instead — imp never sends
+						// unexpanded command lines).
+						const message = err instanceof Error ? err.message.split("\n")[0] : "failed to read";
+						ctx.renderer.error(`imp: /${name} failed to read ${skill.filePath}: ${message}`);
+					}
+					return "handled";
+				},
+			},
+			source: "skill",
+		});
+	}
+	return commands;
 }

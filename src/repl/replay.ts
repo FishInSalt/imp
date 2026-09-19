@@ -1,6 +1,7 @@
 import type { AgentMessage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { BRANCH_MARK, SUMMARY_MARK } from "../core/session/store.js";
+import { skillBlockSummary } from "../core/skills.js";
 import { firstLine, summarizeArgs } from "../format.js";
 import { Renderer } from "../render.js";
 
@@ -76,6 +77,14 @@ function renderMessage(
 				renderer.note("▪ branch summary (a direction you left, kept for context):");
 				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
 				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
+				return;
+			}
+			// M12 §11.3: an expanded skill block (possibly hundreds of lines)
+			// collapses to the same summary line the live echo showed — display
+			// normalization only; the session record keeps the full text.
+			const skillLine = skillBlockSummary(message.content);
+			if (skillLine !== null) {
+				renderer.note(skillLine);
 				return;
 			}
 			if (userSink !== undefined) {

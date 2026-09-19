@@ -184,6 +184,36 @@ EOF
 - Scripted (piped) REPLs load them too when the directory is trusted — the
   same rule extension commands follow; print mode (`-p`) never loads them.
 
+## Skills
+
+A skill is a self-contained instruction package ([Agent Skills](https://agentskills.io)
+standard — same shape as Claude Code and pi skills). Only a one-line catalog
+entry enters the system prompt; the model reads the full body with the `read`
+tool when a task matches — zero context cost until then:
+
+```bash
+mkdir -p .imp/skills/ledger
+cat > .imp/skills/ledger/SKILL.md <<'EOF'
+---
+description: keep PROJECT_PLAN.md as an append-only ledger
+---
+Append dated entries above the anchor, newest first…
+EOF
+```
+
+- Discovery: `<project>/.imp/skills` + `.agents/skills` (project tiers,
+  trust-gated; the ancestor walk goes up to the git root), `~/.imp/skills` +
+  `~/.agents/skills` (user tiers), plus `--skill <path>` / settings
+  `"skills"` (explicit, always load; `--no-skills` skips discovery).
+- `/skill:ledger <args>` force-loads: expands to the full body as the user
+  message (one-line `▪ skill: ledger` echo; session keeps the full text).
+- `/help` lists skills tagged `[skill]`; `"enableSkillCommands": false`
+  disables command registration (the catalog stays).
+
+See [docs/skills.md](docs/skills.md) for the full rules and
+[examples/skills/ledger](examples/skills/ledger) for a worked example with a
+`references/` directory.
+
 ## Subagents
 
 The `task` tool delegates a self-contained job to a fresh subagent with its

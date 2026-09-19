@@ -292,7 +292,9 @@ interface RegisteredSkillCommand { command: SlashCommand; source: string } // ri
   **impossible by construction**. If an extension or md command nonetheless registered
   the literal name `skill:foo` first (md files can contain colons), the skill command
   is skipped with a warning — registration order: builtins → extensions → md → skills.
-- `/help` lists them like md commands, tagged `(skill)`.
+- `/help` lists them like md commands — the `[source]` tag column reads `[skill]`
+  (the bracketed convention md/extension rows already use; impl note over the
+  original sketch's `(skill)`).
 - `disable-model-invocation: true` skills **still register** the command (that is the
   point of the flag — user-only invocation).
 
@@ -438,7 +440,7 @@ injection, startup notes):
 
 - `/skill:name args` produces the exact `<skill>` block user message; transcript shows
   one summary line; session stores the full block; replay collapses it;
-- `/help` lists skills tagged `(skill)`;
+- `/help` lists skills tagged `[skill]`;
 - conflict with a md command literally named `skill:x` resolves with a warning;
 - `examples/skills/ledger/SKILL.md` + `docs/skills.md` + README section shipped;
 - e2e progressive-disclosure test green.

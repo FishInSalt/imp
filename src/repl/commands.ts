@@ -38,13 +38,16 @@ export interface CommandContext {
 	abortActive(): boolean; // abort controller if active
 	/** Replay a session's history on screen (wired in repl.ts; records in tests). */
 	replay(session: SessionStore): number;
-	/** Submit a prompt as if typed — used by markdown quick commands (M11 #6).
-	 *  Idle starts a turn; a running turn queues it. Wired by repl.ts; test
-	 *  environments inject a recorder. Injection-surface note (review): the
-	 *  full ctx is handed to EVERY command run() — extension commands can
-	 *  call this too; extensions are arbitrary code by contract, so this
-	 *  adds no new capability, only a documented one. */
-	submitPrompt(text: string): void;
+	/** Submit a prompt as if typed — used by markdown quick commands (M11 #6)
+	 *  and skill commands (M12 §11.3). Idle starts a turn; a running turn
+	 *  queues it. Wired by repl.ts; test environments inject a recorder.
+	 *  `display` overrides ONLY the transcript echo (skill commands pass a
+	 *  one-line summary instead of the expanded block; the session record
+	 *  always keeps the full text — replay fidelity). Injection-surface note
+	 *  (review): the full ctx is handed to EVERY command run() — extension
+	 *  commands can call this too; extensions are arbitrary code by contract,
+	 *  so this adds no new capability, only a documented one. */
+	submitPrompt(text: string, opts?: { display?: string }): void;
 	/** TUI shells only: wipe transcript + folds. /new calls it BEFORE
 	 *  newSession so the "▪ new session" note lands on the fresh screen
 	 *  (debt clearance); wired in repl.ts, absent in test recorders unless

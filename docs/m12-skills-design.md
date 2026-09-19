@@ -290,7 +290,10 @@ interface RegisteredSkillCommand { command: SlashCommand; source: string } // ri
 
 - The `skill:` prefix makes collisions with builtins/extension/md commands
   **impossible by construction**. If an extension or md command nonetheless registered
-  the literal name `skill:foo` first (md files can contain colons), the skill command
+  the literal name `skill:foo` first (md files cannot actually contain colons
+  in imp — both loader name patterns reject them — so the yield path is
+  defensive against future loaders; it stays because the cost is one Set
+  lookup), the skill command
   is skipped with a warning — registration order: builtins → extensions → md → skills.
 - `/help` lists them like md commands — the `[source]` tag column reads `[skill]`
   (the bracketed convention md/extension rows already use; impl note over the

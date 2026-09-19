@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, AssistantMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
+import { buildSkillCommands, expandSkillBlock, loadSkills } from "../src/core/skills.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -2480,6 +2481,43 @@ describe("runRepl with shell:tui", () => {
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});
+	});
+
+	it("/skill:name echoes one summary line while the full block reaches the model", async () => {
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-skill-tui-"));
+		const skillDir = path.join(baseDir, "ledger");
+		await mkdir(skillDir, { recursive: true });
+		const skillFile = path.join(skillDir, "SKILL.md");
+		const body = "Keep PROJECT_PLAN.md as an append-only ledger.\nNewest entries first.";
+		await writeFile(skillFile, `---\nname: ledger\ndescription: Ledger bookkeeping\n---\n${body}\n`, "utf8");
+		const loaded = loadSkills({
+			cwd: baseDir,
+			home: baseDir, // hermetic: no user tiers
+			projectTrusted: false,
+			noSkills: false,
+			explicitPaths: [skillDir],
+		});
+		expect(loaded.skills).toHaveLength(1);
+		const skill = loaded.skills[0];
+		if (skill === undefined) throw new Error("fixture did not load");
+		const commands = buildSkillCommands(loaded.skills, { enabled: true, reserved: new Set() });
+
+		const env = await startTuiRepl([reply("done")], { commands });
+		await settle();
+		env.terminal.data("/skill:ledger add an entry\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+
+		// transcript: the summary echo, never the body
+		const stream = env.transcript.completedLines().join("\n");
+		expect(stream).toContain("▪ skill: ledger (add an entry)");
+		expect(stream).not.toContain("append-only ledger");
+		// model + session: the FULL expanded block (batch-2 acceptance)
+		const first = env.requests[0];
+		if (first === undefined) throw new Error("no provider call");
+		const lastUser = [...first.messages].reverse().find((m) => m.role === "user");
+		expect(lastUser?.content).toBe(expandSkillBlock(skill, "add an entry"));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
 	});
 });
 

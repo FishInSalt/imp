@@ -12,6 +12,8 @@
  * glm-4.7→5.3-Flash); GLM-5V-Turbo/GLM-4.6V are separate VLM lines.
  */
 
+import { catalogEntryFor } from "./catalog.js";
+
 export interface VisionRule {
 	provider: string;
 	/** Model id prefix, compared case-sensitively like thinking.ts. */
@@ -43,8 +45,13 @@ const VISION_RULES: ReadonlyArray<VisionRule> = [
 	{ provider: "openai-codex", prefix: "gpt-5", vision: true },
 ];
 
-/** Does this (provider, model) accept image input? Unknown → false. */
+/** Does this (provider, model) accept image input? Unknown → false.
+ *  M14 (#model-catalog): an exact pi.dev catalog hit wins — its `input`
+ *  array IS pi's capability statement; the prefix table is the frozen
+ *  offline floor (and the anthropic-compat gateway's only source). */
 export function modelSupportsVision(provider: string, model: string): boolean {
+	const entry = catalogEntryFor(provider, model);
+	if (entry?.input !== undefined) return entry.input.includes("image");
 	for (const rule of VISION_RULES) {
 		if (rule.provider === provider && model.startsWith(rule.prefix)) return rule.vision;
 	}

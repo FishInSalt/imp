@@ -82,6 +82,23 @@ npm run dev -- -p "List the .ts files here and count their total lines"
 imp -p "..." -m claude-sonnet-4-5 --max-turns 20
 ```
 
+## Model catalog (pi.dev)
+
+Model metadata — context windows, cost rates, thinking ladders, vision
+capability, family model lists — comes from the public catalog service at
+`pi.dev` (the same source the reference project consumes). A disk cache
+(`~/.imp/models-catalog.json`) makes it offline-safe: at startup imp loads
+the cache synchronously (the bundled static tables are the frozen last-resort
+floor) and kicks a non-blocking refresh when the cache is older than 4 hours;
+opening `/model` re-checks the same window. No periodic polling. On a
+successful fetch the catalog always wins over the bundled tables, so new
+models and price changes arrive without an imp release.
+
+```bash
+IMP_CATALOG_BASE_URL=https://mirror.example  # redirect the catalog source
+IMP_CATALOG_PATH=/path/to/models-catalog.json # relocate the cache (tests)
+```
+
 ## Interactive mode
 
 Run `imp` with no arguments to start an interactive session (REPL) over one

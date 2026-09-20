@@ -18,6 +18,7 @@ import {
 	saveApiKey,
 	storedApiKeyFamilies,
 } from "../provider/auth-store.js";
+import { catalogModelIds, refreshCatalog } from "../provider/catalog.js";
 import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import {
@@ -248,6 +249,9 @@ export interface ModelListDeps {
 	configured: (family: "anthropic" | "openai" | "openai-codex" | "zai") => boolean;
 	/** Endpoint listing, null when unreachable — injectable for tests. */
 	discover: (family: "anthropic" | "openai" | "openai-codex" | "zai") => Promise<string[] | null>;
+	/** M14: pi.dev overlay ids for the family, null when the catalog has
+	 *  nothing — injectable for tests. */
+	catalogIds?: (family: "anthropic" | "openai" | "openai-codex" | "zai") => string[] | null;
 }
 
 /**
@@ -273,7 +277,14 @@ export async function buildModelList(
 		ids = modelCandidates(current).filter((id) => id !== current);
 	} else {
 		for (const family of configuredFamilies) {
-			const discovered = await deps.discover(family);
+			let discovered = await deps.discover(family);
+			// M14: the pi.dev disk cache stands between live discovery and the
+			// static floor — offline picker lists the real family catalog, and
+			// for openai-codex the catalog IS the discovery source (same
+			// endpoint), so the 4h cache answers before another network probe.
+			if (discovered === null && family === "openai-codex") {
+				discovered = deps.catalogIds?.(family) ?? null;
+			}
 			if (family === "openai-codex") {
 				// pi.dev's catalog is the primary truth (it served gpt-6-astra the
 				// day it shipped); the static seeds are the offline fallback — a
@@ -287,8 +298,20 @@ export async function buildModelList(
 				continue;
 			}
 			if (discovered === null) {
-				fallbackNotes.push(familyLabel(`${family}/`));
-				ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+				const catalogIds = deps.catalogIds?.(family) ?? null;
+				if (catalogIds !== null) {
+					// Same shaping as the discovery path — offline catalog rows
+					// are indistinguishable from live ones (no "unreachable" note:
+					// the catalog is the truth source, not a degraded copy).
+					const listed =
+						family === "anthropic"
+							? catalogIds.filter((id) => !id.toLowerCase().startsWith("glm-"))
+							: catalogIds;
+					ids.push(...listed.map((id) => (family === "anthropic" ? id : `${family}/${id}`)));
+				} else {
+					fallbackNotes.push(familyLabel(`${family}/`));
+					ids.push(...(FAMILY_FALLBACKS[family] ?? []));
+				}
 			} else {
 				// #glm-retire: GLM is never ADVERTISED under anthropic — a
 				// compat endpoint (ANTHROPIC_BASE_URL → z.ai) serves glm ids
@@ -700,9 +723,14 @@ export const COMMANDS: readonly SlashCommand[] = [
 				// TUI shell: a pick behaves exactly like /model <id> on the chosen
 				// row; cancelling changes nothing and notes nothing. The list is what
 				// the CONFIGURED endpoints actually serve (#model-discovery).
+				// M14 dual trigger: opening /model checks the 4h staleness window
+				// (non-blocking — the list below is built from the current
+				// overlay; a refresh lands for the NEXT open).
+				void refreshCatalog().catch(() => undefined);
 				const { rows, fallbackNotes } = await buildModelList(ctx.runner.modelReference(), {
 					configured: familyConfigured,
 					discover: discoverModels,
+					catalogIds: catalogModelIds,
 				});
 				for (const note of fallbackNotes) {
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);

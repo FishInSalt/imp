@@ -19,6 +19,7 @@ import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
+import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
@@ -312,6 +313,12 @@ function printSessionList(): void {
 
 async function main(): Promise<void> {
 	await loadDotEnv(); // loads .env from the imp installation root; real env wins
+	// M14 (#model-catalog): the pi.dev disk cache loads BEFORE any model
+	// resolution (the Runner constructor reads contextWindowFor) and after
+	// .env (IMP_CATALOG_BASE_URL/IMP_CATALOG_PATH may live there). Quick-exit
+	// paths below never touch the network; the stale-cache refresh kick lives
+	// in the run modes.
+	loadCatalogCache();
 	const argv = process.argv.slice(2);
 	if (argv[0] === "sessions") {
 		printSessionList();
@@ -379,6 +386,8 @@ async function loadExtensionSetup(
  * the REPL itself never imports this module's HELP.
  */
 async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
+	// M14: non-blocking staleness check (4h window; /model open re-checks).
+	void refreshCatalog().catch(() => undefined);
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
 	// M9: interactive sessions render through the pi-tui shell — the
 	// Renderer's bytes feed a TranscriptSink component instead of stdout.
@@ -673,6 +682,9 @@ function broadAncestorWarning(cwd: string, trusted: boolean): string {
 }
 
 async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
+	// M14: same staleness kick; a short-lived print process usually exits
+	// before the refresh lands — the disk cache already answered above.
+	void refreshCatalog().catch(() => undefined);
 	const renderer = new Renderer({
 		write: (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,

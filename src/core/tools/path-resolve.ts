@@ -71,7 +71,11 @@ function fileExists(filePath: string): boolean {
 
 /** Resolve a path relative to cwd, with ~ expansion and space normalization. */
 export function resolveToCwd(filePath: string, cwd: string, options?: NormalizePathOptions): string {
-	const normalized = normalizePath(filePath, { normalizeUnicodeSpaces: true, stripAtPrefix: true, ...options });
+	const normalized = normalizePath(filePath, {
+		normalizeUnicodeSpaces: true,
+		stripAtPrefix: true,
+		...options,
+	});
 	const normalizedBase = normalizePath(cwd, { expandTilde: options?.expandTilde ?? true });
 	return isAbsolute(normalized) ? nodeResolve(normalized) : nodeResolve(normalizedBase, normalized);
 }

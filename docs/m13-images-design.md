@@ -252,6 +252,10 @@ user-message path.
 | D4 | No clipboard paste / @file attach / --attach | UX layer, later batch |
 | D5 | Vision via prefix rules, not generated catalog | imp has no catalog; thinking.ts precedent |
 | D6 | Extension tool-result events expose no blocks | No consumer today |
+| D7 | `images.blockImages` egress switch not ported | Its pi home is the settings-selector UI + convertToLlm wrapper; imp has neither (batch-2 review) |
+| D8 | Clipboard is command-based everywhere (no native bindings) | pi rides pi-tui prebuilt .node; imp has none. Sub-items from review: Linux negotiates types (wl-paste --list-types / xclip TARGETS, preferred png/jpeg/webp/gif then any image/*); WSL fallback uses powershell.exe behind an isWSL gate; macOS JXA tries NSPNGFileType when NSBitmapImageFileTypePNG is absent (older macOS) |
+| D9 | Worker never resolves under tsx/vitest (in-process fallback) | pi selects .ts workers for its TS runtime (Bun); imp's runtime chain (node + tsx loaders) cannot execute .ts workers — the compiled dist layout exercises the real worker (built-output smoke), dev/test fall back in-process by design |
+| D10 | Exception-only photon leak in the orientation wrap (pi-verbatim) | Needs a wasm-side throw between decode and assignment; pi has the identical structure — fixing it alone would drift from pi for an unreachable path |
 
 ---
 

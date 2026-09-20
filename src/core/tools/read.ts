@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { Type } from "typebox";
 import { processImage } from "../image/image-process.js";
 import type { ContentBlock } from "../messages.js";
 import { detectSupportedImageMimeType } from "./image-sniff.js";
+import { resolveReadPath } from "./path-resolve.js";
 import type { Tool } from "./types.js";
 
 const MAX_LINES = 2000;
@@ -45,7 +45,10 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			if (requested.trim() === "") {
 				return { output: "Error: no path given", isError: true };
 			}
-			const absolute = path.resolve(cwd, requested);
+			// pi resolveReadPath parity (review P1-1): ~ expansion, Unicode-space
+			// normalization, and the macOS screenshot name variants — the read
+			// tool is the flagship consumer of hand-typed image paths.
+			const absolute = resolveReadPath(requested, cwd);
 
 			let bytes: Buffer;
 			try {
@@ -79,7 +82,7 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 					// The wire carries base64 (4/3 inflation) — cap the encoded
 					// size, not the raw bytes (review: raw-4.5MB encodes to 6MB
 					// > the 5MB API limit).
-					const encodedBytes = Math.ceil(Buffer.from(processed.data, "base64").byteLength / 3) * 4;
+					const encodedBytes = Buffer.byteLength(processed.data, "utf-8");
 					if (encodedBytes > MAX_IMAGE_BYTES) {
 						const mb = (encodedBytes / (1024 * 1024)).toFixed(1);
 						return {

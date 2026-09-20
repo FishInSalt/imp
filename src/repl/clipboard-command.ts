@@ -15,9 +15,12 @@ export function runClipboardCommand(
 ): Promise<Buffer | undefined> {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
-			stdio: ["pipe", options?.input === undefined ? "pipe" : "ignore", "pipe"],
+			// stderr ignored: a child writing >64KB to an undrained pipe would
+			// block until the timeout kill (review P2-6; pi uses "ignore").
+			stdio: ["pipe", options?.input === undefined ? "pipe" : "ignore", "ignore"],
 			windowsHide: true,
 		});
+		child.stdin?.on("error", () => undefined); // EPIPE when the child exits early
 		const chunks: Buffer[] = [];
 		let length = 0;
 		let settled = false;

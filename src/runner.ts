@@ -285,8 +285,9 @@ class RunnerImpl implements Runner {
 				createReadTool({
 					cwd: options.cwd,
 					modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
-					// M13 batch 2: images.autoResize (settings file, read live so a
-					// mid-session edit takes effect — pi reads it per request too).
+					// M13 batch 2: images.autoResize, snapshotted at tool construction
+					// (pi parity — its read definition captures it the same way);
+					// a settings edit takes effect on the next session.
 					imageProcessing: {
 						autoResize: loadSettings(this.options.settingsPath).images?.autoResize ?? true,
 					},

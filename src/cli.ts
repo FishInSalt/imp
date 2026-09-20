@@ -721,6 +721,12 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 					: `${processed.text}${opts.prompt}`;
 		}
 		attachImages = processed.images.length > 0 ? processed.images : undefined;
+		// All files empty and no typed prompt: nothing to send — a provider
+		// request with an empty message list is a guaranteed 400 (review
+		// cosmetic).
+		if ((opts.prompt === "" || opts.prompt === undefined) && attachImages === undefined) {
+			opts.prompt = undefined;
+		}
 	}
 
 	try {

@@ -9,8 +9,8 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { processImage } from "./image/image-process.js";
 import type { ImageBlock } from "./messages.js";
-import { resolveReadPath } from "./tools/path-resolve.js";
 import { detectSupportedImageMimeType } from "./tools/image-sniff.js";
+import { resolveReadPath } from "./tools/path-resolve.js";
 
 export interface ProcessedFiles {
 	text: string;

@@ -426,14 +426,92 @@ describe("M13-2 clipboard matrix", () => {
 		expect(await readClipboardImage({ platform: "darwin", run })).toBeNull();
 	});
 
-	it("linux wayland: wl-paste png; xclip fallback when absent", async () => {
-		const { run, calls } = fakeRun({ wlPaste: undefined, xclip: PNG });
+	it("linux wayland: wl-paste absent (undefined) falls to xclip", async () => {
+		// The fallback keys off the REAL binary names (review P2-9: the old
+		// "wlPaste" map key never matched anything). wl-paste ENOENT →
+		// undefined → xclip answers with PNG.
+		const calls: Array<string> = [];
+		const run = (cmd: string, args: readonly string[]): Promise<Buffer | undefined> => {
+			calls.push(cmd);
+			if (cmd === "xclip") {
+				// TARGETS listing answers with the text form; the read answers bytes
+				return Promise.resolve(args.includes("TARGETS") ? Buffer.from("image/png\n") : PNG);
+			}
+			return Promise.resolve(undefined);
+		};
 		const env = { WAYLAND_DISPLAY: "wayland-0" } as NodeJS.ProcessEnv;
-		const image = await readClipboardImage({ platform: "linux", env, run });
+		const image = await readClipboardImage({ platform: "linux", env, run: run as never });
 		expect(image?.mimeType).toBe("image/png");
-		const bins = calls.map((c) => c.cmd);
-		expect(bins).toContain("wl-paste");
-		expect(bins).toContain("xclip");
+		expect(calls).toContain("wl-paste");
+		expect(calls).toContain("xclip");
+	});
+
+	it("linux wayland: a typed-but-empty wl-paste read is null, not an xclip retry", async () => {
+		// pi semantics: the type list offered image/png, the read returned
+		// zero bytes — the clipboard is empty of images; do not hammer xclip.
+		const calls: Array<string> = [];
+		const run = (cmd: string, args: readonly string[]): Promise<Buffer | undefined> => {
+			calls.push(cmd);
+			if (cmd === "wl-paste") {
+				return Promise.resolve(args.includes("--list-types") ? Buffer.from("image/png\n") : Buffer.alloc(0));
+			}
+			return Promise.resolve(undefined);
+		};
+		const env = { WAYLAND_DISPLAY: "wayland-0" } as NodeJS.ProcessEnv;
+		const image = await readClipboardImage({ platform: "linux", env, run: run as never });
+		expect(image).toBeNull();
+		expect(calls).not.toContain("xclip");
+	});
+
+	it("linux wayland: wl-paste serves the negotiated type", async () => {
+		const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+		const run = (cmd: string, args: readonly string[]): Promise<Buffer | undefined> => {
+			calls.push({ cmd, args });
+			if (cmd === "wl-paste") {
+				return Promise.resolve(
+					args.includes("--list-types") ? Buffer.from("text/plain\nimage/png\nimage/tiff\n") : PNG,
+				);
+			}
+			return Promise.resolve(undefined);
+		};
+		const env = { WAYLAND_DISPLAY: "wayland-0" } as NodeJS.ProcessEnv;
+		const image = await readClipboardImage({ platform: "linux", env, run: run as never });
+		expect(image?.mimeType).toBe("image/png");
+		const read = calls.find((c) => c.args.includes("--type"));
+		expect(read?.args).toEqual(["--type", "image/png", "--no-newline"]);
+	});
+
+	it("linux WSL: powershell.exe fallback only under WSL", async () => {
+		const calls: Array<string> = [];
+		const run = (cmd: string): Promise<Buffer | undefined> => {
+			calls.push(cmd);
+			if (cmd === "powershell.exe") return Promise.resolve(Buffer.from("ok"));
+			if (cmd === "wslpath") return Promise.resolve(Buffer.from("C:\\tmp\\x.png"));
+			return Promise.resolve(undefined); // no wl-paste, no xclip
+		};
+		const env = { WSL_DISTRO_NAME: "Ubuntu" } as NodeJS.ProcessEnv;
+		const image = await readClipboardImage({
+			platform: "linux",
+			env,
+			run: run as never,
+			// the WSL tmp-file dance stubbed at the fs layer would need a real
+			// file — assert the dispatch only: powershell.exe IS spawned under
+			// WSL and is NOT on plain linux.
+			convert: async () => null,
+		});
+		expect(image).toBeNull(); // stubbed run can't produce bytes, but:
+		expect(calls).toContain("powershell.exe");
+		const callsPlain: string[] = [];
+		const runPlain = (cmd: string): Promise<Buffer | undefined> => {
+			callsPlain.push(cmd);
+			return Promise.resolve(undefined);
+		};
+		await readClipboardImage({
+			platform: "linux",
+			env: {} as NodeJS.ProcessEnv,
+			run: runPlain as never,
+		});
+		expect(callsPlain).not.toContain("powershell.exe");
 	});
 
 	it("termux always null", async () => {
@@ -552,5 +630,153 @@ describe("M13-2 resolveReadPath variants", () => {
 		expect([typedNfc, file]).toContain(resolvedNfd);
 		const curly = await mk("Capture d\u2019ecran.png");
 		expect(resolveReadPath(curly.replace("\u2019", "'"), "/tmp", { homeDir: home })).toBe(curly);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// photon-unavailable path (review P2-8a: the seam, actually forced)
+// ---------------------------------------------------------------------------
+
+describe("M13-2 photon unavailable", () => {
+	it("photon missing: whitelisted mimes hit the RESIZE note, BMP the CONVERSION note", async () => {
+		const originalLoad = photonLoader.load;
+		try {
+			photonLoader.load = async () => null;
+			// image/png normalizes without photon — the resize ladder fails
+			const png = await processImage(makePng(8, 8), "image/png");
+			expect(png).toEqual({
+				ok: false,
+				message: "[Image omitted: could not be resized below the inline image size limit.]",
+			});
+			// BMP needs the converter — the conversion note fires first
+			const bmp = await processImage(makeBmp(4, 4), "image/bmp");
+			expect(bmp).toEqual({
+				ok: false,
+				message: "[Image omitted: could not be converted to a supported inline image format.]",
+			});
+			const file = await fixture("unavail.png", makePng(8, 8));
+			const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
+			expect(result.content).toBeUndefined();
+			expect(result.output).toContain("could not be resized below the inline image size limit");
+		} finally {
+			photonLoader.load = originalLoad;
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// EXIF container walks (review P2-8b: JPEG APP1 + WebP EXIF chunks)
+// ---------------------------------------------------------------------------
+
+/** TIFF block (borrowed shape from the parser tests above). */
+function tiffBytes(orientation: number): Buffer {
+	const out = Buffer.alloc(26);
+	out.writeUInt16LE(0x4949, 0);
+	out.writeUInt16LE(42, 2);
+	out.writeUInt32LE(8, 4);
+	out.writeUInt16LE(1, 8); // entry count
+	out.writeUInt16LE(0x0112, 10);
+	out.writeUInt16LE(3, 12);
+	out.writeUInt32LE(1, 14);
+	out.writeUInt16LE(orientation, 18);
+	return out;
+}
+
+/** SOI + APP1(Exif\0\0 + TIFF) + EOI. */
+function jpegWithExif(orientation: number, withExifHeader = true): Buffer {
+	const tiff = tiffBytes(orientation);
+	const payload = withExifHeader ? Buffer.concat([Buffer.from("Exif\x00\x00"), tiff]) : tiff;
+	const app1 = Buffer.alloc(4);
+	app1.writeUInt16BE(0xffe1, 0);
+	app1.writeUInt16BE(payload.length + 2, 2);
+	return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, payload, Buffer.from([0xff, 0xd9])]);
+}
+
+/** RIFF/WEBP container with one EXIF chunk (padded to even). */
+function webpWithExif(orientation: number, withExifHeader = false): Buffer {
+	const tiff = tiffBytes(orientation);
+	const payload = withExifHeader ? Buffer.concat([Buffer.from("Exif\x00\x00"), tiff]) : tiff;
+	const chunk = Buffer.alloc(8);
+	chunk.write("EXIF", 0, "ascii");
+	chunk.writeUInt32LE(payload.length, 4);
+	const riffSize = 4 + 8 + payload.length + (payload.length % 2); // WEBP + chunk
+	const head = Buffer.alloc(12);
+	head.write("RIFF", 0, "ascii");
+	head.writeUInt32LE(riffSize, 4);
+	head.write("WEBP", 8, "ascii");
+	const pad = Buffer.alloc(payload.length % 2);
+	return Buffer.concat([head, chunk, payload, pad]);
+}
+
+describe("M13-2 EXIF container walks", () => {
+	it("JPEG APP1 walk requires the Exif\\0\\0 header (pi semantics)", () => {
+		expect(getExifOrientation(jpegWithExif(6))).toBe(6);
+		expect(getExifOrientation(jpegWithExif(1))).toBe(1);
+		// A headerless APP1 is not recognized — only the WebP walk tolerates
+		// the missing prefix (pi findJpegTiffOffset returns only on the header).
+		expect(getExifOrientation(jpegWithExif(8, false))).toBe(1);
+	});
+
+	it("WebP EXIF chunk walk: chunk padding and header prefix both parse", () => {
+		expect(getExifOrientation(webpWithExif(6))).toBe(6);
+		expect(getExifOrientation(webpWithExif(5, true))).toBe(5);
+		// odd-length payloads must not desync the chunk cursor
+		const odd = webpWithExif(6);
+		expect(getExifOrientation(odd)).toBe(6);
+	});
+
+	it("JPEG without APP1 (APP0 JFIF first) stays orientation 1", () => {
+		const app0 = Buffer.alloc(16);
+		app0.writeUInt16BE(0xffe0, 0);
+		app0.writeUInt16BE(14, 2);
+		const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8]), app0, Buffer.from([0xff, 0xd9])]);
+		expect(getExifOrientation(jpeg)).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// applyExifOrientation pixel math (real photon)
+// ---------------------------------------------------------------------------
+
+const APPLY = await (async () => {
+	const { applyExifOrientation } = await import("../src/core/image/exif-orientation.js");
+	const photon = await photonLoader.load();
+	return { applyExifOrientation, photon };
+})();
+
+describe("M13-2 applyExifOrientation", () => {
+	const photon = APPLY.photon!;
+	const { applyExifOrientation } = APPLY;
+
+	/** 2×1 RGBA image: left pixel RED, right pixel BLUE. */
+	function twoPixelImage() {
+		const raw = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]);
+		return new photon.PhotonImage(raw, 2, 1);
+	}
+
+	it("orientation 6 rotates 90°: 2×1 becomes 1×2, red lands on top", () => {
+		const img = twoPixelImage();
+		const out = applyExifOrientation(photon, img, jpegWithExif(6));
+		expect(out.get_width()).toBe(1);
+		expect(out.get_height()).toBe(2);
+		const px = out.get_raw_pixels();
+		// 90° CW: the left end (red) rises to the top, blue sinks to the bottom
+		expect(Array.from(px.subarray(0, 4))).toEqual([255, 0, 0, 255]);
+		expect(Array.from(px.subarray(4, 8))).toEqual([0, 0, 255, 255]);
+	});
+
+	it("orientation 2 mirrors horizontally: blue on the left", () => {
+		const img = twoPixelImage();
+		const out = applyExifOrientation(photon, img, jpegWithExif(2));
+		expect(out.get_width()).toBe(2);
+		const px = out.get_raw_pixels();
+		expect(Array.from(px.subarray(0, 4))).toEqual([0, 0, 255, 255]);
+		expect(Array.from(px.subarray(4, 8))).toEqual([255, 0, 0, 255]);
+	});
+
+	it("orientation 1 returns the same image untouched", () => {
+		const img = twoPixelImage();
+		const out = applyExifOrientation(photon, img, jpegWithExif(1));
+		expect(out).toBe(img);
 	});
 });

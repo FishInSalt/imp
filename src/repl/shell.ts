@@ -63,6 +63,9 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** M13 batch 2: Ctrl+V image paste. Reads the system clipboard, writes
 	 *  a tmp file, inserts the path at the cursor. Injected in tests. */
 	pasteImage?: () => Promise<ClipboardImage | null>;
+	/** Text fallback when the clipboard has no image (Ctrl+V). Injected in
+	 *  tests — the default really runs pbpaste/xclip (review P1-2). */
+	pasteText?: () => Promise<string | null>;
 }
 
 /** Identity functions throughout — the pre-M9 plain aesthetic. */
@@ -620,7 +623,7 @@ export class TuiShell implements LineInput {
 				this.tui?.requestRender();
 				return;
 			}
-			const text = await readClipboardTextViaPbcopy();
+			const text = await (this.options.pasteText ?? readClipboardTextViaPbcopy)();
 			if (text) {
 				this.editor.insertTextAtCursor(text);
 				this.tui?.requestRender();

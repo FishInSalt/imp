@@ -3,7 +3,7 @@ import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { listSessions } from "./core/session/manager.js";
-import { loadProjectSettings, loadSettings } from "./core/settings.js";
+import { effectiveSettings, loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
 	askTrustOnce,
@@ -37,9 +37,14 @@ import { resolveShell } from "./tui.js";
 // defaultModel (ONLY when the trust store already says trusted — parse time
 // precedes the interactive trust resolution, and "unknown" must be the
 // conservative skip) > builtin.
-const defaultModel = (): string => {
+const defaultModel = (argv: string[] = []): string => {
 	const env = process.env.IMP_MODEL;
 	if (env !== undefined) return env;
+	// --no-trust refuses this directory's .imp/ resources (review P1-3): the
+	// project settings file must not seed the model the flag just refused —
+	// the parse-time default runs before trustDecision is known, so the flag
+	// is pre-scanned from raw argv.
+	if (argv.includes("--no-trust")) return loadSettings().defaultModel ?? "claude-sonnet-4-5";
 	// project WINS over global (pi's scope semantics — the design table's
 	// "env > project > global > default"; smoke caught the inverted order)
 	const projectDefault = projectDefaultModelIfTrusted();
@@ -177,7 +182,7 @@ function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
 		fileArgs: [],
-		model: defaultModel(),
+		model: defaultModel(argv),
 		thinking: envThinking(),
 		maxTokens: 16384,
 		maxTurns: 40,
@@ -486,6 +491,15 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
+		// M15 (review P1-2): hideThinking reads the MERGED view once the
+		// trust resolution exists — the renderer was built before the ask
+		// (the ask itself renders through it), but the field is public and
+		// ctrl+t already flips it live.
+		const mergedHide = effectiveSettings({
+			cwd: process.cwd(),
+			projectAllowed: projectTrusted,
+		}).hideThinkingBlock;
+		if (mergedHide !== undefined) renderer.hideThinking = mergedHide;
 		// Markdown quick commands (M11 #6) ride the same pipeline as extension
 		// commands: /help listing, conflict rules, dispatch. Project tier is
 		// behind the same trust gate.
@@ -568,7 +582,9 @@ function loadSkillSetup(
 	skills: Skill[];
 	enableSkillCommands: boolean;
 } {
-	const settings = loadSettings();
+	// M15 (review P2-1): skills read the MERGED view — a trusted project's
+	// settings.skills participates like every other key.
+	const settings = effectiveSettings({ cwd: process.cwd(), projectAllowed: projectTrusted });
 	const settingsEntries = opts.noSkills ? [] : (settings.skills ?? []);
 	const result = loadSkills({
 		cwd: process.cwd(),

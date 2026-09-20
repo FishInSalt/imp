@@ -152,7 +152,7 @@ function readRaw(file: string): Record<string, unknown> {
  *  compat, pi parity — a future imp version reading this file loses
  *  nothing). Atomic (tmp+rename) + mkdir; best-effort: a write failure
  *  must never take the session down. */
-function saveScope(patch: Record<string, unknown>, file: string): void {
+function saveScope(patch: Record<string, unknown>, file: string): boolean {
 	try {
 		const raw = readRaw(file);
 		const merged = { ...raw, ...patch };
@@ -177,18 +177,28 @@ function saveScope(patch: Record<string, unknown>, file: string): void {
 		const tmp = `${file}.${process.pid}.tmp`;
 		writeFileSync(tmp, `${JSON.stringify(merged, null, "\t")}\n`, "utf-8");
 		renameSync(tmp, file);
+		return true;
 	} catch {
 		// unreadable dir / full disk: the session keeps running without the
-		// cross-session default; the in-memory value is unaffected
+		// cross-session default; the in-memory value is unaffected — but the
+		// CALLER must be able to tell (review P2-2: /settings must not echo
+		// success for a silent no-op).
+		return false;
 	}
 }
 
-/** Patch the GLOBAL scope (programmatic persistence target — D18). */
-export function saveSettings(patch: Partial<ImpSettings>, path?: string): void {
-	saveScope(patch as Record<string, unknown>, settingsFilePath(path));
+/** Patch the GLOBAL scope (programmatic persistence target — D18).
+ *  Returns false when the write failed (review P2-2). */
+export function saveSettings(patch: Partial<ImpSettings>, path?: string): boolean {
+	return saveScope(patch as Record<string, unknown>, settingsFilePath(path));
 }
 
-/** Patch the PROJECT scope (the /settings command's project writes). */
-export function saveProjectSettings(patch: Partial<ImpSettings>, cwd: string, pathOverride?: string): void {
-	saveScope(patch as Record<string, unknown>, pathOverride ?? projectSettingsPath(cwd));
+/** Patch the PROJECT scope (the /settings command's project writes).
+ *  Returns false when the write failed. */
+export function saveProjectSettings(
+	patch: Partial<ImpSettings>,
+	cwd: string,
+	pathOverride?: string,
+): boolean {
+	return saveScope(patch as Record<string, unknown>, pathOverride ?? projectSettingsPath(cwd));
 }

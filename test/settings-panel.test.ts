@@ -224,7 +224,7 @@ describe("M15 /settings command", () => {
 	it("/settings <key> <value> writes global and echoes old → new", async () => {
 		const booted = await boot();
 		await runSettings("autoCompact false", booted.ctx);
-		expect(booted.output()).toContain("settings: autoCompact true → false (global)");
+		expect(booted.output()).toContain("settings: autoCompact true → false (global, next session)");
 		expect(loadSettings(booted.globalPath).autoCompact).toBe(false);
 	});
 
@@ -248,11 +248,11 @@ describe("M15 /settings command", () => {
 	it("project scope: refused when untrusted, written when trusted", async () => {
 		const untrusted = await boot({ projectAllowed: false, project: {} });
 		await runSettings("autoCompact false project", untrusted.ctx);
-		expect(untrusted.output()).toContain("trusted first");
+		expect(untrusted.output()).toContain("trusted");
 
 		const trusted = await boot({ projectAllowed: true, project: {} });
 		await runSettings("autoCompact false project", trusted.ctx);
-		expect(trusted.output()).toContain("(project)");
+		expect(trusted.output()).toContain("(project, next session)");
 		const raw = JSON.parse(readFileSync(projectSettingsPath(trusted.cwd), "utf-8"));
 		expect(raw.autoCompact).toBe(false);
 		expect(loadSettings(trusted.globalPath).autoCompact).toBeUndefined(); // global untouched
@@ -284,7 +284,7 @@ describe("M15 /settings command", () => {
 			return pick === undefined ? null : (pick as number);
 		};
 		await runSettings("", booted.ctx);
-		expect(booted.output()).toContain("settings: autoCompact true → false (project)");
+		expect(booted.output()).toContain("settings: autoCompact true → false (project, next session)");
 		expect(JSON.parse(readFileSync(projectSettingsPath(booted.cwd), "utf-8")).autoCompact).toBe(false);
 	});
 
@@ -297,6 +297,48 @@ describe("M15 /settings command", () => {
 		await runSettings("", booted.ctx);
 		expect(booted.output()).toContain("settings: defaultModel");
 		expect(loadSettings(booted.globalPath).defaultModel).toBe("zai/glm-5.3");
+	});
+});
+
+describe("M15 review round pins", () => {
+	it("P1-1: /settings shows its own write immediately; a second write echoes the real before", async () => {
+		const booted = await boot();
+		await runSettings("autoCompact", booted.ctx);
+		expect(booted.output()).toContain("autoCompact = true");
+		await runSettings("autoCompact false", booted.ctx);
+		await runSettings("autoCompact", booted.ctx);
+		expect(booted.output()).toContain("autoCompact = false"); // live, not the snapshot
+		await runSettings("autoCompact true", booted.ctx);
+		expect(booted.output()).toContain("autoCompact false → true"); // real before, not the stale true
+	});
+
+	it("P2-2: a failed write reports instead of echoing success", async () => {
+		const booted = await boot();
+		// make the global path unwritable by pointing it at a DIRECTORY
+		const dirAsFile = join(booted.baseDir, "blocker");
+		mkdirSync(dirAsFile);
+		// the command writes through the runner's globalSettingsPath — patch it
+		(booted.runner as unknown as { globalSettingsPath: () => string }).globalSettingsPath = () => dirAsFile;
+		await runSettings("autoCompact false", booted.ctx);
+		expect(booted.output()).toContain("changes NOT saved");
+	});
+
+	it("P2-3: the table shows the per-key source", async () => {
+		const booted = await boot({ projectAllowed: true, project: { autoCompact: false } });
+		await runSettings("", booted.ctx);
+		const text = booted.output();
+		expect(text).toContain("autoCompact = false [project]");
+		expect(text).toContain("images.autoResize = true [default]");
+	});
+
+	it("P2-4: TUI defaultModel input is validated (trailing space trimmed)", async () => {
+		const booted = await boot();
+		const picks: number[] = [0];
+		let ask = 0;
+		booted.ctx.select = async () => (ask++ < picks.length ? (picks[ask - 1] as number) : null);
+		booted.ctx.secret = async () => "  zai/glm-5.3  ";
+		await runSettings("", booted.ctx);
+		expect(loadSettings(booted.globalPath).defaultModel).toBe("zai/glm-5.3"); // trimmed
 	});
 });
 

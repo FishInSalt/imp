@@ -1,7 +1,14 @@
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { SessionStore } from "../core/session/store.js";
-import { projectSettingsPath, saveProjectSettings, saveSettings } from "../core/settings.js";
+import {
+	effectiveSettings,
+	loadProjectSettings,
+	loadSettings,
+	projectSettingsPath,
+	saveProjectSettings,
+	saveSettings,
+} from "../core/settings.js";
 import {
 	canonicalizeDir,
 	defaultTrustStorePath,
@@ -255,13 +262,37 @@ interface SettingEntry {
 	current: string;
 	/** env vars shadow a key (the imp invariant: env is the session override). */
 	envShadow?: string;
+	source: "env" | "project" | "global" | "default";
 	kind: "boolean" | "level" | "string";
 }
 
+/** Per-key source (review P2-3): env > project > global > default. */
+function settingSource(ctx: CommandContext, key: string): "env" | "project" | "global" | "default" {
+	const pick = (o: object) => {
+		if (key.startsWith("images.")) return (o as { images?: { autoResize?: boolean } }).images?.autoResize;
+		return (o as Record<string, unknown>)[key];
+	};
+	if (key === "defaultModel" && process.env.IMP_MODEL !== undefined) return "env";
+	if (key === "autoCompact" && process.env.IMP_AUTOCOMPACT === "0") return "env";
+	if (pick(loadProjectSettings(ctx.runner.runnerCwd, ctx.runner.projectSettingsAllowed)) !== undefined) {
+		return "project";
+	}
+	if (pick(loadSettings(ctx.runner.globalSettingsPath())) !== undefined) return "global";
+	return "default";
+}
+
 function settingsEntries(ctx: CommandContext): SettingEntry[] {
-	const effective = ctx.runner.effectiveSettings();
+	// LIVE read, not the runner's construction-time snapshot (review P1-1):
+	// the command's own writes must show immediately — a snapshot here made
+	// /settings contradict its own previous write in the same session.
+	const effective = effectiveSettings({
+		cwd: ctx.runner.runnerCwd,
+		projectAllowed: ctx.runner.projectSettingsAllowed,
+		globalPath: ctx.runner.globalSettingsPath(),
+	});
 	const env = (name: string) => (process.env[name] === undefined ? undefined : process.env[name]);
 	const bool = (v: boolean | undefined, dflt: boolean) => (v === undefined ? dflt : v).toString();
+	const src = (key: string) => settingSource(ctx, key);
 	return [
 		{
 			key: "defaultModel",
@@ -269,18 +300,21 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			current: env("IMP_MODEL") ?? effective.defaultModel ?? "(builtin default)",
 			envShadow: env("IMP_MODEL") !== undefined ? "IMP_MODEL" : undefined,
 			kind: "string",
+			source: src("defaultModel"),
 		},
 		{
 			key: "defaultThinkingLevel",
 			label: "thinking level for new sessions",
 			current: effective.defaultThinkingLevel ?? "(medium)",
 			kind: "level",
+			source: src("defaultThinkingLevel"),
 		},
 		{
 			key: "hideThinkingBlock",
 			label: "hide thinking text (ctrl+t toggles live)",
 			current: bool(effective.hideThinkingBlock, false),
 			kind: "boolean",
+			source: src("hideThinkingBlock"),
 		},
 		{
 			key: "autoCompact",
@@ -288,18 +322,21 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			current: process.env.IMP_AUTOCOMPACT === "0" ? "false" : bool(effective.autoCompact, true),
 			envShadow: process.env.IMP_AUTOCOMPACT === "0" ? "IMP_AUTOCOMPACT=0" : undefined,
 			kind: "boolean",
+			source: src("autoCompact"),
 		},
 		{
 			key: "enableSkillCommands",
 			label: "register skills as /skill:name",
 			current: bool(effective.enableSkillCommands, true),
 			kind: "boolean",
+			source: src("enableSkillCommands"),
 		},
 		{
 			key: "images.autoResize",
 			label: "resize large images before sending",
 			current: bool(effective.images?.autoResize, true),
 			kind: "boolean",
+			source: src("images.autoResize"),
 		},
 	];
 }
@@ -359,7 +396,9 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 			return "handled";
 		}
 		if (scope === "project" && !ctx.runner.projectSettingsAllowed) {
-			ctx.renderer.error("imp: project settings need this directory trusted first — /trust");
+			ctx.renderer.error(
+				"imp: project settings need this directory trusted — start imp with --trust (or without --no-trust) and accept the prompt",
+			);
 			return "handled";
 		}
 		const parsed = parseSettingValue(key, parts[1] as string);
@@ -369,14 +408,21 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		}
 		const before = settingsEntries(ctx).find((e) => e.key === key)?.current ?? "(unset)";
 		const patch = settingPatchFor(key, parsed.value);
-		if (scope === "project")
-			saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd);
-		else
-			saveSettings(
-				patch as Partial<import("../core/settings.js").ImpSettings>,
-				ctx.runner.globalSettingsPath(),
-			);
-		ctx.renderer.status(`settings: ${key} ${before} → ${String(parsed.value)} (${scope})`);
+		const saved =
+			scope === "project"
+				? saveProjectSettings(
+						patch as Partial<import("../core/settings.js").ImpSettings>,
+						ctx.runner.runnerCwd,
+					)
+				: saveSettings(
+						patch as Partial<import("../core/settings.js").ImpSettings>,
+						ctx.runner.globalSettingsPath(),
+					);
+		if (!saved) {
+			ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
+			return "handled";
+		}
+		ctx.renderer.status(`settings: ${key} ${before} → ${String(parsed.value)} (${scope}, next session)`);
 		return "handled";
 	}
 
@@ -398,7 +444,7 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 	// ---- no-arg: table, or the TUI picker ----
 	const entries = settingsEntries(ctx);
 	const table = entries
-		.map((e) => `${e.key} = ${e.current}${e.envShadow ? ` (env ${e.envShadow} wins)` : ""}`)
+		.map((e) => `${e.key} = ${e.current} [${e.source}]${e.envShadow ? ` (env ${e.envShadow} wins)` : ""}`)
 		.join("\n");
 	if (ctx.select === undefined) {
 		ctx.renderer.writeLine(table);
@@ -410,7 +456,7 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 
 	const rows = entries.map((e) => ({
 		label: e.key,
-		description: `${e.current}${e.envShadow ? ` · env ${e.envShadow} wins` : ""}`,
+		description: `${e.current} · ${e.source}${e.envShadow ? ` · env ${e.envShadow} wins` : ""}`,
 	}));
 	const index = await ctx.select({
 		title: "settings — Enter edits, Esc closes",
@@ -420,11 +466,21 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 	const entry = entries[index];
 	if (entry === undefined) return "handled";
 
-	// value entry: cycle booleans/levels, ask for strings
+	// value entry: cycle booleans/levels, ask for strings (review P2-4: the
+	// typed value runs through the SAME validation as the text form — a
+	// pasted trailing space must not become the startup model)
 	let next: string | null;
 	if (entry.kind === "string") {
-		next = (await ctx.secret?.(`${entry.key} =`)) ?? null;
-		if (next !== null && next.trim() === "") next = null;
+		const typed = (await ctx.secret?.(`${entry.key} =`)) ?? null;
+		if (typed === null || typed.trim() === "") next = null;
+		else {
+			const checked = parseSettingValue(entry.key, typed);
+			if (!checked.ok) {
+				ctx.renderer.error(`imp: ${checked.error}`);
+				return "handled";
+			}
+			next = String(checked.value);
+		}
 	} else if (entry.kind === "level") {
 		const order = THINKING_LEVELS as readonly string[];
 		const at = order.indexOf(entry.current === "(medium)" ? "medium" : entry.current);
@@ -448,14 +504,18 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		scope = pick === 1 ? "project" : "global";
 	}
 	const patch = settingPatchFor(entry.key, entry.kind === "boolean" ? next === "true" : next);
-	if (scope === "project")
-		saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd);
-	else
-		saveSettings(
-			patch as Partial<import("../core/settings.js").ImpSettings>,
-			ctx.runner.globalSettingsPath(),
-		);
-	ctx.renderer.status(`settings: ${entry.key} ${entry.current} → ${next} (${scope})`);
+	const saved =
+		scope === "project"
+			? saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd)
+			: saveSettings(
+					patch as Partial<import("../core/settings.js").ImpSettings>,
+					ctx.runner.globalSettingsPath(),
+				);
+	if (!saved) {
+		ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
+		return "handled";
+	}
+	ctx.renderer.status(`settings: ${entry.key} ${entry.current} → ${next} (${scope}, next session)`);
 	return "handled";
 }
 

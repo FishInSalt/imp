@@ -144,3 +144,33 @@ from every prior batch).
   (runnerCwd + globalSettingsPath()), never process.cwd()/the bare
   global default — the runner test seam path must be what the command
   writes to.
+
+## 6. Review round (FIX-FIRST: 3 P1 + 6 P2, all verified then fixed)
+
+- P1-1: /settings displayed the runner's construction-time snapshot — its
+  own writes never showed in-session and a second write echoed a stale
+  `before`. The command now reads LIVE through the three runner seams
+  (runnerCwd/projectSettingsAllowed/globalSettingsPath); the runner's
+  snapshot semantics for tool definitions are unchanged.
+- P1-2: hideThinking read the global scope only; the renderer is now
+  re-assigned from the merged view right after the trust resolution (the
+  renderer must exist before the ask; its hideThinking field is public
+  and ctrl+t already flips it live).
+- P1-3: `imp --no-trust` in a previously-trusted directory still seeded
+  the model from the project's .imp/settings.json — the parse-time
+  default runs before trustDecision is known, so --no-trust is
+  pre-scanned from raw argv and skips the project peek.
+- P2-1: skills[]/enableSkillCommands now read the merged view (a trusted
+  project's settings.skills participates).
+- P2-2: saveSettings/saveProjectSettings return success; /settings
+  reports "changes NOT saved" instead of echoing success on a failed
+  write.
+- P2-3: per-key source column ([env|project|global|default]) in both the
+  table and the picker.
+- P2-4: the TUI text input runs through the same validation as the text
+  form (trim + parseSettingValue).
+- P2-5: the project-write refusal names the real path (--trust), and
+  write echoes say "(next session)" — every consumed key is a
+  construction-time snapshot.
+- P2-6: BUILTIN_COMMAND_NAMES derives from COMMANDS (the hand list had
+  drifted to a subset, letting extensions register duplicate rows).

@@ -18,6 +18,8 @@
  * off..high; binary styles: off/high).
  */
 
+import { catalogEntryFor } from "./catalog.js";
+
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
@@ -352,9 +354,71 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 	},
 ];
 
+/** M14 (#model-catalog): the pi.dev catalog entry for this exact id, mapped
+ *  onto ModelThinkingMeta — single source of truth, wins over MODEL_RULES.
+ *  null return = "catalog silent, use the prefix rules". */
+function catalogThinkingMeta(provider: string, modelId: string): ModelThinkingMeta | null | undefined {
+	const entry = catalogEntryFor(provider, modelId);
+	if (entry === null) return undefined;
+	if (entry.reasoning === false) return null; // no knob (pi semantics)
+	let style: ThinkingStyle;
+	switch (provider) {
+		case "anthropic":
+			style = entry.compat?.forceAdaptiveThinking === true ? "anthropic-adaptive" : "anthropic-budget";
+			return {
+				style,
+				adaptive: entry.compat?.forceAdaptiveThinking === true,
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+			};
+		case "zai":
+			return {
+				style: "glm-openai",
+				supportsEffort: entry.compat?.supportsReasoningEffort === true,
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+			};
+		case "openai":
+			return {
+				style: "openai-effort",
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+			};
+		case "openai-codex":
+			return {
+				style: "codex-effort",
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+			};
+		default:
+			return undefined;
+	}
+}
+
+/** Keep only the seven ladder levels with string|null values. */
+function sanitizeCatalogLevelMap(
+	map: Record<string, string | null> | undefined,
+): ThinkingLevelMap | undefined {
+	if (map === undefined) return undefined;
+	const clean: ThinkingLevelMap = {};
+	let any = false;
+	for (const level of THINKING_LEVELS) {
+		const wire = map[level];
+		if (typeof wire === "string" || wire === null) {
+			clean[level] = wire;
+			any = true;
+		}
+	}
+	return any ? clean : undefined;
+}
+
 /** The thinking metadata driving a model, or null when the model has no
- *  knob (pi's model.reasoning === false → only "off" is available). */
+ *  knob (pi's model.reasoning === false → only "off" is available).
+ *  M14: an exact catalog hit outranks the prefix rules; MODEL_RULES is the
+ *  frozen offline floor. */
 export function thinkingMetaFor(provider: string, modelId: string): ModelThinkingMeta | null {
+	const fromCatalog = catalogThinkingMeta(provider, modelId);
+	if (fromCatalog !== undefined) return fromCatalog;
 	let best: { prefix: string; meta: ModelThinkingMeta } | null = null;
 	for (const rule of MODEL_RULES) {
 		if (rule.provider !== provider) continue;

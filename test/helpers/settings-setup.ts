@@ -14,3 +14,6 @@ import { join } from "node:path";
 
 process.env.IMP_SETTINGS_PATH = join(mkdtempSync(join(tmpdir(), "imp-settings-")), "settings.json");
 process.env.IMP_AUTH_PATH = join(mkdtempSync(join(tmpdir(), "imp-auth-")), "auth.json");
+// M14 (#model-catalog): the pi.dev disk cache gets the same sandbox — a
+// stray overlay must never leak the developer's real catalog into tests.
+process.env.IMP_CATALOG_PATH = join(mkdtempSync(join(tmpdir(), "imp-catalog-")), "models-catalog.json");

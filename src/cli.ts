@@ -19,6 +19,7 @@ import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
+import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
@@ -312,6 +313,12 @@ function printSessionList(): void {
 
 async function main(): Promise<void> {
 	await loadDotEnv(); // loads .env from the imp installation root; real env wins
+	// M14 (#model-catalog): the pi.dev disk cache loads BEFORE any model
+	// resolution (the Runner constructor reads contextWindowFor) and after
+	// .env (IMP_CATALOG_BASE_URL/IMP_CATALOG_PATH may live there). Quick-exit
+	// paths below never touch the network; the stale-cache refresh kick lives
+	// in the run modes.
+	loadCatalogCache();
 	const argv = process.argv.slice(2);
 	if (argv[0] === "sessions") {
 		printSessionList();
@@ -340,11 +347,21 @@ async function main(): Promise<void> {
 		promptDefined: opts.prompt !== undefined || opts.fileArgs.length > 0,
 		stdinIsTty: process.stdin.isTTY === true,
 	});
-	if (mode === "print") {
-		await runPrint(opts, argv);
-		return;
+	// M14: the stale-cache refresh kicks once the run mode is known and is
+	// ABORTED when the run ends (review P1-1) — a blackholed catalog endpoint
+	// must not hold the process open after its output is done (measured 16.8s
+	// without this: 4 sequential family timeouts kept the loop alive).
+	const catalogAbort = new AbortController();
+	void refreshCatalog({ signal: catalogAbort.signal }).catch(() => undefined);
+	try {
+		if (mode === "print") {
+			await runPrint(opts, argv);
+			return;
+		}
+		await runInteractive(opts, argv);
+	} finally {
+		catalogAbort.abort();
 	}
-	await runInteractive(opts, argv);
 }
 
 /**
@@ -379,6 +396,8 @@ async function loadExtensionSetup(
  * the REPL itself never imports this module's HELP.
  */
 async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
+	// M14: the staleness kick lives in main() (after mode resolution, aborted
+	// when the run ends); /model open re-checks the window non-blocking.
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
 	// M9: interactive sessions render through the pi-tui shell — the
 	// Renderer's bytes feed a TranscriptSink component instead of stdout.

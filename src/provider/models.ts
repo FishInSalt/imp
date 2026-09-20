@@ -6,10 +6,16 @@
  * the historical 128K default — conservative in the safe direction (compaction
  * fires earlier than strictly necessary, never later).
  *
+ * M14 (#model-catalog): these tables are FROZEN — bootstrap + offline floor.
+ * The pi.dev catalog overlay (catalog.ts) outranks them for every id it
+ * knows; hand-maintenance stopped with this comment.
+ *
  * IMP_CONTEXT_WINDOW still wins over everything, as before.
  */
 
+import { catalogEntryForReference } from "./catalog.js";
 import { discoveredWindowFor } from "./discover.js";
+import { parseModelRef } from "./resolve.js";
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	// Anthropic (pi anthropic.json catalog)
@@ -90,14 +96,6 @@ const MODEL_COSTS: Record<string, ModelCost> = {
 	"gpt-5.6-terra": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, subscription: true },
 };
 
-/** Cost rates for a model reference (canonical or bare); undefined = unknown,
- *  0-cost-models included so subscriptions can be tagged. */
-export function costFor(reference: string): ModelCost | undefined {
-	const slash = reference.indexOf("/");
-	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
-	return MODEL_COSTS[modelId];
-}
-
 // circular-safe: discover.js owns the runtime map; import lazily via type-only + accessor
 
 let envWarned = false;
@@ -117,6 +115,27 @@ function envInt(name: string): number | undefined {
 	return undefined;
 }
 
+/** Families whose traffic rides a subscription plan rather than the token
+ *  meter (the catalog carries rates but not billing mode — imp's reality:
+ *  zai = GLM Coding Plan, openai-codex = ChatGPT credential; anthropic and
+ *  openai are metered API). Static tables encode the same per-model. */
+const SUBSCRIPTION_FAMILIES = new Set(["zai", "openai-codex"]);
+
+/** Cost rates for a model reference (canonical or bare); undefined = unknown,
+ *  0-cost-models included so subscriptions can be tagged.
+ *  M14: the pi.dev catalog wins; the static table is the floor. */
+export function costFor(reference: string): ModelCost | undefined {
+	const entry = catalogEntryForReference(reference);
+	if (entry?.cost !== undefined) {
+		const cost: ModelCost = { ...entry.cost };
+		if (SUBSCRIPTION_FAMILIES.has(parseModelRef(reference).provider)) cost.subscription = true;
+		return cost;
+	}
+	const slash = reference.indexOf("/");
+	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
+	return MODEL_COSTS[modelId];
+}
+
 /**
  * The effective context window for a model reference (canonical or bare).
  * Priority: IMP_CONTEXT_WINDOW > registry lookup (prefix stripped) > default.
@@ -126,6 +145,9 @@ export function contextWindowFor(reference: string): number {
 	if (env !== undefined) return env;
 	const slash = reference.indexOf("/");
 	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
-	// env > runtime-enriched (discovery metadata) > static table > default
+	// env > catalog (pi.dev, M14 single truth) > runtime-enriched (discovery
+	// metadata) > static table > default
+	const entry = catalogEntryForReference(reference);
+	if (entry?.contextWindow !== undefined) return entry.contextWindow;
 	return discoveredWindowFor(modelId) ?? MODEL_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_WINDOW;
 }

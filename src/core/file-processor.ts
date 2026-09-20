@@ -7,9 +7,9 @@
  */
 
 import { access, readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
 import { processImage } from "./image/image-process.js";
 import type { ImageBlock } from "./messages.js";
+import { resolveReadPath } from "./tools/path-resolve.js";
 import { detectSupportedImageMimeType } from "./tools/image-sniff.js";
 
 export interface ProcessedFiles {
@@ -42,7 +42,9 @@ export async function processFileArguments(
 	const images: ImageBlock[] = [];
 
 	for (const fileArg of fileArgs) {
-		const absolutePath = resolve(fileArg.slice(1)); // strip the leading @
+		// pi resolveReadPath parity: ~ expansion, Unicode-space normalization,
+		// and the macOS screenshot variants (U+202F AM/PM, NFD, U+2019).
+		const absolutePath = resolveReadPath(fileArg, process.cwd());
 
 		// Check if file exists
 		try {

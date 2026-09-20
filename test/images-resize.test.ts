@@ -500,13 +500,57 @@ describe("M13-2 CLI @file args", () => {
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
 		const missing = path.join(DIR, "nope.png");
-		const result = await run(process.execPath, ["dist/cli.js", `@${missing}`, "hello"], {
+		const result: unknown = await run(process.execPath, ["dist/cli.js", `@${missing}`, "hello"], {
 			cwd: process.cwd(),
 			env: { ...process.env, IMP_HOME_DIR: DIR },
-		}).catch((err: { stderr: string; code?: number }) => err);
+		}).catch((err: unknown) => err);
+		const err = result as { stderr: string; code?: number };
 		// The observable: parseArgs did NOT treat @nope.png as prompt text —
 		// the processor owns it and reports the missing file.
-		expect(result.stderr).toContain("File not found");
-		expect(result.code).toBe(1);
+		expect(err.stderr).toContain("File not found");
+		expect(err.code).toBe(1);
 	}, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// read-path variants (macOS screenshots, ~ expansion)
+// ---------------------------------------------------------------------------
+
+describe("M13-2 resolveReadPath variants", () => {
+	const home = path.join(DIR, "home");
+	const mk = async (name: string): Promise<string> => {
+		const file = path.join(home, name);
+		await import("node:fs/promises").then((f) => f.mkdir(path.dirname(file), { recursive: true }));
+		await writeFile(file, "x");
+		return file;
+	};
+
+	it("~ expands to the injected home", async () => {
+		const file = await mk("shot.png");
+		const { resolveReadPath } = await import("../src/core/tools/path-resolve.js");
+		const resolved = resolveReadPath("@~/shot.png", "/tmp", { homeDir: home });
+		expect(resolved).toBe(file);
+	});
+
+	it("U+202F before AM/PM matches a typed plain space", async () => {
+		const file = await mk("Screen Shot 2026-09-20 at 10.00.00\u202fAM.png");
+		const { resolveReadPath } = await import("../src/core/tools/path-resolve.js");
+		const typed = file.replace("\u202f", " ");
+		expect(resolveReadPath(typed, "/tmp", { homeDir: home })).toBe(file);
+	});
+
+	it("NFD variant matches typed NFC, curly apostrophe matches typed straight", async () => {
+		const { resolveReadPath } = await import("../src/core/tools/path-resolve.js");
+		const nfd = "e\u0301cran.png"; // e + combining acute (NFD)
+		const file = await mk(nfd);
+		const typedNfc = path.join(home, "écran.png");
+		const resolvedNfd = resolveReadPath(typedNfc, "/tmp", { homeDir: home });
+		// macOS APFS is normalization-insensitive: the NFC probe may succeed
+		// directly (resolve returns it) or fall through to the NFD variant —
+		// both names address the same file. Case-sensitive/normalizing
+		// filesystems (ext4) take the NFD branch.
+		expect([typedNfc, file]).toContain(resolvedNfd);
+		const curly = await mk("Capture d\u2019ecran.png");
+		expect(resolveReadPath(curly.replace("\u2019", "'"), "/tmp", { homeDir: home })).toBe(curly);
+	});
 });

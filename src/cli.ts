@@ -1,5 +1,7 @@
 import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
+import { processFileArguments } from "./core/file-processor.js";
+import type { ImageBlock } from "./core/messages.js";
 import { listSessions } from "./core/session/manager.js";
 import { loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
@@ -45,6 +47,8 @@ function envThinking(): import("./provider/thinking.js").ThinkingLevel | undefin
 
 interface CliOptions {
 	prompt: string | undefined;
+	/** M13 batch 2: `@path` positionals → file attachments (print mode). */
+	fileArgs: string[];
 	model: string;
 	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity).
 	 *  UNDEFINED when neither is set — the runner then applies the settings
@@ -74,6 +78,8 @@ const HELP = `imp ${VERSION} — a small coding agent
 Usage:
   imp -p "<prompt>"        Run a task in print mode (streams the response, then exits)
   imp "<prompt>"           Same as -p
+  imp @file.png "prompt"   Attach files to the prompt: text files embed as
+                           <file> blocks, images attach to the first message
   imp                     Start an interactive session (REPL)
   imp sessions             List saved sessions for this directory
   imp login                Log in to OpenAI (ChatGPT plan) — device-code OAuth
@@ -144,6 +150,7 @@ a session with /think <level> (bare /think or Shift+Tab cycles).
 function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
+		fileArgs: [],
 		model: defaultModel(),
 		thinking: envThinking(),
 		maxTokens: 16384,
@@ -242,9 +249,20 @@ function parseArgs(argv: string[]): CliOptions {
 				positional.push(arg);
 		}
 	}
-	if (opts.prompt === undefined && positional.length > 0) {
-		opts.prompt = positional.join(" ");
+	// M13 batch 2: @path positionals peel off BEFORE prompt assembly (pi
+	// args.ts) — `imp @shot.png what is this` attaches the image and keeps
+	// the question as the prompt. A bare `@file` with no message is still a
+	// defined prompt (promptDefined).
+	const rest: string[] = [];
+	for (const arg of positional) {
+		// The @ stays: processFileArguments owns the strip (single slice).
+		if (arg.startsWith("@") && arg.length > 1) opts.fileArgs.push(arg);
+		else rest.push(arg);
 	}
+	if (opts.prompt === undefined && rest.length > 0) {
+		opts.prompt = rest.join(" ");
+	}
+	if (opts.fileArgs.length > 0 && opts.prompt === undefined) opts.prompt = "";
 	return opts;
 }
 
@@ -319,7 +337,7 @@ async function main(): Promise<void> {
 	}
 
 	const mode = resolveRunMode({
-		promptDefined: opts.prompt !== undefined,
+		promptDefined: opts.prompt !== undefined || opts.fileArgs.length > 0,
 		stdinIsTty: process.stdin.isTTY === true,
 	});
 	if (mode === "print") {
@@ -693,9 +711,22 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	};
 	process.on("SIGINT", onSigint);
 
+	let attachImages: ImageBlock[] | undefined;
+	if (opts.fileArgs.length > 0) {
+		const processed = await processFileArguments(opts.fileArgs);
+		if (processed.text !== "") {
+			opts.prompt =
+				opts.prompt === undefined || opts.prompt === ""
+					? processed.text.trimEnd()
+					: `${processed.text}${opts.prompt}`;
+		}
+		attachImages = processed.images.length > 0 ? processed.images : undefined;
+	}
+
 	try {
 		const result = await runner.runTurn({
 			userMessage: opts.prompt,
+			userImages: attachImages,
 			signal: controller.signal,
 			onEvent: (event) => renderer.event(event),
 		});

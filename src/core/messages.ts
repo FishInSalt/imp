@@ -20,6 +20,8 @@ export interface Usage {
  *  base64 data and ride tool results (M13; user arrays are allowed by the
  *  type for future input paths). */
 export type ContentBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export type TextBlock = Extract<ContentBlock, { type: "text" }>;
+export type ImageBlock = Extract<ContentBlock, { type: "image" }>;
 
 /** The display/model text of a possibly-blocked content: text blocks joined
  *  by newlines, images contributing nothing. Single source for every

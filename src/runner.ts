@@ -14,7 +14,7 @@ import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
-import { type AgentMessage, contentText } from "./core/messages.js";
+import { type AgentMessage, contentText, type ImageBlock } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
@@ -105,6 +105,8 @@ export interface RunnerOptions {
 
 export interface RunTurnOptions {
 	userMessage?: string; // omit ⇒ continue existing history (not used by 3a UI)
+	/** M13 batch 2: @file image attachments for the opening user message. */
+	userImages?: ImageBlock[];
 	signal?: AbortSignal;
 	/** Turn event tap. `info` is set ONLY for subagent-sourced events (the
 	 *  task tool relays its child loop's events with the child's agent name
@@ -283,6 +285,11 @@ class RunnerImpl implements Runner {
 				createReadTool({
 					cwd: options.cwd,
 					modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
+					// M13 batch 2: images.autoResize (settings file, read live so a
+					// mid-session edit takes effect — pi reads it per request too).
+					imageProcessing: {
+						autoResize: loadSettings(this.options.settingsPath).images?.autoResize ?? true,
+					},
 				}),
 				createEditTool({ cwd: options.cwd }),
 				createWriteTool({ cwd: options.cwd }),
@@ -317,6 +324,9 @@ class RunnerImpl implements Runner {
 					createReadTool({
 						cwd,
 						modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
+						imageProcessing: {
+							autoResize: loadSettings(this.options.settingsPath).images?.autoResize ?? true,
+						},
 					}),
 					createEditTool({ cwd }),
 					createWriteTool({ cwd }),
@@ -738,6 +748,7 @@ class RunnerImpl implements Runner {
 				tools: this.tools,
 				history: this.history,
 				userMessage: options.userMessage,
+				userImages: options.userImages,
 				maxTokens: this.options.maxTokens,
 				thinking: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 				maxIterations: this.options.maxTurns,

@@ -6,6 +6,7 @@ import {
 	type AssistantMessage,
 	addUsage,
 	emptyUsage,
+	type ImageBlock,
 	type ToolResult,
 	type Usage,
 } from "./messages.js";
@@ -25,6 +26,8 @@ export interface RunAgentLoopOptions {
 	history: AgentMessage[];
 	/** New user prompt. Omit to continue from existing history. */
 	userMessage?: string;
+	/** Image attachments for the opening user message (@file CLI args). */
+	userImages?: ImageBlock[];
 	maxTokens?: number;
 	/** Thinking level (#thinking-levels); forwarded to the provider. */
 	thinking?: import("../provider/thinking.js").ThinkingLevel;
@@ -88,6 +91,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		tools,
 		history,
 		userMessage,
+		userImages,
 		maxTokens = 8192,
 		thinking,
 		maxIterations = 40,
@@ -100,7 +104,14 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 	} = options;
 
 	if (userMessage !== undefined && userMessage !== "") {
-		const user: AgentMessage = { role: "user", content: userMessage };
+		// M13 batch 2: @file attachments ride the first user message as image
+		// blocks (pi prompt(text, images) parity); a text-only prompt stays a
+		// bare string — zero byte change for every existing session.
+		const content =
+			userImages !== undefined && userImages.length > 0
+				? [{ type: "text", text: userMessage } as const, ...userImages]
+				: userMessage;
+		const user: AgentMessage = { role: "user", content };
 		history.push(user);
 		onMessage?.(user);
 	}

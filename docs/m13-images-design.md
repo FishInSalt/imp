@@ -252,3 +252,107 @@ user-message path.
 | D4 | No clipboard paste / @file attach / --attach | UX layer, later batch |
 | D5 | Vision via prefix rules, not generated catalog | imp has no catalog; thinking.ts precedent |
 | D6 | Extension tool-result events expose no blocks | No consumer today |
+
+---
+
+## 14. Batch 2 — the processor (2026-09-20, implemented)
+
+Scope: photon resize/convert pipeline (read path), `images.autoResize`
+setting, `@file` CLI attachments, Ctrl+V clipboard image paste.
+pi references: `coding-agent/src/utils/{image-process,image-resize,
+image-resize-core,image-resize-worker,image-convert,exif-orientation,
+photon,clipboard-image}.ts`, `cli/file-processor.ts`, `sdk.ts` (blockImages),
+`settings-manager.ts`.
+
+### 14.1 Pipeline (`src/core/image/`, new directory)
+
+Ports of pi's utils, adapted to imp (ESM, no Bun):
+
+| File | pi origin | Changes |
+|---|---|---|
+| `photon.ts` | `utils/photon.ts` | No fs-patch fallback ladder — that exists for Bun-compiled binaries; imp ships as plain npm ESM where the wasm sits next to the module. Lazy `await import`, null on any failure. |
+| `exif-orientation.ts` | `utils/exif-orientation.ts` | Verbatim (JPEG APP1 + WebP EXIF TIFF walk, orientations 1–8). Parser internals exported for tests. |
+| `image-resize-core.ts` | `utils/image-resize-core.ts` | Verbatim ladder: 2000×2000 / 4.5 MB **encoded** / PNG+JPEG candidates / quality steps {80,85,70,55,40} / ×0.75 dimension decay to 1×1. |
+| `image-resize-worker.ts` | `utils/image-resize-worker.ts` | Verbatim worker entry (transfer bytes in, one message out). |
+| `image-resize.ts` | `utils/image-resize.ts` | Worker + in-process fallback; no Bun string-path branch. `formatDimensionNote` (coordinate-mapping hint) ported as-is. |
+| `image-convert.ts` | `utils/image-convert.ts` | `convertImageBytesToPng` (BMP→PNG, EXIF applied); `convertToPng` kept for the deferred kitty display. |
+| `image-process.ts` | `utils/image-process.ts` | `processImage(bytes, mime, {autoResizeImages})`: normalize (whitelist jpg/jpeg→jpeg; else PNG-convert) → resize → `{ok, data, mimeType, hints}` / `{ok:false, message}`. Hints: `[Image converted from X to Y.]` + `[Image: original WxH, displayed at WxH. Multiply coordinates by S to map to original image.]` |
+
+Dependency: `@silvia-odwyer/photon-node@0.3.4` (pi's exact pin; pure WASM,
+no native build — Docker Linux tests unaffected).
+
+### 14.2 read tool rewiring
+
+The batch-1 image branch's two degraded paths are replaced by
+`processImage` (pi coding-agent read.ts:112 parity):
+
+- BMP: converted to PNG with the conversion hint (D2 resolved).
+- Oversize: resized through the ladder; the 4.5 MB teaching error survives
+  only as resize failure (`[Image omitted: could not be resized below the
+  inline image size limit.]`) — photon missing or unshrinkable.
+- Non-vision note logic unchanged (appended after hints).
+- `images.autoResize: false` (settings file): skips resize, keeps
+  conversion; batch-1 teaching error returns for oversize files.
+
+### 14.3 Settings
+
+`~/.imp/settings.json` gains `images: { autoResize?: boolean }` (default
+true). pi's `images.blockImages` is NOT ported (see D7) — its home in pi is
+the settings-selector UI and the convertToLlm wrapper; imp has neither.
+
+### 14.4 `@file` CLI attachments (print mode)
+
+`imp @shot.png what is this` — positional args starting with `@` run through
+a `file-processor.ts` port (pi `cli/file-processor.ts`): text files become
+`<file name="…">\n…\n</file>` blocks in the prompt; images run through
+`processImage` and attach to the first user message as image blocks (loop
+`userImages?: ImageBlock[]` — `runTurn` passes it through; content composes
+`[{text}, …images]`). Errors: missing file → stderr + exit 1 (pi parity);
+empty file → skipped. imp has no interactive startup-message path (a prompt
+always means print mode — `resolveRunMode`), so `@file` serves print mode
+only, matching pi's `-p` behavior.
+
+### 14.5 Clipboard paste (Ctrl+V, TUI shell)
+
+pi reads the clipboard through pi-tui native bindings (prebuilt .node) with
+xclip/wl-paste fallbacks. imp has no native bindings — the port is
+command-based everywhere (D8):
+
+- darwin: `osascript -l JavaScript` JXA ObjC bridge — NSPasteboard PNG/TIFF
+  → PNG bytes (no permission prompt, no native module).
+- linux: `wl-paste --type image/png` (Wayland) / `xclip -selection
+  clipboard -t image/png -o` (X11).
+- win32: PowerShell `Get-Clipboard -Format Image` → PNG to stdout.
+- TERMUX → null (pi parity).
+
+Unsupported formats convert to PNG via photon. Result writes
+`imp-clipboard-<uuid>.<ext>` into `os.tmpdir()` and the path is inserted at
+the cursor (pi: same shape — the message layer never knows; the model reads
+the file). Wiring: TuiShell's pre-focus input listener (`matchesKey(data,
+"ctrl+v")`) — before the editor consumes the key; a shell option injects
+the reader for tests. Terminal paste (Cmd+V) still arrives as bracketed
+paste and is untouched.
+
+### 14.6 Deferred (carried)
+
+- Kitty inline graphics: pi's Image component + caps detection is a full
+  TUI subsystem; imp's fold-text transcript has no inline-image surface.
+  Recorded D3 (kept).
+- `images.blockImages` egress switch: D7 (new).
+
+### 14.7 Tests (`test/images-resize.test.ts` + additions)
+
+- resize ladder via small `maxBytes` overrides (forces candidates/decay);
+  dimension cap 3000×2000 → 2000×1333; already-small passthrough
+  (`wasResized:false`, bytes identical).
+- EXIF parser on crafted TIFF fixtures (1/6/8, big/little endian, short
+  buffers).
+- BMP → PNG conversion through `processImage` (hint + mimeType); jpg→jpeg
+  normalization; `autoResizeImages:false` path.
+- read tool: oversize now resizes (no teaching error) with dimension hint;
+  photon-unavailable → omitted note (injectable loader).
+- settings parse: autoResize true/false/absent.
+- file-processor: text/image/missing/empty; loop composes blocks (golden).
+- clipboard: platform-dispatched command matrix with an injectable runner
+  (stubbed binaries); termux null; unsupported→PNG via stubbed converter.
+- shell: ctrl+v routes to the injected paste handler and is consumed.

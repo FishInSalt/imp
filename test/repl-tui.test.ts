@@ -1887,7 +1887,7 @@ describe("runRepl with shell:tui", () => {
 		const last = env.requests[4];
 		const userTexts = (last?.messages ?? [])
 			.filter((m): m is UserMessage => m.role === "user")
-			.map((m) => m.content);
+			.map((m) => (typeof m.content === "string" ? m.content : ""));
 		expect(userTexts.some((t) => t.includes("q2 old direction"))).toBe(true);
 		expect(userTexts.some((t) => t.startsWith("[Branch summary \u2014") && t.includes("BRANCHES:"))).toBe(
 			true,
@@ -2067,7 +2067,10 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("reviewed"), 8000);
 		expect(
 			env.requests[0]?.messages.some(
-				(m) => m.role === "user" && m.content.includes("Review the diff. the parser"),
+				(m) =>
+					m.role === "user" &&
+					typeof m.content === "string" &&
+					m.content.includes("Review the diff. the parser"),
 			),
 		).toBe(true);
 		env.terminal.data("/exit\r");

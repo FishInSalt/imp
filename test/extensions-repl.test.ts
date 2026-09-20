@@ -1187,7 +1187,9 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 			.flatMap((r) => r.messages.flatMap((m) => (m.role === "toolResult" ? m.results : [])))
 			.filter((r) => r.toolCallId === "g1" || r.toolCallId === "g2");
 		const g2 = results.find((r) => r.toolCallId === "g2");
-		expect(g2?.isError ?? (g2?.content ?? "").startsWith('Tool "bash" blocked')).toBe(true);
+		expect(
+			g2?.isError ?? (typeof g2?.content === "string" && g2.content.startsWith('Tool "bash" blocked')),
+		).toBe(true);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

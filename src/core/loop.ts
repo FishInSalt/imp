@@ -409,7 +409,9 @@ async function runTool(
 		return {
 			toolCallId: call.id,
 			toolName: call.name,
-			content: result.output,
+			// M13: tools that produce structured blocks (read's image path)
+			// hand the model the blocks; `output` is display-only.
+			content: result.content ?? result.output,
 			isError: result.isError ?? false,
 		};
 	} catch (err) {

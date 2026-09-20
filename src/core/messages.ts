@@ -15,9 +15,27 @@ export interface Usage {
 	cacheWriteTokens?: number;
 }
 
+/** A content block. Text blocks are the common case (a plain string is
+ *  used whenever no image is present — pi's shape); image blocks carry
+ *  base64 data and ride tool results (M13; user arrays are allowed by the
+ *  type for future input paths). */
+export type ContentBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+
+/** The display/model text of a possibly-blocked content: text blocks joined
+ *  by newlines, images contributing nothing. Single source for every
+ *  consumer that used to read `.content` as a string (replay, render,
+ *  subagent context, compaction summarizer). */
+export function contentText(content: string | ContentBlock[]): string {
+	if (typeof content === "string") return content;
+	return content
+		.filter((b): b is { type: "text"; text: string } => b.type === "text")
+		.map((b) => b.text)
+		.join("\n");
+}
+
 export interface UserMessage {
 	role: "user";
-	content: string;
+	content: string | ContentBlock[];
 }
 
 export type AssistantBlock =
@@ -47,7 +65,7 @@ export interface AssistantMessage {
 export interface ToolResult {
 	toolCallId: string;
 	toolName: string;
-	content: string;
+	content: string | ContentBlock[];
 	isError: boolean;
 }
 

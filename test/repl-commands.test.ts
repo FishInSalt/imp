@@ -1103,9 +1103,10 @@ describe("/tree (#10 batch 2)", () => {
 		expect(summaryText).not.toContain("q1"); // the shared trunk is not re-summarized
 		// the new context carries the framed summary
 		const framed = env.runner.history.find(
-			(m): m is UserMessage => m.role === "user" && m.content.startsWith("[Branch summary \u2014"),
+			(m): m is UserMessage =>
+				m.role === "user" && typeof m.content === "string" && m.content.startsWith("[Branch summary \u2014"),
 		);
-		expect(framed?.content).toContain("tried q3-work");
+		expect(typeof framed?.content === "string" && framed.content.includes("tried q3-work")).toBe(true);
 	});
 
 	it("picker cancel is silent; a pick switches", async () => {

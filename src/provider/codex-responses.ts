@@ -1,8 +1,15 @@
-import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import type { AgentMessage, AssistantBlock, ContentBlock, StopReason, Usage } from "../core/messages.js";
 import { getCodexAccessToken } from "./codex-auth.js";
-import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import {
+	abortSafe,
+	downgradeUnsupportedImages,
+	parseSse,
+	postJsonWithRetry,
+	safeParseJson,
+} from "./shared.js";
 import { clampThinkingLevel, effortFor, thinkingMetaFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
+import { modelSupportsVision } from "./vision.js";
 
 /**
  * OpenAI Responses wire protocol as spoken by the Codex backend
@@ -44,8 +51,47 @@ interface InputItem {
 	call_id?: string;
 	name?: string;
 	arguments?: string;
-	output?: string;
+	output?: string | unknown[];
 	[key: string]: unknown;
+}
+
+/** pi openai-responses-shared parity (M13 §7): text-only → the pre-M13
+ *  input_text shape; with images → input_image parts with data URLs. */
+function toUserInputContent(content: string | ContentBlock[]): unknown {
+	if (typeof content === "string") return [{ type: "input_text", text: content }];
+	const parts: unknown[] = [];
+	for (const block of content) {
+		if (block.type === "text") parts.push({ type: "input_text", text: block.text });
+		else
+			parts.push({
+				type: "input_image",
+				detail: "auto",
+				image_url: `data:${block.mimeType};base64,${block.data}`,
+			});
+	}
+	return parts;
+}
+
+/** function_call_output: string for text-only, the input-part array when
+ *  images ride the result (pi convertToolResultOutput parity). */
+function toToolOutput(content: string | ContentBlock[]): string | unknown[] {
+	if (typeof content === "string") return content;
+	const text = content
+		.filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+		.map((b) => b.text)
+		.join("\n");
+	const images = content.filter((b): b is Extract<ContentBlock, { type: "image" }> => b.type === "image");
+	if (images.length === 0) return text;
+	const parts: unknown[] = [];
+	if (text !== "") parts.push({ type: "input_text", text });
+	for (const image of images) {
+		parts.push({
+			type: "input_image",
+			detail: "auto",
+			image_url: `data:${image.mimeType};base64,${image.data}`,
+		});
+	}
+	return parts;
 }
 
 function toInputItems(systemIgnored: string, messages: AgentMessage[]): InputItem[] {
@@ -56,7 +102,7 @@ function toInputItems(systemIgnored: string, messages: AgentMessage[]): InputIte
 	for (const msg of messages) {
 		switch (msg.role) {
 			case "user":
-				items.push({ role: "user", content: [{ type: "input_text", text: msg.content }] });
+				items.push({ role: "user", content: toUserInputContent(msg.content) });
 				break;
 			case "assistant": {
 				const text = msg.blocks
@@ -77,7 +123,11 @@ function toInputItems(systemIgnored: string, messages: AgentMessage[]): InputIte
 			}
 			case "toolResult":
 				for (const r of msg.results) {
-					items.push({ type: "function_call_output", call_id: r.toolCallId, output: r.content });
+					items.push({
+						type: "function_call_output",
+						call_id: r.toolCallId,
+						output: toToolOutput(r.content),
+					});
 				}
 				break;
 			default: {
@@ -126,7 +176,10 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				store: false,
 				stream: true,
 				instructions: request.system,
-				input: toInputItems(request.system, request.messages),
+				input: toInputItems(
+					request.system,
+					downgradeUnsupportedImages(request.messages, modelSupportsVision("codex", request.model)),
+				),
 				parallel_tool_calls: true,
 				// NOTE: no max_output_tokens — the ChatGPT backend REJECTS it
 				// ("Unsupported parameter", live 400 on the first real turn). The

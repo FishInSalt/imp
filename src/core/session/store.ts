@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { firstLine } from "../../format.js";
-import type { AgentMessage, Usage } from "../messages.js";
+import { type AgentMessage, contentText, type Usage } from "../messages.js";
 
 /**
  * JSONL session storage — a message tree in a file.
@@ -364,7 +364,9 @@ export class SessionStore {
 			// firstLine: a multi-line message can start with a blank (shift+enter)
 			// — the label must preview actual content (review F3).
 			const label =
-				first !== undefined && first.role === "user" ? firstLine(first.content) : "(no user message)";
+				first !== undefined && first.role === "user"
+					? firstLine(contentText(first.content))
+					: "(no user message)";
 			tips.push({
 				id: entry.id,
 				label,

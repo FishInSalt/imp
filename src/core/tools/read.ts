@@ -1,10 +1,16 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import type { ContentBlock } from "../messages.js";
+import { detectSupportedImageMimeType } from "./image-sniff.js";
 import type { Tool } from "./types.js";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024; // 50KB
+/** Inline image size cap (M13 §3). Anthropic's inline limit is 5 MB; pi's
+ *  resize target is 4.5 MB encoded. Without a resizer (batch 2), oversized
+ *  images become a teaching note — never a rejected request. */
+const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -14,6 +20,10 @@ const readSchema = Type.Object({
 
 export interface ReadToolOptions {
 	cwd?: string;
+	/** Live vision capability of the ACTIVE model (runner getter — /model
+	 *  can switch mid-session). Absent → no non-vision note (the request-
+	 *  assembly downgrade still protects the wire). */
+	modelSupportsVision?: () => boolean;
 }
 
 export function createReadTool(options: ReadToolOptions = {}): Tool {
@@ -21,7 +31,8 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 	return {
 		name: "read",
 		description:
-			`Read the contents of a text file. Output is truncated to ${MAX_LINES} lines or ${MAX_BYTES / 1024}KB ` +
+			"Read the contents of a text file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. " +
+			`For text files, output is truncated to ${MAX_LINES} lines or ${MAX_BYTES / 1024}KB ` +
 			`(whichever hits first); the truncation note tells you how to continue reading. Use offset/limit for large files.`,
 		parameters: readSchema,
 		async execute(args, signal) {
@@ -37,6 +48,43 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return { output: `Error reading ${requested}: ${message}`, isError: true };
+			}
+
+			// Image path (M13 §3): magic bytes decide — never the extension.
+			const mimeType = detectSupportedImageMimeType(bytes);
+			if (mimeType !== undefined) {
+				const nonVisionNote =
+					options.modelSupportsVision !== undefined && !options.modelSupportsVision()
+						? "\n[Current model does not support images. The image will be omitted from this request.]"
+						: "";
+				if (mimeType === "image/bmp") {
+					// BMP needs conversion before any inline API accepts it (pi's
+					// processor does this; imp's converter is batch 2 — design D2).
+					return {
+						output: `Read image file [image/bmp]\n[Image omitted: BMP requires conversion; not supported yet.]${nonVisionNote}`,
+					};
+				}
+				const byteLength = bytes.byteLength;
+				if (byteLength > MAX_IMAGE_BYTES) {
+					const mb = (byteLength / (1024 * 1024)).toFixed(1);
+					return {
+						output:
+							`Read image file [${mimeType}]\n` +
+							`[Image omitted: ${mb} MB exceeds the 4.5 MB inline limit. Resize it ` +
+							"(e.g. `sips -Z 2000 <file>` on macOS, `magick <file> -resize 2000x2000` via ImageMagick) " +
+							"and read again.]" +
+							nonVisionNote,
+					};
+				}
+				const content: ContentBlock[] = [
+					{ type: "text", text: `Read image file [${mimeType}]${nonVisionNote}` },
+					{ type: "image", data: bytes.toString("base64"), mimeType },
+				];
+				return {
+					// display-only summary; the model receives the blocks
+					output: `Read image file [${mimeType}]${nonVisionNote}`,
+					content,
+				};
 			}
 
 			// Cheap binary detection: NUL byte in the first 8KB.

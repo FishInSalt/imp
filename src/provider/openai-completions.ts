@@ -1,8 +1,15 @@
-import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import type { AgentMessage, AssistantBlock, ContentBlock, StopReason, Usage } from "../core/messages.js";
 import { resolveApiKey } from "./auth-store.js";
-import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import {
+	abortSafe,
+	downgradeUnsupportedImages,
+	parseSse,
+	postJsonWithRetry,
+	safeParseJson,
+} from "./shared.js";
 import { clampThinkingLevel, effortFor, thinkingMetaFor } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
+import { modelSupportsVision } from "./vision.js";
 
 /**
  * OpenAI Chat Completions wire protocol — the de-facto industry standard:
@@ -40,18 +47,38 @@ interface WireToolCall {
 	function: { name: string; arguments: string };
 }
 
+type WireUserPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 type WireMessage =
 	| { role: "system"; content: string }
-	| { role: "user"; content: string }
+	| { role: "user"; content: string | WireUserPart[] }
 	| { role: "assistant"; content: string | null; tool_calls?: WireToolCall[] }
 	| { role: "tool"; tool_call_id: string; content: string };
+
+/** User content: string stays the string (pre-M13 bytes); a block array
+ *  becomes text/image_url parts (OpenAI user-content form). */
+function toUserParts(content: string | ContentBlock[]): string | WireUserPart[] {
+	if (typeof content === "string") return content;
+	const parts: WireUserPart[] = [];
+	let hasText = false;
+	for (const block of content) {
+		if (block.type === "text") {
+			hasText = true;
+			parts.push({ type: "text", text: block.text });
+		} else {
+			parts.push({ type: "image_url", image_url: { url: `data:${block.mimeType};base64,${block.data}` } });
+		}
+	}
+	if (!hasText) parts.unshift({ type: "text", text: "(see attached image)" });
+	return parts;
+}
 
 function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[] {
 	const wire: WireMessage[] = [{ role: "system", content: system }];
 	for (const msg of messages) {
 		switch (msg.role) {
 			case "user":
-				wire.push({ role: "user", content: msg.content });
+				wire.push({ role: "user", content: toUserParts(msg.content) });
 				break;
 			case "assistant": {
 				const text = msg.blocks
@@ -76,11 +103,39 @@ function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[]
 				});
 				break;
 			}
-			case "toolResult":
+			case "toolResult": {
+				// pi parity (openai-completions.ts 1377–1430): chat-completions
+				// tool messages cannot carry images — text goes in the tool
+				// message, images are hoisted into ONE following user message.
+				const hoisted: WireUserPart[] = [];
 				for (const r of msg.results) {
-					wire.push({ role: "tool", tool_call_id: r.toolCallId, content: r.content });
+					let text = "";
+					let hasImages = false;
+					if (typeof r.content === "string") {
+						text = r.content;
+					} else {
+						const texts: string[] = [];
+						for (const block of r.content) {
+							if (block.type === "text") texts.push(block.text);
+							else {
+								hasImages = true;
+								hoisted.push({
+									type: "image_url",
+									image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+								});
+							}
+						}
+						text = texts.join("\n");
+					}
+					wire.push({
+						role: "tool",
+						tool_call_id: r.toolCallId,
+						content: text !== "" ? text : hasImages ? "(see attached image)" : "(no tool output)",
+					});
 				}
+				if (hoisted.length > 0) wire.push({ role: "user", content: hoisted });
 				break;
+			}
 			default: {
 				const exhaustive: never = msg;
 				throw new Error(`unreachable message role: ${JSON.stringify(exhaustive)}`);
@@ -152,11 +207,17 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				);
 			}
 
+			// M13 §6: strip image blocks before serialization when the model
+			// lacks vision (fail-safe default in vision.ts).
+			const messages = downgradeUnsupportedImages(
+				request.messages,
+				modelSupportsVision(options.name ?? "openai", request.model),
+			);
 			const body: Record<string, unknown> = {
 				model: request.model,
 				stream: true,
 				stream_options: { include_usage: true },
-				messages: toWireMessages(request.system, request.messages),
+				messages: toWireMessages(request.system, messages),
 				[maxTokensField(request.model)]: request.maxTokens,
 			};
 			if (request.tools.length > 0) {

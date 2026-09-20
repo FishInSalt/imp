@@ -1,8 +1,15 @@
 import { formatTokens } from "../format.js";
 import type { ThinkingLevel } from "../provider/thinking.js";
 import type { LLMProvider } from "../provider/types.js";
-import type { AgentMessage, AssistantMessage, Usage } from "./messages.js";
-import { addUsage, emptyUsage } from "./messages.js";
+import {
+	type AgentMessage,
+	type AssistantMessage,
+	addUsage,
+	type ContentBlock,
+	contentText,
+	emptyUsage,
+	type Usage,
+} from "./messages.js";
 import type { SessionStore } from "./session/store.js";
 
 /**
@@ -52,11 +59,25 @@ function assistantUsage(message: AgentMessage): Usage | undefined {
 	return undefined;
 }
 
+/** pi parity (compaction.ts:242 ESTIMATED_IMAGE_CHARS): a base64 image
+ *  block costs roughly 4800 chars in the request — never its data length. */
+const ESTIMATED_IMAGE_CHARS = 4800;
+
+function estimateContentChars(content: string | ContentBlock[]): number {
+	if (typeof content === "string") return content.length;
+	let chars = 0;
+	for (const block of content) {
+		if (block.type === "text") chars += block.text.length;
+		else chars += ESTIMATED_IMAGE_CHARS;
+	}
+	return chars;
+}
+
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
 	switch (message.role) {
 		case "user":
-			chars = message.content.length;
+			chars = estimateContentChars(message.content);
 			break;
 		case "assistant":
 			for (const block of message.blocks) {
@@ -67,7 +88,7 @@ export function estimateTokens(message: AgentMessage): number {
 			}
 			break;
 		case "toolResult":
-			for (const result of message.results) chars += result.content.length;
+			for (const result of message.results) chars += estimateContentChars(result.content);
 			break;
 	}
 	// chars/4 heuristic; conservative (overestimates).
@@ -190,7 +211,7 @@ export function serializeForSummary(messages: AgentMessage[]): string {
 	for (const message of messages) {
 		switch (message.role) {
 			case "user":
-				lines.push(`[user]\n${truncate(message.content, MAX_USER_CHARS)}`);
+				lines.push(`[user]\n${truncate(contentText(message.content), MAX_USER_CHARS)}`);
 				break;
 			case "assistant":
 				for (const block of message.blocks) {
@@ -206,7 +227,7 @@ export function serializeForSummary(messages: AgentMessage[]): string {
 			case "toolResult":
 				for (const result of message.results) {
 					lines.push(
-						`[tool result ${result.toolName}${result.isError ? " (error)" : ""}]\n${truncate(result.content, MAX_TOOL_RESULT_CHARS)}`,
+						`[tool result ${result.toolName}${result.isError ? " (error)" : ""}]\n${truncate(contentText(result.content), MAX_TOOL_RESULT_CHARS)}`,
 					);
 				}
 				break;

@@ -14,7 +14,7 @@ import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
-import type { AgentMessage } from "./core/messages.js";
+import { type AgentMessage, contentText } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
@@ -42,6 +42,7 @@ import {
 	thinkingMetaFor,
 } from "./provider/thinking.js";
 import type { LLMProvider } from "./provider/types.js";
+import { modelSupportsVision } from "./provider/vision.js";
 import { zaiApiKey } from "./provider/zai.js";
 import type { Renderer } from "./render.js";
 
@@ -278,7 +279,11 @@ class RunnerImpl implements Runner {
 		this.tools = [
 			...(options.tools ?? [
 				createBashTool({ cwd: options.cwd }),
-				createReadTool({ cwd: options.cwd }),
+				// M13: the live getter — /model can switch vision off mid-session.
+				createReadTool({
+					cwd: options.cwd,
+					modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
+				}),
 				createEditTool({ cwd: options.cwd }),
 				createWriteTool({ cwd: options.cwd }),
 				createGrepTool({ cwd: options.cwd }),
@@ -309,7 +314,10 @@ class RunnerImpl implements Runner {
 				// across two trees would fail silently.
 				getToolsForCwd: (cwd) => [
 					createBashTool({ cwd }),
-					createReadTool({ cwd }),
+					createReadTool({
+						cwd,
+						modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
+					}),
 					createEditTool({ cwd }),
 					createWriteTool({ cwd }),
 					createGrepTool({ cwd }),
@@ -340,7 +348,7 @@ class RunnerImpl implements Runner {
 						type: "tool_end",
 						toolCallId: result.toolCallId,
 						name: result.toolName,
-						output: result.content,
+						output: contentText(result.content),
 						isError: result.isError,
 						subagent: true,
 						agent: info.agent,
@@ -780,7 +788,7 @@ class RunnerImpl implements Runner {
 							type: "tool_end",
 							toolCallId: result.toolCallId,
 							name: result.toolName,
-							output: result.content,
+							output: contentText(result.content),
 							isError: result.isError,
 							cwd: this.options.cwd,
 						});
@@ -903,7 +911,7 @@ class RunnerImpl implements Runner {
 /** User-message text for fork previews: plain string, or the joined text
  *  blocks of a block-content message (steering frames, extensions). */
 function userText(message: AgentMessage): string {
-	// imp's UserMessage.content is always a string (slim format — no block
-	// content on user turns).
-	return message.role === "user" ? message.content : "";
+	// User turns are strings today (M13 only produces blocks on tool
+	// results), but the type allows arrays — join defensively.
+	return message.role === "user" ? contentText(message.content) : "";
 }

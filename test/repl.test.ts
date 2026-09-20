@@ -1181,7 +1181,7 @@ describe("! passthrough (M10)", () => {
 		expect(executed).toEqual(["echo hi"]); // the bang ran after the turn
 		expect(env.requests.length).toBe(2); // and opened no third LLM call
 		const steered = env.requests[1]?.messages.filter((m) => m.role === "user") ?? [];
-		expect(steered.some((m) => m.content.startsWith("!"))).toBe(false); // never model content
+		expect(steered.some((m) => typeof m.content === "string" && m.content.startsWith("!"))).toBe(false); // never model content
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

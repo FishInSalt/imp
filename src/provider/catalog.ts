@@ -21,9 +21,13 @@
  * atomic write instead of pi's publish/store transaction.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+// NOTE (review P2-6): catalog.ts ↔ resolve.ts form a static import cycle
+// through the providers (they import thinking.ts/vision.ts, which import
+// catalog.ts). Verified init-safe — every module here executes only
+// declarations at top level; keep it that way.
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ProviderName } from "./resolve.js";
 import { parseModelRef } from "./resolve.js";
 
@@ -139,8 +143,18 @@ export function loadCatalogCache(path = catalogPath()): boolean {
 			const entry = file.providers[family];
 			if (entry === undefined || typeof entry !== "object" || entry.models === undefined) continue;
 			if (typeof entry.checkedAt !== "number") continue;
-			store.set(family, entry);
-			overlay.set(family, entry.models);
+			// The LOAD path sanitizes exactly like the fetch path (review
+			// P2-1): a hand-edited or corrupt-but-parseable cache must not put
+			// a string contextWindow into contextWindowFor.
+			const models: Record<string, CatalogEntry> = {};
+			for (const raw of Object.values(entry.models)) {
+				if (typeof raw !== "object" || raw === null) continue;
+				const candidate = raw as Partial<CatalogEntry> & { id?: unknown };
+				if (typeof candidate.id !== "string" || candidate.id === "") continue;
+				models[candidate.id] = sanitizeEntry(candidate as CatalogEntry);
+			}
+			store.set(family, { ...entry, models });
+			overlay.set(family, models);
 		}
 		return true;
 	} catch {
@@ -217,6 +231,13 @@ async function runRefresh(options?: {
 		try {
 			await refreshFamily(family, signal, summary);
 		} catch {
+			// Our OWN shutdown abort must not bump the window — the fetch never
+			// got a chance to answer, so the next run should retry (pi skips
+			// persisting on an aborted signal too).
+			if (signal?.aborted) {
+				summary.failed.push(family);
+				continue;
+			}
 			// Network/timeout — keep the cached body; bump the window so a dead
 			// endpoint is not hammered on every /model open (pi parity).
 			if (cached !== undefined) {
@@ -237,20 +258,31 @@ async function refreshFamily(
 	const onOuterAbort = () => controller.abort();
 	signal?.addEventListener("abort", onOuterAbort, { once: true });
 	const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
+	// A pending timer alone must never hold the process open (review P1-1).
+	timer.unref();
 	try {
 		const cached = store.get(family);
 		// Revalidate ONLY when a cached body backs the validator — a 304 must
 		// never empty the overlay (pi parity).
 		const validator = cached !== undefined && Object.keys(cached.models).length > 0 ? cached.etag : undefined;
 		const url = `${catalogBase()}/api/models/providers/${encodeURIComponent(family)}`;
-		const response = await fetcher(
-			url,
-			{
-				accept: "application/json",
-				...(validator !== undefined ? { "if-none-match": validator } : {}),
-			},
-			controller.signal,
-		);
+		// One quiet retry on throttling/transient 5xx (discover.ts precedent,
+		// adapted from pi's fetchWithRetry — review P2-2): a single 503 must
+		// not freeze a family for the whole 4h window.
+		let response: Awaited<ReturnType<CatalogFetcher>>;
+		for (let attempt = 0; ; attempt++) {
+			response = await fetcher(
+				url,
+				{
+					accept: "application/json",
+					...(validator !== undefined ? { "if-none-match": validator } : {}),
+				},
+				controller.signal,
+			);
+			const retriable = response.status === 429 || response.status >= 500;
+			if (!retriable || attempt >= 1) break;
+			await new Promise((r) => setTimeout(r, 400));
+		}
 		if (signal?.aborted) return;
 		const checkedAt = now();
 
@@ -383,6 +415,10 @@ function persistFamily(family: ProviderName, cache: ProviderCache): void {
 		if (entry !== undefined) file.providers[f] = entry;
 	}
 	try {
+		// Every other store in the codebase creates its directory on write
+		// (settings.ts, auth-store.ts) — a clean machine with --no-session
+		// would otherwise never persist the cache (review P2-5).
+		mkdirSync(dirname(path), { recursive: true });
 		const tmp = `${path}.${process.pid}.tmp`;
 		writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`, { encoding: "utf-8" });
 		renameSync(tmp, path);

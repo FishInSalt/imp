@@ -4,7 +4,7 @@
  * revalidation, disk round-trip) and every consult point it feeds
  * (windows, costs, thinking, vision, /model list).
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -234,6 +234,105 @@ describe("M14 catalog refresh", () => {
 		expect(calls).toBe(1);
 	});
 
+	it("a forced caller JOINS a non-forced pass mid-flight (documented semantics)", async () => {
+		let calls = 0;
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		setCatalogFetcherForTest(async (url) => {
+			calls++;
+			if (url === piZaiUrl) await gate;
+			return jsonResponse(200, zaiCatalog);
+		});
+		const normal = refreshCatalog({ families: ["zai"] }); // stale? none cached → fetches
+		const forced = refreshCatalog({ families: ["zai"], force: true });
+		release?.();
+		const [sn, sf] = await Promise.all([normal, forced]);
+		expect(calls).toBe(1); // one network pass shared
+		expect(sn.fetched).toEqual(["zai"]);
+		expect(sf).toEqual(sn); // joiner sees the same summary
+	});
+
+	it("outer abort mid-fetch skips the window bump (no 4h freeze from our own shutdown)", async () => {
+		const { fetcher, logs } = fixtureFetcher({
+			[piZaiUrl]: () => jsonResponse(200, zaiCatalog, { etag: '"a1"' }),
+		});
+		setCatalogFetcherForTest(fetcher);
+		// seed the cache so the no-persist-on-abort path has a body to protect
+		await refreshCatalog({ families: ["zai"], force: true });
+		const before = JSON.parse(readFileSync(process.env.IMP_CATALOG_PATH as string, "utf-8"));
+		expect(before.providers.zai.checkedAt).toBe(1_000_000);
+
+		const controller = new AbortController();
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		// the fake fetcher honors the abort signal like the real fetch
+		setCatalogFetcherForTest(async (_url, _headers, signal) => {
+			await gate;
+			if (signal.aborted) {
+				const err = new Error("This operation was aborted");
+				err.name = "AbortError";
+				throw err;
+			}
+			return jsonResponse(200, zaiCatalog);
+		});
+		clockMs += CATALOG_FRESH_WINDOW_MS + 1; // stale → refetch
+		const pending = refreshCatalog({ families: ["zai"], force: true, signal: controller.signal });
+		controller.abort();
+		release?.();
+		const summary = await pending;
+		expect(summary.failed).toEqual(["zai"]);
+		const after = JSON.parse(readFileSync(process.env.IMP_CATALOG_PATH as string, "utf-8"));
+		expect(after.providers.zai.checkedAt).toBe(1_000_000); // NOT bumped
+		expect(logs.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("load path sanitizes like the fetch path (review P2-1)", () => {
+		writeFileSync(
+			process.env.IMP_CATALOG_PATH as string,
+			JSON.stringify({
+				version: 1,
+				providers: {
+					zai: {
+						models: {
+							"glm-bad": {
+								id: "glm-bad",
+								contextWindow: "one million" as unknown as number,
+								input: "text" as unknown as string[],
+								cost: { input: "1" } as unknown as never,
+							},
+							"glm-good": { id: "glm-good", contextWindow: 128_000 },
+						},
+						checkedAt: 1,
+					},
+				},
+			}),
+			"utf-8",
+		);
+		expect(loadCatalogCache()).toBe(true);
+		const bad = catalogEntryFor("zai", "glm-bad");
+		expect(bad?.contextWindow).toBeUndefined(); // string rejected
+		expect(bad?.input).toBeUndefined(); // wrong shape rejected
+		expect(bad?.cost).toBeUndefined();
+		const good = catalogEntryFor("zai", "glm-good");
+		expect(good?.contextWindow).toBe(128_000);
+	});
+
+	it("one quiet retry on 429/5xx before the window freezes (review P2-2)", async () => {
+		let calls = 0;
+		setCatalogFetcherForTest(async () => {
+			calls++;
+			return jsonResponse(calls === 1 ? 503 : 200, calls === 1 ? {} : zaiCatalog, { etag: '"r1"' });
+		});
+		const summary = await refreshCatalog({ families: ["zai"], force: true });
+		expect(calls).toBe(2);
+		expect(summary.fetched).toEqual(["zai"]);
+		expect(catalogModelIds("zai")).toEqual(["glm-5.3", "glm-5.3-flash"]);
+	});
+
 	it("corrupt cache file → static floor, load returns false", () => {
 		writeFileSync(process.env.IMP_CATALOG_PATH as string, "{ not json", "utf-8");
 		expect(loadCatalogCache()).toBe(false);
@@ -258,16 +357,20 @@ describe("M14 catalog refresh", () => {
 });
 
 describe("M14 consult wiring", () => {
+	let savedPath: string | undefined;
 	beforeEach(() => {
 		resetCatalogForTest();
 		resetDiscoveredWindowsForTest();
 		setCatalogClockForTest(() => 1_000_000);
 		const tmp = mkdtempSync(join(tmpdir(), "imp-catalog-consult-"));
+		savedPath = process.env.IMP_CATALOG_PATH;
 		process.env.IMP_CATALOG_PATH = join(tmp, "models-catalog.json");
 	});
 	afterEach(() => {
 		resetCatalogForTest();
 		resetDiscoveredWindowsForTest();
+		if (savedPath === undefined) delete process.env.IMP_CATALOG_PATH;
+		else process.env.IMP_CATALOG_PATH = savedPath;
 	});
 
 	it("catalog window beats discovery and the static table", () => {
@@ -293,9 +396,14 @@ describe("M14 consult wiring", () => {
 		expect(contextWindowFor("zai/glm-5.3")).toBe(512_000); // prefixed form too
 		// unknown id keeps the static floor
 		expect(contextWindowFor("glm-5.2")).toBe(1_000_000);
-		// IMP_CONTEXT_WINDOW still wins over everything
-		process.env.IMP_CONTEXT_WINDOW = "999_000's sibling: 65536";
-		delete process.env.IMP_CONTEXT_WINDOW;
+		// IMP_CONTEXT_WINDOW still wins over everything (review P2-4: this
+		// was a dead set-and-delete; now actually asserted)
+		process.env.IMP_CONTEXT_WINDOW = "65536";
+		try {
+			expect(contextWindowFor("glm-5.3")).toBe(65536);
+		} finally {
+			delete process.env.IMP_CONTEXT_WINDOW;
+		}
 	});
 
 	it("catalog cost + family subscription annotation; anthropic stays unflagged", () => {

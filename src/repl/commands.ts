@@ -279,9 +279,11 @@ export async function buildModelList(
 		for (const family of configuredFamilies) {
 			let discovered = await deps.discover(family);
 			// M14: the pi.dev disk cache stands between live discovery and the
-			// static floor — offline picker lists the real family catalog, and
-			// for openai-codex the catalog IS the discovery source (same
-			// endpoint), so the 4h cache answers before another network probe.
+			// static floor — offline picker lists the real family catalog. The
+			// live probe still runs FIRST (fresh 5-min data wins; no staleness
+			// regression); the 4h catalog cache answers only when the probe is
+			// unreachable, so a dropped endpoint still shows real ids (at the
+			// cost of a second pi.dev hit for openai-codex on /model open).
 			if (discovered === null && family === "openai-codex") {
 				discovered = deps.catalogIds?.(family) ?? null;
 			}

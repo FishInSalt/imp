@@ -100,6 +100,26 @@ serves the same models).
 - **D13 — no `publish`/transactional store**: pi routes updates through
   `context.publish` so the UI and store stay consistent; imp's overlay is
   module state + atomic file write.
+- **D14 — cross-process writes are last-writer-wins**: each process writes
+  its own whole-file snapshot (atomic per-pid rename), so two concurrent
+  imp processes refreshing different families can drop each other's entry;
+  pi does locked read-modify-write (`withLockAsync`). Bounded by the next
+  4h refresh — accepted.
+- **D15 — retry adapted, not ported**: pi's `fetchWithRetry` (2 extra
+  attempts, per-attempt timeout) is reduced to imp's discover.ts precedent
+  (one quiet retry on 429/5xx after 400ms, shared 4s attempt window) —
+  a single 503 no longer freezes a family for 4h, without tripling the
+  worst-case hang on a blackholed endpoint.
+
+Review round (FIX-FIRST, 1 P1 + 5 P2, all fixed): P1-1 the un-awaited
+startup refresh held the process open up to ~16s after print output with a
+blackholed endpoint (measured; fix = kick moved to main after mode
+resolution, aborted in finally; the attempt timer unrefs; our own abort
+skips the window bump). P2s: load path sanitizes like the fetch path;
+retry-once on transient 5xx; /model comment corrected (live probe still
+wins, no staleness regression); tests (dead env assertion made real,
+forced-joins-unforced, abort propagation, load sanitization, retry);
+mkdirSync of the cache directory; import-cycle note (init-safe).
 
 ## 5. Test plan
 

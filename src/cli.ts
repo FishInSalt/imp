@@ -347,11 +347,21 @@ async function main(): Promise<void> {
 		promptDefined: opts.prompt !== undefined || opts.fileArgs.length > 0,
 		stdinIsTty: process.stdin.isTTY === true,
 	});
-	if (mode === "print") {
-		await runPrint(opts, argv);
-		return;
+	// M14: the stale-cache refresh kicks once the run mode is known and is
+	// ABORTED when the run ends (review P1-1) — a blackholed catalog endpoint
+	// must not hold the process open after its output is done (measured 16.8s
+	// without this: 4 sequential family timeouts kept the loop alive).
+	const catalogAbort = new AbortController();
+	void refreshCatalog({ signal: catalogAbort.signal }).catch(() => undefined);
+	try {
+		if (mode === "print") {
+			await runPrint(opts, argv);
+			return;
+		}
+		await runInteractive(opts, argv);
+	} finally {
+		catalogAbort.abort();
 	}
-	await runInteractive(opts, argv);
 }
 
 /**
@@ -386,8 +396,8 @@ async function loadExtensionSetup(
  * the REPL itself never imports this module's HELP.
  */
 async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
-	// M14: non-blocking staleness check (4h window; /model open re-checks).
-	void refreshCatalog().catch(() => undefined);
+	// M14: the staleness kick lives in main() (after mode resolution, aborted
+	// when the run ends); /model open re-checks the window non-blocking.
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
 	// M9: interactive sessions render through the pi-tui shell — the
 	// Renderer's bytes feed a TranscriptSink component instead of stdout.
@@ -682,9 +692,6 @@ function broadAncestorWarning(cwd: string, trusted: boolean): string {
 }
 
 async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
-	// M14: same staleness kick; a short-lived print process usually exits
-	// before the refresh lands — the disk cache already answered above.
-	void refreshCatalog().catch(() => undefined);
 	const renderer = new Renderer({
 		write: (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,

@@ -3,7 +3,7 @@ import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { listSessions } from "./core/session/manager.js";
-import { loadSettings } from "./core/settings.js";
+import { loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
 	askTrustOnce,
@@ -33,7 +33,32 @@ import { resolveShell } from "./tui.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
-const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
+// M15 precedence: IMP_MODEL > global settings defaultModel > project settings
+// defaultModel (ONLY when the trust store already says trusted — parse time
+// precedes the interactive trust resolution, and "unknown" must be the
+// conservative skip) > builtin.
+const defaultModel = (): string => {
+	const env = process.env.IMP_MODEL;
+	if (env !== undefined) return env;
+	// project WINS over global (pi's scope semantics — the design table's
+	// "env > project > global > default"; smoke caught the inverted order)
+	const projectDefault = projectDefaultModelIfTrusted();
+	if (projectDefault !== undefined) return projectDefault;
+	const globalDefault = loadSettings().defaultModel;
+	if (globalDefault !== undefined) return globalDefault;
+	return "claude-sonnet-4-5";
+};
+
+function projectDefaultModelIfTrusted(): string | undefined {
+	try {
+		const home = homedir();
+		const data = readTrustFile(defaultTrustStorePath(home));
+		if (nearestTrustEntry(data, process.cwd())?.trusted !== true) return undefined;
+		return loadProjectSettings(process.cwd(), true).defaultModel;
+	} catch {
+		return undefined; // corrupt store → treat as unknown → skip (conservative)
+	}
+}
 
 /** IMP_THINKING startup level; invalid values are ignored with a notice
  *  (unlike --thinking, which errors — a typo in a shell profile should not
@@ -488,6 +513,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			}),
 		];
 		runner = await createRunner({
+			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,
 			agentsProjectAllowed: projectTrusted,
@@ -704,6 +730,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		const extensions = await loadExtensionSetup(opts, renderer, undefined, projectTrusted);
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		runner = await createRunner({
+			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,

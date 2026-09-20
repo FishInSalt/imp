@@ -48,6 +48,10 @@ export interface SubagentOptions {
 	signal?: AbortSignal;
 	/** Wall-clock budget. Default CHILD_TIMEOUT_MS; injectable for tests. */
 	timeoutMs?: number;
+	/** M15: the parent's resolved auto-compaction decision (env > project
+	 *  settings > global settings > on). The child honors the parent's
+	 *  environment exactly; undefined falls back to the env-only gate. */
+	autoCompact?: boolean;
 	/** Fires for every child message (the task tool persists its transcript). */
 	onMessage?: (message: AgentMessage) => void;
 	/** The child's session store (the task tool's children/ file). When set,
@@ -155,7 +159,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// does NOT reset the turn budget — CHILD_MAX_TURNS still bounds the child.
 	// The loop's turn counter is untouched by the history splice: compaction
 	// buys context room, not extra turns.
-	const autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+	const autoCompact = options.autoCompact ?? process.env.IMP_AUTOCOMPACT !== "0";
 	// Summarizer-failure backstop: after 3 consecutive failures compaction is
 	// disabled for the rest of the run (one stderr note) — a persistent auth
 	// failure must not buy 40 silent paid retry calls.

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { SessionStore } from "../core/session/store.js";
+import { projectSettingsPath, saveProjectSettings, saveSettings } from "../core/settings.js";
 import {
 	canonicalizeDir,
 	defaultTrustStorePath,
@@ -242,6 +243,220 @@ function familyLabel(id: string): string {
 	if (id.startsWith("zai/")) return "Z.ai GLM coding plan";
 	if (id.startsWith("openai/")) return "OpenAI-compatible endpoint";
 	return "anthropic-compatible endpoint";
+}
+
+// ---------------------------------------------------------------------------
+// /settings (M15) — pi's settings-selector, lean form
+// ---------------------------------------------------------------------------
+
+interface SettingEntry {
+	key: string;
+	label: string;
+	current: string;
+	/** env vars shadow a key (the imp invariant: env is the session override). */
+	envShadow?: string;
+	kind: "boolean" | "level" | "string";
+}
+
+function settingsEntries(ctx: CommandContext): SettingEntry[] {
+	const effective = ctx.runner.effectiveSettings();
+	const env = (name: string) => (process.env[name] === undefined ? undefined : process.env[name]);
+	const bool = (v: boolean | undefined, dflt: boolean) => (v === undefined ? dflt : v).toString();
+	return [
+		{
+			key: "defaultModel",
+			label: "startup model (-m and IMP_MODEL win)",
+			current: env("IMP_MODEL") ?? effective.defaultModel ?? "(builtin default)",
+			envShadow: env("IMP_MODEL") !== undefined ? "IMP_MODEL" : undefined,
+			kind: "string",
+		},
+		{
+			key: "defaultThinkingLevel",
+			label: "thinking level for new sessions",
+			current: effective.defaultThinkingLevel ?? "(medium)",
+			kind: "level",
+		},
+		{
+			key: "hideThinkingBlock",
+			label: "hide thinking text (ctrl+t toggles live)",
+			current: bool(effective.hideThinkingBlock, false),
+			kind: "boolean",
+		},
+		{
+			key: "autoCompact",
+			label: "auto-compaction on context pressure",
+			current: process.env.IMP_AUTOCOMPACT === "0" ? "false" : bool(effective.autoCompact, true),
+			envShadow: process.env.IMP_AUTOCOMPACT === "0" ? "IMP_AUTOCOMPACT=0" : undefined,
+			kind: "boolean",
+		},
+		{
+			key: "enableSkillCommands",
+			label: "register skills as /skill:name",
+			current: bool(effective.enableSkillCommands, true),
+			kind: "boolean",
+		},
+		{
+			key: "images.autoResize",
+			label: "resize large images before sending",
+			current: bool(effective.images?.autoResize, true),
+			kind: "boolean",
+		},
+	];
+}
+
+const SETTING_KEYS = [
+	"defaultModel",
+	"defaultThinkingLevel",
+	"hideThinkingBlock",
+	"autoCompact",
+	"enableSkillCommands",
+	"images.autoResize",
+] as const;
+
+function parseSettingValue(
+	key: string,
+	raw: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+	switch (key) {
+		case "defaultModel":
+			return raw.trim() === ""
+				? { ok: false, error: "defaultModel needs a model id" }
+				: { ok: true, value: raw.trim() };
+		case "defaultThinkingLevel":
+			return (THINKING_LEVELS as readonly string[]).includes(raw)
+				? { ok: true, value: raw }
+				: { ok: false, error: `thinking level must be one of: ${THINKING_LEVELS.join(", ")}` };
+		case "hideThinkingBlock":
+		case "autoCompact":
+		case "enableSkillCommands":
+		case "images.autoResize":
+			if (raw === "true" || raw === "false") return { ok: true, value: raw === "true" };
+			return { ok: false, error: `${key} must be true or false` };
+		default:
+			return {
+				ok: false,
+				error: `unknown setting — one of: ${SETTING_KEYS.join(", ")} (skills[] is file-edit only)`,
+			};
+	}
+}
+
+function settingPatchFor(key: string, value: unknown): Record<string, unknown> {
+	if (key.startsWith("images.")) {
+		return { images: { [key.slice("images.".length)]: value } };
+	}
+	return { [key]: value };
+}
+
+async function runSettingsCommand(args: string, ctx: CommandContext): Promise<CommandOutcome> {
+	const parts = args.trim().split(/\s+/).filter(Boolean);
+
+	// ---- /settings key value [scope] ----
+	if (parts.length >= 2) {
+		const key = parts[0] as string;
+		const scope = parts[2] ?? "global";
+		if (scope !== "global" && scope !== "project") {
+			ctx.renderer.error(`imp: scope must be global or project — got ${JSON.stringify(scope)}`);
+			return "handled";
+		}
+		if (scope === "project" && !ctx.runner.projectSettingsAllowed) {
+			ctx.renderer.error("imp: project settings need this directory trusted first — /trust");
+			return "handled";
+		}
+		const parsed = parseSettingValue(key, parts[1] as string);
+		if (!parsed.ok) {
+			ctx.renderer.error(`imp: ${parsed.error}`);
+			return "handled";
+		}
+		const before = settingsEntries(ctx).find((e) => e.key === key)?.current ?? "(unset)";
+		const patch = settingPatchFor(key, parsed.value);
+		if (scope === "project")
+			saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd);
+		else
+			saveSettings(
+				patch as Partial<import("../core/settings.js").ImpSettings>,
+				ctx.runner.globalSettingsPath(),
+			);
+		ctx.renderer.status(`settings: ${key} ${before} → ${String(parsed.value)} (${scope})`);
+		return "handled";
+	}
+
+	// ---- /settings key ----
+	if (parts.length === 1) {
+		const key = parts[0] as string;
+		if (!SETTING_KEYS.includes(key as (typeof SETTING_KEYS)[number])) {
+			ctx.renderer.error(`imp: unknown setting ${JSON.stringify(key)} — one of: ${SETTING_KEYS.join(", ")}`);
+			return "handled";
+		}
+		const entry = settingsEntries(ctx).find((e) => e.key === key);
+		ctx.renderer.writeLine(
+			`${key} = ${entry?.current ?? "(unset)"}${entry?.envShadow ? ` (env ${entry.envShadow} wins)` : ""}`,
+		);
+		ctx.renderer.writeLine(`set with: /settings ${key} <value> [global|project]`);
+		return "handled";
+	}
+
+	// ---- no-arg: table, or the TUI picker ----
+	const entries = settingsEntries(ctx);
+	const table = entries
+		.map((e) => `${e.key} = ${e.current}${e.envShadow ? ` (env ${e.envShadow} wins)` : ""}`)
+		.join("\n");
+	if (ctx.select === undefined) {
+		ctx.renderer.writeLine(table);
+		ctx.renderer.writeLine(
+			`global: ${ctx.runner.globalSettingsPath()}  project: ${projectSettingsPath(ctx.runner.runnerCwd)}${ctx.runner.projectSettingsAllowed ? "" : " (untrusted — inactive)"}`,
+		);
+		return "handled";
+	}
+
+	const rows = entries.map((e) => ({
+		label: e.key,
+		description: `${e.current}${e.envShadow ? ` · env ${e.envShadow} wins` : ""}`,
+	}));
+	const index = await ctx.select({
+		title: "settings — Enter edits, Esc closes",
+		items: rows,
+	});
+	if (index === null) return "handled";
+	const entry = entries[index];
+	if (entry === undefined) return "handled";
+
+	// value entry: cycle booleans/levels, ask for strings
+	let next: string | null;
+	if (entry.kind === "string") {
+		next = (await ctx.secret?.(`${entry.key} =`)) ?? null;
+		if (next !== null && next.trim() === "") next = null;
+	} else if (entry.kind === "level") {
+		const order = THINKING_LEVELS as readonly string[];
+		const at = order.indexOf(entry.current === "(medium)" ? "medium" : entry.current);
+		next = order[(at + 1) % order.length] ?? null;
+	} else {
+		next = entry.current === "true" ? "false" : "true";
+	}
+	if (next === null) return "handled";
+
+	// scope: project only offered when trusted
+	const scopeItems = [
+		{ label: "global", description: ctx.runner.globalSettingsPath() },
+		...(ctx.runner.projectSettingsAllowed
+			? [{ label: "project", description: projectSettingsPath(ctx.runner.runnerCwd) }]
+			: []),
+	];
+	let scope: "global" | "project" = "global";
+	if (scopeItems.length > 1) {
+		const pick = await ctx.select({ title: "write to which settings file?", items: scopeItems });
+		if (pick === null) return "handled";
+		scope = pick === 1 ? "project" : "global";
+	}
+	const patch = settingPatchFor(entry.key, entry.kind === "boolean" ? next === "true" : next);
+	if (scope === "project")
+		saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd);
+	else
+		saveSettings(
+			patch as Partial<import("../core/settings.js").ImpSettings>,
+			ctx.runner.globalSettingsPath(),
+		);
+	ctx.renderer.status(`settings: ${entry.key} ${entry.current} → ${next} (${scope})`);
+	return "handled";
 }
 
 export interface ModelListDeps {
@@ -1024,6 +1239,15 @@ export const COMMANDS: readonly SlashCommand[] = [
 				ctx.renderer.note("▪ project trust (store unreadable — /trust shows details)");
 			}
 			return "handled";
+		},
+	},
+	{
+		name: "settings",
+		usage: "/settings [key]",
+		summary: "view or change settings (scope: global|project)",
+		allowedDuringRun: false,
+		run: async (args, ctx): Promise<CommandOutcome> => {
+			return runSettingsCommand(args, ctx);
 		},
 	},
 	{

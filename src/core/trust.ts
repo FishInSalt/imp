@@ -217,10 +217,13 @@ export function trustRequiringResources(cwd: string, home: string): string[] {
 	// the model, so it gates like the rest (review P1: a commands-only repo
 	// used to slip through the empty-resources early-exit).
 	// ".imp/skills" (M12) — same reasoning: skills ARE model-directed content.
+	// ".imp/settings.json" (M15) — project settings redirect the model and
+	// toggle behavior; a cloned repo must not grow them un-gated.
 	for (const rel of [".imp/extensions", ".imp/agents", ".imp/commands", ".imp/skills"]) {
 		const target = join(cwd, rel);
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}
+	if (existsSync(join(cwd, ".imp", "settings.json"))) found.push(".imp/settings.json");
 	// `.agents/skills` ancestor walk (M12): cwd first, up to the git root,
 	// excluding the user-global ~/.agents/skills. Entries are relative to
 	// cwd ("../.agents/skills" for ancestors) so describeTrustResources can

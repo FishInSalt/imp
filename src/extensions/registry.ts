@@ -2,7 +2,7 @@ import { Value } from "typebox/value";
 import type { ToolCallDecision } from "../core/loop.js";
 import type { Tool } from "../core/tools/types.js";
 import { firstLine } from "../format.js";
-import type { SlashCommand } from "../repl/commands.js";
+import { COMMANDS, type SlashCommand } from "../repl/commands.js";
 import type {
 	ConfirmOptions,
 	ContextSection,
@@ -20,8 +20,10 @@ import type {
 
 /** imp's own tool names — reserved; extensions cannot shadow them (design §9). */
 const BUILTIN_TOOL_NAMES: readonly string[] = ["bash", "read", "edit", "write", "grep", "find"];
-/** imp's own slash commands — reserved (design §9). */
-const BUILTIN_COMMAND_NAMES: readonly string[] = ["help", "exit", "new", "model", "compact"];
+/** imp's own slash commands — reserved (design §9). Derived from COMMANDS
+ *  (M15 review P2-6): the hand list had drifted to a subset, letting
+ *  extensions register duplicate /settings, /think, /status, /trust rows. */
+const BUILTIN_COMMAND_NAMES: readonly string[] = COMMANDS.map((command) => command.name);
 
 /** Tool and command names must match this (design §9). */
 const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;

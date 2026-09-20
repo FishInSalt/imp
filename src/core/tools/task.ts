@@ -67,6 +67,9 @@ export interface TaskToolOptions {
 	childSessions?: boolean;
 	/** Injectable wall clock for tests. */
 	timeoutMs?: number;
+	/** M15: the runner's resolved auto-compaction decision (env > project
+	 *  settings > global settings > on) — read at spawn like getModel. */
+	getAutoCompact?: () => boolean;
 	/** The parent's permission gate, forwarded into the child loop (M6a).
 	 * Receives the call plus which named agent (if any) is running and the
 	 * child's working directory — the worktree path when isolation is active
@@ -219,6 +222,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					if (parent !== null) session = createChildSession(parent, options.sessionBaseDir);
 				}
 				outcome = await runSubagent({
+					autoCompact: options.getAutoCompact?.(),
 					provider: options.getProvider(),
 					model: agent?.model ?? options.getModel(),
 					system: options.getSystem(),

@@ -3,7 +3,7 @@ import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { listSessions } from "./core/session/manager.js";
-import { loadSettings } from "./core/settings.js";
+import { effectiveSettings, loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
 	askTrustOnce,
@@ -33,7 +33,37 @@ import { resolveShell } from "./tui.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
-const defaultModel = (): string => process.env.IMP_MODEL ?? "claude-sonnet-4-5";
+// M15 precedence: IMP_MODEL > global settings defaultModel > project settings
+// defaultModel (ONLY when the trust store already says trusted — parse time
+// precedes the interactive trust resolution, and "unknown" must be the
+// conservative skip) > builtin.
+const defaultModel = (argv: string[] = []): string => {
+	const env = process.env.IMP_MODEL;
+	if (env !== undefined) return env;
+	// --no-trust refuses this directory's .imp/ resources (review P1-3): the
+	// project settings file must not seed the model the flag just refused —
+	// the parse-time default runs before trustDecision is known, so the flag
+	// is pre-scanned from raw argv.
+	if (argv.includes("--no-trust")) return loadSettings().defaultModel ?? "claude-sonnet-4-5";
+	// project WINS over global (pi's scope semantics — the design table's
+	// "env > project > global > default"; smoke caught the inverted order)
+	const projectDefault = projectDefaultModelIfTrusted();
+	if (projectDefault !== undefined) return projectDefault;
+	const globalDefault = loadSettings().defaultModel;
+	if (globalDefault !== undefined) return globalDefault;
+	return "claude-sonnet-4-5";
+};
+
+function projectDefaultModelIfTrusted(): string | undefined {
+	try {
+		const home = homedir();
+		const data = readTrustFile(defaultTrustStorePath(home));
+		if (nearestTrustEntry(data, process.cwd())?.trusted !== true) return undefined;
+		return loadProjectSettings(process.cwd(), true).defaultModel;
+	} catch {
+		return undefined; // corrupt store → treat as unknown → skip (conservative)
+	}
+}
 
 /** IMP_THINKING startup level; invalid values are ignored with a notice
  *  (unlike --thinking, which errors — a typo in a shell profile should not
@@ -152,7 +182,7 @@ function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = {
 		prompt: undefined,
 		fileArgs: [],
-		model: defaultModel(),
+		model: defaultModel(argv),
 		thinking: envThinking(),
 		maxTokens: 16384,
 		maxTurns: 40,
@@ -461,6 +491,15 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
+		// M15 (review P1-2): hideThinking reads the MERGED view once the
+		// trust resolution exists — the renderer was built before the ask
+		// (the ask itself renders through it), but the field is public and
+		// ctrl+t already flips it live.
+		const mergedHide = effectiveSettings({
+			cwd: process.cwd(),
+			projectAllowed: projectTrusted,
+		}).hideThinkingBlock;
+		if (mergedHide !== undefined) renderer.hideThinking = mergedHide;
 		// Markdown quick commands (M11 #6) ride the same pipeline as extension
 		// commands: /help listing, conflict rules, dispatch. Project tier is
 		// behind the same trust gate.
@@ -488,6 +527,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			}),
 		];
 		runner = await createRunner({
+			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
 			deferInit: !interactive,
 			agentsProjectAllowed: projectTrusted,
@@ -542,7 +582,9 @@ function loadSkillSetup(
 	skills: Skill[];
 	enableSkillCommands: boolean;
 } {
-	const settings = loadSettings();
+	// M15 (review P2-1): skills read the MERGED view — a trusted project's
+	// settings.skills participates like every other key.
+	const settings = effectiveSettings({ cwd: process.cwd(), projectAllowed: projectTrusted });
 	const settingsEntries = opts.noSkills ? [] : (settings.skills ?? []);
 	const result = loadSkills({
 		cwd: process.cwd(),
@@ -704,6 +746,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		const extensions = await loadExtensionSetup(opts, renderer, undefined, projectTrusted);
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		runner = await createRunner({
+			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,

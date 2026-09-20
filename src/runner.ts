@@ -18,7 +18,7 @@ import { type AgentMessage, contentText, type ImageBlock } from "./core/messages
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
-import { loadSettings, saveSettings } from "./core/settings.js";
+import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
 import { formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
@@ -76,6 +76,9 @@ export interface RunnerOptions {
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
 	/** Hermetic tests: the settings file path (default ~/.imp/settings.json). */
 	settingsPath?: string;
+	/** M15: project settings visibility (the M8 trust gate result for the
+	 *  session cwd — false keeps <cwd>/.imp/settings.json unread). */
+	projectSettingsAllowed?: boolean;
 	/** Hermetic tests: overrides ~/.imp/agents for the agent registry (M5c). */
 	agentsHomeDir?: string;
 	/** M8 trust gate: false skips `<cwd>/.imp/agents` (global agents still load). */
@@ -127,6 +130,17 @@ export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session";
 
 export interface Runner {
 	readonly session: SessionStore | null;
+	/** The merged settings view (M15) — construction-time snapshot
+	 *  (global ← trust-gated project). */
+	effectiveSettings(): ImpSettings;
+	/** M15: whether <cwd>/.imp/settings.json participates this session. */
+	readonly projectSettingsAllowed: boolean;
+	/** M15: the working directory the settings scopes resolve against (the
+	 *  session cwd — /settings uses it instead of process.cwd()). */
+	readonly runnerCwd: string;
+	/** M15: the global settings file this session reads (test seam path
+	 *  included) — /settings writes there, not to the bare default. */
+	globalSettingsPath(): string;
 	/** The live conversation array — the REPL holds this across turns. Identity is stable. */
 	readonly history: AgentMessage[];
 	/** Per-run model. Mutable: `/model` writes it; runTurn/compaction read it at call time. */
@@ -233,8 +247,28 @@ class RunnerImpl implements Runner {
 	providerName: ProviderName; // implements Runner's public readonly tell
 	private readonly tools: Tool[];
 	private readonly autoCompact: boolean;
+	private effective: ImpSettings;
 
 	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
+	/** The merged settings view (M15) — construction-time snapshot. */
+	effectiveSettings(): ImpSettings {
+		return this.effective;
+	}
+
+	/** M15: whether <cwd>/.imp/settings.json participates this session (the
+	 *  startup trust resolution — /settings uses the same gate for writes). */
+	get projectSettingsAllowed(): boolean {
+		return this.options.projectSettingsAllowed === true;
+	}
+
+	get runnerCwd(): string {
+		return this.options.cwd ?? process.cwd();
+	}
+
+	globalSettingsPath(): string {
+		return settingsFilePath(this.options.settingsPath);
+	}
+
 	get autoCompactEnabled(): boolean {
 		return this.autoCompact;
 	}
@@ -263,13 +297,23 @@ class RunnerImpl implements Runner {
 		// Multi-provider review P1-3: the compaction window must follow the
 		// registry from construction — not only after an explicit /model switch.
 		this.settings = { ...this.settings, contextWindow: contextWindowFor(options.model) };
+		// M15: every runner settings read goes through the merged view (global ←
+		// trust-gated project). Snapshot at construction — pi's read definitions
+		// capture settings the same way (recorded in M13 batch 2).
+		// The project scope resolves against the SESSION cwd (options.cwd),
+		// never the process cwd — runner tests and multi-cwd callers rely on it.
+		this.effective = effectiveSettings({
+			cwd: this.options.cwd ?? process.cwd(),
+			projectAllowed: this.options.projectSettingsAllowed === true,
+			globalPath: this.options.settingsPath,
+		});
 		this.lastRunModel = initialModel;
 		// #thinking-levels: startup level (--thinking / IMP_THINKING) > the
 		// settings default (persisted by setThinkingLevel) > pi's
 		// DEFAULT_THINKING_LEVEL "medium" — clamped to the startup model's
 		// family (pi clamps on init the same way; knob-less models clamp to
 		// "off", so the medium default only ever applies where a knob exists).
-		const storedDefault = loadSettings(this.options.settingsPath).defaultThinkingLevel;
+		const storedDefault = this.effectiveSettings().defaultThinkingLevel;
 		this.level = clampThinkingLevel(
 			thinkingMetaFor(this.providerName, this.model),
 			this.options.thinking ?? storedDefault ?? "medium",
@@ -289,7 +333,7 @@ class RunnerImpl implements Runner {
 					// (pi parity — its read definition captures it the same way);
 					// a settings edit takes effect on the next session.
 					imageProcessing: {
-						autoResize: loadSettings(this.options.settingsPath).images?.autoResize ?? true,
+						autoResize: this.effectiveSettings().images?.autoResize ?? true,
 					},
 				}),
 				createEditTool({ cwd: options.cwd }),
@@ -309,6 +353,7 @@ class RunnerImpl implements Runner {
 			createTaskTool({
 				getProvider: () => this.provider,
 				getModel: () => this.model,
+				getAutoCompact: () => this.autoCompact,
 				getSystem: () => this.system,
 				getTools: () => this.tools,
 				getSession: () => this.sessionStore,
@@ -326,7 +371,7 @@ class RunnerImpl implements Runner {
 						cwd,
 						modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
 						imageProcessing: {
-							autoResize: loadSettings(this.options.settingsPath).images?.autoResize ?? true,
+							autoResize: this.effectiveSettings().images?.autoResize ?? true,
 						},
 					}),
 					createEditTool({ cwd }),
@@ -368,7 +413,9 @@ class RunnerImpl implements Runner {
 				},
 			}),
 		);
-		this.autoCompact = process.env.IMP_AUTOCOMPACT !== "0";
+		// M15: env override > project settings > global settings > default on
+		this.autoCompact =
+			process.env.IMP_AUTOCOMPACT === "0" ? false : (this.effectiveSettings().autoCompact ?? true);
 		this.branchSummaryEnabled = process.env.IMP_BRANCH_SUMMARY !== "0"; // #10: /tree keeps the left branch’s lessons
 		this.system = "";
 		if (!options.deferInit) this.warmup();

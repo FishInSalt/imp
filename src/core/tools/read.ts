@@ -7,9 +7,11 @@ import type { Tool } from "./types.js";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024; // 50KB
-/** Inline image size cap (M13 §3). Anthropic's inline limit is 5 MB; pi's
- *  resize target is 4.5 MB encoded. Without a resizer (batch 2), oversized
- *  images become a teaching note — never a rejected request. */
+/** Inline image size cap (M13 §3), on the BASE64-ENCODED payload (pi
+ *  parity — image-resize-core computes ceil(n/3)*4): Anthropic rejects
+ *  images over 5 MB encoded; 4.5 MB leaves headroom. Without a resizer
+ *  (batch 2), oversized images become a teaching note — never a rejected
+ *  request. */
 const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
 
 const readSchema = Type.Object({
@@ -64,13 +66,16 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 						output: `Read image file [image/bmp]\n[Image omitted: BMP requires conversion; not supported yet.]${nonVisionNote}`,
 					};
 				}
-				const byteLength = bytes.byteLength;
-				if (byteLength > MAX_IMAGE_BYTES) {
-					const mb = (byteLength / (1024 * 1024)).toFixed(1);
+				// The wire carries base64 (4/3 inflation) — cap the encoded size,
+				// not the raw bytes (review: raw-4.5MB encodes to 6MB > the 5MB
+				// API limit).
+				const encodedBytes = Math.ceil(bytes.byteLength / 3) * 4;
+				if (encodedBytes > MAX_IMAGE_BYTES) {
+					const mb = (encodedBytes / (1024 * 1024)).toFixed(1);
 					return {
 						output:
 							`Read image file [${mimeType}]\n` +
-							`[Image omitted: ${mb} MB exceeds the 4.5 MB inline limit. Resize it ` +
+							`[Image omitted: ${mb} MB encoded exceeds the 4.5 MB inline limit. Resize it ` +
 							"(e.g. `sips -Z 2000 <file>` on macOS, `magick <file> -resize 2000x2000` via ImageMagick) " +
 							"and read again.]" +
 							nonVisionNote,

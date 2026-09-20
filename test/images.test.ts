@@ -133,6 +133,19 @@ describe("M13 read tool image path", () => {
 		expect(result.isError).toBeUndefined();
 	});
 
+	it("the cap is on the ENCODED size: 3.4MB raw (4.5MB+ base64) is refused", async () => {
+		const raw = Buffer.alloc(3.4 * 1024 * 1024);
+		PNG_SIG.copy(raw, 0);
+		raw.writeUInt32BE(13, 8);
+		raw.write("IHDR", 12, "ascii");
+		raw.writeUInt32BE(2, 33);
+		raw.write("IDAT", 37, "ascii");
+		const file = await tmpFixture("enc.png", raw);
+		const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
+		expect(result.content).toBeUndefined();
+		expect(result.output).toContain("encoded exceeds the 4.5 MB inline limit");
+	});
+
 	it("non-vision model appends the omission note; the read still succeeds", async () => {
 		const file = await tmpFixture("a.png", pngBytes());
 		const result = await createReadTool({ modelSupportsVision: () => false }).execute(

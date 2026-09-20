@@ -214,6 +214,25 @@ See [docs/skills.md](docs/skills.md) for the full rules and
 [examples/skills/ledger](examples/skills/ledger) for a worked example with a
 `references/` directory.
 
+## Images
+
+The `read` tool attaches images to the conversation. When the active model
+supports vision (claude, gpt-4o/4.1/4.5/5, o3/o4, glm-5.3-flash/flashx,
+glm-5v …), a read of a jpg/png/gif/webp sends the image inline — the model
+sees it. Detection is by content (magic bytes), never by file extension.
+
+- Oversized images (>4.5 MB) come back with a teaching note telling the
+  model how to resize (`sips`/ImageMagick) instead of failing the request.
+- BMP reports a not-supported note (conversion lands with auto-resize in a
+  later batch).
+- Text-only models still read successfully: the image is replaced by a
+  placeholder at request time, and the tool notes the omission.
+- z.ai Coding Plan users: `glm-5.3-flash` is the vision model of the plan
+  (GLM-5.3 itself is text-only).
+
+Transcript and print show one dim note per attachment
+(`▪ image [image/png, 412.3 KB]`); sessions store the full image blocks.
+
 ## Subagents
 
 The `task` tool delegates a self-contained job to a fresh subagent with its

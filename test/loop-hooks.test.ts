@@ -417,7 +417,13 @@ describe("loop hooks (M2)", () => {
 			async *stream(request) {
 				// the rewrite happens before the first stream: history must already be compacted
 				const first = request.messages[0];
-				if (!(first?.role === "user" && first.content.includes("[Conversation summary"))) {
+				if (
+					!(
+						first?.role === "user" &&
+						typeof first.content === "string" &&
+						first.content.includes("[Conversation summary")
+					)
+				) {
 					throw new Error("expected compacted history in first turn");
 				}
 				const message = assistant([{ type: "text", text: "ok" }]);

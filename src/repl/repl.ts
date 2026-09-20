@@ -1,7 +1,7 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
-import type { AgentMessage, AssistantMessage, Usage } from "../core/messages.js";
+import { type AgentMessage, type AssistantMessage, contentText, type Usage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
@@ -11,7 +11,7 @@ import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/t
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
-import type { Renderer } from "../render.js";
+import { imageSuffix, type Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
 import { COMMANDS, type CommandContext, dispatchCommand, loginNeedsGuard, parseCommand } from "./commands.js";
@@ -547,7 +547,7 @@ class ReplMachine {
 		if (this.input.addFold === undefined) return;
 		const result = event.result;
 		if (!result.isError && result.toolName === "edit") {
-			const content = result.content;
+			const content = contentText(result.content);
 			const split = content.indexOf(":\n");
 			if (split !== -1) {
 				// the built-in contract: "<summary>:\n<diff>" gets the decorated
@@ -560,7 +560,7 @@ class ReplMachine {
 				return;
 			}
 		}
-		const rawLines = result.content.split("\n");
+		const rawLines = contentText(result.content).split("\n");
 		// A trailing newline is a terminator, not a (blank) line — count it out
 		// (review P2: 400 physical lines + "\n" lied about one more).
 		if (rawLines[rawLines.length - 1] === "") rawLines.pop();
@@ -572,7 +572,8 @@ class ReplMachine {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
 		this.input.addFold(
-			summarizeResult(result.toolName, result.content),
+			summarizeResult(result.toolName, contentText(result.content)) +
+				imageSuffix(result, this.renderer.ansiEnabled),
 			capped,
 			false,
 			result.isError === true,

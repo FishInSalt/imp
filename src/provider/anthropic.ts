@@ -1,6 +1,12 @@
-import type { AgentMessage, AssistantBlock, StopReason, Usage } from "../core/messages.js";
+import type { AgentMessage, AssistantBlock, ContentBlock, StopReason, Usage } from "../core/messages.js";
 import { loadApiKey } from "./auth-store.js";
-import { abortSafe, parseSse, postJsonWithRetry, safeParseJson } from "./shared.js";
+import {
+	abortSafe,
+	downgradeUnsupportedImages,
+	parseSse,
+	postJsonWithRetry,
+	safeParseJson,
+} from "./shared.js";
 import {
 	adaptiveEffortFor,
 	anthropicThinkingBudget,
@@ -8,6 +14,7 @@ import {
 	thinkingMetaFor,
 } from "./thinking.js";
 import type { LLMEvent, LLMProvider, LLMRequest } from "./types.js";
+import { modelSupportsVision } from "./vision.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const API_VERSION = "2023-06-01";
@@ -29,11 +36,30 @@ interface WireMessage {
 	content: string | WireContent[];
 }
 
+/** pi convertContentBlocks parity (M13 §7): text-only → concatenated
+ *  string (the pre-M13 byte shape); with images → block array where an
+ *  image is {type:"image", source:{type:"base64", media_type, data}}.
+ *  Images without any text prepend "(see attached image)" — the API
+ *  requires at least one block, and the model deserves a word about the
+ *  silent attachment. */
+function toAnthropicContent(content: string | ContentBlock[]): string | WireContent[] {
+	if (typeof content === "string") return content;
+	const blocks: WireContent[] = content.map((block) =>
+		block.type === "text"
+			? { type: "text", text: block.text }
+			: { type: "image", source: { type: "base64", media_type: block.mimeType, data: block.data } },
+	);
+	if (!blocks.some((b) => b.type === "text")) {
+		blocks.unshift({ type: "text", text: "(see attached image)" });
+	}
+	return blocks;
+}
+
 function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 	return messages.map((msg): WireMessage => {
 		switch (msg.role) {
 			case "user":
-				return { role: "user", content: msg.content };
+				return { role: "user", content: toAnthropicContent(msg.content) };
 			case "assistant": {
 				const content: WireContent[] = [];
 				for (const block of msg.blocks) {
@@ -68,7 +94,9 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 					content: msg.results.map((r) => ({
 						type: "tool_result",
 						tool_use_id: r.toolCallId,
-						content: r.content,
+						// pi convertToolResult parity: images live INSIDE the
+						// tool_result content array (text + image parts mixed).
+						content: toAnthropicContent(r.content),
 						is_error: r.isError,
 					})),
 				};
@@ -113,7 +141,9 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 				max_tokens: request.maxTokens,
 				system: request.system,
 				stream: true,
-				messages: toWireMessages(request.messages),
+				messages: toWireMessages(
+					downgradeUnsupportedImages(request.messages, modelSupportsVision("anthropic", request.model)),
+				),
 			};
 			// Anthropic-compatible APIs reject an empty tools array; only send it when set.
 			if (request.tools.length > 0) {

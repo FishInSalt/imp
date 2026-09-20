@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { contentText } from "../messages.js";
 import { skillBlockSummary } from "../skills.js";
 import { SessionError, type SessionHeader, type SessionStats, SessionStore } from "./store.js";
 
@@ -77,10 +78,13 @@ function inspectSessionFile(filePath: string): SessionInfo | null {
 	let title = "(empty session)";
 	for (const entry of store.getEntries()) {
 		if (entry.type === "message" && entry.message.role === "user") {
-			const first = entry.message.content.split("\n").find((l) => l.trim() !== "") ?? "";
+			const first =
+				contentText(entry.message.content)
+					.split("\n")
+					.find((l) => l.trim() !== "") ?? "";
 			// An expanded skill block (M12 §11.3) titles as its summary line —
 			// the raw `<skill name="…` prefix reads as noise in /sessions.
-			title = skillBlockSummary(entry.message.content) ?? first.slice(0, 80);
+			title = skillBlockSummary(contentText(entry.message.content)) ?? first.slice(0, 80);
 			break;
 		}
 	}

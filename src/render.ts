@@ -1,5 +1,26 @@
 import type { AgentEvent } from "./core/loop.js";
-import type { ToolResult } from "./core/messages.js";
+import { contentText, type ToolResult } from "./core/messages.js";
+
+/** M13 §8: the display note for an image attachment — base64 length back to
+ *  bytes (4/3), human units. Empty for text-only results. */
+export function imageSuffix(result: ToolResult, ansi: boolean): string {
+	if (typeof result.content === "string") return "";
+	let suffix = "";
+	for (const block of result.content) {
+		if (block.type !== "image") continue;
+		const bytes = (block.data.length * 3) / 4;
+		const kb = bytes / 1024;
+		const size =
+			bytes < 1024
+				? `${Math.round(bytes)} B`
+				: kb >= 1024
+					? `${(kb / 1024).toFixed(1)} MB`
+					: `${kb.toFixed(1)} KB`;
+		suffix += ` ${dim(`▪ image [${block.mimeType}, ${size}]`, ansi)}`;
+	}
+	return suffix;
+}
+
 import {
 	bold,
 	dim,
@@ -505,8 +526,12 @@ export class Renderer {
 	private toolEnd(result: ToolResult): void {
 		if (this.options.toolStyle === "two-line") {
 			const line = result.isError
-				? red(`  ✗ ${firstLine(result.content)}`, this.options.ansi)
-				: dim(`  → ${summarizeResult(result.toolName, result.content)}`, this.options.ansi);
+				? red(
+						`  ✗ ${firstLine(contentText(result.content))}${imageSuffix(result, this.options.ansi)}`,
+						this.options.ansi,
+					)
+				: dim(`  → ${summarizeResult(result.toolName, contentText(result.content))}`, this.options.ansi) +
+					imageSuffix(result, this.options.ansi);
 			this.write(`${line}\n`);
 			this.needsNewline = false;
 			return;
@@ -529,7 +554,7 @@ export class Renderer {
 			: `${dim("● ", this.options.ansi)}${bold(result.toolName, this.options.ansi)}`;
 		let line: string;
 		if (result.isError) {
-			line = `${base} ${red("✗", this.options.ansi)} ${red(firstLine(result.content, 120), this.options.ansi)}`;
+			line = `${base} ${red("✗", this.options.ansi)} ${red(firstLine(contentText(result.content), 120), this.options.ansi)}`;
 		} else {
 			const seconds = pending ? (this.clock() - pending.startedAt) / 1000 : 0;
 			const duration = seconds >= 1 ? ` ${dim(`${seconds.toFixed(1)}s`, this.options.ansi)}` : "";
@@ -558,7 +583,9 @@ export class Renderer {
 	private resultSummary(result: ToolResult): string {
 		// Claude-Code-calibrated gutter: two spaces + ⎿ + two spaces, one style
 		// wrap for the whole line (nested wraps reset each other mid-line).
-		const text = `  ⎿  ${summarizeResult(result.toolName, result.content)}`;
+		const text =
+			`  ⎿  ${summarizeResult(result.toolName, contentText(result.content))}` +
+			imageSuffix(result, this.options.ansi);
 		return result.isError ? red(text, this.options.ansi) : dim(text, this.options.ansi);
 	}
 

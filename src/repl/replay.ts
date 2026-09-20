@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../core/messages.js";
+import { type AgentMessage, contentText } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import { BRANCH_MARK, SUMMARY_MARK } from "../core/session/store.js";
 import { skillBlockSummary } from "../core/skills.js";
@@ -67,22 +67,25 @@ function renderMessage(
 ): void {
 	switch (message.role) {
 		case "user": {
-			if (message.content.startsWith(SUMMARY_MARK)) {
+			// Blocked content (M13) has no summary/branch/skill markers by
+			// construction — collapse to its text for the marker checks.
+			const userText = contentText(message.content);
+			if (userText.startsWith(SUMMARY_MARK)) {
 				renderer.note("▪ conversation summary (earlier messages were compacted):");
-				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
+				const body = userText.split("]\n\n", 2)[1] ?? userText;
 				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
 				return;
 			}
-			if (message.content.startsWith(BRANCH_MARK)) {
+			if (userText.startsWith(BRANCH_MARK)) {
 				renderer.note("▪ branch summary (a direction you left, kept for context):");
-				const body = message.content.split("]\n\n", 2)[1] ?? message.content;
+				const body = userText.split("]\n\n", 2)[1] ?? userText;
 				renderer.raw(`${renderer.dim(body.trim())}\n\n`);
 				return;
 			}
 			// M12 §11.3: an expanded skill block (possibly hundreds of lines)
 			// collapses to the same summary line the live echo showed — display
 			// normalization only; the session record keeps the full text.
-			const skillLine = skillBlockSummary(message.content);
+			const skillLine = skillBlockSummary(userText);
 			if (skillLine !== null) {
 				renderer.note(skillLine);
 				return;
@@ -90,12 +93,12 @@ function renderMessage(
 			if (userSink !== undefined) {
 				// TUI: the full message body as a background block — the live
 				// echo and the replay show the same shape (pi parity).
-				userSink(message.content);
+				userSink(userText);
 				return;
 			}
-			const lines = message.content.split("\n");
+			const lines = userText.split("\n");
 			const more = lines.length > 1 ? ` ${renderer.dim(`(+${lines.length - 1} lines)`)}` : "";
-			renderer.writeLine(`> ${firstLine(message.content, 200)}${more}`);
+			renderer.writeLine(`> ${firstLine(userText, 200)}${more}`);
 			return;
 		}
 		case "assistant": {

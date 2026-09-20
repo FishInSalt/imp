@@ -1,3 +1,4 @@
+import type { AgentMessage, ContentBlock } from "../core/messages.js";
 /**
  * Transport plumbing shared by every wire-protocol implementation
  * (anthropic-messages, openai-completions, …). Extracted verbatim from
@@ -129,4 +130,51 @@ export async function postJsonWithRetry(
 		}
 	}
 	throw new Error(`${label} request failed: ${networkError?.message ?? "retries exhausted"}`);
+}
+
+/** pi transform-messages parity (M13 §6): a non-vision model never sees an
+ *  image block — user/toolResult arrays get images replaced by a text
+ *  placeholder, consecutive placeholders collapse to one (pi's
+ *  previousWasPlaceholder). String contents pass through untouched, so the
+ *  text-only hot path allocates nothing. */
+export function downgradeUnsupportedImages(
+	messages: AgentMessage[],
+	supportsVision: boolean,
+): AgentMessage[] {
+	if (supportsVision) return messages;
+
+	const replace = (content: string | ContentBlock[], placeholder: string): string | ContentBlock[] => {
+		if (typeof content === "string") return content;
+		const out: ContentBlock[] = [];
+		let previousWasPlaceholder = false;
+		for (const block of content) {
+			if (block.type === "image") {
+				if (!previousWasPlaceholder) out.push({ type: "text", text: placeholder });
+				previousWasPlaceholder = true;
+				continue;
+			}
+			out.push(block);
+			previousWasPlaceholder = block.type === "text" && block.text === placeholder;
+		}
+		return out;
+	};
+
+	return messages.map((msg) => {
+		if (msg.role === "user" && Array.isArray(msg.content)) {
+			return { ...msg, content: replace(msg.content, "(image omitted: model does not support images)") };
+		}
+		if (msg.role === "toolResult") {
+			let changed = false;
+			const results = msg.results.map((result) => {
+				if (typeof result.content === "string") return result;
+				changed = true;
+				return {
+					...result,
+					content: replace(result.content, "(tool image omitted: model does not support images)"),
+				};
+			});
+			return changed ? { ...msg, results } : msg;
+		}
+		return msg;
+	});
 }

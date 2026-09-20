@@ -35,9 +35,12 @@ const VISION_RULES: ReadonlyArray<VisionRule> = [
 	{ provider: "openai", prefix: "gpt-5", vision: true },
 	{ provider: "openai", prefix: "o3", vision: true },
 	{ provider: "openai", prefix: "o4", vision: true },
-	// Codex (responses API) rides gpt-5-codex — vision-capable per OpenAI docs.
-	{ provider: "codex", prefix: "gpt-5-codex", vision: true },
-	{ provider: "codex", prefix: "gpt-5", vision: true },
+	// Codex (responses API) rides gpt-5-codex — vision-capable per OpenAI
+	// docs. Keyed "openai-codex" to match resolve.ts's ProviderName: the
+	// read tool's getter passes the RUNNER's providerName, and a mismatch
+	// here meant the non-vision note lied on codex models (review P1).
+	{ provider: "openai-codex", prefix: "gpt-5-codex", vision: true },
+	{ provider: "openai-codex", prefix: "gpt-5", vision: true },
 ];
 
 /** Does this (provider, model) accept image input? Unknown → false. */

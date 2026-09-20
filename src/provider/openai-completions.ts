@@ -133,7 +133,15 @@ function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[]
 						content: text !== "" ? text : hasImages ? "(see attached image)" : "(no tool output)",
 					});
 				}
-				if (hoisted.length > 0) wire.push({ role: "user", content: hoisted });
+				if (hoisted.length > 0) {
+					// pi parity: the hoisted message leads with a text part — a
+					// textless user message is the shape strict OpenAI-compatible
+					// gateways reject (pi openai-completions.ts:1434-1444).
+					wire.push({
+						role: "user",
+						content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...hoisted],
+					});
+				}
 				break;
 			}
 			default: {

@@ -178,7 +178,7 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				instructions: request.system,
 				input: toInputItems(
 					request.system,
-					downgradeUnsupportedImages(request.messages, modelSupportsVision("codex", request.model)),
+					downgradeUnsupportedImages(request.messages, modelSupportsVision("openai-codex", request.model)),
 				),
 				parallel_tool_calls: true,
 				// NOTE: no max_output_tokens — the ChatGPT backend REJECTS it

@@ -3,7 +3,7 @@ import { contentText, type ToolResult } from "./core/messages.js";
 
 /** M13 §8: the display note for an image attachment — base64 length back to
  *  bytes (4/3), human units. Empty for text-only results. */
-function imageSuffix(result: ToolResult, ansi: boolean): string {
+export function imageSuffix(result: ToolResult, ansi: boolean): string {
 	if (typeof result.content === "string") return "";
 	let suffix = "";
 	for (const block of result.content) {

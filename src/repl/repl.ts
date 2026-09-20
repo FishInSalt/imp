@@ -11,7 +11,7 @@ import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/t
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
-import type { Renderer } from "../render.js";
+import { imageSuffix, type Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
 import { COMMANDS, type CommandContext, dispatchCommand, loginNeedsGuard, parseCommand } from "./commands.js";
@@ -572,7 +572,8 @@ class ReplMachine {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
 		this.input.addFold(
-			summarizeResult(result.toolName, contentText(result.content)),
+			summarizeResult(result.toolName, contentText(result.content)) +
+				imageSuffix(result, this.renderer.ansiEnabled),
 			capped,
 			false,
 			result.isError === true,

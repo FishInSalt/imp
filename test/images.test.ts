@@ -237,7 +237,9 @@ describe("M13 vision prefix rules", () => {
 		expect(modelSupportsVision("anthropic", "claude-fable-5")).toBe(true);
 		expect(modelSupportsVision("openai", "gpt-4o-mini")).toBe(true);
 		expect(modelSupportsVision("openai", "o3-mini")).toBe(true);
-		expect(modelSupportsVision("codex", "gpt-5-codex")).toBe(true);
+		expect(modelSupportsVision("openai-codex", "gpt-5-codex")).toBe(true);
+		expect(modelSupportsVision("openai-codex", "gpt-5.5")).toBe(true);
+		expect(modelSupportsVision("codex", "gpt-5-codex")).toBe(false); // review P1: the runner name is openai-codex
 		expect(modelSupportsVision("openai", "gpt-3.5-turbo")).toBe(false);
 		expect(modelSupportsVision("deepseek", "deepseek-v4")).toBe(false);
 	});
@@ -452,7 +454,10 @@ describe("M13 openai-completions wire", () => {
 		const after = messages[messages.indexOf(toolMsg) + 1];
 		expect(after).toEqual({
 			role: "user",
-			content: [{ type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } }],
+			content: [
+				{ type: "text", text: "Attached image(s) from tool result:" },
+				{ type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+			],
 		});
 	});
 
@@ -610,5 +615,66 @@ describe("M13 render note", () => {
 		});
 		const text = out.join("");
 		expect(text).toContain("▪ image [image/png, 3 B]");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// zai wrapper rides the same wire (review finding 4)
+// ---------------------------------------------------------------------------
+
+describe("M13 zai wire (wrapper)", () => {
+	it("glm-5.3-flash: hoisted with the text part; glm-5.3: placeholders", async () => {
+		captured.length = 0;
+		script = { status: 200, chunks: openaiChunks() };
+		// zai.ts wraps this exact factory (name: "zai", zaiToolStream) — driving
+		// it here pins the wrapper's vision path without its credential gate.
+		const zai = createOpenAICompletionsProvider({ baseUrl, apiKey: "k", name: "zai", zaiToolStream: true });
+		await drive(zai, {
+			system: "s",
+			model: "glm-5.3-flash",
+			messages: imageTurn(),
+			tools: [],
+			maxTokens: 16,
+		});
+		const messages =
+			(captured[0]?.body?.messages as Array<{ role: string; content: unknown }> | undefined) ?? [];
+		const hoisted = messages.find((m) => m.role === "user" && Array.isArray(m.content));
+		expect(JSON.stringify(hoisted)).toContain("data:image/png;base64,QUJD");
+		expect(JSON.stringify(hoisted)).toContain("Attached image(s) from tool result:");
+
+		captured.length = 0;
+		script = { status: 200, chunks: openaiChunks() };
+		await drive(zai, { system: "s", model: "glm-5.3", messages: imageTurn(), tools: [], maxTokens: 16 });
+		const raw = JSON.stringify(captured[0]?.body);
+		expect(raw).not.toContain("QUJD");
+		expect(raw).toContain("(tool image omitted: model does not support images)");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// compaction: the summarize request never carries image bytes (design §11.8)
+// ---------------------------------------------------------------------------
+
+describe("M13 compaction summarizer exclusion", () => {
+	it("serializeForSummary renders text only — no base64 leaks", async () => {
+		const { serializeForSummary } = await import("../src/core/compaction.js");
+		const text = serializeForSummary([
+			{
+				role: "toolResult",
+				results: [
+					{
+						toolCallId: "t1",
+						toolName: "read",
+						content: [
+							{ type: "text", text: "Read image file [image/png]" },
+							{ type: "image", data: "QUJD", mimeType: "image/png" },
+						],
+						isError: false,
+					},
+				],
+			},
+		]);
+		expect(text).toContain("Read image file [image/png]");
+		expect(text).not.toContain("QUJD");
 	});
 });

@@ -167,9 +167,11 @@ messages cannot carry images, so images are **hoisted**):
 
 - tool message content = joined text (placeholder when only images).
 - after a run of tool messages, if vision model and images exist → one
-  following user message with `{type:"image_url", image_url:{url:
-  "data:<mime>;base64,<data>"}}` parts (existing `requiresAssistantAfterTool`
-  compat already shapes that boundary — reuse it).
+  following user message leading with pi's text part
+  `Attached image(s) from tool result:` then the `{type:"image_url",
+  image_url:{url:"data:<mime>;base64,<data>"}}` parts (imp already emits
+  user-after-tool messages for steering, so the boundary shape is
+  established; the leading text part is pi parity for strict gateways).
 
 **codex-responses.ts** (pi `openai-responses-shared` parity):
 

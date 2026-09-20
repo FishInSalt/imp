@@ -166,6 +166,8 @@ function makeShell(options?: {
 	onDequeue?: () => void;
 	autocomplete?: AutocompleteOptions;
 	historyPath?: string;
+	pasteImage?: () => Promise<import("../src/repl/clipboard-image.js").ClipboardImage | null>;
+	pasteText?: () => Promise<string | null>;
 }) {
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();
@@ -175,6 +177,8 @@ function makeShell(options?: {
 		terminal,
 		autocomplete: options?.autocomplete,
 		historyPath: options?.historyPath,
+		pasteImage: options?.pasteImage,
+		pasteText: options?.pasteText,
 		onLine: (line, mode) => {
 			events.push(`line:${mode ?? "steer"}:${line}`);
 			options?.onLine?.(line, mode);
@@ -2668,6 +2672,37 @@ describe("queue parity: review findings", () => {
 		expect(events).toHaveLength(1);
 		expect(events[0]).toBe(`line:followUp:${body}`);
 		expect(events[0]).not.toContain("[paste #");
+		shell.close();
+	});
+});
+
+// ── Ctrl+V clipboard image paste (M13 batch 2) ────────────────────────────
+
+describe("TuiShell ctrl+v image paste", () => {
+	it("inserts the tmp-file path at the cursor and consumes the key", async () => {
+		const { terminal, shell } = makeShell({
+			pasteImage: async () => ({ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png" }),
+		});
+		shell.start();
+		terminal.data("\x16"); // ctrl+v through the real stdin splitter
+		await new Promise((r) => setTimeout(r, 20)); // async handler settles
+		const text = shell.getText() ?? "";
+		expect(text).toContain("imp-clipboard-");
+		expect(text.endsWith(".png")).toBe(true);
+		shell.close();
+	});
+
+	it("no image on the clipboard → nothing inserted", async () => {
+		// pasteText stubbed too (review P1-2): without it the fallback really
+		// runs pbpaste and the developer's clipboard leaks into the test.
+		const { terminal, shell } = makeShell({
+			pasteImage: async () => null,
+			pasteText: async () => null,
+		});
+		shell.start();
+		terminal.data("\x16");
+		await new Promise((r) => setTimeout(r, 10));
+		expect(shell.getText() ?? "").toBe("");
 		shell.close();
 	});
 });

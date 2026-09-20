@@ -24,6 +24,76 @@ import { modelSupportsVision } from "../src/provider/vision.js";
 // the header structure it validates).
 // ---------------------------------------------------------------------------
 
+/** Real, photon-decodable PNG (batch 2: read runs the processor). */
+function realPng(width = 4, height = 4): Buffer {
+	const zlib = require("node:zlib") as typeof import("node:zlib");
+	const crcTable: number[] = [];
+	for (let n = 0; n < 256; n++) {
+		let c = n;
+		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+		crcTable[n] = c >>> 0;
+	}
+	const crc32 = (buf: Buffer): number => {
+		let c = 0xffffffff;
+		for (const byte of buf) c = crcTable[(c ^ byte)! & 0xff]! ^ (c >>> 8);
+		return (c ^ 0xffffffff) >>> 0;
+	};
+	const chunk = (type: string, data: Buffer): Buffer => {
+		const len = Buffer.alloc(4);
+		len.writeUInt32BE(data.length);
+		const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+		const crc = Buffer.alloc(4);
+		crc.writeUInt32BE(crc32(body));
+		return Buffer.concat([len, body, crc]);
+	};
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(width, 0);
+	ihdr.writeUInt32BE(height, 4);
+	ihdr[8] = 8; // bit depth
+	ihdr[9] = 6; // RGBA
+	const raw = Buffer.concat(
+		Array.from({ length: height }, (_, y) =>
+			Buffer.concat([
+				Buffer.from([0]), // filter: none
+				Buffer.concat(
+					Array.from({ length: width }, (_, x) => Buffer.from([(x * 40) % 256, (y * 40) % 256, 128, 255])),
+				),
+			]),
+		),
+	);
+	return Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		chunk("IHDR", ihdr),
+		chunk("IDAT", zlib.deflateSync(raw)),
+		chunk("IEND", Buffer.alloc(0)),
+	]);
+}
+
+/** Real 24-bit BMP (bottom-up rows, no palette). */
+function realBmp(width = 4, height = 4): Buffer {
+	const rowSize = Math.ceil((width * 3) / 4) * 4; // rows pad to 4 bytes
+	const pixelData = Buffer.alloc(rowSize * height);
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const at = (height - 1 - y) * rowSize + x * 3; // bottom-up
+			pixelData[at] = 200; // B
+			pixelData[at + 1] = (x * 40) % 256; // G
+			pixelData[at + 2] = (y * 40) % 256; // R
+		}
+	}
+	const dib = Buffer.alloc(40);
+	dib.writeUInt32LE(40, 0);
+	dib.writeInt32LE(width, 4);
+	dib.writeInt32LE(height, 8);
+	dib.writeUInt16LE(1, 12);
+	dib.writeUInt16LE(24, 14);
+	const header = Buffer.alloc(14);
+	header.write("BM", 0, "ascii");
+	header.writeUInt32LE(14 + dib.length + pixelData.length, 2);
+	header.writeUInt32LE(14 + dib.length, 10);
+	return Buffer.concat([header, dib, pixelData]);
+}
+
 function pngBytes(animated = false): Buffer {
 	const buf = Buffer.alloc(64);
 	PNG_SIG.copy(buf, 0);
@@ -99,7 +169,8 @@ async function tmpFixture(name: string, bytes: Buffer): Promise<string> {
 
 describe("M13 read tool image path", () => {
 	it("returns text note + image blocks for a PNG", async () => {
-		const file = await tmpFixture("shot.png", pngBytes());
+		const png = realPng(4, 4);
+		const file = await tmpFixture("shot.png", png);
 		const tool = createReadTool({});
 		const result = await tool.execute({ path: file }, new AbortController().signal);
 		expect(result.isError).toBeUndefined();
@@ -107,18 +178,24 @@ describe("M13 read tool image path", () => {
 		expect(blocks).toHaveLength(2);
 		const [note, image] = blocks as ContentBlock[];
 		expect(note).toEqual({ type: "text", text: "Read image file [image/png]" });
-		expect(image).toEqual({ type: "image", data: pngBytes().toString("base64"), mimeType: "image/png" });
+		// 4×4 is under every limit — passthrough keeps the original bytes
+		expect(image).toEqual({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
 	});
 
-	it("BMP degrades to a text-only note (no converter in batch 1)", async () => {
-		const file = await tmpFixture("x.bmp", bmpBytes());
+	it("BMP converts to PNG with the conversion hint (batch 2 processor)", async () => {
+		const file = await tmpFixture("x.bmp", realBmp(4, 4));
 		const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
-		expect(result.content).toBeUndefined();
-		expect(result.output).toContain("Read image file [image/bmp]");
-		expect(result.output).toContain("[Image omitted: BMP requires conversion; not supported yet.]");
+		expect(result.content).toBeDefined();
+		const [note, image] = result.content as ContentBlock[];
+		if (note?.type !== "text" || image?.type !== "image") throw new Error("unexpected blocks");
+		expect(note.text).toContain("Read image file [image/png]");
+		expect(note.text).toContain("[Image converted from image/bmp to image/png.]");
+		expect(image.mimeType).toBe("image/png");
 	});
 
-	it("oversize images (>4.5MB) get the resize teaching note, not an error", async () => {
+	it("undecodable image bytes get the resize-failure note, never an error", async () => {
+		// A header-only buffer passes sniffing but photon cannot decode it —
+		// the processor's failure wording (batch 2), still not an error.
 		const big = Buffer.alloc(4.6 * 1024 * 1024);
 		PNG_SIG.copy(big, 0);
 		big.writeUInt32BE(13, 8);
@@ -128,26 +205,31 @@ describe("M13 read tool image path", () => {
 		const file = await tmpFixture("big.png", big);
 		const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
 		expect(result.content).toBeUndefined();
-		expect(result.output).toContain("exceeds the 4.5 MB inline limit");
-		expect(result.output).toContain("sips -Z 2000");
+		expect(result.output).toContain("Read image file [image/png]");
+		expect(result.output).toContain(
+			"[Image omitted: could not be resized below the inline image size limit.]",
+		);
 		expect(result.isError).toBeUndefined();
 	});
 
-	it("the cap is on the ENCODED size: 3.4MB raw (4.5MB+ base64) is refused", async () => {
-		const raw = Buffer.alloc(3.4 * 1024 * 1024);
+	it("autoResize=false: oversize keeps the batch-1 teaching error (encoded cap)", async () => {
+		const raw = Buffer.alloc(3.4 * 1024 * 1024); // 4.5MB+ encoded
 		PNG_SIG.copy(raw, 0);
 		raw.writeUInt32BE(13, 8);
 		raw.write("IHDR", 12, "ascii");
 		raw.writeUInt32BE(2, 33);
 		raw.write("IDAT", 37, "ascii");
 		const file = await tmpFixture("enc.png", raw);
-		const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
+		const result = await createReadTool({ imageProcessing: { autoResize: false } }).execute(
+			{ path: file },
+			new AbortController().signal,
+		);
 		expect(result.content).toBeUndefined();
 		expect(result.output).toContain("encoded exceeds the 4.5 MB inline limit");
 	});
 
 	it("non-vision model appends the omission note; the read still succeeds", async () => {
-		const file = await tmpFixture("a.png", pngBytes());
+		const file = await tmpFixture("a.png", realPng(4, 4));
 		const result = await createReadTool({ modelSupportsVision: () => false }).execute(
 			{ path: file },
 			new AbortController().signal,
@@ -508,7 +590,7 @@ describe("M13 codex-responses wire", () => {
 
 describe("M13 e2e — image read through the loop", () => {
 	it("the toolResult history entry carries the blocks; the provider sees them", async () => {
-		const file = await tmpFixture("e2e.png", pngBytes());
+		const file = await tmpFixture("e2e.png", realPng(4, 4));
 		const requests: LLMRequest[] = [];
 		const scripts: AssistantMessage[] = [
 			{
@@ -544,7 +626,7 @@ describe("M13 e2e — image read through the loop", () => {
 		if (tr?.role !== "toolResult") throw new Error("no toolResult");
 		expect(tr.results[0]?.content).toEqual([
 			{ type: "text", text: "Read image file [image/png]" },
-			{ type: "image", data: pngBytes().toString("base64"), mimeType: "image/png" },
+			{ type: "image", data: realPng(4, 4).toString("base64"), mimeType: "image/png" },
 		]);
 		expect(requests[1]?.messages.some((m) => m.role === "toolResult")).toBe(true);
 	});

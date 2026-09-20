@@ -16,6 +16,7 @@ import {
 	Text,
 	TUI,
 } from "../tui.js";
+import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
 import type {
@@ -59,6 +60,12 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** Cross-session input history file (M11 #4). Absent (tests, hermetic
 	 *  runs) disables persistence entirely — in-memory recall still works. */
 	historyPath?: string;
+	/** M13 batch 2: Ctrl+V image paste. Reads the system clipboard, writes
+	 *  a tmp file, inserts the path at the cursor. Injected in tests. */
+	pasteImage?: () => Promise<ClipboardImage | null>;
+	/** Text fallback when the clipboard has no image (Ctrl+V). Injected in
+	 *  tests — the default really runs pbpaste/xclip (review P1-2). */
+	pasteText?: () => Promise<string | null>;
 }
 
 /** Identity functions throughout — the pre-M9 plain aesthetic. */
@@ -307,6 +314,14 @@ export class TuiShell implements LineInput {
 				// A filterable picker eats printable input as its query (M11 #9)
 				// before the list or the editor could see it.
 				if (this.selector.filterKey?.(data) === true) return { consume: true };
+			}
+			// Ctrl+V (M13 batch 2, pi's app.clipboard.pasteImage): read the system
+			// clipboard — an image becomes a tmp-file path at the cursor; text
+			// pastes as text. An open selector keeps its keys; bracketed paste
+			// (terminal Cmd+V) never reaches here.
+			if (this.selector === null && matchesKey(data, "ctrl+v")) {
+				void this.handlePasteImage();
+				return { consume: true };
 			}
 			if (this.selector === null && matchesKey(data, "alt+enter")) {
 				// Alt+enter routes the editor text as a follow-up (pi parity): it
@@ -595,6 +610,29 @@ export class TuiShell implements LineInput {
 		});
 	}
 
+	/** Ctrl+V handler (M13 batch 2): image → tmp path at the cursor, text →
+	 *  plain insert. Errors are silent (no clipboard permission, headless
+	 *  session) — pi parity. */
+	private async handlePasteImage(): Promise<void> {
+		if (this.editor === null) return;
+		try {
+			const reader = this.options.pasteImage ?? readClipboardImage;
+			const image = await reader();
+			if (image) {
+				this.editor.insertTextAtCursor(writeClipboardImageToTmp(image));
+				this.tui?.requestRender();
+				return;
+			}
+			const text = await (this.options.pasteText ?? readClipboardTextViaPbcopy)();
+			if (text) {
+				this.editor.insertTextAtCursor(text);
+				this.tui?.requestRender();
+			}
+		} catch {
+			// silently ignore clipboard errors (may not have permission, etc.)
+		}
+	}
+
 	/**
 	 * Append a collapsed fold INLINE, directly below the transcript's
 	 * current end — at tool_end that is the `● … ✓` line (the renderer
@@ -858,4 +896,20 @@ export class TuiShell implements LineInput {
 		this.askContainer.removeChild(this.askLine);
 		this.askLine = null;
 	}
+}
+
+/** Best-effort plain-text clipboard read for the Ctrl+V text fallback
+ *  (M13 batch 2). Undefined/null → nothing inserted. */
+async function readClipboardTextViaPbcopy(): Promise<string | null> {
+	const { runClipboardCommand } = await import("./clipboard-command.js");
+	const platform = process.platform;
+	const cmd =
+		platform === "darwin"
+			? { bin: "pbpaste", args: [] as const }
+			: platform === "linux"
+				? { bin: "xclip", args: ["-selection", "clipboard", "-o"] as const }
+				: { bin: "powershell", args: ["-NoProfile", "-Command", "Get-Clipboard"] as const };
+	const out = await runClipboardCommand(cmd.bin, cmd.args, { timeoutMs: 2000, maxBufferBytes: 1024 * 1024 });
+	if (out === undefined || out.length === 0) return null;
+	return out.toString("utf-8");
 }

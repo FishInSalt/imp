@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { Type } from "typebox";
+import { processImage } from "../image/image-process.js";
 import type { ContentBlock } from "../messages.js";
 import { detectSupportedImageMimeType } from "./image-sniff.js";
+import { resolveReadPath } from "./path-resolve.js";
 import type { Tool } from "./types.js";
 
 const MAX_LINES = 2000;
@@ -26,6 +27,8 @@ export interface ReadToolOptions {
 	 *  can switch mid-session). Absent → no non-vision note (the request-
 	 *  assembly downgrade still protects the wire). */
 	modelSupportsVision?: () => boolean;
+	/** M13 batch 2: image pipeline switches (settings.images.autoResize). */
+	imageProcessing?: { autoResize?: boolean };
 }
 
 export function createReadTool(options: ReadToolOptions = {}): Tool {
@@ -42,7 +45,10 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			if (requested.trim() === "") {
 				return { output: "Error: no path given", isError: true };
 			}
-			const absolute = path.resolve(cwd, requested);
+			// pi resolveReadPath parity (review P1-1): ~ expansion, Unicode-space
+			// normalization, and the macOS screenshot name variants — the read
+			// tool is the flagship consumer of hand-typed image paths.
+			const absolute = resolveReadPath(requested, cwd);
 
 			let bytes: Buffer;
 			try {
@@ -59,35 +65,43 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 					options.modelSupportsVision !== undefined && !options.modelSupportsVision()
 						? "\n[Current model does not support images. The image will be omitted from this request.]"
 						: "";
-				if (mimeType === "image/bmp") {
-					// BMP needs conversion before any inline API accepts it (pi's
-					// processor does this; imp's converter is batch 2 — design D2).
+				// Batch 2: the processor owns everything (pi coding-agent
+				// read.ts:112 parity) — normalization (jpg→jpeg, BMP→PNG, EXIF
+				// baked in), then the resize ladder. With autoResize off the
+				// original bytes ship (conversion still happens), but oversize
+				// files still refuse (the batch-1 teaching error) so a request
+				// is never rejected upstream.
+				const autoResize = options.imageProcessing?.autoResize ?? true;
+				const processed = await processImage(bytes, mimeType, { autoResizeImages: autoResize });
+				if (!processed.ok) {
 					return {
-						output: `Read image file [image/bmp]\n[Image omitted: BMP requires conversion; not supported yet.]${nonVisionNote}`,
+						output: `Read image file [${mimeType}]\n${processed.message}${nonVisionNote}`,
 					};
 				}
-				// The wire carries base64 (4/3 inflation) — cap the encoded size,
-				// not the raw bytes (review: raw-4.5MB encodes to 6MB > the 5MB
-				// API limit).
-				const encodedBytes = Math.ceil(bytes.byteLength / 3) * 4;
-				if (encodedBytes > MAX_IMAGE_BYTES) {
-					const mb = (encodedBytes / (1024 * 1024)).toFixed(1);
-					return {
-						output:
-							`Read image file [${mimeType}]\n` +
-							`[Image omitted: ${mb} MB encoded exceeds the 4.5 MB inline limit. Resize it ` +
-							"(e.g. `sips -Z 2000 <file>` on macOS, `magick <file> -resize 2000x2000` via ImageMagick) " +
-							"and read again.]" +
-							nonVisionNote,
-					};
+				if (!autoResize) {
+					// The wire carries base64 (4/3 inflation) — cap the encoded
+					// size, not the raw bytes (review: raw-4.5MB encodes to 6MB
+					// > the 5MB API limit).
+					const encodedBytes = Buffer.byteLength(processed.data, "utf-8");
+					if (encodedBytes > MAX_IMAGE_BYTES) {
+						const mb = (encodedBytes / (1024 * 1024)).toFixed(1);
+						return {
+							output:
+								`Read image file [${mimeType}]\n` +
+								`[Image omitted: ${mb} MB encoded exceeds the 4.5 MB inline limit. Resize it ` +
+								"(e.g. `sips -Z 2000 <file>` on macOS, `magick <file> -resize 2000x2000` via ImageMagick) " +
+								"and read again, or enable images.autoResize.]" +
+								nonVisionNote,
+						};
+					}
 				}
+				const hints = processed.hints.length > 0 ? `\n${processed.hints.join("\n")}` : "";
 				const content: ContentBlock[] = [
-					{ type: "text", text: `Read image file [${mimeType}]${nonVisionNote}` },
-					{ type: "image", data: bytes.toString("base64"), mimeType },
+					{ type: "text", text: `Read image file [${processed.mimeType}]${hints}${nonVisionNote}` },
+					{ type: "image", data: processed.data, mimeType: processed.mimeType },
 				];
 				return {
-					// display-only summary; the model receives the blocks
-					output: `Read image file [${mimeType}]${nonVisionNote}`,
+					output: `Read image file [${processed.mimeType}]${hints}${nonVisionNote}`,
 					content,
 				};
 			}

@@ -22,6 +22,11 @@ export interface ImpSettings {
 	skills?: string[];
 	/** /skill:name command registration (default true; M12 batch 2 consumes it). */
 	enableSkillCommands?: boolean;
+	/** M13 batch 2: image pipeline switches. `autoResize` (default true)
+	 *  resizes read/attached images through the photon ladder (2000×2000 /
+	 *  4.5 MB encoded); false keeps conversion but ships original bytes —
+	 *  oversize files then hit the batch-1 teaching error again. */
+	images?: { autoResize?: boolean };
 }
 
 /** The settings file path (IMP_SETTINGS_PATH overrides — hermetic tests). */
@@ -48,6 +53,12 @@ export function loadSettings(path?: string): ImpSettings {
 			out.skills = obj.skills.filter((entry): entry is string => typeof entry === "string");
 		}
 		if (typeof obj.enableSkillCommands === "boolean") out.enableSkillCommands = obj.enableSkillCommands;
+		if (obj.images !== null && typeof obj.images === "object" && !Array.isArray(obj.images)) {
+			const images = obj.images as Record<string, unknown>;
+			const outImages: { autoResize?: boolean } = {};
+			if (typeof images.autoResize === "boolean") outImages.autoResize = images.autoResize;
+			if (Object.keys(outImages).length > 0) out.images = outImages;
+		}
 		return out;
 	} catch {
 		return {}; // missing, unreadable, or malformed JSON

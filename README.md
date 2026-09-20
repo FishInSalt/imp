@@ -221,10 +221,20 @@ supports vision (claude, gpt-4o/4.1/4.5/5, o3/o4, glm-5.3-flash/flashx,
 glm-5v …), a read of a jpg/png/gif/webp sends the image inline — the model
 sees it. Detection is by content (magic bytes), never by file extension.
 
-- Oversized images (>4.5 MB) come back with a teaching note telling the
-  model how to resize (`sips`/ImageMagick) instead of failing the request.
-- BMP reports a not-supported note (conversion lands with auto-resize in a
-  later batch).
+- Oversized images (>4.5 MB encoded) are resized automatically through the
+  photon (Rust/WASM) ladder — 2000×2000 cap, PNG/JPEG candidates, quality
+  steps, dimension decay — with a coordinate-mapping note telling the model
+  how to map back to original pixels. Set `images.autoResize: false` in
+  `~/.imp/settings.json` to ship original bytes (oversize then gets a
+  teaching note instead).
+- BMP converts to PNG (EXIF orientation baked in); jpg/jpeg mime labels
+  normalize.
+- Attach files to a print-mode prompt: `imp @shot.png @notes.txt "what is
+  this"` — text files embed as `<file>` blocks, images attach to the first
+  message through the same processor.
+- In the TUI, Ctrl+V pastes a clipboard image as a tmp-file path at the
+  cursor (macOS via osascript, Linux via wl-paste/xclip, Windows via
+  PowerShell); plain text pastes when no image is found.
 - Text-only models still read successfully: the image is replaced by a
   placeholder at request time, and the tool notes the omission.
 - z.ai Coding Plan users: `glm-5.3-flash` is the vision model of the plan

@@ -1372,11 +1372,21 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			// pi parity: [\r\n]+ collapses to a space, outer whitespace
-			// trims; the user is told when their text was normalized.
+			// trims; the user is told when their text was normalized
+			// (M16 review P1-2 — the comment used to claim this without the
+			// note actually existing).
 			const sanitized = trimmed.replace(/[\r\n]+/g, " ").trim();
-			if (sanitized === "") {
-				ctx.renderer.error("imp: /name needs a non-empty name");
+			if (sanitized === "-") {
+				// M16 review P1-3: the store's "empty name clears" semantic
+				// was unreachable from the REPL (parseCommand trims args, so
+				// whitespace-only never got here) — "-" is the explicit
+				// affordance for it.
+				session.appendSessionName("");
+				ctx.renderer.status("Session name cleared");
 				return "handled";
+			}
+			if (sanitized !== trimmed) {
+				ctx.renderer.note(`▪ newlines collapsed: ${sanitized}`);
 			}
 			session.appendSessionName(sanitized);
 			ctx.renderer.status(`Session name set: ${sanitized}`);

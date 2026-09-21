@@ -79,6 +79,35 @@ describe("ls tool (M16)", () => {
 		expect(notDir.output).toContain("cannot read");
 	});
 
+	it("aborts MID-LOOP (M16 review P2-9): the per-entry check stops the walk deterministically", async () => {
+		const entries: Record<string, string> = {};
+		for (let i = 0; i < 8; i++) entries[`f${i}.txt`] = "x";
+		const dir = await makeDir(entries);
+		// A signal whose `aborted` flips true after 3 reads: 1 pre-start
+		// check + per-entry checks — the flip lands INSIDE the stat loop,
+		// deterministic without racing real fs timing (the tool only reads
+		// `signal.aborted`, so a shaped stand-in pins the contract).
+		let checks = 0;
+		const flipAfter3 = {
+			get aborted() {
+				checks += 1;
+				return checks > 3;
+			},
+		} as unknown as AbortSignal;
+		const result = await createLsTool({ cwd: dir }).execute({}, flipAfter3);
+		expect(result.isError).toBe(true);
+		expect(result.output).toBe("Error: aborted");
+	});
+
+	it("at the entry clamp the notice teaches narrowing, not the same limit (M16 review P2-7)", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-ls-"));
+		// 5001 empty files: one past the clamp ceiling, cheap on tmpfs
+		const names = Array.from({ length: 5001 }, (_, i) => `f${String(i).padStart(4, "0")}.txt`);
+		await Promise.all(names.map((name) => writeFile(path.join(dir, name), "", "utf-8")));
+		const result = await run(dir, { limit: 5000 });
+		expect(result.output).toContain("Narrow the path — 5000 is the maximum");
+	}, 20000);
+
 	it("honors an aborted signal without touching the filesystem", async () => {
 		const controller = new AbortController();
 		controller.abort();

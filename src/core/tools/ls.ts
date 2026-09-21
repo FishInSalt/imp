@@ -82,7 +82,11 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 			// (narrow the path), unlike the entry cap which suggests a limit.
 			const notices: string[] = [];
 			if (entryLimitReached) {
-				notices.push(`${limit} entries limit reached. Use limit=${Math.min(limit * 2, MAX_LIMIT)} for more`);
+				notices.push(
+					limit >= MAX_LIMIT
+						? `${limit} entries limit reached. Narrow the path — ${limit} is the maximum`
+						: `${limit} entries limit reached. Use limit=${Math.min(limit * 2, MAX_LIMIT)} for more`,
+				);
 			}
 			let output = "";
 			let bytes = 0;

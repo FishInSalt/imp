@@ -48,6 +48,22 @@ or settings.
 - `inspectSessionFile` titles a named session by its name (the current
   branch's latest `session_info`), so `/sessions` and `--resume` previews
   show it. `/status` gains a `· name` segment.
+- Version-skew policy (the session format's standing rule, stated for
+  this entry): unknown *fields* on a line are ignored (forward
+  compatible); unknown entry *types* make an older binary throw in
+  `parseEntryLine` — such a session is skipped by `/sessions` listing
+  and `--continue`, and `--resume <id>` reports no match. This matches
+  the pre-existing treatment of `thinkingLevelChange`/`branchSummary`/
+  `position` lines by older imp versions.
+- Review round (FIX-FIRST: 3 P1 + 7 P2) added: `"ls"`/`"task"` to the
+  reserved tool names (an extension could shadow the new ls — the hand
+  list had drifted again); the /name newline-collapse warning that two
+  comments claimed but no code emitted; `/name -` as the explicit clear
+  affordance (the store's "empty name clears" was unreachable from the
+  REPL because parseCommand trims args); clamp-aware ls limit notice;
+  the OSC 52 fd-1 safety rationale comment; pins for branch-locality,
+  unknown-field forward compat, mid-loop abort, the reserved-name
+  rejection, the warning, and the clear.
 
 ## Tests
 

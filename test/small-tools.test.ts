@@ -61,6 +61,59 @@ describe("session_info entries (M16 /name)", () => {
 		expect(store.buildContext().messages).toHaveLength(1);
 	});
 
+	it("branch-local (M16 review P2-4): /fork leaves the name behind; /tree back returns it", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const store = createSession(path.join(base, "proj"), base);
+		store.appendMessage(user("first"));
+		store.appendMessage(user("second"));
+		store.appendSessionName("on the main branch");
+		// fork BEFORE the first user message: the write position moves to the
+		// root, and the name entry is off the new branch's path
+		const forkPoint = store.userForkPoints()[0];
+		expect(forkPoint).toBeDefined();
+		store.forkBefore(forkPoint?.id ?? "");
+		expect(store.getSessionName()).toBeUndefined();
+		// the name entry is the leaf of the abandoned branch — /tree lists it
+		// (otherBranchTips) and switching to that tip restores the name
+		const tips = store.otherBranchTips();
+		expect(tips.length).toBeGreaterThan(0);
+		const nameTip = tips[tips.length - 1]; // the abandoned old branch
+		expect(nameTip).toBeDefined();
+		store.switchBranch(nameTip?.id ?? "");
+		expect(store.getSessionName()).toBe("on the main branch");
+	});
+
+	it("forward compat (M16 review P2-5): unknown FIELDS ride along; the name still reads", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const dir = path.join(base, "proj-sessions");
+		const { mkdirSync, writeFileSync } = await import("node:fs");
+		mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, "s.jsonl");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				type: "session",
+				version: 1,
+				id: "a1b2c3d4-0000",
+				timestamp: new Date().toISOString(),
+				cwd: dir,
+			}) +
+				"\n" +
+				JSON.stringify({
+					type: "session_info",
+					id: "aaaa0001",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					name: "futureproof",
+					futureField: { nested: true },
+				}) +
+				"\n",
+			"utf-8",
+		);
+		const { SessionStore } = await import("../src/core/session/store.js");
+		expect(SessionStore.open(file).getSessionName()).toBe("futureproof");
+	});
+
 	it("round-trips through the file: reopen finds the name", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
 		const store = createSession(path.join(base, "proj"), base);

@@ -50,6 +50,12 @@ export async function copyToClipboard(text: string, options: CopyToClipboardOpti
 	// No command worked (or none existed — headless linux without X): the
 	// OSC 52 escape lets the USER's terminal set its own clipboard, which
 	// is the only path that works over SSH (pi parity).
+	// TUI safety (M16 review P2-6): this writes to fd 1, the same stream
+	// pi-tui frames go through — Node serializes same-stream writes, and
+	// the sequence is non-printing and consumed atomically up to BEL, so
+	// it cannot corrupt a differential-rendered frame. That holds only
+	// while the TUI keeps using fd 1; a future frame-sink change must
+	// revisit this seam.
 	if (!emitOsc52(text, write)) {
 		throw new Error(
 			"no clipboard writer available (text too long for OSC 52 and no clipboard command succeeded)",

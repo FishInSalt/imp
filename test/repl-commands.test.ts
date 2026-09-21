@@ -563,10 +563,20 @@ describe("/copy and /name (M16)", () => {
 		expect(env.output()).toContain("· fix the parser");
 	});
 
-	it("/name: newlines collapse to one space with the raw text kept out of the file", async () => {
+	it("/name: newlines collapse to one space AND THE WARNING SAYS SO (M16 review P1-2)", async () => {
 		const env = await makeEnv({ seed: [user("hello")] });
 		await dispatchCommand("/name two\nlines", env.ctx);
 		expect(env.output()).toContain("Session name set: two lines");
+		expect(env.output()).toContain("newlines collapsed: two lines");
+	});
+
+	it("/name -: clears the name — the store's empty semantic gets an affordance (M16 review P1-3)", async () => {
+		const env = await makeEnv({ seed: [user("hello")] });
+		await dispatchCommand("/name temporary", env.ctx);
+		await dispatchCommand("/name -", env.ctx);
+		expect(env.output()).toContain("Session name cleared");
+		expect(env.runner.session?.getSessionName()).toBeUndefined();
+		expect(env.runner.listSessions()[0]?.title).not.toBe("temporary");
 	});
 
 	it("/name: needs a session (the --no-session boot)", async () => {

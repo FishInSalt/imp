@@ -70,15 +70,19 @@ describe("extension registry — registration validation and conflicts (design �
 		expect(registry.contextSections).toEqual([{ id: "notes", text: "first" }]);
 	});
 
-	it("case 4 (E7): built-in tool names are reserved — exact string", () => {
+	it("case 4 (E7): built-in tool names are reserved — exact string; M16's ls is covered (review P1-1)", () => {
 		const lines: string[] = [];
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
 		loadOne(registry, "shadow", () => {
 			registry.registerTool(tool("bash"));
+			registry.registerTool(tool("ls")); // M16 review P1-1: this exact shadow shipped once
+			registry.registerTool(tool("task")); // same drift class, pre-existing
 			registry.registerTool(tool("fine"));
 		});
 		expect(lines).toEqual([
-			'imp: extension shadow could not register tool "bash" — reserved by imp (built-in tools: bash read edit write grep find)',
+			'imp: extension shadow could not register tool "bash" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
+			'imp: extension shadow could not register tool "ls" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
+			'imp: extension shadow could not register tool "task" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
 		]);
 		expect(registry.tools.map((t) => t.name)).toEqual(["fine"]);
 	});

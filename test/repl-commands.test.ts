@@ -19,7 +19,7 @@ import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, loginNeedsGuard, parseCommand } from "../src/repl/commands.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
-import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { assistant, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
 
 beforeEach(() => {
 	vi.stubEnv("IMP_LOG", "0");
@@ -295,6 +295,8 @@ describe("slash commands", () => {
 				"  /trust             show the project-trust decision for this directory (and all records)",
 				"  /status            session, model, context, and trust at a glance",
 				"  /settings [key]    view or change settings (scope: global|project)",
+				"  /copy              copy the last agent message to the clipboard",
+				"  /name              name this session (shows in /sessions)",
 				"  /compact           summarize older context now",
 				"",
 				"",
@@ -502,7 +504,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /settings /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /settings /copy /name /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
@@ -510,6 +512,67 @@ describe("slash commands", () => {
 		await dispatchCommand("/", bare.ctx);
 		expect(bare.output()).toContain('imp: unknown command "/"\n');
 		expect(bare.requests).toHaveLength(0);
+	});
+});
+
+describe("/copy and /name (M16)", () => {
+	it("/copy: no agent messages yet teaches instead of erroring", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/copy", env.ctx);
+		expect(env.output()).toContain("No agent messages to copy yet");
+		expect(env.requests).toHaveLength(0);
+	});
+
+	it("/copy: copies the LAST assistant text through the injected writer; tool-only turns are skipped", async () => {
+		const env = await makeEnv({
+			seed: [
+				user("do it"),
+				assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } }]),
+				assistant([{ type: "text", text: "the answer" }]),
+				assistant([{ type: "thinking", thinking: "hmm" }]),
+			],
+		});
+		const copied: string[] = [];
+		(env.ctx as { copyText?: (t: string) => Promise<void> }).copyText = async (t) => {
+			copied.push(t);
+		};
+		await dispatchCommand("/copy", env.ctx);
+		expect(copied).toEqual(["the answer"]);
+		expect(env.output()).toContain("Copied last agent message to clipboard");
+	});
+
+	it("/copy: writer failure surfaces the error, never a fake success", async () => {
+		const env = await makeEnv({ seed: [user("hi"), assistant([{ type: "text", text: "boomable" }])] });
+		(env.ctx as { copyText?: (t: string) => Promise<void> }).copyText = async () => {
+			throw new Error("no clipboard writer available");
+		};
+		await dispatchCommand("/copy", env.ctx);
+		expect(env.output()).toContain("no clipboard writer available");
+		expect(env.output()).not.toContain("Copied");
+	});
+
+	it("/name: set → status line; /name shows it; sessions list titles by it; /status carries it", async () => {
+		const env = await makeEnv({ seed: [user("hello")] });
+		await dispatchCommand("/name fix the parser", env.ctx);
+		expect(env.output()).toContain("Session name set: fix the parser");
+		await dispatchCommand("/name", env.ctx);
+		expect(env.output()).toContain("session name: fix the parser");
+		const listing = env.runner.listSessions();
+		expect(listing[0]?.title).toBe("fix the parser");
+		await dispatchCommand("/status", env.ctx);
+		expect(env.output()).toContain("· fix the parser");
+	});
+
+	it("/name: newlines collapse to one space with the raw text kept out of the file", async () => {
+		const env = await makeEnv({ seed: [user("hello")] });
+		await dispatchCommand("/name two\nlines", env.ctx);
+		expect(env.output()).toContain("Session name set: two lines");
+	});
+
+	it("/name: needs a session (the --no-session boot)", async () => {
+		const env = await makeEnv({ noSession: true });
+		await dispatchCommand("/name anything", env.ctx);
+		expect(env.output()).toContain("/name needs a session");
 	});
 });
 

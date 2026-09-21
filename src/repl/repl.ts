@@ -171,9 +171,11 @@ function queuePreviewText(text: string): string {
 
 /** One entry of the input queue. Plain typed lines carry their routing
  *  mode: "steer" (Enter) injects into the running turn at the next model
- *  call; "followUp" (alt+enter) holds for after the run settles. Bang
- *  lines and md prompts never steer — they are flush-only by design (the
- *  prompt is model input verbatim, never re-interpreted). */
+ *  call; "followUp" (alt+enter) is consumed by the SAME run at its next
+ *  would-stop boundary (M17). Bang lines and md prompts never enter either
+ *  pool — they are flush-only by design (the prompt is model input verbatim,
+ *  never re-interpreted; a bang runs in the shell whatever mode submitted
+ *  it). */
 type QueueEntry = { text: string; mode: SubmitMode } | { prompt: string; display?: string };
 
 function entryText(entry: QueueEntry): string {
@@ -635,8 +637,13 @@ class ReplMachine {
 		const picked: string[] = [];
 		while (true) {
 			// first follow-up entry, skipping non-qualifying ones in place
-			// (bang/prompt/steer entries keep their queue positions and order)
-			const index = this.queue.findIndex((entry) => "text" in entry && entry.mode === "followUp");
+			// (bang/prompt/steer entries keep their queue positions and order).
+			// Bang lines are shell directives regardless of their submit mode
+			// (review P1: alt+enter on "! cmd" must not reroute it to the model —
+			// the flush path runs it in the shell, so timing must not decide).
+			const index = this.queue.findIndex(
+				(entry) => "text" in entry && entry.mode === "followUp" && !isBangLine(entry.text),
+			);
 			if (index === -1) break;
 			const entry = this.queue.splice(index, 1)[0];
 			if (entry === undefined || !("text" in entry)) break; // unreachable; type guard

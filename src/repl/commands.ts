@@ -138,8 +138,9 @@ Keys:
   Shift+Tab          cycle the thinking level (models with thinking)
   Ctrl+T             hide/show reasoning traces (pi's toggle, persisted)
   newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
-  follow-up          Alt+Enter queues the line to run AFTER the running turn
-                     (plain Enter steers into it)
+  follow-up          Alt+Enter queues the line for the SAME run — consumed
+                     when the model would stop, one per answer (Enter steers into
+                     the next model call instead)
   queued input       Alt+Up (or Esc,p — works without the Kitty protocol)
                      pulls all queued lines back into the editor; Ctrl+C
                      abort hands them back the same way — never dropped

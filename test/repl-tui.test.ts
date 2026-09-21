@@ -1523,7 +1523,10 @@ describe("runRepl with shell:tui", () => {
 		const request2 = env.requests[1]?.messages ?? [];
 		expect(request2.some((m) => m.role === "user" && m.content === "queued A")).toBe(true);
 		expect(request2.some((m) => m.role === "user" && m.content === "queued B")).toBe(true);
-		await waitUntil(() => !env.terminal.frameSince(mark).includes("steer:")); // region cleared
+		// wait for a REAL post-drain repaint first (the tool's ✓ row) so the
+		// region-clear check below cannot pass on an empty window vacuously
+		await waitUntil(() => env.terminal.frameSince(mark).includes("✓"));
+		expect(env.terminal.frameSince(mark)).not.toContain("steer:"); // region cleared
 		g2.resolve(); // both answers land; boundary polls find nothing → run completes
 		await settle();
 		env.terminal.data("/exit\r");
@@ -2341,6 +2344,34 @@ describe("runRepl with shell:tui", () => {
 			await expect(env.repl).resolves.toBe(0);
 		});
 
+		it("M17 review P1: a bang line submitted with alt+enter never enters the model — flush runs it in the shell", async () => {
+			const g = gate();
+			const g2 = gate();
+			const env = await startTuiRepl([
+				() => g.promise.then(() => reply("answer one")), // held: request 1
+				() => g2.promise.then(() => reply("answer two")), // held: the F follow-up turn
+			]);
+			await settle();
+			env.terminal.data("go\r");
+			env.terminal.data("! echo shell-ran");
+			env.terminal.data("\x1b\r"); // alt+enter on a bang line: mode followUp…
+			env.terminal.data("F one");
+			env.terminal.data("\x1b\r"); // …and a real follow-up behind it
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("bash: ! echo shell-ran"); // labeled as bash
+			g.resolve(); // boundary: the drain must skip the bang entry, consume F only
+			await waitUntil(() => env.requests.length >= 2);
+			const request2 = env.requests[1]?.messages ?? [];
+			expect(request2.some((m) => m.role === "user" && m.content === "F one")).toBe(true);
+			for (const req of env.requests) {
+				expect(req.messages.some((m) => m.role === "user" && m.content === "! echo shell-ran")).toBe(false);
+			}
+			g2.resolve(); // the run completes → the flush path executes the bang in the shell
+			await waitUntil(() => env.terminal.frameSince(0).includes("shell-ran"), 8000);
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
 		it("M17: abort during a follow-up turn restores the unconsumed follow-up to the editor", async () => {
 			const g = gate();
 			let calls = 0;
@@ -2375,16 +2406,7 @@ describe("runRepl with shell:tui", () => {
 			env.terminal.data("\x1b\r"); // stays queued
 			await settle();
 			g.resolve(); // answer one lands → boundary consumes F1 → request 2 holds mid-stream
-			try {
-				await waitUntil(() => requests.length >= 2);
-			} catch {
-				console.log(
-					"DBG1>>> requests:",
-					env.requests.length,
-					JSON.stringify(env.terminal.frameSince(0).slice(-400)),
-				);
-				throw new Error("no request 2");
-			}
+			await waitUntil(() => requests.length >= 2);
 			env.terminal.data("\x03"); // Ctrl+C: abort the running follow-up turn
 			await waitUntil(() => env.terminal.frameSince(0).includes("(interrupt"));
 			// the unconsumed F2 comes back to the editor (restore), never dropped

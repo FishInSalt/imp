@@ -28,8 +28,9 @@ export interface QueueEntryView {
 
 /** How a submitted line routes while a run is in flight. "steer" (Enter,
  *  the default) enters the running turn before the next model call;
- *  "followUp" (alt+enter) holds until the run settles. Idle, both submit
- *  immediately — the mode only matters behind a live run. */
+ *  "followUp" (alt+enter) is consumed by the SAME run at its next
+ *  would-stop boundary (M17) — one queued follow-up per answer. Idle, both
+ *  submit immediately — the mode only matters behind a live run. */
 export type SubmitMode = "steer" | "followUp";
 
 /**

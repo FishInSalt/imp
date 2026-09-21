@@ -173,6 +173,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			// scope, one aggregated usage, one run_end). Each drained message
 			// enters history exactly like a steering message. Empty polls on
 			// both fronts are the real stop.
+			// INVARIANT (caller-bounded, review P2): these polls can extend the
+			// run indefinitely — maxIterations does NOT bound text-only
+			// continuations. Every poll consumer must consume a FINITE queue
+			// entry per delivery (the REPL splices one per drain); a poll that
+			// always returns entries spins forever with no guard here.
 			const boundarySteering = (await getSteeringMessages?.()) ?? [];
 			if (boundarySteering.length > 0) {
 				for (const message of boundarySteering) {

@@ -19,7 +19,7 @@ import type {
 } from "./types.js";
 
 /** imp's own tool names — reserved; extensions cannot shadow them (design §9). */
-const BUILTIN_TOOL_NAMES: readonly string[] = ["bash", "read", "edit", "write", "grep", "find"];
+const BUILTIN_TOOL_NAMES: readonly string[] = ["bash", "read", "edit", "write", "grep", "find", "ls", "task"];
 /** imp's own slash commands — reserved (design §9). Derived from COMMANDS
  *  (M15 review P2-6): the hand list had drifted to a subset, letting
  *  extensions register duplicate /settings, /think, /status, /trust rows. */

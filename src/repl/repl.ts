@@ -14,6 +14,7 @@ import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.j
 import { imageSuffix, type Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
+import { copyToClipboard } from "./clipboard-write.js";
 import { COMMANDS, type CommandContext, dispatchCommand, loginNeedsGuard, parseCommand } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
@@ -1090,6 +1091,7 @@ class ReplMachine {
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string, opts?: { display?: string }) => this.enqueuePrompt(text, opts?.display),
+			copyText: (text: string) => copyToClipboard(text), // /copy (M16)
 			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
 			refreshFooter: () => this.refreshFooter(), // /think repaints the level segment
 			abortActive: () => {

@@ -25,6 +25,7 @@ import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
 import { createFindTool } from "./core/tools/find.js";
 import { createGrepTool } from "./core/tools/grep.js";
+import { createLsTool } from "./core/tools/ls.js";
 import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
 import type { Tool } from "./core/tools/types.js";
@@ -340,6 +341,7 @@ class RunnerImpl implements Runner {
 				createWriteTool({ cwd: options.cwd }),
 				createGrepTool({ cwd: options.cwd }),
 				createFindTool({ cwd: options.cwd }),
+				createLsTool({ cwd: options.cwd }),
 			]),
 			...(options.extensions?.tools ?? []),
 		];
@@ -378,6 +380,7 @@ class RunnerImpl implements Runner {
 					createWriteTool({ cwd }),
 					createGrepTool({ cwd }),
 					createFindTool({ cwd }),
+					createLsTool({ cwd }),
 				],
 				// Same registry gate as the main loop, but events are marked
 				// subagent-sourced so "tool_call" handlers can tell children

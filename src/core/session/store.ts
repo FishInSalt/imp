@@ -18,6 +18,9 @@ import { type AgentMessage, contentText, type Usage } from "../messages.js";
  *    "summary":<text>,"retainedTail":[...],"tokensBefore":<n>}
  *   {"type":"branchSummary","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
  *    "summary":<text>}   #10: written when /tree switches away from a branch
+ *   {"type":"session_info","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
+ *    "name":<text>}   M16 /name: the branch's display name; the latest
+ *    one on the current branch wins, empty clears (pi's session_info)
  *   {"type":"position","leafId":<id|null>}   #10 review: a file-level marker
  *    (NOT a tree node) recording the write position when /fork or /tree
  *    moved it without appending — otherwise a restart landed on the file's
@@ -79,7 +82,21 @@ export interface ThinkingLevelChangeEntry extends EntryBase {
 	thinkingLevel: string;
 }
 
-export type SessionEntry = MessageEntry | CompactionEntry | BranchSummaryEntry | ThinkingLevelChangeEntry;
+/** M16 /name: the session's display name (pi's SessionInfoEntry, slimmed).
+ *  Tree metadata like thinkingLevelChange — participates in the
+ *  parent/leaf structure, never in buildContext or stats. The latest one
+ *  on the CURRENT branch wins; an empty name explicitly clears it. */
+export interface SessionInfoEntry extends EntryBase {
+	type: "session_info";
+	name: string;
+}
+
+export type SessionEntry =
+	| MessageEntry
+	| CompactionEntry
+	| BranchSummaryEntry
+	| ThinkingLevelChangeEntry
+	| SessionInfoEntry;
 
 export interface SessionStats {
 	messageCount: number;
@@ -143,6 +160,10 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 	} else if (entry.type === "thinkingLevelChange") {
 		if (typeof entry.thinkingLevel !== "string") {
 			throw new SessionError(`session line ${lineNo}: thinkingLevelChange entry missing level`);
+		}
+	} else if (entry.type === "session_info") {
+		if (typeof entry.name !== "string") {
+			throw new SessionError(`session line ${lineNo}: session_info entry missing name`);
 		}
 	} else {
 		throw new SessionError(`session line ${lineNo}: unknown entry type "${String(entry.type)}"`);
@@ -278,6 +299,35 @@ export class SessionStore {
 		};
 		this.append(entry);
 		return entry.id;
+	}
+
+	/** M16 /name: append a session_info entry. The name is sanitized by
+	 *  the CALLER (commands.ts, which owns the normalization warning);
+	 *  the store keeps exactly what it is given. */
+	appendSessionName(name: string): string {
+		const entry: SessionInfoEntry = {
+			type: "session_info",
+			id: this.nextId(),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			name,
+		};
+		this.append(entry);
+		return entry.id;
+	}
+
+	/** The branch's display name: the LATEST session_info entry on the
+	 *  current branch, undefined when none exists or the latest is empty
+	 *  (an empty name explicitly clears — pi parity). */
+	getSessionName(): string | undefined {
+		const branch = this.getBranch();
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry?.type === "session_info") {
+				return entry.name.trim() || undefined;
+			}
+		}
+		return undefined;
 	}
 
 	appendThinkingLevelChange(thinkingLevel: string): string {

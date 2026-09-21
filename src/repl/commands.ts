@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
+import type { AssistantBlock } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
 import {
 	effectiveSettings,
@@ -37,6 +38,7 @@ import {
 } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
+import { copyToClipboard } from "./clipboard-write.js";
 import type { SelectOptions } from "./line-input.js";
 
 export interface CommandContext {
@@ -65,6 +67,9 @@ export interface CommandContext {
 	/** Repaint the TUI footer (wired in repl.ts; /think changes its level
 	 *  segment). Absent in test recorders unless injected. */
 	refreshFooter?: () => void;
+	/** Clipboard write, bound in repl.ts (/copy). Injectable in tests so
+	 *  the suite never touches the real clipboard. */
+	copyText?: (text: string) => Promise<void>;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
 	 *  fallback for a missing select. Resolves the chosen index, or null on
@@ -1274,8 +1279,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 				ctx.renderer.note("▪ session none (--no-session)");
 			} else {
 				const stats = session.stats();
+				const name = session.getSessionName();
 				ctx.renderer.note(
-					`▪ session ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
+					`▪ session ${session.header.id.slice(0, 8)}${name ? ` · ${name}` : ""} · ${stats.messageCount} msgs · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
 				);
 			}
 			const contextTokens = estimateContextTokens(runner.history).tokens;
@@ -1308,6 +1314,83 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: false,
 		run: async (args, ctx): Promise<CommandOutcome> => {
 			return runSettingsCommand(args, ctx);
+		},
+	},
+	{
+		name: "copy",
+		summary: "copy the last agent message to the clipboard",
+		allowedDuringRun: true,
+		// pi parity: the source is the LIVE history tail — a message that is
+		// still streaming mid-run is NOT copied (we walk finished entries),
+		// but /copy stays available during a run because "grab what it said
+		// so far" is a read-only operation.
+		run: async (_args, ctx): Promise<CommandOutcome> => {
+			// runner.history is the live array — walk it in reverse for the
+			// last assistant message with text (skips tool-call-only turns).
+			const history = ctx.runner.history;
+			for (let i = history.length - 1; i >= 0; i--) {
+				const message = history[i];
+				if (message === undefined || message.role !== "assistant") continue;
+				// thinking blocks stay out — pi's getLastAssistantText is the
+				// message TEXT, what the user reads on screen
+				const text = message.blocks
+					.filter((block): block is Extract<AssistantBlock, { type: "text" }> => block.type === "text")
+					.map((block) => block.text)
+					.join("")
+					.trim();
+				if (text === "") continue;
+				const write = ctx.copyText ?? ((value: string) => copyToClipboard(value));
+				try {
+					await write(text);
+					ctx.renderer.status("Copied last agent message to clipboard");
+				} catch (error) {
+					ctx.renderer.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				return "handled";
+			}
+			ctx.renderer.error("No agent messages to copy yet.");
+			return "handled";
+		},
+	},
+	{
+		name: "name",
+		summary: "name this session (shows in /sessions)",
+		allowedDuringRun: false,
+		// Names are session-tree metadata: mid-run would interleave with the
+		// turn's own appends — pi also treats /name as an idle command.
+		run: (args, ctx): CommandOutcome => {
+			const session = ctx.runner.session;
+			if (!session) {
+				ctx.renderer.error("imp: /name needs a session — restart without --no-session");
+				return "handled";
+			}
+			const trimmed = args.trim();
+			if (trimmed === "") {
+				const current = session.getSessionName();
+				if (current) ctx.renderer.note(`▪ session name: ${current}`);
+				else ctx.renderer.note("▪ no session name — /name <name> sets one");
+				return "handled";
+			}
+			// pi parity: [\r\n]+ collapses to a space, outer whitespace
+			// trims; the user is told when their text was normalized
+			// (M16 review P1-2 — the comment used to claim this without the
+			// note actually existing).
+			const sanitized = trimmed.replace(/[\r\n]+/g, " ").trim();
+			if (sanitized === "-") {
+				// M16 review P1-3: the store's "empty name clears" semantic
+				// was unreachable from the REPL (parseCommand trims args, so
+				// whitespace-only never got here) — "-" is the explicit
+				// affordance for it.
+				session.appendSessionName("");
+				ctx.renderer.status("Session name cleared");
+				return "handled";
+			}
+			if (sanitized !== trimmed) {
+				ctx.renderer.note(`▪ newlines collapsed: ${sanitized}`);
+			}
+			session.appendSessionName(sanitized);
+			ctx.renderer.status(`Session name set: ${sanitized}`);
+			return "handled";
 		},
 	},
 	{

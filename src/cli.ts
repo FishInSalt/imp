@@ -824,20 +824,26 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 
 	try {
 		// M18: print mode gets MCP too — one fire-and-forget connectAll before
-		// the single run; no boundary machine (a one-shot has no second run to
-		// flush late tools into). Tools that connect in time join the run's
-		// toolMap; slow handshakes simply miss it.
+		// the single run. onRunStart parks handshakes that finish mid-run (a
+		// one-shot has no second run to flush them into — parking beats leaking
+		// an unexecutable tool into the wire request, review P2-3); close lives
+		// in finally so a failed run still kills the children (review P1-2).
 		const mcp = createMcpSetup(renderer, runner);
-		const result = await runner.runTurn({
-			userMessage: opts.prompt,
-			userImages: attachImages,
-			signal: controller.signal,
-			onEvent: (event) => renderer.event(event),
-		});
-		renderer.endRun(true);
-		runner.printRunStats(result);
-		runner.printSessionStats();
-		mcp?.close();
+		try {
+			mcp?.onRunStart();
+			const result = await runner.runTurn({
+				userMessage: opts.prompt,
+				userImages: attachImages,
+				signal: controller.signal,
+				onEvent: (event) => renderer.event(event),
+			});
+			mcp?.onRunEnd();
+			renderer.endRun(true);
+			runner.printRunStats(result);
+			runner.printSessionStats();
+		} finally {
+			mcp?.close();
+		}
 	} catch (err) {
 		renderer.endRun(true);
 		reportStartupError(err);

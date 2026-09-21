@@ -2,7 +2,7 @@
 
 状态：已审批（2026-09-23，含 D6 修订 + 自审修复 P1×1/P2×4）
 分支：`feat/mcp-tools`
-参考：pi 经 `pi-mcp-adapter@2.34.0` 扩展实现（~29k 行 TS）；imp 目标是**功能语义对齐**，不做架构对齐（D1）。
+参考：pi 经 `pi-mcp-adapter@2.34.0` 扩展实现（~29k 行 TS；本机源码 `/Users/z/.pi/agent/npm/node_modules/pi-mcp-adapter/`，引用坐标均指该目录）；imp 目标是**功能语义对齐**，不做架构对齐（D1）。
 
 ## 0. 目标
 
@@ -98,7 +98,7 @@ pi 把已注册工具（含 MCP）枚举进系统提示 `# Tools` 段，每行 `
 
 **连接超时**：45s（npx 冷启动首次下载）。失败/超时 → 标 `failed`。重连分两场景（审查修复：原“工具被调用时重试”对启动失败场景是死锁——工具从未注册，调用永不发生）：
 
-- **启动失败**（工具从未注册）：在 **run 边界重试**——新 run 提交时若未连接且冷却（30s）已过则重试，上限 3 次，之后仅 /mcp 手动触发
+- **启动失败**（工具从未注册）：在 **run 边界重试**——新 run 提交时若未连接且冷却（30s）已过则重试，上限 3 次，之后该服务器本会话保持 failed（v1 无手动重连；/mcp 显示状态，恢复=重启会话）
 - **中途掉线**（工具已注册但连接死了）：该服务器任一工具被调用时单飞重试（in-flight 去重），冷却 30s
 
 /mcp 查看状态不触发重连。
@@ -132,7 +132,7 @@ pi 把已注册工具（含 MCP）枚举进系统提示 `# Tools` 段，每行 `
 
 - **启动**：runner 构造后（repl init）`manager.connectAll()` fire-and-forget；每服务器 resolve 后走**晚到注册规则**（见下）+ 一行 note `▪ mcp <server>: N tools ready`（仅 connected 出）
 - **晚到注册（审查修复）**：loop 的 wire 请求逐轮读 `this.tools` 活引用（loop.ts:154），但工具执行走循环前的 `toolMap` 快照（loop.ts:126、:416）——run 进行中推入的工具会被发给模型、被调用、热后报 `unknown tool`，比不可见更糟。因此：**连接完成时若 run 进行中，工具进 pending 队列，run 边界（run_end/新 run 提交）flush 进 `this.tools`**，下一 run 起可见且可执行（与 M17“设置下一 run 生效”同一哲学）
-- **hermetic 注入缝（审查补）**：runner 的显式 tools 路径（单测隔离）不得自动 spawn 真子进程——`RunnerOptions.mcp` 注入 manager（默认=发现+连接；测试注入 fake 或 none），config 发现路径可注入（沙箱 home）
+- **hermetic 注入缝（实现修订，独立审查 P3-9）**：实现比设计更强——manager 由 cli.ts 的 `createMcpSetup` 创建（`ReplOptions.mcp` → `ReplMachineOptions.mcp`，该键**必填可空**，漏传即编译错误，防 runRepl→ReplMachine 断线重演），runner 结构上无法 spawn（`RunnerOptions` 不含 mcp）。print 模式同样经 createMcpSetup，`onRunStart/onRunEnd` 包住唯一 run（晚到握手停在 pending，不泄漏进 wire），close 放 finally（失败 run 也杀子进程）。config 发现路径可注入（沙箱 home）
 - **shutdown**：repl 统一退出路径 `gracefulExit` 调 `manager.close()`（§3 关闭序列）；双 Ctrl+C 强退路径同步 `kill()` 不 await；run 中断（abort）**不**杀服务器进程，只断 pending 调用等待
 - **重连后重注册**：先移除旧工具对象再 push 新的——避免重名堆叠
 
@@ -140,7 +140,7 @@ pi 把已注册工具（含 MCP）枚举进系统提示 `# Tools` 段，每行 `
 
 - **`/mcp`**（`allowedDuringRun: true`，只读）：
   - 无配置：`no MCP servers configured (looked in: <五路径>)`
-  - 有：每服务器一行——`zai-vision: connected · 2 tools` / `failed · <错误一行>` / `connecting…` / `disabled`；`mcp.enabled=false` 时：`mcp disabled in settings`
+  - 有：每服务器一行——`zai-vision: connected · 2 tools` / `failed · <错误一行>` / `connecting…` / `disconnected`（掉线后陈旧工具仍可调用，见 §3 重连）/ `disabled`；`mcp.enabled=false` 时：`mcp disabled in settings`；`IMP_MCP=0` 时：专用环境行（不谎报"无配置"）
 - **settings**：`mcp.enabled`（boolean，默认 true）——/settings 面板一行 + coerce 校验，走 M15 机器
 - **/help**：命令表加 `/mcp` 行（金样钉随动）
 - **README**：MCP 段——配置示例（zai-vision 原样）、发现顺序、v1 范围与七项延后表（含触发条件）
@@ -161,10 +161,24 @@ fixture：`test/helpers/mcp-fake-server.mjs`——讲 NDJSON 的假服务器（�
 
 门禁照旧：全量 vitest、typecheck 0、biome 净、dist 冒烟（dist 产物 + 假服务器端到端）。
 
+## 7.5 独立审查（第二轮，实现后）
+
+reviewer 对 `f59065b` 全量 diff 对抗审查，结论 BLOCK → 全部修复并补钉子：
+
+- **P1-1 runRepl→ReplMachine 断线**：`ReplMachineOptions.mcp` 漏传（可选键 tsc 静默）→ 四处死代码：优雅退出不杀子进程（pty 实测 /exit 挂起）、run 边界 parking 不生效、启动失败重连死、/mcp 永远显示"无配置"。修复=补传 + 该键改必填可空（漏传即编译错误）+ `test/mcp-wiring.test.ts` 驱动真 runRepl 钉住（/mcp 渲染 + /exit 后 pid 见证子进程死亡）。
+- **P1-2 print 模式失败路径泄漏**：mcp 声明在 try 内，provider 抛错后不 close → `imp -p` 挂起。修复=close 移入 finally。
+- **P2-3 print 模式无边界机**：晚到握手会 splice 进在飞 run 的活数组（模型可见不可执行）。修复=onRunStart/onRunEnd 包住唯一 run。
+- **P2-4 分块 UTF-8 截断**：逐块 `toString("utf-8")` 使跨块多字节字符腐坏 → 整行被当杂散行丢弃 → 120s 挂起。修复=字节缓冲、按 0x0A 切、完整行才解码（10MB 守卫随之变成真字节计量，P3-13）。钉子=utf8split 模式（中文描述跨块写回）。
+- **P2-5 页上限静默**：设计要求"超限记 note"，实现只 return。修复=listTools 返回 `{tools, capped}`，manager 记 note。钉子=liarcursor 模式（永不结束的 cursor）。
+- **P2-6 桥接结果无截断**：违反仓内"工具自己截断输出"不变量（bash 50KB 尾截）。修复=mapCallResult 按 MAX_BYTES 尾截+注记。
+- **P2-7 §7 桥接测试面未兑现**：补 `test/mcp-bridge.test.ts`（normalizeInputSchema 四态/directToolName 拒绝/mapCallResult 五态）；blocks 工具进 fixture 工具表（原先的"非文本省略"测试是假阳性——调用根本不存在的工具）；slow 工具的 cancelled 通知加回执见证（FAKE_MCP_CANCEL_FILE）。
+- **P3**：abort 监听器泄漏（settle 时 removeEventListener + 正常完成后监听数归零钉子）；connect 失败杀进程升级为完整优雅序列；/mcp 对 IMP_MCP=0 显示专用行（原先谎报"无配置"）；/settings mcp 行加 envShadow；schema 显式非 object 类型改整体换新（§4"包一层"原意）；设计文档四处对齐（本节 + §3 重试上限语义 + §5 接缝 + §6 disconnected）。
+- **对齐断言复核**：reviewer 找不到 adapter 源码（任务书给错路径）→ 亲自核实 `/Users/z/.pi/agent/npm/node_modules/pi-mcp-adapter/`：三形态 env 展开（utils.ts interpolateEnvVars）、字段级合并+URL 凭据绑定（config.ts mergeConfigs/URL_BOUND_AUTH_FIELDS）、promptSnippet 截断 100（index.ts）全部属实，引用坐标已修入附录。
+
 ## 8. 风险与开放问题
 
 - **R1 npx 冷启动**：首次下载可能超 45s 连接超时 → failed + run 边界重试（≤3 次）；note 里给"再试一次"指引
-- **R2 版本协商宽松性**：接受异版本不停连；真机验证 zai-vision 返回的版本后把实际形状钉进测试
+- **R2 版本协商宽松性**：接受异版本不停连。真机已验证（2026-02-06，zai-vision）：initialize 回 `protocolVersion: "2025-06-18"`（与请求一致）、`serverInfo: {name: "zai-mcp-server", version: "0.1.5"}`、`capabilities` 仅 `tools`——宽松协商无需触发，握手形状即设计假设
 - **R3 大输出**：单行 10MB 上限断连（防御性，罕见）
 - **R4 Windows**：spawn 细节（shell 解析）未验证——imp 现有 CI 只覆盖 mac/Linux，记档
 - **R6 settings 键命名**：`mcp.enabled` 单键起步；后续 per-server enable 走配置文件 `disabled` 键（§2），不进 settings——避免两处开关打架

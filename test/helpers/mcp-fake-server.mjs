@@ -7,6 +7,10 @@
 //   badline   — prints a non-JSON line BEFORE the initialize response
 //   neverinit — accepts initialize but never responds (connect-timeout pin)
 //   die       — answers initialize, then exits after the initialized note
+//   liarcursor— tools/list ALWAYS returns one tool + a cursor (page-cap pin)
+//   utf8split — every tools/list response is written as two stdout chunks
+//               split mid-multi-byte-char (chunk-boundary decode pin)
+//   blocks    — one tool list containing the "blocks" tool
 // Tool-call behaviors keyed by tool NAME:
 //   slow       — replies after 30s (call-timeout / abort pins)
 //   boom       — replies isError with a message
@@ -44,6 +48,9 @@ const TOOLS = {
 	badline: [{ name: "echo", inputSchema: { type: "object" } }],
 	neverinit: [{ name: "echo", inputSchema: { type: "object" } }],
 	die: [{ name: "echo", inputSchema: { type: "object" } }],
+	liarcursor: [{ name: "echo", inputSchema: { type: "object" } }],
+	utf8split: [{ name: "echo", description: "回显参数 — chunk 边界测试", inputSchema: { type: "object" } }],
+	blocks: [{ name: "blocks", inputSchema: { type: "object" } }],
 };
 
 let paginatedOnce = false;
@@ -56,6 +63,12 @@ rl.on("line", (line) => {
 		return;
 	}
 	if (msg.id === undefined) {
+		if (msg.method === "notifications/cancelled") {
+			if (process.env.FAKE_MCP_CANCEL_FILE) {
+				try { writeFileSync(process.env.FAKE_MCP_CANCEL_FILE, String(msg.params?.requestId ?? "?")); } catch {}
+			}
+			return;
+		}
 		if (msg.method === "notifications/initialized" && mode === "die") {
 			out({ jsonrpc: "2.0", method: "notifications/echo", params: { note: "dying now" } });
 			process.exit(1);
@@ -72,6 +85,23 @@ rl.on("line", (line) => {
 			});
 			break;
 		case "tools/list":
+			if (mode === "liarcursor") {
+				// Lying server: a cursor that never ends. The client must stop at
+				// the page cap and report the truncation (review P2-5 pin).
+				out({ jsonrpc: "2.0", id: msg.id, result: { tools: TOOLS.liarcursor, nextCursor: "again" } });
+				break;
+			}
+			if (mode === "utf8split") {
+				// Write the response as two chunks split INSIDE a multi-byte UTF-8
+				// char: per-chunk toString("utf-8") would corrupt both halves and
+				// the line would be dropped as stray non-JSON (review P2-4 pin).
+				const payload = `${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: TOOLS.utf8split } })}\n`;
+				const bytes = Buffer.from(payload, "utf-8");
+				const splitAt = bytes.indexOf(Buffer.from("回", "utf-8")) + 1; // inside the char
+				process.stdout.write(bytes.subarray(0, splitAt));
+				setTimeout(() => process.stdout.write(bytes.subarray(splitAt)), 5);
+				break;
+			}
 			if (mode === "paginate" && !paginatedOnce) {
 				paginatedOnce = true;
 				out({ jsonrpc: "2.0", id: msg.id, result: { tools: TOOLS.paginate.slice(0, 1), nextCursor: "c2" } });
@@ -99,7 +129,11 @@ rl.on("line", (line) => {
 					process.exit(1);
 				}
 			}
-			if (name === "slow") return; // never answer: timeout/abort pins
+			if (name === "slow") {
+				// never answer by tool-call path: timeout/abort pins. But record the
+				// client's notifications/cancelled (ack witness, review P2-7 pin).
+				return;
+			}
 			if (name === "boom") {
 				out({
 					jsonrpc: "2.0",

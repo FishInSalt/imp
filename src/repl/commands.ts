@@ -358,6 +358,7 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			current: bool(effective.mcp?.enabled, true),
 			kind: "boolean",
 			source: src("mcp.enabled"),
+			envShadow: process.env.IMP_MCP === "0" ? "IMP_MCP=0" : undefined,
 		},
 		{
 			key: "steeringMode",
@@ -1362,6 +1363,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 		usage: "/mcp",
 		allowedDuringRun: true, // read-only status, like /status (M18 §6)
 		run: (_args, ctx) => {
+			// Mirror createMcpSetup's gate order: environment first, then settings.
+			if (process.env.IMP_MCP === "0") {
+				ctx.renderer.note(
+					"▪ mcp disabled via IMP_MCP=0 (environment) — unset it or set IMP_MCP=1 (next session)",
+				);
+				return "handled";
+			}
 			const settings = ctx.runner.effectiveSettings();
 			if (settings.mcp?.enabled === false) {
 				ctx.renderer.note(

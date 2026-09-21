@@ -13,18 +13,20 @@
  * (not a captured client) so a mid-session reconnect is transparent.
  */
 import type { TSchema } from "typebox";
-import { BUILTIN_TOOL_NAMES, NAME_PATTERN } from "../core/constants.js";
+import { BUILTIN_TOOL_NAMES, MAX_BYTES, NAME_PATTERN } from "../core/constants.js";
 import type { Tool, ToolExecuteResult } from "../core/tools/types.js";
 import type { McpCallResult, McpToolInfo } from "./client.js";
 
 /** Normalize a server inputSchema into a JSON Schema `parameters` object.
- *  MCP arguments are always an object per spec, so a schema that forgot
- *  `type` (or claims something else) is normalized to type:"object" with its
- *  siblings preserved. */
+ *  MCP arguments are always an object per spec. A schema whose type is
+ *  explicitly NOT object is replaced with a fresh `{type:"object"}` — its
+ *  siblings were written for the wrong type (design §4: 包一层). A schema
+ *  with no type keeps its siblings and gains `type:"object"`. */
 export function normalizeInputSchema(inputSchema: unknown): TSchema {
 	if (inputSchema !== null && typeof inputSchema === "object" && !Array.isArray(inputSchema)) {
 		const schema = inputSchema as Record<string, unknown>;
 		if (schema.type === "object") return inputSchema as TSchema;
+		if (typeof schema.type === "string") return { type: "object" } as TSchema;
 		if (Object.keys(schema).length > 0) return { ...schema, type: "object" } as TSchema;
 	}
 	return { type: "object" } as TSchema;
@@ -43,7 +45,9 @@ export function directToolName(server: string, toolName: string): { name: string
 	return { name };
 }
 
-/** Map an MCP call result into imp's ToolExecuteResult (design §4). */
+/** Map an MCP call result into imp's ToolExecuteResult (design §4). Output
+ *  is tail-capped at MAX_BYTES like every builtin (a chatty server must not
+ *  flood the next provider request). */
 export function mapCallResult(result: McpCallResult): ToolExecuteResult {
 	const texts: string[] = [];
 	let nonText = 0;
@@ -55,6 +59,10 @@ export function mapCallResult(result: McpCallResult): ToolExecuteResult {
 	if (nonText > 0) {
 		const note = `(${nonText} non-text block${nonText === 1 ? "" : "s"} omitted)`;
 		output = output === "" ? note : `${output}\n${note}`;
+	}
+	if (Buffer.byteLength(output) > MAX_BYTES) {
+		const buf = Buffer.from(output);
+		output = `[truncated — kept the last 50KB]\n${buf.subarray(buf.length - MAX_BYTES).toString("utf-8")}`;
 	}
 	return { output, isError: result.isError === true ? true : undefined };
 }

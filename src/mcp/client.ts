@@ -47,6 +47,10 @@ interface PendingEntry {
 	resolve: (value: unknown) => void;
 	reject: (err: Error) => void;
 	timer: ReturnType<typeof setTimeout>;
+	/** Removes the abort listener when the entry settles — the loop reuses
+	 * one signal across every tool call in a run, so listeners must not
+	 * accumulate (review P3-8). */
+	detach?: () => void;
 }
 
 export interface McpClientOptions {
@@ -76,7 +80,10 @@ export class McpClient {
 	private proc: ChildProcess | null = null;
 	private nextId = 1;
 	private pending = new Map<number, PendingEntry>();
-	private stdoutBuf = "";
+	/** Raw byte buffer — lines split on 0x0A and decoded only when complete,
+	 * so a multi-byte UTF-8 char straddling a chunk boundary cannot corrupt
+	 * a line (review P2-4). Length is bytes (the 10MB guard means bytes). */
+	private stdoutBuf: Buffer = Buffer.alloc(0);
 	private stderrTail = "";
 	private closed = false;
 	private connected = false;
@@ -123,15 +130,19 @@ export class McpClient {
 			this.notify("notifications/initialized", {});
 			this.connected = true;
 		} catch (err) {
-			this.shutdown("SIGTERM");
+			// Full graceful sequence (stdin.end → SIGTERM → SIGKILL): a
+			// handshake that timed out may also ignore SIGTERM (review P3-13).
+			this.shutdown("graceful");
 			if (err instanceof McpConnectionError) throw err;
 			const message = err instanceof Error ? err.message : String(err);
 			throw new McpConnectionError(message, this.stderrTail.trim());
 		}
 	}
 
-	/** Paginated tools/list (cursor loop, page cap). */
-	async listTools(): Promise<McpToolInfo[]> {
+	/** Paginated tools/list (cursor loop, page cap). `capped` is true when a
+	 * server kept returning a cursor past the page cap — the caller notes
+	 * the truncation instead of silently dropping pages (design §3). */
+	async listTools(): Promise<{ tools: McpToolInfo[]; capped: boolean }> {
 		const tools: McpToolInfo[] = [];
 		let cursor: string | undefined;
 		for (let page = 0; page < TOOLS_LIST_PAGE_CAP; page++) {
@@ -146,9 +157,9 @@ export class McpClient {
 				}
 			}
 			cursor = result?.nextCursor;
-			if (cursor === undefined || cursor === "") return tools;
+			if (cursor === undefined || cursor === "") return { tools, capped: false };
 		}
-		return tools; // page cap reached (design §3): keep what we have
+		return { tools, capped: true }; // page cap reached (design §3)
 	}
 
 	/** One tools/call. Abort rejects immediately; the server gets a
@@ -186,18 +197,18 @@ export class McpClient {
 	// --- internals ---------------------------------------------------------
 
 	private feedStdout(chunk: Buffer): void {
-		this.stdoutBuf += chunk.toString("utf-8");
+		this.stdoutBuf = this.stdoutBuf.length === 0 ? chunk : Buffer.concat([this.stdoutBuf, chunk]);
 		if (this.stdoutBuf.length > MAX_LINE_BYTES) {
 			this.die("server wrote a line over 10MB — connection dropped (design R3)");
 			return;
 		}
-		let nl = this.stdoutBuf.indexOf("\n");
+		let nl = this.stdoutBuf.indexOf(0x0a);
 		while (nl >= 0) {
-			const line = this.stdoutBuf.slice(0, nl);
-			this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
+			const line = this.stdoutBuf.subarray(0, nl).toString("utf-8");
+			this.stdoutBuf = this.stdoutBuf.subarray(nl + 1);
 			if (line.trim() !== "") this.handleLine(line);
 			if (this.closed) return;
-			nl = this.stdoutBuf.indexOf("\n");
+			nl = this.stdoutBuf.indexOf(0x0a);
 		}
 	}
 
@@ -225,10 +236,8 @@ export class McpClient {
 		}
 		// RESPONSE to one of ours.
 		if (msg.id !== undefined && typeof msg.id === "number") {
-			const entry = this.pending.get(msg.id);
+			const entry = this.deletePending(msg.id);
 			if (entry === undefined) return; // late response to an aborted call
-			this.pending.delete(msg.id);
-			clearTimeout(entry.timer);
 			const error = msg.error as { code?: number; message?: string } | undefined;
 			if (error !== undefined && error !== null) {
 				entry.reject(new Error(`MCP error ${error.code ?? "?"}: ${error.message ?? "unknown error"}`));
@@ -238,6 +247,17 @@ export class McpClient {
 			return;
 		}
 		// Notification (method only) — v1 ignores server notifications.
+	}
+
+	/** Remove a pending entry and detach its listeners; undefined when the
+	 * entry already settled (late response after abort/timeout). */
+	private deletePending(id: number): PendingEntry | undefined {
+		const entry = this.pending.get(id);
+		if (entry === undefined) return undefined;
+		this.pending.delete(id);
+		clearTimeout(entry.timer);
+		entry.detach?.();
+		return entry;
 	}
 
 	private request(
@@ -253,26 +273,30 @@ export class McpClient {
 			}
 			const id = this.nextId++;
 			const timer = setTimeout(() => {
-				this.pending.delete(id);
-				reject(new Error(`MCP "${method}" timed out after ${timeoutMs}ms`));
+				const entry = this.deletePending(id);
+				if (entry !== undefined) {
+					entry.reject(new Error(`MCP "${method}" timed out after ${timeoutMs}ms`));
+				}
 			}, timeoutMs);
-			this.pending.set(id, { resolve, reject, timer });
+			const entry: PendingEntry = { resolve, reject, timer };
 			if (signal !== undefined) {
 				const onAbort = () => {
-					const entry = this.pending.get(id);
-					if (entry === undefined) return;
-					this.pending.delete(id);
-					clearTimeout(entry.timer);
+					const pendingEntry = this.deletePending(id);
+					if (pendingEntry === undefined) return;
 					this.notify("notifications/cancelled", { requestId: id, reason: "client aborted" });
 					reject(new Error(`MCP "${method}" aborted`));
 				};
 				if (signal.aborted) {
-					onAbort();
+					clearTimeout(timer);
+					reject(new Error(`MCP "${method}" aborted`));
+					this.notify("notifications/cancelled", { requestId: id, reason: "client aborted" });
 					return;
 				}
 				signal.addEventListener("abort", onAbort, { once: true });
+				entry.detach = () => signal.removeEventListener("abort", onAbort);
 				// late response after abort: no pending entry → ignored above
 			}
+			this.pending.set(id, entry);
 			this.write({ jsonrpc: "2.0", id, method, params });
 		});
 	}
@@ -292,11 +316,9 @@ export class McpClient {
 		this.connected = false;
 		this.closed = true;
 		const err = new McpConnectionError(reason, this.stderrTail.trim());
-		for (const [, entry] of this.pending) {
-			clearTimeout(entry.timer);
-			entry.reject(err);
+		for (const id of [...this.pending.keys()]) {
+			this.deletePending(id)?.reject(err);
 		}
-		this.pending.clear();
 		this.proc?.kill("SIGTERM");
 		try {
 			this.onDead?.(reason);
@@ -310,11 +332,9 @@ export class McpClient {
 		this.closed = true;
 		this.connected = false;
 		const err = new McpConnectionError("connection closed", this.stderrTail.trim());
-		for (const [, entry] of this.pending) {
-			clearTimeout(entry.timer);
-			entry.reject(err);
+		for (const id of [...this.pending.keys()]) {
+			this.deletePending(id)?.reject(err);
 		}
-		this.pending.clear();
 		const proc = this.proc;
 		if (proc === null) return;
 		if (mode === "graceful") {

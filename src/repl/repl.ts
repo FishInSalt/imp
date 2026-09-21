@@ -277,8 +277,10 @@ interface ReplMachineOptions {
 	replay: (session: SessionStore) => number;
 	exit: (code: number) => never;
 	finish: (code: number) => void;
-	/** M18: MCP manager for run boundaries + shutdown (from ReplOptions). */
-	mcp?: McpManager;
+	/** M18: MCP manager for run boundaries + shutdown (from ReplOptions).
+	 *  Required key (may be undefined) so forgetting to pass it is a type
+	 *  error, not a silent dead seam (review P1-1). */
+	mcp: McpManager | undefined;
 }
 
 /**
@@ -1300,6 +1302,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		exit: options.exit ?? ((code: number) => process.exit(code)),
 		finish,
 		replay,
+		mcp: options.mcp, // M18: run boundaries + shutdown (review P1-1)
 	});
 	// api.confirm's tty side: route questions to this REPL's single readline
 	// interface (a second interface would race it for stdin bytes). With a

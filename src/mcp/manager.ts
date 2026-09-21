@@ -19,7 +19,7 @@
 import type { Tool } from "../core/tools/types.js";
 import type { Renderer } from "../render.js";
 import { bridgeTool, mapCallResult } from "./bridge.js";
-import { McpClient, McpConnectionError } from "./client.js";
+import { McpClient, McpConnectionError, TOOLS_LIST_PAGE_CAP } from "./client.js";
 import type { McpServerConfig } from "./config.js";
 
 /** Run-boundary retry budget for startup-failed servers. */
@@ -194,7 +194,13 @@ export class McpManager {
 		state.client = client;
 		try {
 			await client.connect();
-			const infos = await client.listTools();
+			const { tools: infos, capped } = await client.listTools();
+			if (capped) {
+				// design §3: cap reached → note and stop, never silently drop pages
+				this.options.renderer.note(
+					`▪ mcp ${state.config.name}: tool list hit the ${TOOLS_LIST_PAGE_CAP}-page cap — showing the first ${infos.length} tools`,
+				);
+			}
 			state.tools = this.bridgeAll(state, infos);
 			state.status = "connected";
 			state.attempts = 0;

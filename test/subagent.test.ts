@@ -256,8 +256,16 @@ describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagin
 		);
 		expect(goPrompts).toHaveLength(0); // compacted into the summary message
 		expect(retryRequest.messages.filter((m) => m.role === "user")).toHaveLength(1);
-		// Both rounds' cost lives in history (assistant turns >= 1).
-		expect((outcome.turns ?? 0) >= 1).toBe(true);
+		// D3 pin — the retry's own counters would report turns=1 / 50in-5out;
+		// round-1-only would report 100/7. Truthful accounting is both rounds
+		// plus the summarizer's own call: turns 2, 160 in / 17 out.
+		expect(outcome.turns).toBe(2);
+		expect(outcome.usage).toEqual({
+			inputTokens: 160,
+			outputTokens: 17,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
 	});
 
 	it("second overflow → crash with the guidance text; exactly one real summarizer call", async () => {

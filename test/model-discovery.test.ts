@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
 	discoverModels,
 	familyConfigured,
+	MODELS_PAGE_CAP,
 	resetDiscoveryCacheForTest,
 	setDiscoveryClockForTest,
 } from "../src/provider/discover.js";
@@ -335,7 +336,8 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 	let server: Server;
 	let baseUrl = "";
 	let hits: string[] = [];
-	let mode: "single-camel" | "page-camel" | "page-snake" | "ignore-cursor" | "always-new" = "single-camel";
+	let mode: "single-camel" | "page-camel" | "page-snake" | "ignore-cursor" | "always-new" | "page2-500" =
+		"single-camel";
 	const PAGE1 = ["m1", "m2", "m3"];
 	const PAGE2 = ["m4", "m5"];
 
@@ -369,6 +371,15 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 								: { data: PAGE2.map((id) => ({ id })), first_id: "m4", has_more: false, last_id: "m5" },
 						),
 					);
+				}
+				return;
+			}
+			if (mode === "page2-500") {
+				if (url.searchParams.get("after_id") === null) {
+					res.end(JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
+				} else {
+					res.writeHead(500);
+					res.end("{}");
 				}
 				return;
 			}
@@ -437,8 +448,28 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 	it("an always-lying cursor stops at the page cap", async () => {
 		mode = "always-new";
 		const ids = await discoverModels("anthropic");
-		expect(hits).toHaveLength(10); // MODELS_PAGE_CAP
-		expect(ids).toHaveLength(10);
+		expect(hits).toHaveLength(MODELS_PAGE_CAP);
+		expect(ids).toHaveLength(MODELS_PAGE_CAP);
+	});
+
+	it("a completed walk writes the MERGED list once — no refetch inside the TTL (review P2-2 pin)", async () => {
+		mode = "page-camel";
+		const first = await discoverModels("anthropic");
+		expect(first).toEqual([...PAGE1, ...PAGE2]);
+		expect(hits).toHaveLength(2);
+		const second = await discoverModels("anthropic"); // served from the cache
+		expect(second).toEqual([...PAGE1, ...PAGE2]);
+		expect(hits).toHaveLength(2); // zero new requests
+	});
+
+	it("a mid-walk failure returns null and caches NOTHING — the next call refetches (review P2-2 pin)", async () => {
+		mode = "page2-500";
+		const first = await discoverModels("anthropic");
+		expect(first).toBeNull(); // page 2 exhausted its retry → whole walk fails
+		const afterFirst = hits.length; // page1 + two 500 attempts
+		const second = await discoverModels("anthropic"); // nothing was cached
+		expect(second).toBeNull();
+		expect(hits.length).toBe(afterFirst * 2); // full refetch, not a poisoned partial
 	});
 
 	it("the zai coding endpoint ({object, data}, no pagination fields) stays a single request", async () => {

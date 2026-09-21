@@ -26,7 +26,7 @@ const REQUEST_TIMEOUT_MS = 4_000;
 /** Page cap for cursor-paginated /v1/models listings (same spirit as the MCP
  *  tools/list cap): a lying cursor must bound the loop even if ids keep
  *  being "new". */
-const MODELS_PAGE_CAP = 10;
+export const MODELS_PAGE_CAP = 10;
 
 interface CacheEntry {
 	ids: string[];

@@ -161,6 +161,23 @@ async function settle(extraMs = 30): Promise<void> {
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+/** Poll the rendered frames until text appears — the timing-proof wait
+ *  (M15 CI flake: settle()'s fixed 30ms loses to a slow runner's full
+ *  provider→tool→render turn; poll instead of hoping). */
+async function frameContains(
+	env: { terminal: { frameSince: (n: number) => string } },
+	text: string,
+	timeoutMs = 2000,
+): Promise<void> {
+	const start = Date.now();
+	while (!env.terminal.frameSince(0).includes(text)) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`frame did not contain ${JSON.stringify(text)} within ${timeoutMs}ms`);
+		}
+		await settle(15);
+	}
+}
+
 function makeShell(options?: {
 	onLine?: (l: string, mode?: "steer" | "followUp") => void;
 	onDequeue?: () => void;
@@ -1348,12 +1365,9 @@ describe("runRepl with shell:tui", () => {
 		]);
 		await writeFile(path.join(env.baseDir, "fold.txt"), "hello\n", "utf-8");
 		env.terminal.data("edit it\r");
-		await settle();
-		await settle();
-		expect(env.terminal.frameSince(0)).toContain("▸ Edited fold.txt (1 edit applied) (+1/-1)");
+		await frameContains(env, "▸ Edited fold.txt (1 edit applied) (+1/-1)");
 		env.terminal.data("\x0f"); // Ctrl+O — expand the newest fold
-		await settle();
-		expect(env.terminal.frameSince(0)).toContain("+ goodbye");
+		await frameContains(env, "+ goodbye");
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);

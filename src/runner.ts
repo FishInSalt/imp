@@ -119,6 +119,9 @@ export interface RunTurnOptions {
 	onEvent?: (event: AgentEvent, info?: AgentEventInfo) => void;
 	/** Steering: queued user input injected at turn boundaries. */
 	getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
+	/** Follow-ups (M17): queued user input consumed when the model would
+	 *  stop — the same run continues to answer them (see loop.ts). */
+	getFollowUpMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
 }
 
 /** Discriminator for subagent-sourced events on RunTurnOptions.onEvent. */
@@ -839,6 +842,7 @@ class RunnerImpl implements Runner {
 						}
 					: undefined,
 				getSteeringMessages: options.getSteeringMessages,
+				getFollowUpMessages: options.getFollowUpMessages,
 				// Wrapped once (M4c design §8.3): forward to the renderer as before,
 				// and tap tool_end for observers — fire-and-forget, isolated by the
 				// registry (E10), never blocking the loop.

@@ -22,6 +22,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "../provider/thinking.js";
 
+export type QueueMode = "all" | "one-at-a-time";
+
 export interface ImpSettings {
 	/** Startup model when -m/IMP_MODEL is absent (M15; env still wins). */
 	defaultModel?: string;
@@ -36,6 +38,15 @@ export interface ImpSettings {
 	skills?: string[];
 	/** /skill:name command registration (default true; M12 batch 2 consumes it). */
 	enableSkillCommands?: boolean;
+	/** M17 queue drain modes (pi settings keys, same literals). Defaults are a
+	 *  DELIBERATE divergence from pi (docs/m17-followup-runs-design.md §2):
+	 *  steering batches (timely supplementary info — one boundary delivers
+	 *  the complete correction set; a one-at-a-time backlog would delay newer
+	 *  messages), follow-ups run one per boundary (independent next tasks —
+	 *  keeps the esc+p revision window between them). pi defaults both to
+	 *  one-at-a-time. */
+	steeringMode?: QueueMode;
+	followUpMode?: QueueMode;
 	/** M13 batch 2: image pipeline switches. `autoResize` (default true)
 	 *  resizes read/attached images through the photon ladder (2000×2000 /
 	 *  4.5 MB encoded); false keeps conversion but ships original bytes —
@@ -55,6 +66,10 @@ export function projectSettingsPath(cwd: string): string {
 
 /** Coerce one parsed JSON object into ImpSettings; unknown keys are
  *  DROPPED from this view (they survive in the file — see readRaw). */
+function coerceQueueMode(value: unknown): QueueMode | undefined {
+	return value === "all" || value === "one-at-a-time" ? value : undefined;
+}
+
 function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
 	const out: ImpSettings = {};
 	if (typeof parsed.defaultModel === "string" && parsed.defaultModel !== "")
@@ -69,6 +84,10 @@ function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
 		out.skills = parsed.skills.filter((entry): entry is string => typeof entry === "string");
 	}
 	if (typeof parsed.enableSkillCommands === "boolean") out.enableSkillCommands = parsed.enableSkillCommands;
+	const steeringMode = coerceQueueMode(parsed.steeringMode);
+	if (steeringMode !== undefined) out.steeringMode = steeringMode;
+	const followUpMode = coerceQueueMode(parsed.followUpMode);
+	if (followUpMode !== undefined) out.followUpMode = followUpMode;
 	if (parsed.images !== null && typeof parsed.images === "object" && !Array.isArray(parsed.images)) {
 		const images = parsed.images as Record<string, unknown>;
 		const outImages: { autoResize?: boolean } = {};

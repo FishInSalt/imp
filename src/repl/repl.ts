@@ -3,7 +3,7 @@ import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import { type AgentMessage, type AssistantMessage, contentText, type Usage } from "../core/messages.js";
 import type { SessionStore } from "../core/session/store.js";
-import { saveSettings } from "../core/settings.js";
+import { type QueueMode, saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
@@ -301,6 +301,13 @@ class ReplMachine {
 	 *  snapshot after every mutation (see pushActivity). */
 	private activityTools = new Map<string, ActivityToolLine>();
 	private activityAgents = new Map<string, ActivityAgentLine>();
+	/** M17 queue drain modes for the ACTIVE run (design §3): snapshotted once
+	 *  per run in submitTurn from the merged settings view — /settings writes
+	 *  take effect next run, like the panel's "(next session)" teaching. */
+	private modes: { steering: QueueMode; followUp: QueueMode } = {
+		steering: "all",
+		followUp: "one-at-a-time",
+	};
 	private receivedLine = false;
 	private readonly runner: Runner;
 	private readonly commands: readonly RegisteredExtensionCommand[];
@@ -500,6 +507,13 @@ class ReplMachine {
 	private async submitTurn(line: string, display?: string): Promise<void> {
 		if (this.state === "exited") return;
 		this.state = "running";
+		// M17: the run's drain modes (design §3) — read from the LIVE merged
+		// view so a pre-run /settings write is already in effect for this run.
+		const settings = this.runner.effectiveSettings();
+		this.modes = {
+			steering: settings.steeringMode ?? "all",
+			followUp: settings.followUpMode ?? "one-at-a-time",
+		};
 		this.input.setActive(true);
 		// The TUI editor clears the line on submit — echo it into the
 		// transcript so the conversation reads as a conversation (dogfood
@@ -528,6 +542,7 @@ class ReplMachine {
 					this.trackActivity(event, info);
 				},
 				getSteeringMessages: () => this.steeringMessages(),
+				getFollowUpMessages: () => this.followUpMessages(),
 			});
 			await this.settleSuccess(result);
 		} catch (err) {
@@ -588,16 +603,50 @@ class ReplMachine {
 		// Only steer-mode TYPED lines steer (follow-up lines, md prompts, and
 		// bang entries all hold for the flush — that is the whole point of
 		// alt+enter routing).
-		const index = this.queue.findIndex(
-			(entry) => "text" in entry && entry.mode === "steer" && !isBangLine(entry.text),
-		);
-		if (index === -1) return [];
-		const picked = this.queue.splice(index, 1)[0];
-		if (picked === undefined || !("text" in picked)) return []; // unreachable; type guard
-		const next = picked.text;
-		this.renderer.note(`▪ steering: ${shorten(next)}`);
+		// M17: the drain mode is read once per run (submitTurn). "all" (imp's
+		// default) takes every steer entry at this boundary — batched
+		// supplementary info, delivered complete at the earliest moment;
+		// "one-at-a-time" (pi's default) keeps the old first-entry-only drain.
+		const picked: string[] = [];
+		while (true) {
+			const index = this.queue.findIndex(
+				(entry) => "text" in entry && entry.mode === "steer" && !isBangLine(entry.text),
+			);
+			if (index === -1) break;
+			const entry = this.queue.splice(index, 1)[0];
+			if (entry === undefined || !("text" in entry)) break; // unreachable; type guard
+			picked.push(entry.text);
+			if (this.modes.steering === "one-at-a-time") break;
+		}
+		if (picked.length === 0) return [];
+		for (const text of picked) this.renderer.note(`▪ steering: ${shorten(text)}`);
 		this.syncQueue();
-		return [{ role: "user", content: next }];
+		return picked.map((text) => ({ role: "user" as const, content: text }));
+	}
+
+	/** M17 follow-up drain: consumed by the LOOP at would-stop boundaries
+	 *  (runner.runTurn getFollowUpMessages → loop.ts), so queued follow-ups
+	 *  continue the SAME run instead of settling into independent turns.
+	 *  Echo is a full user block — a follow-up opens a new exchange, unlike a
+	 *  steering injection mid-turn (note). "one-at-a-time" (imp default, pi
+	 *  parity): one entry per boundary — the esc+p revision window between
+	 *  boundaries is the point (design §2). */
+	private followUpMessages(): AgentMessage[] {
+		const picked: string[] = [];
+		while (true) {
+			// first follow-up entry, skipping non-qualifying ones in place
+			// (bang/prompt/steer entries keep their queue positions and order)
+			const index = this.queue.findIndex((entry) => "text" in entry && entry.mode === "followUp");
+			if (index === -1) break;
+			const entry = this.queue.splice(index, 1)[0];
+			if (entry === undefined || !("text" in entry)) break; // unreachable; type guard
+			this.renderer.user(entry.text);
+			picked.push(entry.text);
+			if (this.modes.followUp === "one-at-a-time") break;
+		}
+		if (picked.length === 0) return [];
+		this.syncQueue();
+		return picked.map((text) => ({ role: "user" as const, content: text }));
 	}
 
 	/** Bottom status line for the TUI shell (the legacy shell ignores it):

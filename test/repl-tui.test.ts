@@ -1478,7 +1478,7 @@ describe("runRepl with shell:tui", () => {
 
 	// ── queue visual (M10): the machine pushes it, the shell paints it ──
 
-	it("queue visual: queued lines paint per-entry rows, drain via steering/flush, then clear", async () => {
+	it("queue visual: steer rows drain batched (all mode default), region clears, run continues", async () => {
 		const g = gate();
 		const g2 = gate();
 		let toolStarted = false;
@@ -1513,15 +1513,19 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("2 queued"); // both rows visible now
 		expect(env.terminal.frameSince(0)).toContain("  steer: queued B");
-		g.resolve();
-		await waitUntil(() => env.requests.length >= 2); // steering poll consumed A; request 2 held open
-		await settle();
-		expect(env.terminal.frameSince(0)).toContain("  steer: queued B");
 		const mark = env.terminal.writes.length;
-		g2.resolve(); // the run settles; leftover B flushes as its own turn → count 0
-		await waitUntil(() => env.requests.length >= 3);
+		g.resolve();
+		// M17 default steeringMode "all": ONE poll drains both entries → the
+		// second request carries both as consecutive user messages and the
+		// queue region clears at the same boundary (pi's one-at-a-time default
+		// would spend a turn per entry — the deliberate divergence, design §2).
+		await waitUntil(() => env.requests.length >= 2); // request 2 held open
+		const request2 = env.requests[1]?.messages ?? [];
+		expect(request2.some((m) => m.role === "user" && m.content === "queued A")).toBe(true);
+		expect(request2.some((m) => m.role === "user" && m.content === "queued B")).toBe(true);
+		await waitUntil(() => !env.terminal.frameSince(mark).includes("steer:")); // region cleared
+		g2.resolve(); // both answers land; boundary polls find nothing → run completes
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("steer:"); // the region cleared
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
@@ -2240,9 +2244,10 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 	describe("queue parity: follow-up routing and dequeue (machine)", () => {
-		it("alt+enter queues a follow-up: it skips the steering poll and runs as its own turn after the run", async () => {
+		it("alt+enter queues a follow-up: it skips the steering poll and is consumed by the SAME run at the would-stop boundary (M17)", async () => {
 			const g = gate();
 			const g2 = gate();
+			const g3 = gate();
 			let toolStarted = false;
 			const slow: Tool = {
 				name: "slow_tool",
@@ -2261,13 +2266,14 @@ describe("runRepl with shell:tui", () => {
 						"tool_use",
 					),
 					() => g2.promise.then(() => reply("turn one done")), // held: request 2 stays open
-					reply("turn two done"),
+					() => g3.promise.then(() => reply("turn two done")), // held: the follow-up turn stays open
 				],
 				{ tools: [slow] },
 			);
 			await settle();
 			env.terminal.data("go\r");
 			await waitUntil(() => toolStarted);
+			const runMark = env.terminal.writes.length; // mid-run mark: the run is live from here
 			env.terminal.data("steer me\r"); // Enter: steer mode
 			await settle();
 			expect(env.terminal.frameSince(0)).toContain("  steer: steer me");
@@ -2280,11 +2286,110 @@ describe("runRepl with shell:tui", () => {
 			const request2 = env.requests[1]?.messages ?? [];
 			expect(request2.some((m) => m.role === "user" && m.content === "steer me")).toBe(true);
 			expect(request2.some((m) => m.role === "user" && m.content === "later please")).toBe(false); // NOT injected
-			g2.resolve(); // turn settles → flush dispatches the follow-up as its own turn
+			g2.resolve(); // first answer lands (no tool calls) → M17 would-stop boundary:
+			// the SAME run consumes the follow-up — no settle, no flush dispatch
 			await waitUntil(() => env.requests.length >= 3);
 			const request3 = env.requests[2]?.messages ?? [];
 			expect(request3.some((m) => m.role === "user" && m.content === "later please")).toBe(true);
-			await waitUntil(() => env.terminal.frameSince(0).includes("later please")); // echoed
+			await waitUntil(() => env.terminal.frameSince(0).includes("later please")); // echoed as a user block
+			// same-run pin: the follow-up turn is HELD OPEN here, so the whole span
+			// since runMark is mid-run — the idle editor hint must never have
+			// painted between the two answers (the legacy shell pins the same
+			// fact via ONE stats line)
+			expect(env.terminal.frameSince(runMark)).not.toContain("(/ for commands");
+			g3.resolve();
+			await settle();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("M17: two queued follow-ups drain one per boundary inside ONE run (one-at-a-time default)", async () => {
+			const g = gate();
+			const g2 = gate();
+			const g3 = gate();
+			const env = await startTuiRepl([
+				() => g.promise.then(() => reply("answer one")), // held: request 1
+				() => g2.promise.then(() => reply("answer two")), // held: the F1 follow-up turn
+				() => g3.promise.then(() => reply("answer three")), // held: the F2 follow-up turn
+			]);
+			await settle();
+			env.terminal.data("go\r");
+			env.terminal.data("F one");
+			env.terminal.data("\x1b\r"); // alt+enter: follow-up F1
+			env.terminal.data("F two");
+			env.terminal.data("\x1b\r"); // follow-up F2
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("2 queued");
+			const runMark = env.terminal.writes.length; // run is live (request 1 held)
+			g.resolve(); // answer one lands → boundary consumes F1 ONLY
+			await waitUntil(() => env.requests.length >= 2);
+			const request2 = env.requests[1]?.messages ?? [];
+			expect(request2.some((m) => m.role === "user" && m.content === "F one")).toBe(true);
+			expect(request2.some((m) => m.role === "user" && m.content === "F two")).toBe(false); // one-at-a-time
+			// ONE run end to end: F2's turn holds below — the idle hint must
+			// never have painted across the three answers
+			g2.resolve(); // answer two lands → next boundary consumes F2
+			await waitUntil(() => env.requests.length >= 3);
+			const request3 = env.requests[2]?.messages ?? [];
+			expect(request3.some((m) => m.role === "user" && m.content === "F two")).toBe(true);
+			// ONE run end to end: F2's turn is HELD OPEN here — the idle hint must
+			// never have painted across the three answers
+			expect(env.terminal.frameSince(runMark)).not.toContain("(/ for commands");
+			g3.resolve();
+			await settle();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("M17: abort during a follow-up turn restores the unconsumed follow-up to the editor", async () => {
+			const g = gate();
+			let calls = 0;
+			const requests: LLMRequest[] = []; // injected provider records its own
+			const env = await startTuiRepl([], {
+				// abort-aware hold: the FIRST response waits on the gate; the SECOND
+				// (the F1 follow-up turn) holds mid-stream and loses the race to Ctrl+C
+				provider: {
+					name: "abort-hold",
+					async *stream(request) {
+						requests.push(request);
+						calls++;
+						if (calls === 1) {
+							await g.promise;
+							yield { type: "message_end", message: reply("answer one") };
+							return;
+						}
+						yield { type: "text_delta", text: "partial" };
+						await new Promise<void>((resolve) => {
+							request.signal?.addEventListener("abort", () => resolve(), { once: true });
+						});
+						if (request.signal?.aborted) return; // abortSafe: end without message_end
+						yield { type: "message_end", message: reply("never lands") };
+					},
+				},
+			});
+			await settle();
+			env.terminal.data("go\r");
+			env.terminal.data("F one");
+			env.terminal.data("\x1b\r"); // alt+enter: follow-up F1
+			env.terminal.data("F two");
+			env.terminal.data("\x1b\r"); // stays queued
+			await settle();
+			g.resolve(); // answer one lands → boundary consumes F1 → request 2 holds mid-stream
+			try {
+				await waitUntil(() => requests.length >= 2);
+			} catch {
+				console.log(
+					"DBG1>>> requests:",
+					env.requests.length,
+					JSON.stringify(env.terminal.frameSince(0).slice(-400)),
+				);
+				throw new Error("no request 2");
+			}
+			env.terminal.data("\x03"); // Ctrl+C: abort the running follow-up turn
+			await waitUntil(() => env.terminal.frameSince(0).includes("(interrupt"));
+			// the unconsumed F2 comes back to the editor (restore), never dropped
+			await waitUntil(() => env.transcript.completedLines().join("\n").includes("restored 1 queued"));
+			env.terminal.data("\x15"); // clear the restored draft before exiting
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});

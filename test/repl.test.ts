@@ -276,7 +276,7 @@ describe("runRepl", () => {
 		expect(await env.repl).toBe(0);
 	});
 
-	it("leftover queue auto-continues: ▪ continuing with queued starts the next turn", async () => {
+	it("M17: steer-mode leftover queued during the final response joins the finishing run (boundary poll, one run)", async () => {
 		const g = gate();
 		const g2 = gate();
 		let toolStarted = false;
@@ -312,11 +312,16 @@ describe("runRepl", () => {
 		await waitUntil(() => env.requests.length >= 2);
 		env.send("next line\n"); // queued AFTER the last steering poll — leftover
 		await waitUntil(() => env.output().includes("▪ queued: next line"));
-		g2.resolve(); // final reply completes the run; leftover flushes as a new turn
+		g2.resolve(); // final reply completes with no tool calls → M17 boundary
+		// poll consumes the steer-mode leftover INSIDE the finishing run (pi's
+		// turn-end poll :257): no second turn, one stats line for 3 turns.
 		await waitUntil(() => env.requests.length >= 3);
-		expect(env.output()).toContain("▪ continuing with queued: next line");
+		expect(env.output()).toContain("▪ steering: next line");
+		expect(env.output()).not.toContain("continuing with queued"); // never flushed as its own turn
 		const last = env.requests[2]?.messages.at(-1);
 		expect(last).toEqual({ role: "user", content: "next line" });
+		await waitUntil(() => env.output().includes("after-queued reply"));
+		await waitUntil(() => env.output().includes("· 3 turns ·")); // ONE run, three turns
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

@@ -302,6 +302,36 @@ describe("openai-completions provider", () => {
 		const events = await collect(provider().stream(REQ("glm-4.6", [{ role: "user", content: "hi" }])));
 		expect(lastMessage(events).stopReason).toBe("max_tokens");
 	});
+
+	it("M17 wire pin: batched steering sends consecutive user messages as separate wire entries", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: { content: "ok" } }] }),
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				sse({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }),
+				"data: [DONE]\n\n",
+			],
+		};
+		await collect(
+			provider().stream(
+				REQ("gpt-5.2", [
+					{ role: "user", content: "go" },
+					{
+						role: "assistant",
+						blocks: [{ type: "text", text: "answering" }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+					{ role: "user", content: "first correction" },
+					{ role: "user", content: "second correction" },
+				]),
+			),
+		);
+		const body = captured.at(-1)?.body as { messages?: Array<{ role: string; content: string }> };
+		const users = (body.messages ?? []).filter((m) => m.role === "user");
+		expect(users.map((m) => m.content)).toEqual(["go", "first correction", "second correction"]);
+	});
 });
 
 describe("parseModelRef routing", () => {

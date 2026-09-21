@@ -285,3 +285,66 @@ describe("anthropic provider abort mid-stream", () => {
 		await new Promise<void>((resolve) => srv.close(() => resolve()));
 	});
 });
+
+describe("M17 wire pin: anthropic batched steering (consecutive user messages)", () => {
+	it("sends each user message as its own wire user turn — no merge, no drop", async () => {
+		const bodies: unknown[] = [];
+		const server = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c) => chunks.push(c as Buffer));
+			req.on("end", () => {
+				bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.write(
+					'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n',
+				);
+				res.write(
+					'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n',
+				);
+				res.write(
+					'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\n',
+				);
+				res.write(
+					'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+				);
+				res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+				res.end();
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const a = server.address();
+		if (a === null || typeof a === "string") throw new Error("no address");
+		const base = `http://127.0.0.1:${a.port}`;
+		try {
+			const provider = createAnthropicProvider({ baseUrl: base, apiKey: "test-key" });
+			const events: LLMEvent[] = [];
+			for await (const e of provider.stream({
+				system: "sys",
+				model: "claude-sonnet-4-5",
+				messages: [
+					{ role: "user", content: "go" },
+					{
+						role: "assistant",
+						blocks: [{ type: "text", text: "answering" }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+					{ role: "user", content: "first correction" },
+					{ role: "user", content: "second correction" },
+				],
+				tools: [],
+				maxTokens: 64,
+			})) {
+				events.push(e);
+			}
+			expect(events.some((e) => e.type === "message_end")).toBe(true);
+			const body = bodies[0] as { messages?: Array<{ role: string; content: unknown }> };
+			const users = (body.messages ?? []).filter((m) => m.role === "user");
+			// consecutive user messages pass through unmerged; the Anthropic API
+			// combines consecutive same-role turns server-side (M17 design §2)
+			expect(users).toHaveLength(3);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+});

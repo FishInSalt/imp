@@ -39,6 +39,11 @@ export interface RunAgentLoopOptions {
 	onBeforeTurn?: (history: AgentMessage[]) => void | Promise<void>;
 	/** Polls for steering messages: queued user input injected at turn boundaries. */
 	getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
+	/** Polls for follow-up messages (M17): queued user input consumed when the
+	 *  model would otherwise stop — the SAME run continues to answer them
+	 *  (pi agent-loop.ts:261). One poll per would-stop boundary; the caller's
+	 *  drain mode (one-at-a-time / all) decides how much it returns. */
+	getFollowUpMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
 	 * Permission/observation gate: called after argument validation, before
 	 * tool execution (M4c design §8.3). Return { block: true, reason } to
@@ -98,6 +103,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		onMessage,
 		onBeforeTurn,
 		getSteeringMessages,
+		getFollowUpMessages,
 		onToolCall,
 		onEvent,
 		signal,
@@ -119,16 +125,25 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 	const usage = emptyUsage();
 	const toolMap = new Map(tools.map((t) => [t.name, t] as const));
 	let turns = 0;
+	// Set right after injecting queued messages at a would-stop boundary so
+	// the top-of-loop steering poll skips ONE pass — pi's "only poll again if
+	// the earlier poll returned nothing" guard (:195): in one-at-a-time mode a
+	// re-poll would deliver a second message into the same turn.
+	let skipSteeringPoll = false;
 
 	while (true) {
 		if (signal?.aborted) return { stopReason: "aborted", turns, usage };
 
 		// Steering: messages queued while the model was working enter before the
 		// next assistant response, so the model sees them without a new user turn.
-		const steering = (await getSteeringMessages?.()) ?? [];
-		for (const message of steering) {
-			history.push(message);
-			onMessage?.(message);
+		if (skipSteeringPoll) {
+			skipSteeringPoll = false;
+		} else {
+			const steering = (await getSteeringMessages?.()) ?? [];
+			for (const message of steering) {
+				history.push(message);
+				onMessage?.(message);
+			}
 		}
 
 		// Compaction hook: may rewrite history in place (older messages -> summary).
@@ -151,7 +166,32 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		);
 
 		if (toolCalls.length === 0) {
-			return { stopReason: "completed", turns, usage };
+			// The model would stop. M17, pi's boundary order (agent-loop.ts :257
+			// then :261): steering queued during THIS turn's stream is consumed
+			// first (it may add turns — steer priority); only an empty steering
+			// poll consults follow-ups, which continue the SAME run (one abort
+			// scope, one aggregated usage, one run_end). Each drained message
+			// enters history exactly like a steering message. Empty polls on
+			// both fronts are the real stop.
+			const boundarySteering = (await getSteeringMessages?.()) ?? [];
+			if (boundarySteering.length > 0) {
+				for (const message of boundarySteering) {
+					history.push(message);
+					onMessage?.(message);
+				}
+				skipSteeringPoll = true;
+				continue;
+			}
+			const followUps = (await getFollowUpMessages?.()) ?? [];
+			if (followUps.length === 0) {
+				return { stopReason: "completed", turns, usage };
+			}
+			for (const message of followUps) {
+				history.push(message);
+				onMessage?.(message);
+			}
+			skipSteeringPoll = true;
+			continue;
 		}
 
 		if (turns >= maxIterations) {

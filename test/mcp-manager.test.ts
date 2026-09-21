@@ -19,7 +19,7 @@ afterAll(() => {
 });
 
 function fakeRenderer(notes: string[]): Renderer {
-	return { note: (t) => notes.push(t), error: (t) => notes.push(t) } as unknown as Renderer;
+	return { note: (t: string) => notes.push(t), error: (t: string) => notes.push(t) } as unknown as Renderer;
 }
 
 function serverConfig(name: string, mode: string, extra: Partial<McpServerConfig> = {}): McpServerConfig {

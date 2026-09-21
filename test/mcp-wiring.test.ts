@@ -62,7 +62,7 @@ describe("runRepl wiring (review P1-1)", () => {
 			],
 			cwd: baseDir,
 			version: "test",
-			renderer: { note: (t) => notes.push(t), error: (t) => notes.push(t) } as never,
+			renderer: { note: (t: string) => notes.push(t), error: (t: string) => notes.push(t) } as never,
 			connectTimeoutMs: 5000,
 			callTimeoutMs: 5000,
 		});

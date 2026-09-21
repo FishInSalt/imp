@@ -68,6 +68,7 @@ describe("/mcp command", () => {
 
 	it("renders connected / failed / disabled states", async () => {
 		const env = await makeEnv();
+		const notes: string[] = [];
 		const manager = new McpManager({
 			servers: [
 				{
@@ -88,7 +89,7 @@ describe("/mcp command", () => {
 			],
 			cwd: tmp,
 			version: "test",
-			renderer: { note: (t) => notes.push(t), error: (t) => notes.push(t) } as never,
+			renderer: { note: (t: string) => notes.push(t), error: (t: string) => notes.push(t) } as never,
 			connectTimeoutMs: 150,
 			callTimeoutMs: 150,
 		});

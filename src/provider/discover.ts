@@ -23,6 +23,10 @@ import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS, zaiApiKey } from "./zai.js";
 
 const CACHE_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 4_000;
+/** Page cap for cursor-paginated /v1/models listings (same spirit as the MCP
+ *  tools/list cap): a lying cursor must bound the loop even if ids keep
+ *  being "new". */
+const MODELS_PAGE_CAP = 10;
 
 interface CacheEntry {
 	ids: string[];
@@ -139,7 +143,6 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 	let url: string;
 	const headers: Record<string, string> = { accept: "application/json" };
 	if (family === "anthropic") {
-		url = `${baseUrl}/v1/models?limit=1000`;
 		// Same precedence as the provider: stored key (x-api-key) wins; env
 		// keeps the bearer/x-api-key split it always had.
 		const stored = loadApiKey("anthropic");
@@ -148,6 +151,11 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 		else if (token !== undefined) headers.authorization = `Bearer ${token}`;
 		else headers["x-api-key"] = String(process.env.ANTHROPIC_API_KEY);
 		headers["anthropic-version"] = "2023-06-01";
+		// z.ai's Anthropic-compat endpoint returns camelCase pagination
+		// metadata ({data, firstId, hasMore, lastId}); the real Anthropic API
+		// returns snake_case {has_more, last_id}. Follow either — the
+		// no-new-ids stop makes an ignoring server degrade to a single page.
+		return fetchAnthropicModelsPaged(baseUrl, headers, cacheKey);
 	} else {
 		url = `${baseUrl}/models`;
 		headers.authorization = `Bearer ${String(resolveApiKey("openai", "OPENAI_API_KEY")?.key)}`;
@@ -156,30 +164,20 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 	return fetchJson(url, headers, cacheKey);
 }
 
-/** Fetch a models listing; accepts both {data:[...]} (OpenAI/Anthropic
- *  convention) and {models:[{slug|id}]} (the codex backend's shape). */
-async function fetchJson(
-	url: string,
-	headers: Record<string, string>,
-	cacheKey?: string,
-): Promise<string[] | null> {
-	// One quiet retry on throttling: a single 429 must not collapse the
-	// picker into its fallback seeds (observed live against z.ai).
-	for (let attempt = 0; attempt < 2; attempt++) {
-		if (attempt > 0) await new Promise((r) => setTimeout(r, 400));
-		const result = await fetchOnce(url, headers, cacheKey);
-		if (result !== "retry") return result;
-	}
-	return null;
+/** One page of a models listing plus its cursor metadata. Accepts bare
+ *  arrays, {data:[...]} / {models:[...]} (OpenAI/Anthropic/codex shapes) and
+ *  the pi.dev record map; pagination wrapper fields are read in both casings
+ *  (camelCase on z.ai's compat endpoint, snake_case on the real API). */
+export interface ModelsPage {
+	ids: string[];
+	hasMore: boolean;
+	lastId: string | null;
 }
+type PageOrRetry = ModelsPage | null | "retry";
 
-type FetchOnce = string[] | null | "retry";
-
-async function fetchOnce(
-	url: string,
-	headers: Record<string, string>,
-	cacheKey?: string,
-): Promise<FetchOnce> {
+/** Fetch a models listing page; never touches the cache (the paged loop owns
+ *  cache writes so a partial walk is never stamped — review P2-2). */
+async function fetchPage(url: string, headers: Record<string, string>): Promise<PageOrRetry> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
@@ -221,13 +219,74 @@ async function fetchOnce(
 		}
 		if (Object.keys(windows).length > 0) registerDiscoveredContextWindows(windows);
 		if (ids.length === 0) return null;
-		if (cacheKey !== undefined) cache.set(cacheKey, { ids, at: now() });
-		return ids;
+		// Pagination metadata, both casings; absent on non-paging endpoints.
+		const rawHasMore = asRecord.hasMore ?? asRecord.has_more;
+		const rawLastId = asRecord.lastId ?? asRecord.last_id;
+		return {
+			ids,
+			hasMore: rawHasMore === true,
+			lastId: typeof rawLastId === "string" && rawLastId !== "" ? rawLastId : null,
+		};
 	} catch {
 		return null; // offline / timeout / bad shape — caller falls back
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+/** One quiet retry on throttling: a single 429 must not collapse the
+ *  picker into its fallback seeds (observed live against z.ai). */
+async function fetchPageWithRetry(url: string, headers: Record<string, string>): Promise<ModelsPage | null> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		if (attempt > 0) await new Promise((r) => setTimeout(r, 400));
+		const result = await fetchPage(url, headers);
+		if (result !== "retry") return result;
+	}
+	return null;
+}
+
+/** Un-paged fetch with cache stamping — the zai/openai/codex seam (behavior
+ *  identical to the pre-pagination fetchJson/fetchOnce pair). */
+async function fetchJson(
+	url: string,
+	headers: Record<string, string>,
+	cacheKey?: string,
+): Promise<string[] | null> {
+	const page = await fetchPageWithRetry(url, headers);
+	if (page === null) return null;
+	if (cacheKey !== undefined) cache.set(cacheKey, { ids: page.ids, at: now() });
+	return page.ids;
+}
+
+/** Cursor-paginated anthropic-family listing (design §4): follow
+ *  after_id while the endpoint reports more pages, dedupe by id so a server
+ *  that ignores the cursor (observed live on z.ai: limit/lastId ignored)
+ *  terminates on the unchanged second page, hard-capped at MODELS_PAGE_CAP.
+ *  Cache semantics (review P2-2): one merged write after the loop; any
+ *  mid-walk failure returns null outright — no partial list is cached. */
+async function fetchAnthropicModelsPaged(
+	baseUrl: string,
+	headers: Record<string, string>,
+	cacheKey: string,
+): Promise<string[] | null> {
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	let url = `${baseUrl}/v1/models?limit=1000`;
+	for (let page = 0; page < MODELS_PAGE_CAP; page++) {
+		const result = await fetchPageWithRetry(url, headers);
+		if (result === null) return null;
+		const fresh = result.ids.filter((id) => !seen.has(id));
+		for (const id of fresh) {
+			seen.add(id);
+			ids.push(id);
+		}
+		if (fresh.length === 0) break; // cursor ignored → same page: stop, keep what we have
+		if (!result.hasMore || result.lastId === null) break; // normal end
+		url = `${baseUrl}/v1/models?limit=1000&after_id=${encodeURIComponent(result.lastId)}`;
+	}
+	if (ids.length === 0) return null;
+	cache.set(cacheKey, { ids, at: now() });
+	return ids;
 }
 
 /** Codex listing: pi's public catalog service (unauthenticated, fast).

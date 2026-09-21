@@ -328,3 +328,145 @@ describe("formatTokens (pi footer algorithm)", () => {
 		expect(formatTokens(15_000_000)).toBe("15M");
 	});
 });
+
+describe("discoverModels pagination (anthropic family, docs/overflow-pagination-design.md §4)", () => {
+	/** Scripted paging server: one mutable "mode" the handler dispatches on.
+	 *  Pages: page1 (no after_id) = m1..m3, page2 (after_id=m3) = m4..m5. */
+	let server: Server;
+	let baseUrl = "";
+	let hits: string[] = [];
+	let mode: "single-camel" | "page-camel" | "page-snake" | "ignore-cursor" | "always-new" = "single-camel";
+	const PAGE1 = ["m1", "m2", "m3"];
+	const PAGE2 = ["m4", "m5"];
+
+	beforeAll(async () => {
+		server = createServer((req, res) => {
+			hits.push(String(req.url));
+			const url = new URL(String(req.url), "http://x");
+			res.writeHead(200, { "content-type": "application/json" });
+			if (mode === "single-camel") {
+				// Today's live z.ai compat-endpoint shape (2026-02-07 probe).
+				res.end(
+					JSON.stringify({ data: PAGE1.map((id) => ({ id })), firstId: "m1", hasMore: false, lastId: "m3" }),
+				);
+				return;
+			}
+			if (mode === "page-camel" || mode === "page-snake") {
+				const camel = mode === "page-camel";
+				if (url.searchParams.get("after_id") === null) {
+					res.end(
+						JSON.stringify(
+							camel
+								? { data: PAGE1.map((id) => ({ id })), firstId: "m1", hasMore: true, lastId: "m3" }
+								: { data: PAGE1.map((id) => ({ id })), first_id: "m1", has_more: true, last_id: "m3" },
+						),
+					);
+				} else {
+					res.end(
+						JSON.stringify(
+							camel
+								? { data: PAGE2.map((id) => ({ id })), firstId: "m4", hasMore: false, lastId: "m5" }
+								: { data: PAGE2.map((id) => ({ id })), first_id: "m4", has_more: false, last_id: "m5" },
+						),
+					);
+				}
+				return;
+			}
+			if (mode === "ignore-cursor") {
+				// Server that reports more pages but returns the SAME page whatever
+				// after_id says (z.ai ignores cursor params today).
+				res.end(JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
+				return;
+			}
+			// always-new: every request serves one fresh id and keeps lying about
+			// more pages — the page cap is the only stop.
+			const n = hits.length;
+			res.end(JSON.stringify({ data: [{ id: `fresh-${n}` }], hasMore: true, lastId: `fresh-${n}` }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (address === null || typeof address === "string") throw new Error("no address");
+		baseUrl = `http://127.0.0.1:${address.port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
+	beforeEach(() => {
+		resetDiscoveryCacheForTest();
+		setDiscoveryClockForTest(() => 1_000_000);
+		process.env.ANTHROPIC_AUTH_TOKEN = "zai-token";
+		process.env.ANTHROPIC_BASE_URL = baseUrl;
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		hits = [];
+		mode = "single-camel";
+	});
+	afterEach(() => {
+		delete process.env.ANTHROPIC_AUTH_TOKEN;
+		delete process.env.ANTHROPIC_BASE_URL;
+	});
+
+	it("today's z.ai shape (camelCase, hasMore:false) is one page — shape pin", async () => {
+		const ids = await discoverModels("anthropic");
+		expect(ids).toEqual(PAGE1);
+		expect(hits).toEqual(["/v1/models?limit=1000"]); // never a second request
+	});
+
+	it("hasMore:true follows after_id and merges pages (camelCase)", async () => {
+		mode = "page-camel";
+		const ids = await discoverModels("anthropic");
+		expect(ids).toEqual([...PAGE1, ...PAGE2]);
+		expect(hits).toEqual(["/v1/models?limit=1000", "/v1/models?limit=1000&after_id=m3"]);
+	});
+
+	it("snake_case (real Anthropic API) pages too", async () => {
+		mode = "page-snake";
+		const ids = await discoverModels("anthropic");
+		expect(ids).toEqual([...PAGE1, ...PAGE2]);
+		expect(hits).toEqual(["/v1/models?limit=1000", "/v1/models?limit=1000&after_id=m3"]);
+	});
+
+	it("a server that ignores after_id (same page again) stops on the dedupe, no duplicates", async () => {
+		mode = "ignore-cursor";
+		const ids = await discoverModels("anthropic");
+		expect(ids).toEqual(PAGE1);
+		expect(hits).toHaveLength(2); // tried page 2, got nothing new, stopped
+	});
+
+	it("an always-lying cursor stops at the page cap", async () => {
+		mode = "always-new";
+		const ids = await discoverModels("anthropic");
+		expect(hits).toHaveLength(10); // MODELS_PAGE_CAP
+		expect(ids).toHaveLength(10);
+	});
+
+	it("the zai coding endpoint ({object, data}, no pagination fields) stays a single request", async () => {
+		// Separate tiny server on the zai path: /models (no /v1 prefix).
+		let zaiHits = 0;
+		const zaiServer = createServer((req, res) => {
+			zaiHits += 1;
+			if (req.url === "/models") {
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify({ object: "list", data: PAGE1.map((id) => ({ id })) }));
+				return;
+			}
+			res.writeHead(404);
+			res.end("{}");
+		});
+		await new Promise<void>((resolve) => zaiServer.listen(0, "127.0.0.1", resolve));
+		const addr = zaiServer.address();
+		if (addr === null || typeof addr === "string") throw new Error("no address");
+		try {
+			process.env.ZAI_BASE_URL = `http://127.0.0.1:${addr.port}`;
+			process.env.ZAI_API_KEY = "zai-key";
+			const ids = await discoverModels("zai");
+			expect(ids).toEqual(PAGE1);
+			expect(zaiHits).toBe(1); // single page, no cursor chasing
+		} finally {
+			await new Promise<void>((resolve) => zaiServer.close(() => resolve()));
+			delete process.env.ZAI_BASE_URL;
+			delete process.env.ZAI_API_KEY;
+		}
+	});
+});

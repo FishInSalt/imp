@@ -8,6 +8,8 @@ import {
 	compactSession,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
+	isContextOverflowError,
+	overflowGuidance,
 	shouldCompact,
 } from "./compaction.js";
 import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
@@ -158,7 +160,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// IMP_AUTOCOMPACT=0 disables it exactly like the main loop. NOTE: compaction
 	// does NOT reset the turn budget — CHILD_MAX_TURNS still bounds the child.
 	// The loop's turn counter is untouched by the history splice: compaction
-	// buys context room, not extra turns.
+	// buys context room, not extra turns. (Overflow recovery below is the
+	// deliberate exception: it is a SECOND runAgentLoop call, so its loop
+	// counter starts fresh — worst case 2x CHILD_MAX_TURNS, main-loop parity.)
 	const autoCompact = options.autoCompact ?? process.env.IMP_AUTOCOMPACT !== "0";
 	// Summarizer-failure backstop: after 3 consecutive failures compaction is
 	// disabled for the rest of the run (one stderr note) — a persistent auth
@@ -186,8 +190,14 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	 *  throws there but its host (the REPL) catches it and the next turn retries
 	 *  — a child has no outer host, so the equivalent contract (run survives,
 	 *  un-compacted history, retry at the next turn boundary if still over
-	 *  threshold) is provided by catching here. */
-	async function compactChildHistory(history: AgentMessage[]): Promise<void> {
+	 *  threshold) is provided by catching here.
+	 *
+	 *  Returns {compacted, error?}: the overflow-recovery seam (below) needs
+	 *  both signals — "did not move, do not retry" and the failure cause for
+	 *  the guidance text. The onBeforeTurn caller ignores the result. */
+	async function compactChildHistory(
+		history: AgentMessage[],
+	): Promise<{ compacted: boolean; error?: string }> {
 		try {
 			// The child's signal IS forwarded (unlike the runner's /compact, which
 			// deliberately waits): children have a wall clock the main loop lacks,
@@ -235,11 +245,16 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				addUsage(summarizedUsage, compacted.usage);
 				summarizedTurns += beforeStats.turns - afterStats.turns;
 				summarizedAny = true;
+				return { compacted: true };
 			}
-		} catch {
+			return { compacted: false }; // keepRecent swallowed everything (cut <= 0)
+		} catch (err) {
 			// Keep the un-compacted history and continue; the next turn boundary
 			// retries if the estimate is still over the threshold (bounded by
 			// CHILD_MAX_TURNS). The child has no status channel to report to.
+			// Abort-during-summarizer also lands here (the signal is forwarded) —
+			// the recovery seam re-checks child.signal.aborted, onBeforeTurn
+			// simply retries next boundary.
 			consecutiveFailures += 1;
 			if (consecutiveFailures >= 3) {
 				compactionDisabled = true;
@@ -247,6 +262,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					"imp: child compaction failed 3 times in a row — giving up for this task; the run continues un-compacted\n",
 				);
 			}
+			return { compacted: false, error: err instanceof Error ? err.message : String(err) };
 		}
 	}
 
@@ -265,8 +281,12 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	if (clock.aborted) child.abort();
 	else clock.addEventListener("abort", relay);
 
-	try {
-		const result: RunAgentLoopResult = await runAgentLoop({
+	/** The child's one launch seam: userMessage is undefined on the overflow
+	 *  retry — the failed attempt already left the prompt in history (the loop
+	 *  only appends non-empty prompts, loop.ts:112), a re-pass would duplicate
+	 *  it. Same shape as the main loop's retry (runner.ts:772). */
+	const launchLoop = (userMessage: string | undefined): Promise<RunAgentLoopResult> =>
+		runAgentLoop({
 			provider: options.provider,
 			model: options.model,
 			system:
@@ -275,7 +295,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				(options.extraSystem ? `\n\n# Agent profile\n\n${options.extraSystem}` : ""),
 			tools: options.tools,
 			history,
-			userMessage: options.prompt,
+			userMessage,
 			maxIterations: CHILD_MAX_TURNS,
 			onMessage: options.onMessage,
 			onToolCall: options.onToolCall,
@@ -283,6 +303,20 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			onBeforeTurn,
 			signal: child.signal,
 		});
+
+	/** Accounting from history + the summarized accumulator — shared by the
+	 *  crash path and the recovered path (both rounds' real cost lives in
+	 *  history; a second runAgentLoop's own counters only cover the retry). */
+	const statsFromHistory = () => {
+		const { turns, usage } = historyStats(history);
+		return {
+			turns: turns + summarizedTurns,
+			usage: summarizedAny ? addUsageIntoNew(usage, summarizedUsage) : usage,
+		};
+	};
+
+	try {
+		const result = await launchLoop(options.prompt);
 		if (result.stopReason === "aborted") {
 			const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
 			return {
@@ -299,18 +333,69 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			usage: result.usage,
 		};
 	} catch (err) {
-		// Provider/protocol error: partial recovery — whatever the child already
-		// said survives (§3); the task tool decides error vs partial-result.
-		const { turns, usage } = historyStats(history);
-		return {
+		const crashWith = (reason: string): SubagentOutcome => ({
 			status: "crash",
-			reason: err instanceof Error ? err.message : String(err),
+			reason,
 			text: finalAssistantText(history),
-			// The spliced history lost the summarized-away turns/usage — add the
-			// accumulator back so the (child: N turns, …) trailer stays truthful.
-			turns: turns + summarizedTurns,
-			usage: summarizedAny ? addUsageIntoNew(usage, summarizedUsage) : usage,
-		};
+			...statsFromHistory(),
+		});
+		const rawMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+		// #overflow-recovery (child): a live context-overflow error gets ONE
+		// compact-and-retry — the main loop's runTurnOrRecoverFromOverflow
+		// mirrored onto the child, minus its session-only compactAndSplice
+		// (compactChildHistory works in both modes). Single attempt, like pi's
+		// _overflowRecoveryAttempted and the main loop.
+		if (!isContextOverflowError(err)) {
+			// Provider/protocol error: partial recovery — whatever the child already
+			// said survives (§3); the task tool decides error vs partial-result.
+			return crashWith(rawMessage(err));
+		}
+		const guidanceTokens = () => estimateContextTokens(history).tokens;
+		if (compactionDisabled) {
+			return crashWith(
+				overflowGuidance(guidanceTokens(), settings, "compaction disabled after repeated failures"),
+			);
+		}
+		const { compacted, error } = await compactChildHistory(history);
+		if (!compacted) {
+			// Review P1-1: an abort/timeout during the compact window is swallowed
+			// by compactChildHistory's internal catch (it only returns false) —
+			// re-detect it here so the clock is not misreported as a crash.
+			if (child.signal.aborted) {
+				const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
+				return {
+					status: timedOut ? "timeout" : "aborted",
+					text: finalAssistantText(history),
+					...statsFromHistory(),
+				};
+			}
+			return crashWith(overflowGuidance(guidanceTokens(), settings, error ?? "nothing safe to compact"));
+		}
+		try {
+			const result = await launchLoop(undefined);
+			if (result.stopReason === "aborted") {
+				const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
+				return {
+					status: timedOut ? "timeout" : "aborted",
+					text: finalAssistantText(history),
+					...statsFromHistory(),
+				};
+			}
+			// D3: retry-success accounting from history (both rounds' cost).
+			return {
+				status: result.stopReason,
+				text: finalAssistantText(history),
+				...statsFromHistory(),
+			};
+		} catch (retryErr) {
+			// Review P1-2: a NON-overflow retry failure (401/500/network) keeps its
+			// raw message — never mislabeled as overflow (runner.ts:775 parity).
+			if (!isContextOverflowError(retryErr)) return crashWith(rawMessage(retryErr));
+			return crashWith(
+				overflowGuidance(guidanceTokens(), settings, "still over the window after one compaction"),
+			);
+		}
 	} finally {
 		options.signal?.removeEventListener("abort", relay);
 		clock.removeEventListener("abort", relay);

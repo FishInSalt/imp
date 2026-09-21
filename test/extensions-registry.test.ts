@@ -94,7 +94,7 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerCommand(command("model"));
 		});
 		expect(lines).toEqual([
-			'imp: extension meta could not register command "model" — reserved by imp (known: help exit new fork tree sessions resume model login logout think worktrees trust status settings copy name compact)',
+			'imp: extension meta could not register command "model" — reserved by imp (known: help exit new fork tree sessions resume model login logout think worktrees trust status mcp settings copy name compact)',
 		]);
 	});
 

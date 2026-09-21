@@ -320,6 +320,46 @@ description tells the model the same). Read-only agent profiles (`tools:`
 without edit/write/bash) make that structural — and `worktree: true` removes
 the shared surface entirely (see above).
 
+## MCP (Model Context Protocol)
+
+imp can consume tools exposed by MCP servers over stdio — the same config
+files pi's adapter reads, so an existing setup works unchanged:
+
+```jsonc
+// ~/.config/mcp/mcp.json (or ~/.agents/mcp.json, or <project>/.mcp.json)
+{
+	"mcpServers": {
+		"zai-vision": {
+			"command": "npx",
+			"args": ["-y", "@z_ai/mcp-server"],
+			"env": { "Z_AI_API_KEY": "…" }
+		}
+	}
+}
+```
+
+Discovery order (later files override earlier ones per server, whole entry):
+`~/.config/mcp/mcp.json` → `~/.agents/mcp.json` → `~/.agents/mcp/mcp.json` →
+`<project>/.mcp.json` → `<project>/mcp.json`. Values in `command`/`args`/`env`
+expand `${VAR}`, `$env:VAR` and `{env:VAR}` placeholders. `"disabled": true`
+on a server skips it (visible in `/mcp`).
+
+Every server tool registers flat as `<server>_<tool>` (e.g.
+`zai-vision_analyze_image`) and is callable by the model like a built-in tool.
+Connections start asynchronously at startup (npx cold starts can take a
+while); tools that connect while a run is in flight join at the next run
+boundary. A server that dies mid-session reconnects transparently on the next
+tool call. `/mcp` shows per-server status; `IMP_MCP=0` or
+`"mcp": {"enabled": false}` in settings disables the module entirely
+(no config found = zero cost, nothing spawns).
+
+**v1 scope** (stdio + tools only; deliberate, each deferral has a trigger):
+no OAuth/HTTP transports, no sampling or elicitation, no resources/prompts
+surfaces, no per-call approval gates, no cross-vendor config import
+(cursor/claude/windsurf), and no `mcp` proxy tool (flat registration until a
+server with ≥10 tools shows up). Design + trigger table:
+`docs/m18-mcp-design.md`.
+
 ## Extensions
 
 imp loads **extensions** — plain ESM modules (`.mjs`) whose default export is a

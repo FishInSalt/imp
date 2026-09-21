@@ -21,6 +21,8 @@ import {
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
+import { mcpConfigPaths } from "../mcp/config.js";
+import type { McpManager } from "../mcp/manager.js";
 import {
 	type ApiKeyFamily,
 	clearApiKey,
@@ -71,6 +73,10 @@ export interface CommandContext {
 	/** Clipboard write, bound in repl.ts (/copy). Injectable in tests so
 	 *  the suite never touches the real clipboard. */
 	copyText?: (text: string) => Promise<void>;
+	/** M18 MCP manager, bound in repl.ts when the module is active (config
+	 *  found + settings gate on). Absent otherwise — /mcp prints its own
+	 *  guidance without it. */
+	mcp?: McpManager;
 	/** Item picker, bound in repl.ts ONLY when the input shell implements it
 	 *  (TuiShell; the readline shell has none). Commands must keep a text
 	 *  fallback for a missing select. Resolves the chosen index, or null on
@@ -277,6 +283,7 @@ interface SettingEntry {
 function settingSource(ctx: CommandContext, key: string): "env" | "project" | "global" | "default" {
 	const pick = (o: object) => {
 		if (key.startsWith("images.")) return (o as { images?: { autoResize?: boolean } }).images?.autoResize;
+		if (key.startsWith("mcp.")) return (o as { mcp?: { enabled?: boolean } }).mcp?.enabled;
 		return (o as Record<string, unknown>)[key];
 	};
 	if (key === "defaultModel" && process.env.IMP_MODEL !== undefined) return "env";
@@ -346,6 +353,13 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			source: src("images.autoResize"),
 		},
 		{
+			key: "mcp.enabled",
+			label: "connect MCP servers from mcp.json",
+			current: bool(effective.mcp?.enabled, true),
+			kind: "boolean",
+			source: src("mcp.enabled"),
+		},
+		{
 			key: "steeringMode",
 			label: "steering drain per turn boundary",
 			current: effective.steeringMode ?? "all",
@@ -369,6 +383,7 @@ const SETTING_KEYS = [
 	"autoCompact",
 	"enableSkillCommands",
 	"images.autoResize",
+	"mcp.enabled",
 	"steeringMode",
 	"followUpMode",
 ] as const;
@@ -392,6 +407,7 @@ function parseSettingValue(
 		case "autoCompact":
 		case "enableSkillCommands":
 		case "images.autoResize":
+		case "mcp.enabled":
 			if (raw === "true" || raw === "false") return { ok: true, value: raw === "true" };
 			return { ok: false, error: `${key} must be true or false` };
 		case "steeringMode":
@@ -410,6 +426,9 @@ function parseSettingValue(
 function settingPatchFor(key: string, value: unknown): Record<string, unknown> {
 	if (key.startsWith("images.")) {
 		return { images: { [key.slice("images.".length)]: value } };
+	}
+	if (key.startsWith("mcp.")) {
+		return { mcp: { [key.slice("mcp.".length)]: value } };
 	}
 	return { [key]: value };
 }
@@ -1333,6 +1352,38 @@ export const COMMANDS: readonly SlashCommand[] = [
 				ctx.renderer.note(`▪ project trust ${state}`);
 			} catch {
 				ctx.renderer.note("▪ project trust (store unreadable — /trust shows details)");
+			}
+			return "handled";
+		},
+	},
+	{
+		name: "mcp",
+		summary: "show MCP server connections and tool counts",
+		usage: "/mcp",
+		allowedDuringRun: true, // read-only status, like /status (M18 §6)
+		run: (_args, ctx) => {
+			const settings = ctx.runner.effectiveSettings();
+			if (settings.mcp?.enabled === false) {
+				ctx.renderer.note(
+					"▪ mcp disabled in settings — /settings mcp.enabled true re-enables (next session)",
+				);
+				return "handled";
+			}
+			if (ctx.mcp === undefined) {
+				const paths = mcpConfigPaths({ cwd: ctx.runner.runnerCwd });
+				ctx.renderer.note(`▪ no MCP servers configured (looked in: ${paths.join(", ")})`);
+				return "handled";
+			}
+			for (const line of ctx.mcp.statusLines()) {
+				if (line.status === "connected") {
+					ctx.renderer.writeLine(
+						`  ${line.name}: connected · ${line.tools} tool${line.tools === 1 ? "" : "s"}`,
+					);
+				} else if (line.status === "failed" && line.error !== null) {
+					ctx.renderer.writeLine(`  ${line.name}: failed · ${line.error}`);
+				} else {
+					ctx.renderer.writeLine(`  ${line.name}: ${line.status}`);
+				}
 			}
 			return "handled";
 		},

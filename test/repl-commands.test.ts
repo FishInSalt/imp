@@ -294,6 +294,7 @@ describe("slash commands", () => {
 				"  /worktrees         list worktrees kept for a manual merge (M6b handbacks)",
 				"  /trust             show the project-trust decision for this directory (and all records)",
 				"  /status            session, model, context, and trust at a glance",
+				"  /mcp               show MCP server connections and tool counts",
 				"  /settings [key]    view or change settings (scope: global|project)",
 				"  /copy              copy the last agent message to the clipboard",
 				"  /name              name this session (shows in /sessions)",
@@ -505,7 +506,7 @@ describe("slash commands", () => {
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
 			'imp: unknown command "/foo"\n' +
-				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /settings /copy /name /compact — /help shows what they do\n",
+				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /mcp /settings /copy /name /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name

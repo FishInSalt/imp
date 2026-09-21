@@ -19,6 +19,8 @@ import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
+import { discoverMcpConfig } from "./mcp/config.js";
+import { McpManager } from "./mcp/manager.js";
 import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
@@ -539,6 +541,11 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		reportStartupError(err);
 		return;
 	}
+	// M18 MCP: manager creation lives here (not in the runner) — the runner
+	// stays tool-agnostic; the manager splices into the live tools array and
+	// the REPL drives its run boundaries. Skipped entirely when the settings
+	// gate is off (D4) — no discovery, no spawns, /mcp reports the gate.
+	const mcp = createMcpSetup(renderer, runner);
 	let code: number;
 	try {
 		code = await runRepl({
@@ -546,6 +553,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			commands,
 			confirm,
 			releaseStartupNotes,
+			mcp,
 			shell,
 			transcript,
 			inputHistoryPath: shell === "tui" ? historyFilePath(homedir()) : undefined,
@@ -566,6 +574,29 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	// Setting the code and returning lets the loop drain naturally; the
 	// force-exit paths (double Ctrl+C) keep their explicit process.exit.
 	process.exitCode = code;
+}
+
+/** M18 MCP setup (interactive + print): discovery, gate, manager, and the
+ *  initial fire-and-forget connections. Returns undefined when disabled or
+ *  unconfigured — callers treat that as "module inert" (D4).
+ *  IMP_MCP=0 is the env escape hatch (mirrors IMP_AUTOCOMPACT) for CI and
+ *  quick diagnostics. */
+function createMcpSetup(renderer: Renderer, runner: Runner): McpManager | undefined {
+	if (process.env.IMP_MCP === "0") return undefined;
+	const settings = runner.effectiveSettings();
+	if (settings.mcp?.enabled === false) return undefined;
+	const discovered = discoverMcpConfig({ cwd: process.cwd() });
+	for (const note of discovered.notes) renderer.note(note);
+	if (discovered.servers.length === 0) return undefined;
+	const manager = new McpManager({
+		servers: discovered.servers,
+		cwd: process.cwd(),
+		version: VERSION,
+		renderer,
+	});
+	manager.attachToolsArray(runner.tools);
+	manager.connectAll();
+	return manager;
 }
 
 /** M12 skills — loaded right after the trust gate resolves, mirroring the
@@ -792,6 +823,11 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 
 	try {
+		// M18: print mode gets MCP too — one fire-and-forget connectAll before
+		// the single run; no boundary machine (a one-shot has no second run to
+		// flush late tools into). Tools that connect in time join the run's
+		// toolMap; slow handshakes simply miss it.
+		const mcp = createMcpSetup(renderer, runner);
 		const result = await runner.runTurn({
 			userMessage: opts.prompt,
 			userImages: attachImages,
@@ -801,6 +837,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		renderer.endRun(true);
 		runner.printRunStats(result);
 		runner.printSessionStats();
+		mcp?.close();
 	} catch (err) {
 		renderer.endRun(true);
 		reportStartupError(err);

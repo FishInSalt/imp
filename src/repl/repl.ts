@@ -9,6 +9,7 @@ import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
+import type { McpManager } from "../mcp/manager.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
 import { imageSuffix, type Renderer } from "../render.js";
@@ -66,6 +67,11 @@ export interface ReplOptions {
 	 *  it instead of burying it. Absent in tests and print mode — notes then
 	 *  print live, as before. */
 	releaseStartupNotes?: () => void;
+	/** M18 MCP manager (created by cli.ts when config exists + the settings
+	 *  gate is on; absent otherwise). The REPL drives its run boundaries
+	 *  (late tools flush at run end — loop toolMap is per-run) and its
+	 *  shutdown (gracefulExit / forceExit). */
+	mcp?: McpManager;
 }
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
@@ -271,6 +277,8 @@ interface ReplMachineOptions {
 	replay: (session: SessionStore) => number;
 	exit: (code: number) => never;
 	finish: (code: number) => void;
+	/** M18: MCP manager for run boundaries + shutdown (from ReplOptions). */
+	mcp?: McpManager;
 }
 
 /**
@@ -317,6 +325,9 @@ class ReplMachine {
 	private readonly input: LineInput;
 	private readonly interactive: boolean;
 	private readonly replay: (session: SessionStore) => number;
+	/** M18 MCP manager — run boundaries and shutdown (optional: absent when
+	 *  the module is inert). */
+	private readonly mcp: McpManager | undefined;
 	private readonly exit: (code: number) => never;
 	private readonly finish: (code: number) => void;
 
@@ -327,6 +338,7 @@ class ReplMachine {
 		this.input = options.input;
 		this.interactive = options.interactive;
 		this.replay = options.replay;
+		this.mcp = options.mcp;
 		this.exit = options.exit;
 		this.finish = options.finish;
 		this.refreshFooter(); // eager warmup already knows model + session
@@ -509,6 +521,11 @@ class ReplMachine {
 	private async submitTurn(line: string, display?: string): Promise<void> {
 		if (this.state === "exited") return;
 		this.state = "running";
+		// M18: run boundary START — flush any tools that connected while idle
+		// plus mid-run completions parked by the manager, and retry startup-
+		// failed servers within budget. Must precede runTurn: flushed tools
+		// join THIS run's toolMap (loop.ts builds it once per run).
+		this.mcp?.onRunStart();
 		// M17: the run's drain modes (design §3) — read from the LIVE merged
 		// view so a pre-run /settings write is already in effect for this run.
 		const settings = this.runner.effectiveSettings();
@@ -806,6 +823,9 @@ class ReplMachine {
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {
 		this.controller = null;
 		this.interruptCount = 0;
+		// M18: run boundary END — tools that connected mid-run flush now (the
+		// next run's toolMap picks them up).
+		this.mcp?.onRunEnd();
 		if (this.state === "exited") return;
 		this.renderer.endRun();
 		// Stats placement (pi parity, 2026-09-10): the TUI transcript carries
@@ -827,6 +847,7 @@ class ReplMachine {
 	private settleFailure(err: unknown): void {
 		this.controller = null;
 		this.interruptCount = 0;
+		this.mcp?.onRunEnd(); // M18: same boundary as settleSuccess
 		if (this.state === "exited") return;
 		this.renderer.endRun();
 		this.refreshFooter(); // partial usage may have landed before the failure
@@ -1109,6 +1130,7 @@ class ReplMachine {
 	private gracefulExit(code: number): void {
 		if (this.state === "exited") return;
 		this.state = "exited";
+		this.mcp?.close(); // M18: kill MCP children before goodbye
 		const session = this.runner.session;
 		if (session) {
 			const id8 = session.header.id.slice(0, 8);
@@ -1122,6 +1144,7 @@ class ReplMachine {
 	private forceExit(code: number): void {
 		if (this.state === "exited") return;
 		this.state = "exited";
+		this.mcp?.forceKill(); // M18: synchronous best-effort kill
 		// Close dangling tool_use in the session so a force-quit run stays
 		// resumable (single Ctrl+C is handled by the loop; this is the 130 path).
 		this.runner.persistMissingToolResults("(force quit before this tool ran)");
@@ -1148,6 +1171,7 @@ class ReplMachine {
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string, opts?: { display?: string }) => this.enqueuePrompt(text, opts?.display),
 			copyText: (text: string) => copyToClipboard(text), // /copy (M16)
+			mcp: this.mcp, // M18: /mcp status
 			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
 			refreshFooter: () => this.refreshFooter(), // /think repaints the level segment
 			abortActive: () => {

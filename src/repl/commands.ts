@@ -7,6 +7,7 @@ import {
 	loadProjectSettings,
 	loadSettings,
 	projectSettingsPath,
+	type QueueMode,
 	saveProjectSettings,
 	saveSettings,
 } from "../core/settings.js";
@@ -137,8 +138,9 @@ Keys:
   Shift+Tab          cycle the thinking level (models with thinking)
   Ctrl+T             hide/show reasoning traces (pi's toggle, persisted)
   newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter
-  follow-up          Alt+Enter queues the line to run AFTER the running turn
-                     (plain Enter steers into it)
+  follow-up          Alt+Enter queues the line for the SAME run — consumed
+                     when the model would stop, one per answer (Enter steers into
+                     the next model call instead)
   queued input       Alt+Up (or Esc,p — works without the Kitty protocol)
                      pulls all queued lines back into the editor; Ctrl+C
                      abort hands them back the same way — never dropped
@@ -268,7 +270,7 @@ interface SettingEntry {
 	/** env vars shadow a key (the imp invariant: env is the session override). */
 	envShadow?: string;
 	source: "env" | "project" | "global" | "default";
-	kind: "boolean" | "level" | "string";
+	kind: "boolean" | "level" | "string" | "mode";
 }
 
 /** Per-key source (review P2-3): env > project > global > default. */
@@ -343,6 +345,20 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			kind: "boolean",
 			source: src("images.autoResize"),
 		},
+		{
+			key: "steeringMode",
+			label: "steering drain per turn boundary",
+			current: effective.steeringMode ?? "all",
+			kind: "mode",
+			source: src("steeringMode"),
+		},
+		{
+			key: "followUpMode",
+			label: "follow-up drain per run boundary",
+			current: effective.followUpMode ?? "one-at-a-time",
+			kind: "mode",
+			source: src("followUpMode"),
+		},
 	];
 }
 
@@ -353,7 +369,11 @@ const SETTING_KEYS = [
 	"autoCompact",
 	"enableSkillCommands",
 	"images.autoResize",
+	"steeringMode",
+	"followUpMode",
 ] as const;
+
+const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 
 function parseSettingValue(
 	key: string,
@@ -374,6 +394,11 @@ function parseSettingValue(
 		case "images.autoResize":
 			if (raw === "true" || raw === "false") return { ok: true, value: raw === "true" };
 			return { ok: false, error: `${key} must be true or false` };
+		case "steeringMode":
+		case "followUpMode":
+			return (QUEUE_MODES as readonly string[]).includes(raw)
+				? { ok: true, value: raw }
+				: { ok: false, error: `${key} must be one of: ${QUEUE_MODES.join(", ")}` };
 		default:
 			return {
 				ok: false,
@@ -490,6 +515,8 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		const order = THINKING_LEVELS as readonly string[];
 		const at = order.indexOf(entry.current === "(medium)" ? "medium" : entry.current);
 		next = order[(at + 1) % order.length] ?? null;
+	} else if (entry.kind === "mode") {
+		next = entry.current === "all" ? "one-at-a-time" : "all";
 	} else {
 		next = entry.current === "true" ? "false" : "true";
 	}
@@ -508,7 +535,10 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		if (pick === null) return "handled";
 		scope = pick === 1 ? "project" : "global";
 	}
-	const patch = settingPatchFor(entry.key, entry.kind === "boolean" ? next === "true" : next);
+	const patch = settingPatchFor(
+		entry.key,
+		entry.kind === "boolean" ? next === "true" : entry.kind === "mode" ? (next as QueueMode) : next,
+	);
 	const saved =
 		scope === "project"
 			? saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd)

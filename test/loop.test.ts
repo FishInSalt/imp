@@ -202,3 +202,126 @@ describe("agent loop", () => {
 		expect(types).toContain("message_end");
 	});
 });
+
+describe("M17 follow-up continuation (same run)", () => {
+	it("a non-empty follow-up poll continues the SAME run: one result, aggregated usage, follow-up in history", async () => {
+		const provider = scriptedProvider([
+			assistant([{ type: "text", text: "first answer" }]),
+			assistant([{ type: "text", text: "follow-up answer" }]),
+		]);
+		const history: AgentMessage[] = [];
+		let polls = 0;
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history,
+			userMessage: "go",
+			getFollowUpMessages: () => {
+				polls++;
+				// first would-stop boundary delivers one queued entry; the second finds the pool empty
+				return polls === 1 ? [{ role: "user", content: "now this" }] : [];
+			},
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(result.turns).toBe(2); // both assistant turns in ONE run
+		expect(result.usage).toMatchObject({ inputTokens: 20, outputTokens: 10 }); // aggregated across the continuation
+		expect(history).toHaveLength(4); // go → answer → follow-up → answer
+		expect(history[0]).toMatchObject({ role: "user", content: "go" });
+		expect(history[1]).toMatchObject({ role: "assistant" });
+		expect(history[2]).toMatchObject({ role: "user", content: "now this" }); // injected before the second call
+		expect(history[3]).toMatchObject({ role: "assistant" });
+	});
+
+	it("empty follow-up poll is the real stop: completed at the boundary", async () => {
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])]);
+		let polls = 0;
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+			getFollowUpMessages: () => {
+				polls++;
+				return [];
+			},
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(result.turns).toBe(1);
+		expect(polls).toBe(1);
+	});
+
+	it("steering queued at the would-stop boundary is consumed BEFORE any follow-up (pi order)", async () => {
+		let calls = 0;
+		let steeringQueue: AgentMessage[] = [];
+		const followUps: AgentMessage[] = [{ role: "user", content: "F" }];
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream() {
+				calls++;
+				if (calls === 1) {
+					// queue the steer DURING the first response's stream: every earlier
+					// top-of-loop poll read empty — only the would-stop boundary poll
+					// can see it (pi agent-loop.ts :257 before :261)
+					await new Promise<void>((resolve) => setTimeout(resolve, 0));
+					steeringQueue = [{ role: "user", content: "S" }];
+					yield { type: "message_end", message: assistant([{ type: "text", text: "turn one" }]) };
+				} else if (calls === 2) {
+					yield { type: "message_end", message: assistant([{ type: "text", text: "turn two" }]) };
+				} else {
+					yield { type: "message_end", message: assistant([{ type: "text", text: "turn three" }]) };
+				}
+			},
+		};
+		const history: AgentMessage[] = [];
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history,
+			userMessage: "go",
+			getSteeringMessages: () => {
+				const drained = steeringQueue;
+				steeringQueue = [];
+				return drained;
+			},
+			getFollowUpMessages: () => followUps.splice(0),
+		});
+		// order: go → response 1 → boundary takes S (steer priority, extra turn)
+		// → response 2 → boundary: steering empty → followUp F → response 3 → stop
+		const users = history.filter((m) => m.role === "user").map((m) => (m as { content: unknown }).content);
+		expect(users).toEqual(["go", "S", "F"]);
+		expect(result.turns).toBe(3); // ONE run across both continuations
+	});
+
+	it("abort during a follow-up turn returns aborted; unconsumed follow-ups were never polled away", async () => {
+		const controller = new AbortController();
+		let calls = 0;
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream() {
+				calls++;
+				if (calls === 1) yield { type: "message_end", message: assistant([{ type: "text", text: "one" }]) };
+				// second call (the follow-up turn): abort mid-stream
+				controller.abort();
+				yield { type: "text_delta", text: "par" };
+				throw new Error("unreachable — abortSafe providers end the stream");
+			},
+		};
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+			signal: controller.signal,
+			getFollowUpMessages: () => (calls === 1 ? [{ role: "user", content: "F" }] : []),
+		});
+		expect(result.stopReason).toBe("aborted");
+	});
+});

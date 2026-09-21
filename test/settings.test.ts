@@ -1,6 +1,7 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadSettings, saveSettings, settingsFilePath } from "../src/core/settings.js";
 
@@ -33,5 +34,37 @@ describe("settings store (#thinking-levels persistence)", () => {
 			if (prev === undefined) delete process.env.IMP_SETTINGS_PATH;
 			else process.env.IMP_SETTINGS_PATH = prev;
 		}
+	});
+});
+
+describe("M17 queue drain modes", () => {
+	it("steeringMode/followUpMode coerce the two-value enum; anything else reads as unset", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-m17-"));
+		const file = join(dir, "settings.json");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				steeringMode: "all",
+				followUpMode: "one-at-a-time",
+				bogus: { steeringMode: "all" },
+			}),
+			"utf-8",
+		);
+		const loaded = loadSettings(file);
+		expect(loaded.steeringMode).toBe("all");
+		expect(loaded.followUpMode).toBe("one-at-a-time");
+		// invalid literals drop (forgiving load, code default applies)
+		writeFileSync(file, JSON.stringify({ steeringMode: "everything", followUpMode: 3 }), "utf-8");
+		expect(loadSettings(file).steeringMode).toBeUndefined();
+		expect(loadSettings(file).followUpMode).toBeUndefined();
+	});
+
+	it("saveSettings round-trips both keys", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-m17-"));
+		const file = join(dir, "settings.json");
+		expect(saveSettings({ steeringMode: "one-at-a-time", followUpMode: "all" }, file)).toBe(true);
+		const loaded = loadSettings(file);
+		expect(loaded.steeringMode).toBe("one-at-a-time");
+		expect(loaded.followUpMode).toBe("all");
 	});
 });

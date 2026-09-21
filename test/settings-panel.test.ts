@@ -352,3 +352,31 @@ describe("M15 startup default model", () => {
 		expect(loadSettings(file).defaultModel).toBe("openai-codex/gpt-5.5");
 	});
 });
+
+describe("M17 queue mode keys in /settings", () => {
+	it("no-arg table shows both keys with the imp defaults", async () => {
+		const booted = await boot({ projectAllowed: false });
+		await runSettings("", booted.ctx);
+		const text = booted.output();
+		expect(text).toContain("steeringMode = all");
+		expect(text).toContain("followUpMode = one-at-a-time");
+	});
+
+	it("/settings steeringMode one-at-a-time writes and validates", async () => {
+		const booted = await boot();
+		await runSettings("steeringMode one-at-a-time", booted.ctx);
+		expect(booted.output()).toContain("settings: steeringMode all → one-at-a-time (global, next session)");
+		expect(loadSettings(booted.globalPath).steeringMode).toBe("one-at-a-time");
+
+		const booted2 = await boot();
+		await runSettings("steeringMode batched", booted2.ctx);
+		expect(booted2.output()).toContain("steeringMode must be one of: all, one-at-a-time");
+	});
+
+	it("/settings followUpMode accepts all (the pi-nondefault direction)", async () => {
+		const booted = await boot();
+		await runSettings("followUpMode all", booted.ctx);
+		expect(booted.output()).toContain("settings: followUpMode one-at-a-time → all (global, next session)");
+		expect(loadSettings(booted.globalPath).followUpMode).toBe("all");
+	});
+});

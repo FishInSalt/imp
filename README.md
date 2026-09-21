@@ -110,9 +110,14 @@ imp            # interactive REPL (streaming, one-line tool status)
 
 - Plain lines are sent to the model. Lines typed while imp is working are
   queued — each queued row shows its route: `steer:` lines (plain Enter)
-  inject into the running turn before the next model call, `follow-up:`
-  lines (alt+enter) wait for the run to settle and then run as their own
-  turn. The prompt shows `+ ` while a run is active.
+  inject into the running turn before the next model call (default mode
+  `all`: every queued steer line joins the next boundary at once),
+  `follow-up:` lines (alt+enter) are consumed by the SAME run when the
+  model would otherwise stop — one queued follow-up per answer (default
+  mode `one-at-a-time`), so a queued sequence advances without returning
+  to idle and one Ctrl+C interrupts the whole remainder. Both drain modes
+  are settings keys: `/settings steeringMode` and `/settings followUpMode`
+  (`all` | `one-at-a-time`). The prompt shows `+ ` while a run is active.
 - alt+up (or esc+p — works on terminals without the Kitty keyboard
   protocol) pulls every queued line back into the editor for editing;
   your in-progress draft is preserved below them. Ctrl+C abort hand the

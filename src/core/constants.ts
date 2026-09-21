@@ -21,3 +21,23 @@ export const CHILD_TIMEOUT_MS = 30 * 60 * 1000;
  *  turn latency against endpoint pressure and worst-case deterministic
  *  tool_end wait (a fast call reports behind at most cap-1 slow siblings). */
 export const MAX_CONCURRENT_TASKS = 5;
+
+/** imp's built-in tool names (M18: moved here from extensions/registry so the
+ *  MCP bridge shares the exact same hand list — the M16 P1 lesson was this
+ *  list drifting between checkers, letting an extension register `ls` over
+ *  the builtin. Order preserved from the registry original — error strings
+ *  join this list and their goldens pin it.) */
+export const BUILTIN_TOOL_NAMES: readonly string[] = [
+	"bash",
+	"read",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"task",
+];
+
+/** Tool and command names (extensions AND MCP-bridged tools) must match
+ *  this (design §9; M18: single home — registry and the MCP bridge share it). */
+export const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;

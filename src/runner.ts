@@ -134,6 +134,10 @@ export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session";
 
 export interface Runner {
 	readonly session: SessionStore | null;
+	/** The live tool table (M18: the MCP manager splices bridged tools in at
+	 *  run boundaries; identity stable for the loop's per-turn wire request).
+	 *  readonly = do not REASSIGN; the array itself is mutated in place. */
+	readonly tools: Tool[];
 	/** The merged settings view (M15) — construction-time snapshot
 	 *  (global ← trust-gated project). */
 	effectiveSettings(): ImpSettings;
@@ -249,7 +253,10 @@ class RunnerImpl implements Runner {
 	private readonly logger: RunLogger;
 	private provider: LLMProvider; // wrapped with logging once; /model may swap it (multi-provider)
 	providerName: ProviderName; // implements Runner's public readonly tell
-	private readonly tools: Tool[];
+	/** The live tool table (M18: public — the MCP manager splices its bridged
+	 *  tools in at run boundaries; the array identity is stable for the loop's
+	 *  per-turn wire request while execution's toolMap is rebuilt per run). */
+	readonly tools: Tool[];
 	private readonly autoCompact: boolean;
 	private effective: ImpSettings;
 

@@ -52,6 +52,10 @@ export interface ImpSettings {
 	 *  4.5 MB encoded); false keeps conversion but ships original bytes —
 	 *  oversize files then hit the batch-1 teaching error again. */
 	images?: { autoResize?: boolean };
+	/** M18 MCP: master gate (default true — with no mcp.json anywhere the
+	 *  module is inert anyway, D4 zero-cost-without-config). false skips
+	 *  discovery and connections entirely; /mcp then reports the gate. */
+	mcp?: { enabled?: boolean };
 }
 
 /** The global settings file path (IMP_SETTINGS_PATH overrides — hermetic tests). */
@@ -93,6 +97,12 @@ function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
 		const outImages: { autoResize?: boolean } = {};
 		if (typeof images.autoResize === "boolean") outImages.autoResize = images.autoResize;
 		if (Object.keys(outImages).length > 0) out.images = outImages;
+	}
+	if (parsed.mcp !== null && typeof parsed.mcp === "object" && !Array.isArray(parsed.mcp)) {
+		const mcp = parsed.mcp as Record<string, unknown>;
+		const outMcp: { enabled?: boolean } = {};
+		if (typeof mcp.enabled === "boolean") outMcp.enabled = mcp.enabled;
+		if (Object.keys(outMcp).length > 0) out.mcp = outMcp;
 	}
 	return out;
 }

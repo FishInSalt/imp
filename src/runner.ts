@@ -223,7 +223,12 @@ export interface Runner {
 	): Promise<
 		| { noop: true }
 		| { aborted: true }
-		| { editorText?: string; summary: "written" | "empty" | "disabled" | "failed"; messages: number }
+		| {
+				editorText?: string;
+				editorTextDroppedImages?: boolean;
+				summary: "written" | "empty" | "disabled" | "failed";
+				messages: number;
+		  }
 	>;
 	printRunStats(result: RunAgentLoopResult, options?: { statsLine?: boolean }): void;
 	printSessionStats(): void;
@@ -669,6 +674,12 @@ class RunnerImpl implements Runner {
 		const isUserMessage = target.type === "message" && target.message.role === "user";
 		const newLeaf = isUserMessage ? target.parentId : targetId;
 		const editorText = isUserMessage ? userText(target.message) : undefined;
+		// Design §7 P3: re-edit restores TEXT only — flag dropped images.
+		const hadImages =
+			isUserMessage &&
+			target.message.role === "user" &&
+			Array.isArray(target.message.content) &&
+			target.message.content.some((b) => b.type === "image");
 
 		let outcome: "written" | "empty" | "disabled" | "failed" = "disabled";
 		let summary: string | undefined;
@@ -719,6 +730,7 @@ class RunnerImpl implements Runner {
 		this.history.push(...store.buildContext().messages);
 		return {
 			...(editorText === undefined ? {} : { editorText }),
+			...(hadImages === true ? { editorTextDroppedImages: true } : {}),
 			summary: outcome,
 			messages: this.history.length,
 		};

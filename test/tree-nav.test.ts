@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
-import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { assistant, gate, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 
@@ -195,5 +195,72 @@ describe("runner.navigateTree (#tree)", () => {
 		if ("noop" in result || "aborted" in result) throw new Error("expected a plain result");
 		expect(result.summary).toBe("failed");
 		expect(store.getLeafId()).toBe(a2old); // switched anyway
+	});
+});
+
+describe("navigateTree review-round pins (#tree)", () => {
+	it("identity guard: a session swap mid-summarize appends NOTHING to the old store", async () => {
+		const hold = gate();
+		const requests: LLMRequest[] = [];
+		const provider: LLMProvider = {
+			name: "gated",
+			async *stream(request) {
+				requests.push({ ...request, messages: [...request.messages] });
+				await hold.promise;
+				yield { type: "text_delta", text: "LATE SUMMARY" };
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text: "LATE SUMMARY" }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+				};
+			},
+		};
+		const { runner, store, ids } = await navEnv({ provider });
+		store.appendMessage(user("q3-new"));
+		const a2old = store.getTree()[0]?.children[0]?.children.find((n) => n.entry.id === ids.q2old)?.children[0]
+			?.entry.id;
+		const pending = runner.navigateTree(a2old ?? "", { summarize: true });
+		runner.newSession(); // the swap happens while the summarizer hangs
+		hold.resolve();
+		const leafBefore = store.getLeafId();
+		const result = await pending;
+		if ("noop" in result || "aborted" in result) throw new Error("expected failed");
+		expect(result.summary).toBe("failed");
+		// the OLD store gained no summary and did not move
+		expect(store.getBranch().some((e) => e.type === "branchSummary")).toBe(false);
+		expect(store.getLeafId()).toBe(leafBefore);
+	});
+
+	it("a compaction entry on the newly selected path is honored by the rebuild", async () => {
+		const { runner, store, ids } = await navEnv();
+		// put a compaction at the head of the abandoned branch: q2-old's child
+		// position on the abandoned branch and compact there: q2-old → compaction
+		store.branchTo(ids.q2old);
+		const compId = store.appendCompaction("COMPACTED TRUNK", [user("kept-1")], 1000);
+		store.appendMessage(user("after-compaction"));
+		const tipId = store.appendMessage(assistant([{ type: "text", text: "done" }]));
+		// move AWAY (to the other fork), then navigate to the post-compaction tip
+		store.branchTo(ids.a1);
+		expect(store.getLeafId()).toBe(ids.a1);
+		const result = await runner.navigateTree(tipId, { summarize: false });
+		void compId;
+		if ("noop" in result || "aborted" in result) throw new Error("expected plain");
+		// buildContext: compaction summary + retainedTail + after-entries
+		const texts = runner.history
+			.filter(
+				(m): m is AgentMessage & { role: "user"; content: string } =>
+					m.role === "user" && typeof m.content === "string" && !m.content.startsWith("["),
+			)
+			.map((m) => m.content);
+		expect(texts).toEqual(["kept-1", "after-compaction"]); // q2-old collapsed into the summary
+		const summaryMsg = runner.history.find(
+			(m): m is AgentMessage & { role: "user" } =>
+				m.role === "user" && typeof m.content === "string" && m.content.startsWith("[Conversation summary"),
+		);
+		expect(summaryMsg?.content).toContain("COMPACTED TRUNK");
 	});
 });

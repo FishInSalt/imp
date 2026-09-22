@@ -542,11 +542,7 @@ export class SessionStore {
 			targetId,
 			label: label ?? "",
 		};
-		appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
-		this.entries.push(entry);
-		this.byId.set(entry.id, entry);
-		if (entry.label === "") this.labelsById.delete(entry.targetId);
-		else this.labelsById.set(entry.targetId, entry.label);
+		this.append(entry); // indexEntry's label branch advances NO leaf
 		return entry.id;
 	}
 

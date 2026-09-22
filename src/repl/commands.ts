@@ -936,7 +936,14 @@ export const COMMANDS: readonly SlashCommand[] = [
 			}
 			const trimmed = args.trim();
 			let targetId: string | null = null;
-			if (/^[1-9]\d*$/.test(trimmed)) {
+			let summarize = false;
+			let customInstructions: string | undefined;
+			let viaPicker = false; // the TUI navigator already asked; the numbered path never asks
+			if (/^0\d*$/.test(trimmed)) {
+				// numeric but invalid (zero / leading zero) — a precise message
+				ctx.renderer.error(`imp: /tree ${trimmed} — row numbers run #1–#${rows.length}`);
+				return "handled";
+			} else if (/^[1-9]\d*$/.test(trimmed)) {
 				const target = rows[Number(trimmed) - 1];
 				if (target === undefined) {
 					ctx.renderer.error(`imp: /tree ${trimmed} — the tree runs #1–#${rows.length}`);
@@ -947,12 +954,44 @@ export const COMMANDS: readonly SlashCommand[] = [
 				ctx.renderer.error("imp: /tree takes no text — /tree opens the navigator, /tree <n> goes to row #n");
 				return "handled";
 			} else if (ctx.treeSelect !== undefined) {
-				const picked = await ctx.treeSelect({
-					roots: session.getTree(),
-					leafId: session.getLeafId(),
-				});
-				if (picked === null) return "handled"; // cancelled
-				targetId = picked;
+				// The pick → ask loop (review P2: Esc at the ask RETURNS TO THE
+				// TREE, and a cancelled custom prompt re-asks — pi's flow; only
+				// cancelling the tree itself ends the command).
+				viaPicker = true;
+				while (true) {
+					const picked = await ctx.treeSelect({
+						roots: session.getTree(),
+						leafId: session.getLeafId(),
+					});
+					if (picked === null) return "handled"; // cancelled the command
+					// The current position is a selectable row (absolute
+					// visibility) — pi answers "already there" BEFORE any ask.
+					if (picked === session.getLeafId()) {
+						ctx.renderer.note("▪ already at that point");
+						return "handled";
+					}
+					targetId = picked; // set before every exit from the loop
+					if (ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0") break;
+					const choice = await ctx.select({
+						title: "Summarize the branch you are leaving into the new one?",
+						items: [
+							{ label: "No summary", description: "switch without carrying the left branch over" },
+							{ label: "Summarize", description: "keep the left branch's lessons in context" },
+							{
+								label: "Summarize with custom prompt",
+								description: "add your own instructions",
+							},
+						],
+					});
+					if (choice === null) continue; // Esc → back to the tree selector
+					if (choice === 1 || choice === 2) summarize = true;
+					if (choice === 2) {
+						const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
+						if (typed === null || typed.trim() === "") continue; // re-ask (pi loops too)
+						customInstructions = typed.trim();
+					}
+					break;
+				}
 			} else {
 				// Legacy readline shell: the numbered text tree (same rows).
 				ctx.renderer.writeLine(ctx.renderer.dim("session tree (pick with /tree <n>):"));
@@ -966,30 +1005,17 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			if (targetId === null) return "handled"; // unreachable; type guard
+			// The current position is a selectable row (absolute visibility) —
+			// pi's flow answers "already there" BEFORE any ask or progress note.
+			if (targetId === session.getLeafId()) {
+				ctx.renderer.note("▪ already at that point");
+				return "handled";
+			}
 
-			// The summarize question: three-way pi parity (design §3.4). Only
-			// the TUI shell can ask interactively; /tree <n> and IMP_BRANCH_SUMMARY=0
-			// keep the old behavior — summarize when enabled, never otherwise.
-			let summarize = false;
-			let customInstructions: string | undefined;
-			if (ctx.select !== undefined && trimmed === "" && process.env.IMP_BRANCH_SUMMARY !== "0") {
-				const choice = await ctx.select({
-					title: "Summarize the branch you are leaving into the new one?",
-					items: [
-						{ label: "No summary", description: "switch without carrying the left branch over" },
-						{ label: "Summarize", description: "keep the left branch's lessons in context" },
-						{ label: "Summarize with custom prompt", description: "add your own instructions" },
-					],
-				});
-				if (choice === null) return "handled"; // Esc = cancelled the navigation
-				if (choice === 1 || choice === 2) summarize = true;
-				if (choice === 2) {
-					const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
-					if (typed === null || typed.trim() === "") return "handled"; // cancelled
-					customInstructions = typed.trim();
-				}
-			} else if (process.env.IMP_BRANCH_SUMMARY !== "0") {
-				summarize = true; // /tree <n>: no interactive channel — match the old default
+			// /tree <n> (both shells) and IMP_BRANCH_SUMMARY=0 keep the old
+			// behavior — summarize when enabled, never otherwise (no ask).
+			if (targetId !== null && !viaPicker && process.env.IMP_BRANCH_SUMMARY !== "0") {
+				summarize = true;
 			}
 
 			// Progress feedback BEFORE the potentially 5-20s summarizer await —
@@ -1022,8 +1048,15 @@ export const COMMANDS: readonly SlashCommand[] = [
 				// and as a note where there is no editor (legacy shell).
 				if (result.editorText !== undefined && result.editorText.trim() !== "") {
 					const current = ctx.getEditorText?.() ?? "";
-					if (current.trim() === "" && ctx.setEditorText !== undefined) ctx.setEditorText(result.editorText);
-					else ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”`);
+					// Design §7 P3: re-edit restores TEXT only — say so when the
+					// original message carried images.
+					const suffix = result.editorTextDroppedImages === true ? " (text only — images dropped)" : "";
+					if (current.trim() === "" && ctx.setEditorText !== undefined) {
+						ctx.setEditorText(result.editorText);
+						if (suffix !== "") ctx.renderer.note(`▪ re-edit restores text only${suffix}`);
+					} else {
+						ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”${suffix}`);
+					}
 				}
 				const tail =
 					result.summary === "written"

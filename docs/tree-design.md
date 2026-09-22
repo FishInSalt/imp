@@ -1,6 +1,6 @@
 # /tree 会话树导航(设计稿)
 
-状态:已实现(设计审查闭环后用户批准;实现审查待跑;测试 1075→1101)。设计审查记录见 §7。
+状态:已实现;实现审查闭环(1 P1+4 P2+3 P3,全采纳,见 §9);测试 1075→1105。设计审查记录见 §7。
 
 ## 0. 背景与目标
 
@@ -312,3 +312,14 @@ TreeNode.label 来源:labelsById(文件级,重放后写胜);**树节点 = 非 la
 - 集成:treeSelect 存在时命令流(mock resolve entryId)、legacy 文本树、
   /tree <n> 树行序号、**摘要中止流(longOpAbort)**、editorText 回填仅
   空编辑器、legacy note 打印。
+
+## 9. 实现审查记录(`a96c518` 后)
+
+判 needs-fixes(1 P1+4 P2+3 P3);D 契约与 §7 五项 P1 修正全部落实(逐项核实)。全部采纳并修复:
+- **P1(f 键吞掉搜索字母)**:`data === "f"` 无 query 守卫——搜索时打不出任何含 f 的词。修:`f` 仅在无搜索时为折叠键。
+- **P2(leaf 目标先问摘要后报 noop)**:当前 leaf 是可选行,选它先弹三选再"already at that point"。修:选中即短路(设计 §3.4 本序)。
+- **P2(Esc 应回树选择器)**:三选/自定义指令的取消原直接退出命令。修:pick→ask 循环——ask 取消重开树、自定义取消重问(pi 同);仅取消树本身才退出。
+- **P2(§8 三枚缺失测试)**:身份守卫(newSession 换库后摘要不落旧库、leaf 不动)、命令级 longOpAbort 中止流(onLongOpAbort 注册→abort→"stayed on the current branch"→finally 清空)、新路径 compaction 尊重(summary+retainedTail+后续)。
+- **P2(多根渲染)**:原平铺,现照 pi 虚拟根降一层+连接符(测试改钉)。`· roots: n` 头行**不实现**(记录简化:多根本身仅见于损坏文件)。
+- **P3×3**:appendLabelChange 复用 append()(单一索引不变式);editorText 丢图像时 UI 提示"(text only — images dropped)"(runner 返回 editorTextDroppedImages);`/tree 0` 类前导零给精确文案。
+- 顺带发现并修:重构循环中 targetId 早退路径漏赋值(env=0 无询问直捕场景)。

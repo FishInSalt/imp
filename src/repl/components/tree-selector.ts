@@ -207,10 +207,17 @@ export function buildTreeRows(
 		...roots.filter((r) => activePath.has(r.entry.id)),
 		...roots.filter((r) => !activePath.has(r.entry.id)),
 	];
-	for (let i = 0; i < orderedRoots.length; i++) {
-		const root = orderedRoots[i];
-		if (root === undefined) continue;
-		flatten(root, 0, false, false, i === orderedRoots.length - 1, []);
+	if (orderedRoots.length === 1) {
+		const root = orderedRoots[0];
+		if (root !== undefined) flatten(root, 0, false, false, false, []);
+	} else {
+		// Multiple roots (orphans): pi's virtual root — the roots render one
+		// level down with connectors, visually one tree (review P2).
+		for (let i = 0; i < orderedRoots.length; i++) {
+			const root = orderedRoots[i];
+			if (root === undefined) continue;
+			flatten(root, 1, true, true, i === orderedRoots.length - 1, []);
+		}
 	}
 
 	if (opts.query !== undefined && opts.query !== "") {
@@ -283,7 +290,8 @@ export class TreeSelectorComponent implements Component {
 			const i = TREE_FILTER_MODES.indexOf(this.mode);
 			this.mode = TREE_FILTER_MODES[(i + 1) % TREE_FILTER_MODES.length] as TreeFilterMode;
 			this.clampSelection();
-		} else if (data === "f") {
+		} else if (data === "f" && this.query === "") {
+			// review P1: searchable "f" beats the fold key
 			const row = this.rows()[this.selected];
 			if (row !== undefined) {
 				if (this.folded.has(row.entryId)) this.folded.delete(row.entryId);

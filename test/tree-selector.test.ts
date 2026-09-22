@@ -166,11 +166,13 @@ describe("buildTreeRows (#tree)", () => {
 		expect(rows.map((r) => r.entryId)).toEqual([ids.a3]);
 	});
 
-	it("multi-root: orphans render as additional top-level rows", () => {
+	it("multi-root: pi's virtual root — roots de-indent under connectors (review P2)", () => {
 		const { roots, ids } = posterTree();
 		const orphan = node({ id: "orphan", type: "message", message: user("orphan") });
 		const rows = buildTreeRows([...roots, orphan], ids.a3 ?? null, { filter: "default" });
-		expect(rows[0]?.prefix).toBe("");
+		// the active root leads with a connector; the orphan is the LAST root
+		expect(rows[0]?.prefix).toBe("├─ ");
+		expect(rows[6]?.prefix).toBe("└─ ");
 		expect(rows[6]?.text).toBe("user: orphan");
 	});
 
@@ -216,6 +218,22 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 		expect(picked).toEqual(["q1"]);
 		selector.handleInput("\x1b"); // no search open — Esc cancels directly
 		expect(state.cancelled).toBe(true);
+	});
+
+	it("'f' types into the search — fold only fires without a query (review P1)", () => {
+		const { selector, picked, state } = harness("a3");
+		selector.handleInput("fold"); // contains TWO f's — must reach the query
+		// rows: nothing matches "fold" among texts except the surviving leaf a3
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["a3"]);
+		for (let i = 0; i < 4; i++) selector.handleInput("\x7f"); // one char each — terminals deliver per-key
+		// back to empty query
+		expect(selector.rows()).toHaveLength(6);
+		selector.handleInput("f"); // NOW it folds (selected row 0 = the root)
+		expect(selector.rows()).toHaveLength(1);
+		selector.handleInput("f"); // unfold
+		expect(selector.rows()).toHaveLength(6);
+		expect(picked).toEqual([]);
+		expect(state.cancelled).toBe(false);
 	});
 
 	it("typing searches; Esc clears the search first; backspace edits", () => {

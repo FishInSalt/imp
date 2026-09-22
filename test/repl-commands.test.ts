@@ -20,7 +20,7 @@ import { dispatchCommand, helpText, loginNeedsGuard, parseCommand } from "../src
 import { buildTreeRows } from "../src/repl/components/tree-selector.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
-import { assistant, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
+import { assistant, gate, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
 
 beforeEach(() => {
 	vi.stubEnv("IMP_LOG", "0");
@@ -1264,6 +1264,35 @@ describe("/tree (#10 batch 2)", () => {
 		await dispatchCommand("/tree", env.ctx);
 		expect(env.runner.session?.getLeafId()).toBe(leafBefore);
 		secretAnswer = null;
+	});
+
+	it("Ctrl+C mid-summary via onLongOpAbort: stayed on the current branch (#tree, review P2)", async () => {
+		const hold = gate();
+		const provider: LLMProvider = {
+			name: "gated",
+			// biome-ignore lint/correctness/useYield: the throw IS the script (abort surfaces before any delta)
+			async *stream() {
+				await hold.promise;
+				throw new Error("branch summary: summarizer aborted — incomplete, rejected");
+			},
+		};
+		const env = await branchedEnvWith(provider);
+		env.runner.session?.appendMessage(user("q3-new"));
+		const leafBefore = env.runner.session?.getLeafId();
+		const seen: (AbortController | null)[] = [];
+		(env.ctx as { onLongOpAbort?: unknown }).onLongOpAbort = (c: AbortController | null) => {
+			seen.push(c);
+		};
+		const pending = dispatchCommand("/tree 4", env.ctx); // row 4 = the abandoned tip
+		await new Promise((r) => setTimeout(r, 20)); // the summarizer is now hanging
+		const live = seen.find((c): c is AbortController => c !== null);
+		live?.abort(); // the compacting-state Ctrl+C path does exactly this
+		hold.resolve();
+		await pending;
+		const out = env.output();
+		expect(out).toContain("summarization cancelled — stayed on the current branch");
+		expect(env.runner.session?.getLeafId()).toBe(leafBefore); // nothing moved
+		expect(seen[seen.length - 1]).toBeNull(); // the finally cleared the channel
 	});
 
 	it("editorText backfill lands only over an EMPTY editor (#tree)", async () => {

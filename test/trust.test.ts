@@ -208,3 +208,21 @@ describe("askTrustOnce (the interactive one-time ask)", () => {
 		expect(await answer).toBeNull();
 	});
 });
+
+describe("trustRequiringResources #system-md", () => {
+	it("SYSTEM.md and APPEND_SYSTEM.md files gate like settings.json", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-trust-sysmd-"));
+		mkdirSync(join(dir, ".imp"), { recursive: true });
+		writeFileSync(join(dir, ".imp", "SYSTEM.md"), "persona");
+		writeFileSync(join(dir, ".imp", "APPEND_SYSTEM.md"), "extra");
+		const resources = trustRequiringResources(dir, home);
+		expect(resources).toContain(".imp/SYSTEM.md");
+		expect(resources).toContain(".imp/APPEND_SYSTEM.md");
+	});
+
+	it("a directory shadowing the name does not trigger the ask (isFile)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-trust-shadow-"));
+		mkdirSync(join(dir, ".imp", "SYSTEM.md"), { recursive: true });
+		expect(trustRequiringResources(dir, home)).toEqual([]);
+	});
+});

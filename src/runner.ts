@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { type AgentRegistry, formatAgentsForPrompt, loadAgentDefinitions } from "./core/agents/registry.js";
 import {
@@ -26,6 +27,7 @@ import {
 	mcpCatalogEntries,
 	type PromptCatalogTool,
 } from "./core/system-prompt.js";
+import { loadSystemPromptFiles } from "./core/system-prompt-files.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
 import { createFindTool } from "./core/tools/find.js";
@@ -89,6 +91,15 @@ export interface RunnerOptions {
 	agentsHomeDir?: string;
 	/** M8 trust gate: false skips `<cwd>/.imp/agents` (global agents still load). */
 	agentsProjectAllowed?: boolean;
+	/** #system-md: the session-resolved trust bit for project SYSTEM.md /
+	 *  APPEND_SYSTEM.md. The loader must NOT re-read the trust store — the
+	 *  "session" answer grants without recording (design review P1-1).
+	 *  Default false (conservative when not told). */
+	systemPromptProjectAllowed?: boolean;
+	/** Hermetic tests: overrides ~/.imp for SYSTEM.md/APPEND_SYSTEM.md
+	 *  discovery (design review P1-2 — a real global file on the dev machine
+	 *  would replace the prompt and machine-break the suite). */
+	systemPromptHomeDir?: string;
 	/** Defer session creation and startup banners until the first warmup()
 	 *  call. Scripted (piped) mode uses this so a zero-line pipe — the "forgot
 	 *  -p" case — exits with HELP and no side effects (no banners, no empty
@@ -509,7 +520,34 @@ class RunnerImpl implements Runner {
 			...this.tools.filter((t) => t.mcpServer === undefined),
 			...mcpCatalogEntries(this.tools),
 		];
-		let system = buildSystemPrompt(defaultSystemPromptContext(), catalogTools);
+		// #system-md: cwd is pinned to the session cwd, not process.cwd() —
+		// in override mode it is the sole surviving machine fact (review P2-5).
+		const promptFiles = loadSystemPromptFiles(
+			this.options.cwd,
+			this.options.systemPromptProjectAllowed ?? false,
+			this.options.systemPromptHomeDir ?? os.homedir(),
+		);
+		let system = buildSystemPrompt({ ...defaultSystemPromptContext(), cwd: this.options.cwd }, catalogTools, {
+			override: promptFiles.override?.text,
+			append: promptFiles.append?.text,
+		});
+		if (notify) {
+			const sources = [promptFiles.override, promptFiles.append]
+				.filter((e): e is { text: string; path: string } => e !== undefined)
+				.map((e) => path.relative(this.options.cwd, e.path) || e.path);
+			if (sources.length > 0) {
+				this.options.renderer.note(`▪ system: ${sources.join(", ")}`);
+			}
+			const rel = (p: string) => path.relative(this.options.cwd, p) || p;
+			for (const file of promptFiles.supersededByGlobal) {
+				this.options.renderer.note(
+					`▪ global ${path.basename(file)} active — project ${rel(file)} ignored (imp --trust to enable)`,
+				);
+			}
+			for (const file of promptFiles.unreadableProject) {
+				this.options.renderer.note(`▪ could not read ${rel(file)} — skipped`);
+			}
+		}
 		if (!this.options.noContextFiles) {
 			const context = loadContextFiles(this.options.cwd);
 			if (context) {

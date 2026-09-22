@@ -17,3 +17,10 @@ process.env.IMP_AUTH_PATH = join(mkdtempSync(join(tmpdir(), "imp-auth-")), "auth
 // M14 (#model-catalog): the pi.dev disk cache gets the same sandbox — a
 // stray overlay must never leak the developer's real catalog into tests.
 process.env.IMP_CATALOG_PATH = join(mkdtempSync(join(tmpdir(), "imp-catalog-")), "models-catalog.json");
+
+// #system-md (impl review P1): HOME gets the same sandbox — os.homedir()
+// resolves $HOME on POSIX, so a developer's real ~/.imp/SYSTEM.md (the
+// feature's own target audience) must never leak into any test's prompt
+// assembly. Fixes the class, not two call sites: skills/task-tool/mcp-
+// wiring runner tests inherit the isolation for free.
+process.env.HOME = mkdtempSync(join(tmpdir(), "imp-home-"));

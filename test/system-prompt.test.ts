@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { Type } from "typebox";
@@ -142,5 +142,158 @@ describe("runner system assembly (prompt-audit P4/P5/P7 integration)", () => {
 			.split("\n")
 			.filter((l) => l.includes("context:")).length;
 		expect(noteLinesAfter).toBe(noteLinesBefore); // refresh is silent
+	});
+});
+
+describe("buildSystemPrompt override/append (#system-md)", () => {
+	it("override replaces the body; cwd line survives; append follows the override", () => {
+		const prompt = buildSystemPrompt(CTX, [{ name: "bash", promptSnippet: "x" }], {
+			override: "You are my Rust reviewer.",
+			append: "Answer in Chinese.",
+		});
+		expect(prompt.startsWith("You are my Rust reviewer.")).toBe(true);
+		expect(prompt).not.toContain("# Core rules");
+		expect(prompt).not.toContain("# Available tools");
+		expect(prompt).not.toContain("# Environment");
+		expect(prompt).toContain("Current working directory: /w");
+		expect(prompt.indexOf("You are my Rust reviewer.")).toBeLessThan(prompt.indexOf("Answer in Chinese."));
+	});
+
+	it("append-only lands after the default body", () => {
+		const prompt = buildSystemPrompt(CTX, [], { append: "Answer in Chinese." });
+		expect(prompt).toContain("# Core rules");
+		expect(prompt).toContain("Use tools proactively");
+		expect(prompt.trimEnd().endsWith("Answer in Chinese.")).toBe(true);
+	});
+});
+
+describe("runner SYSTEM.md integration (#system-md)", () => {
+	async function makeBase(): Promise<string> {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-sysmd-"));
+		await mkdir(join(base, ".imp"), { recursive: true });
+		return base;
+	}
+
+	async function makeRunner(base: string, extra: Record<string, unknown> = {}) {
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd: base,
+			argv: [],
+			settingsPath: join(base, "settings.json"),
+			systemPromptHomeDir: join(base, "home"),
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 2,
+			noContextFiles: false,
+			noSession: true,
+			renderer,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])]),
+			...extra,
+		});
+		return { runner, output };
+	}
+
+	it("override replaces the body; context/skills/agents survive (D3/D4); note fires", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "You are my Rust reviewer.");
+		await writeFile(join(base, "AGENTS.md"), "Project rule: be terse.");
+		const { runner, output } = await makeRunner(base, {
+			systemPromptProjectAllowed: true,
+			skills: [
+				{
+					name: "demo",
+					description: "A demo skill",
+					filePath: join(base, "demo.md"),
+					baseDir: base,
+					source: "path",
+				},
+			],
+		});
+		const system = runner.system;
+		expect(system.startsWith("You are my Rust reviewer.")).toBe(true);
+		expect(system).not.toContain("# Core rules");
+		// the four survivors: cwd line, context XML, skills block
+		expect(system).toContain(`Current working directory: ${base}`);
+		expect(system).toContain("<project_context>");
+		expect(system).toContain("Project rule: be terse.");
+		expect(system).toContain("<available_skills>");
+		expect(output()).toContain("▪ system: .imp/SYSTEM.md");
+	});
+
+	it("P1-1 pin: session trust (nothing recorded in the store) still loads the project file", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "session persona");
+		// no trust store anywhere — the session-resolved boolean is the only grant
+		const { runner } = await makeRunner(base, { systemPromptProjectAllowed: true });
+		expect(runner.system.startsWith("session persona")).toBe(true);
+	});
+
+	it("default is conservative: without the flag the project file is ignored (global home empty)", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
+		const { runner, output } = await makeRunner(base);
+		expect(runner.system).toContain("# Core rules");
+		expect(output()).not.toContain("▪ system:");
+	});
+
+	it("P1-2 hermeticity: systemPromptHomeDir isolates the global tier both ways", async () => {
+		const base = await makeBase();
+		const home = join(base, "home");
+		await mkdir(join(home, ".imp"), { recursive: true });
+		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
+		const withGlobal = await makeRunner(base);
+		expect(withGlobal.runner.system.startsWith("global persona")).toBe(true);
+		// a different, empty home → no override even though the first home exists on disk
+		const emptyHome = join(base, "home2");
+		await mkdir(join(emptyHome, ".imp"), { recursive: true });
+		const without = await makeRunner(base, { systemPromptHomeDir: emptyHome });
+		expect(without.runner.system).toContain("# Core rules");
+	});
+
+	it("mixed pairs render per-file superseded notes + unreadable warns (impl review P2)", async () => {
+		const base = await makeBase();
+		const home = join(base, "home");
+		await mkdir(join(home, ".imp"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
+		await writeFile(join(base, ".imp", "APPEND_SYSTEM.md"), "project append");
+		await writeFile(join(home, ".imp", "APPEND_SYSTEM.md"), "global append");
+		const { output } = await makeRunner(base, { systemPromptProjectAllowed: false });
+		expect(output()).toContain("global APPEND_SYSTEM.md active — project .imp/APPEND_SYSTEM.md ignored");
+		expect(output()).not.toContain("global SYSTEM.md active"); // SYSTEM pair has no global takeover
+	});
+
+	it("an unreadable trusted file renders the skip warn (D5)", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		const locked = join(base, ".imp", "APPEND_SYSTEM.md");
+		await writeFile(locked, "locked append");
+		await chmod(locked, 0o000);
+		const { output } = await makeRunner(base, { systemPromptProjectAllowed: true });
+		expect(output()).toContain("▪ could not read .imp/APPEND_SYSTEM.md — skipped");
+	});
+
+	it("untrusted + global takeover renders the superseded note (D6 copy)", async () => {
+		const base = await makeBase();
+		const home = join(base, "home");
+		await mkdir(join(home, ".imp"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
+		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
+		const { runner, output } = await makeRunner(base, { systemPromptProjectAllowed: false });
+		expect(runner.system.startsWith("global persona")).toBe(true);
+		expect(output()).toContain("global SYSTEM.md active — project .imp/SYSTEM.md ignored");
+		expect(output()).toContain("imp --trust to enable");
+	});
+
+	it("D10: mid-session file edit is picked up by refreshSystemPrompt", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		const { runner } = await makeRunner(base, { systemPromptProjectAllowed: true });
+		expect(runner.system).toContain("# Core rules");
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "edited persona");
+		runner.refreshSystemPrompt();
+		expect(runner.system.startsWith("edited persona")).toBe(true);
 	});
 });

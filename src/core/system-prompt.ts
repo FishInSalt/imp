@@ -15,12 +15,23 @@ export interface PromptCatalogTool {
 	promptSnippet?: string;
 }
 
+/** #system-md (D3/D4): a full replacement body — identity, environment, core
+ *  rules and the tool catalog all go; the cwd line survives because workspace
+ *  boundary rules and path resolution depend on it (pi parity). */
+export interface SystemPromptOptions {
+	override?: string;
+	/** APPEND_SYSTEM.md — lands after the body in both modes, before the
+	 *  runner's context/skills/agents appendages (pi's relative order). */
+	append?: string;
+}
+
 /** One routing line per snippet-bearing tool. pi's snippets were too terse to
  *  route on ("Read file contents"); these answer WHEN to reach for the tool —
  *  the decision the model makes before it reads schemas. */
 export function buildSystemPrompt(
 	context: SystemPromptContext,
 	tools: readonly PromptCatalogTool[] = [],
+	opts?: SystemPromptOptions,
 ): string {
 	const lines = tools
 		.filter((tool) => tool.promptSnippet !== undefined && tool.promptSnippet !== "")
@@ -33,6 +44,12 @@ export function buildSystemPrompt(
 ${lines.join("\n")}`
 			: "";
 
+	const appendSection = opts?.append ? `\n\n${opts.append}` : "";
+	if (opts?.override) {
+		// The only machine fact that must survive replacement (D4): platform
+		// is discoverable via one bash call; cwd is not.
+		return `${opts.override}${appendSection}\n\nCurrent working directory: ${context.cwd}`;
+	}
 	return `You are imp, a small coding agent that runs in the user's terminal.
 
 # Environment
@@ -51,7 +68,7 @@ ${catalog}
 
 In addition to the tools above, you may have access to other tools depending on the project.
 
-Use tools proactively to establish facts; base your answers on observed output, not assumptions.`;
+Use tools proactively to establish facts; base your answers on observed output, not assumptions.${appendSection}`;
 }
 
 /** prompt-audit P7: MCP catalog entries — per-tool one-liners while the

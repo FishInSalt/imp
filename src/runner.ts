@@ -19,7 +19,7 @@ import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
-import { formatSkillsForPrompt, type Skill } from "./core/skills.js";
+import { escapeXml, formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import {
 	buildSystemPrompt,
 	defaultSystemPromptContext,
@@ -517,7 +517,10 @@ class RunnerImpl implements Runner {
 				// by file content; tags give the model a reliable boundary and
 				// carry the file's provenance (pi's <project_context> shape).
 				const inner = context.sections
-					.map((s) => `<project_instructions path="${s.path}">\n${s.content}\n</project_instructions>\n\n`)
+					.map(
+						(s) =>
+							`<project_instructions path="${escapeXml(s.path)}">\n${s.content}\n</project_instructions>\n\n`,
+					)
 					.join("");
 				system += `\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n${inner}</project_context>`;
 				if (notify) {

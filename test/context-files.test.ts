@@ -83,3 +83,16 @@ describe("candidates + first-match (prompt-audit P4)", () => {
 		expect(loaded!.sections[0]!.content).toBe("override wins");
 	});
 });
+
+describe("global tier stays AGENTS.md-only (impl review P2-1)", () => {
+	it("an unreadable global AGENTS.md does NOT fall through to ~/.imp/CLAUDE.md", async () => {
+		const { root, home } = await makeTree();
+		const imp = path.join(home, ".imp");
+		await mkdir(imp, { recursive: true });
+		await writeFile(path.join(imp, "CLAUDE.md"), "global claude must not load");
+		// AGENTS.md exists but is a directory → readFileSync throws
+		await mkdir(path.join(imp, "AGENTS.md"), { recursive: true });
+		const loaded = loadContextFiles(root, home);
+		expect(loaded).toBeNull();
+	});
+});

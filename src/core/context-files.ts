@@ -64,11 +64,14 @@ export function loadContextFiles(cwd: string, home: string = os.homedir()): Load
 	if (files.length === 0) return null;
 
 	const sections: Array<{ path: string; content: string }> = [];
+	const globalFile = path.join(home, ".imp", "AGENTS.md");
 	for (const file of files) {
 		// Read-failure fall-through (design review P3-4, pi parity): an
 		// unreadable AGENTS.md must not shadow a readable CLAUDE.md — walk the
 		// remaining candidates of the same directory before giving up on it.
-		const candidates = [file, ...fallbackCandidates(file)];
+		// The GLOBAL file is exempt (impl review P2-1): its tier is pinned to
+		// AGENTS.md exactly — ~/.imp/CLAUDE.md must not load via the back door.
+		const candidates = file === globalFile ? [file] : [file, ...fallbackCandidates(file)];
 		for (const candidate of candidates) {
 			let content: string;
 			try {

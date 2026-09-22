@@ -316,8 +316,7 @@ Use tools proactively to establish facts; base your answers on observed output, 
   加码(服务器数量不可控)。
 - **D7 roster**:数值上限抄 pi-subagents(16/12KB/512B);opt-in advertise
   不做(imp 注册量小;记档触发=注册量增长)。
-- **D8 质量门**:error|length 双 stopReason,压缩与分支摘要两处;空摘要
-  检查保留。
+- **D8 质量门**:`max_tokens` stopReason(词表以 imp 为准,§6.5 P1-3 修订;实现另加 abort 门),压缩与分支摘要两处;空摘要检查保留。
 - **D9 延后**:SYSTEM.md/APPEND_SYSTEM.md 整替(用户裁定:本批不做,下一
   批再看);扩展 promptGuidelines 注入(contextSections 已覆盖);
   pi-subagents 安全段(治理产物)。
@@ -409,3 +408,5 @@ splice 路径都产生 SUMMARY_MARK 头且 cut≥1 时形状良构;home 目录�
 
 verdict 摘录:"architecture of the batch … sound and well-matched to the
 verified seams; every judgment in §1 is directionally correct"。
+
+**实现审查（`b7b401a` 后，同日）**：无 P0/P1 运行时缺陷；P1-P9+D1-D9 逐项核实落实（D10 账本条目当时缺失，见下）。判 needs-fixes 两项 P2+五项 P3，全部亲自核实后修复：P2-1 全局 `~/.imp/AGENTS.md` 经 fallbackCandidates 漏进 5 名回退（AGENTS.md 名在名单内，读失败会穿透到 ~/.imp/CLAUDE.md）→全局槽豁免回退+钉子；P2-2 supersedes-M18-D6 未记 PROJECT_PLAN→已记+M18 文档 D6 加被取代标记；P3×5：12KB 预算改按渲染后整块计（含头尾/警示行/omitted）、repl generic fold 补 display 感知、两处 summarizer 各加 abort 门（中止流无 message_end，部分摘要原可正常返回落盘）、⎿/two-line 的 display 钉×2、path 属性 escapeXml。另修文档 D8 过时措辞（error|length→max_tokens）。

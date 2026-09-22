@@ -332,3 +332,39 @@ describe("renderMarkdownLite", () => {
 		expect(renderMarkdownLite(src, false)).toBe(src);
 	});
 });
+
+describe("render display channel (prompt-audit P1, impl review P3-4)", () => {
+	const displayResult: ToolResult = {
+		toolCallId: "t1",
+		toolName: "edit",
+		content: [{ type: "text", text: "Edited a.ts: 1 edit applied." }],
+		isError: false,
+		display: "Edited a.ts (1 edit applied):\n@@ line 1 @@\n- old",
+	};
+
+	it("the ⎿ result summary shows the display text", () => {
+		let text = "";
+		const r = new Renderer({
+			write: (s) => (text += s),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "one-line",
+		});
+		r.event({ type: "tool_end", result: displayResult });
+		expect(text).toContain("Edited a.ts (1 edit applied)");
+		expect(text).not.toContain("Edited a.ts: 1 edit applied.");
+	});
+
+	it("two-line style also prefers display", () => {
+		let text = "";
+		const r = new Renderer({
+			write: (s) => (text += s),
+			ansi: false,
+			liveTools: false,
+			toolStyle: "two-line",
+		});
+		r.event({ type: "tool_end", result: displayResult });
+		expect(text).toContain("Edited a.ts (1 edit applied)");
+		expect(text).not.toContain("Edited a.ts: 1 edit applied.");
+	});
+});

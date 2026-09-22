@@ -366,6 +366,9 @@ export async function summarizeBranchSegment(args: {
 			throw new Error("branch summary: hit the token cap — incomplete, rejected");
 		}
 	}
+	if (args.signal?.aborted) {
+		throw new Error("branch summary: summarizer aborted — incomplete, rejected");
+	}
 	if (summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
 	return summary.trim();
 }
@@ -478,6 +481,12 @@ export async function compactHistory(args: {
 	// end_turn|tool_use|max_tokens|stop_sequence|null; provider errors throw).
 	if (summarizerStopReason === "max_tokens") {
 		throw new Error("compaction: summary hit the token cap — incomplete, rejected");
+	}
+	// Aborted streams end without message_end — a partial summary must not be
+	// spliced in either (impl review P3-3; the child seam forwards its signal,
+	// and the recovery seam re-classifies the throw as timeout/aborted).
+	if (args.signal?.aborted) {
+		throw new Error("compaction: summarizer aborted — incomplete, rejected");
 	}
 	if (summary.trim() === "" && finalText !== undefined) summary = finalText;
 	if (summary.trim() === "") throw new Error("compaction: summarizer returned an empty summary");

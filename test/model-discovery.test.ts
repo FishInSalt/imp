@@ -341,14 +341,21 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 	const PAGE1 = ["m1", "m2", "m3"];
 	const PAGE2 = ["m4", "m5"];
 
+	/** Write-then-send helper: the page2-500 branch must NOT have a 200
+	 *  header pre-written (CI caught ERR_HTTP_HEADERS_SENT when it did). */
+	const sendJson = (res: import("node:http").ServerResponse, body: string): void => {
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(body);
+	};
+
 	beforeAll(async () => {
 		server = createServer((req, res) => {
 			hits.push(String(req.url));
 			const url = new URL(String(req.url), "http://x");
-			res.writeHead(200, { "content-type": "application/json" });
 			if (mode === "single-camel") {
 				// Today's live z.ai compat-endpoint shape (2026-02-07 probe).
-				res.end(
+				sendJson(
+					res,
 					JSON.stringify({ data: PAGE1.map((id) => ({ id })), firstId: "m1", hasMore: false, lastId: "m3" }),
 				);
 				return;
@@ -356,7 +363,8 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 			if (mode === "page-camel" || mode === "page-snake") {
 				const camel = mode === "page-camel";
 				if (url.searchParams.get("after_id") === null) {
-					res.end(
+					sendJson(
+						res,
 						JSON.stringify(
 							camel
 								? { data: PAGE1.map((id) => ({ id })), firstId: "m1", hasMore: true, lastId: "m3" }
@@ -364,7 +372,8 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 						),
 					);
 				} else {
-					res.end(
+					sendJson(
+						res,
 						JSON.stringify(
 							camel
 								? { data: PAGE2.map((id) => ({ id })), firstId: "m4", hasMore: false, lastId: "m5" }
@@ -376,9 +385,9 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 			}
 			if (mode === "page2-500") {
 				if (url.searchParams.get("after_id") === null) {
-					res.end(JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
+					sendJson(res, JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
 				} else {
-					res.writeHead(500);
+					res.writeHead(500); // own header — never a pre-written 200
 					res.end("{}");
 				}
 				return;
@@ -386,13 +395,13 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 			if (mode === "ignore-cursor") {
 				// Server that reports more pages but returns the SAME page whatever
 				// after_id says (z.ai ignores cursor params today).
-				res.end(JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
+				sendJson(res, JSON.stringify({ data: PAGE1.map((id) => ({ id })), hasMore: true, lastId: "m3" }));
 				return;
 			}
 			// always-new: every request serves one fresh id and keeps lying about
 			// more pages — the page cap is the only stop.
 			const n = hits.length;
-			res.end(JSON.stringify({ data: [{ id: `fresh-${n}` }], hasMore: true, lastId: `fresh-${n}` }));
+			sendJson(res, JSON.stringify({ data: [{ id: `fresh-${n}` }], hasMore: true, lastId: `fresh-${n}` }));
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		const address = server.address();

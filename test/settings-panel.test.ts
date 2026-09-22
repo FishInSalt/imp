@@ -380,3 +380,50 @@ describe("M17 queue mode keys in /settings", () => {
 		expect(loadSettings(booted.globalPath).followUpMode).toBe("all");
 	});
 });
+
+describe("#tree batch B settings keys", () => {
+	it("no-arg table shows both keys with their defaults", async () => {
+		const booted = await boot({ projectAllowed: false });
+		await runSettings("", booted.ctx);
+		const text = booted.output();
+		expect(text).toContain("treeFilterMode = default");
+		expect(text).toContain("branchSummary.skipPrompt = false");
+	});
+
+	it("typed writes validate the five literals and echo LIVE (not next session)", async () => {
+		const booted = await boot();
+		await runSettings("treeFilterMode labeled-only", booted.ctx);
+		expect(booted.output()).toContain("settings: treeFilterMode default → labeled-only (global, live)");
+		expect(loadSettings(booted.globalPath).treeFilterMode).toBe("labeled-only");
+		const booted2 = await boot();
+		await runSettings("treeFilterMode everything", booted2.ctx);
+		expect(booted2.output()).toContain("must be one of: default, no-tools, user-only, labeled-only, all");
+	});
+
+	it("branchSummary.skipPrompt writes nested and echoes live", async () => {
+		const booted = await boot();
+		await runSettings("branchSummary.skipPrompt true", booted.ctx);
+		expect(booted.output()).toContain("settings: branchSummary.skipPrompt false → true (global, live)");
+		const raw = JSON.parse(readFileSync(booted.globalPath, "utf-8")) as {
+			branchSummary?: { skipPrompt?: boolean };
+		};
+		expect(raw.branchSummary?.skipPrompt).toBe(true);
+	});
+
+	it("the panel's Enter cycle uses the entry's own values (impl-review P3-7)", async () => {
+		const booted = await boot(); // untrusted: no scope picker after the row pick
+		(booted.ctx as { select?: unknown }).select = async (options: {
+			title?: string;
+			items?: { label: string }[];
+		}) => {
+			// pick the treeFilterMode ROW (whatever its index is)
+			const at = (options.items ?? []).findIndex((i) => i.label === "treeFilterMode");
+			return at;
+		};
+		await runSettings("", booted.ctx);
+		// default → no-tools (the SECOND literal — a regression to the
+		// hardcoded queue pair would write "one-at-a-time" here)
+		expect(booted.output()).toContain("settings: treeFilterMode default → no-tools (global, live)");
+		expect(loadSettings(booted.globalPath).treeFilterMode).toBe("no-tools");
+	});
+});

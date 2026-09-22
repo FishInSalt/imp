@@ -814,8 +814,13 @@ export class TuiShell implements LineInput {
 					Math.max(4, Math.min(16, tui.terminal.rows - 6)),
 					(entryId) => finish(entryId),
 					() => finish(null),
+					{
+						initialFilterMode: options.initialFilterMode,
+						onLabelChange: options.onLabelChange,
+					},
 				),
-				options.title ?? "Navigate the session tree (enter=go · tab=filter · f=fold · type to search)",
+				options.title ??
+					"Navigate the session tree (enter=go · tab=filter · f=fold · L=label · type to search)",
 			);
 			this.selector = { teardown: () => finish(null) };
 			this.updatePlaceholder();

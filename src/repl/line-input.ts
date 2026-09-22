@@ -5,6 +5,7 @@ export interface SelectItemOption {
 }
 
 import type { TreeNode } from "../core/session/store.js";
+import type { TreeFilterMode } from "./components/tree-selector.js";
 
 /** #tree: what treeSelect renders — the session tree (store.getTree()'s
  * shape) plus the current position. */
@@ -12,6 +13,12 @@ export interface TreeSelectRequest {
 	roots: TreeNode[];
 	leafId: string | null;
 	title?: string;
+	/** Opening filter — the treeFilterMode setting (batch B; pi's
+	 *  initialFilterMode). Default "default". */
+	initialFilterMode?: TreeFilterMode;
+	/** Persist a committed label edit (batch B; undefined label = remove).
+	 *  The store write lives here so the component stays UI-only. */
+	onLabelChange?: (entryId: string, label: string | undefined) => void;
 }
 
 /** Options for LineInput.select — an interactive item picker. */

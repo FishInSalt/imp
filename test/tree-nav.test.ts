@@ -264,3 +264,60 @@ describe("navigateTree review-round pins (#tree)", () => {
 		expect(summaryMsg?.content).toContain("COMPACTED TRUNK");
 	});
 });
+
+describe("batch B: forkSessionAt rides navigateTree (#tree-b)", () => {
+	it("forkSessionAt ≡ navigateTree(user target, no summary): same position, same history", async () => {
+		const a = await navEnv();
+		const b = await navEnv();
+		// a fork target must be ON the current branch (forkSessionAt's own
+		// defense): extend it, then fork before the newest user message
+		const targetA = a.store.appendMessage(user("q3"));
+		a.store.appendMessage(assistant([{ type: "text", text: "a3" }]));
+		const targetB = b.store.appendMessage(user("q3"));
+		b.store.appendMessage(assistant([{ type: "text", text: "a3" }]));
+		const viaFork = await a.runner.forkSessionAt(targetA);
+		const viaNav = await b.runner.navigateTree(targetB, { summarize: false });
+		if ("noop" in viaNav || "aborted" in viaNav) throw new Error("expected plain result");
+		expect("noop" in viaFork).toBe(false);
+		expect("aborted" in viaFork).toBe(false);
+		if ("noop" in viaFork || "aborted" in viaFork) throw new Error("unreachable");
+		// positions land on each store's own fork point (ids differ across stores)
+		expect(a.store.getLeafId()).toBe(a.ids.a1);
+		expect(b.store.getLeafId()).toBe(b.ids.a1);
+		expect(a.runner.history.map((m) => (m.role === "user" ? m.content : ""))).toEqual(
+			b.runner.history.map((m) => (m.role === "user" ? m.content : "")),
+		);
+		expect(viaFork.editorText).toBe("q3");
+		expect(viaFork.preview).toBe("q3");
+		expect(viaFork.messages).toBe(viaNav.messages);
+	});
+
+	it("forking the UNANSWERED leaf message moves off it and returns the text (P1)", async () => {
+		const { runner, store } = await navEnv();
+		const draft = store.appendMessage(user("q3-drafted")); // unanswered leaf
+		expect(store.getLeafId()).toBe(draft);
+		const result = await runner.forkSessionAt(draft);
+		if ("noop" in result || "aborted" in result) throw new Error("expected plain result");
+		expect(store.getLeafId()).toBe(store.getBranch().at(-1)?.id); // a1 — the parent
+		const leftBehind = store
+			.getBranch()
+			.some((e) => e.type === "message" && e.message.role === "user" && e.message.content === "q3-drafted");
+		expect(leftBehind).toBe(false);
+		expect(result.editorText).toBe("q3-drafted");
+	});
+
+	it("a NON-user leaf target still noops (assistant tip)", async () => {
+		const { runner, store } = await navEnv();
+		const result = await runner.navigateTree(store.getLeafId() ?? "");
+		expect(result).toEqual({ noop: true });
+	});
+
+	it("forkSessionAt keeps its own validation (off-path / non-user rejected)", async () => {
+		const { runner, store, ids } = await navEnv();
+		store.appendMessage(assistant([{ type: "text", text: "tail" }]));
+		await expect(runner.forkSessionAt("no-such-id")).rejects.toThrow("not found");
+		const tip = store.getLeafId();
+		await expect(runner.forkSessionAt(tip ?? "")).rejects.toThrow("not found"); // assistant ≠ fork point
+		void ids;
+	});
+});

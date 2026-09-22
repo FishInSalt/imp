@@ -18,9 +18,24 @@ import { type Component, matchesKey, Text, truncateToWidth } from "../../tui.js"
  * fold covers the rest). Batch B may revisit each.
  */
 
-export type TreeFilterMode = "default" | "no-tools" | "user-only";
+export type TreeFilterMode = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 
-export const TREE_FILTER_MODES: TreeFilterMode[] = ["default", "no-tools", "user-only"];
+export const TREE_FILTER_MODES: TreeFilterMode[] = [
+	"default",
+	"no-tools",
+	"user-only",
+	"labeled-only",
+	"all",
+];
+
+/** Status-line tag per mode (pi's getStatusLabels literals — "labeled", not
+ *  "labeled-only"; "default" carries no tag). */
+const MODE_TAGS: Partial<Record<TreeFilterMode, string>> = {
+	"no-tools": "no-tools",
+	"user-only": "user-only",
+	"labeled-only": "labeled",
+	all: "all",
+};
 
 /** One renderable row of the tree (pre-ANSI: plain text pieces). */
 export interface TreeRow {
@@ -46,9 +61,16 @@ function hasTextContent(message: AgentMessage): boolean {
  *  ALWAYS visible — an absolute rule across all modes (design §3.3, review
  *  P2-3: stronger than pi, which only exempts the tool-only-assistant rule —
  *  after a switch the user must see where they landed, whatever it is). */
-function passesFilter(entry: SessionEntry, mode: TreeFilterMode, isCurrentLeaf: boolean): boolean {
+function passesFilter(
+	entry: SessionEntry,
+	mode: TreeFilterMode,
+	isCurrentLeaf: boolean,
+	label: string | undefined,
+): boolean {
 	if (isCurrentLeaf) return true;
-	// Tree metadata never shows in any mode (pi's settings-entry rule).
+	if (mode === "labeled-only") return label !== undefined;
+	// Tree metadata never shows in any mode but "all" (pi's settings-entry rule).
+	if (mode === "all") return true;
 	if (entry.type === "thinkingLevelChange" || entry.type === "session_info") return false;
 	if (entry.type === "message" && entry.message.role === "assistant") {
 		// Tool-only assistant turns are noise (pi's default rule) — unless they
@@ -156,7 +178,7 @@ export function buildTreeRows(
 	): void => {
 		const isCurrentLeaf = node.entry.id === leafId;
 		const folded = opts.folded?.has(node.entry.id) === true && node.children.length > 0;
-		if (passesFilter(node.entry, opts.filter, isCurrentLeaf)) {
+		if (passesFilter(node.entry, opts.filter, isCurrentLeaf, node.label)) {
 			// Prefix char-by-char: gutter columns, then the connector column.
 			const total = indent * 3;
 			let prefix = "";
@@ -236,7 +258,7 @@ export function buildTreeRows(
  *  move, Enter selects, Tab cycles the filter, f folds, typing searches,
  *  backspace edits the query, Esc clears the search then exits. */
 export class TreeSelectorComponent implements Component {
-	private mode: TreeFilterMode = "default";
+	private mode: TreeFilterMode;
 	private query = "";
 	private folded = new Set<string>();
 	private selected = 0;
@@ -246,6 +268,10 @@ export class TreeSelectorComponent implements Component {
 	private readonly leafId: string | null;
 	private readonly onSelectEntry: (entryId: string) => void;
 	private readonly onCancel: () => void;
+	/** Label editing state (#tree batch B): non-null while the inline input
+	 *  owns every key (pi's LabelInput). Empty string on save = REMOVE. */
+	private labelEdit: { entryId: string; buffer: string } | null = null;
+	private readonly onLabelChange?: (entryId: string, label: string | undefined) => void;
 
 	constructor(
 		roots: TreeNode[],
@@ -253,12 +279,39 @@ export class TreeSelectorComponent implements Component {
 		maxLines: number,
 		onSelectEntry: (entryId: string) => void,
 		onCancel: () => void,
+		opts?: {
+			/** Opening filter (the treeFilterMode setting; pi's initialFilterMode). */
+			initialFilterMode?: TreeFilterMode;
+			/** Persist a committed label (empty = remove). In-place tree update
+			 *  happens regardless — this is the disk side (pi's ordering:
+			 *  mutate first, persist second). */
+			onLabelChange?: (entryId: string, label: string | undefined) => void;
+		},
 	) {
 		this.roots = roots;
 		this.leafId = leafId;
 		this.visibleLines = Math.max(3, maxLines);
 		this.onSelectEntry = onSelectEntry;
 		this.onCancel = onCancel;
+		this.mode = opts?.initialFilterMode ?? "default";
+		this.onLabelChange = opts?.onLabelChange;
+	}
+
+	/** pi's updateNodeLabel: set the in-memory label so rows reflect the edit
+	 *  immediately (getTree() builds fresh trees per /tree call — no other
+	 *  holder can observe this mutation). */
+	private setNodeLabel(entryId: string, label: string | undefined): void {
+		const stack = [...this.roots];
+		while (stack.length > 0) {
+			const node = stack.pop();
+			if (node === undefined) continue;
+			if (node.entry.id === entryId) {
+				if (label === undefined) delete node.label;
+				else node.label = label;
+				return;
+			}
+			stack.push(...node.children);
+		}
 	}
 
 	/** Current rows — also the seam the legacy text tree reuses (via
@@ -272,6 +325,22 @@ export class TreeSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.labelEdit !== null) {
+			this.handleLabelEditInput(data);
+			return;
+		}
+		if (data === "L") {
+			// Edit the selected entry's label. Uppercase only, BEFORE the
+			// printable guard — an active search never receives "L" (pi's
+			// shift+l structure; search is case-insensitive, so lowercase
+			// finds the same rows).
+			const row = this.rows()[this.selected];
+			if (row !== undefined) {
+				const current = this.findNodeLabel(row.entryId);
+				this.labelEdit = { entryId: row.entryId, buffer: current ?? "" };
+			}
+			return;
+		}
 		if (matchesKey(data, "up")) {
 			this.selected = Math.max(0, this.selected - 1);
 		} else if (matchesKey(data, "down")) {
@@ -282,6 +351,7 @@ export class TreeSelectorComponent implements Component {
 		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			if (this.query !== "") {
 				this.query = "";
+				this.folded.clear(); // (pi clears folds here too)
 				this.selected = 0;
 			} else {
 				this.onCancel();
@@ -289,6 +359,7 @@ export class TreeSelectorComponent implements Component {
 		} else if (matchesKey(data, "tab")) {
 			const i = TREE_FILTER_MODES.indexOf(this.mode);
 			this.mode = TREE_FILTER_MODES[(i + 1) % TREE_FILTER_MODES.length] as TreeFilterMode;
+			this.folded.clear(); // a filter change must be able to illuminate folded subtrees
 			this.clampSelection();
 		} else if (data === "f" && this.query === "") {
 			// review P1: searchable "f" beats the fold key
@@ -301,13 +372,50 @@ export class TreeSelectorComponent implements Component {
 		} else if (matchesKey(data, "backspace")) {
 			if (this.query !== "") {
 				this.query = this.query.slice(0, -1);
+				this.folded.clear(); // search edits must see through folds (pi)
 				this.clampSelection();
 			}
 		} else if (!data.startsWith("\x1b") && data !== "" && ![...data].some((ch) => ch < " ")) {
 			// Printable input (ASCII + committed IME) builds the query.
 			this.query += data;
+			this.folded.clear(); // (pi clears folds on every search edit)
 			this.clampSelection();
 		}
+	}
+
+	/** The label-edit mini-input (pi's LabelInput): printables build the
+	 *  buffer, backspace deletes, Enter commits (trim; empty = REMOVE),
+	 *  Esc cancels. Every OTHER key is swallowed — the tree's keys stay
+	 *  inert while the input owns focus. */
+	private handleLabelEditInput(data: string): void {
+		const edit = this.labelEdit;
+		if (edit === null) return;
+		if (matchesKey(data, "enter")) {
+			this.labelEdit = null;
+			const trimmed = edit.buffer.trim();
+			const label = trimmed === "" ? undefined : trimmed;
+			this.setNodeLabel(edit.entryId, label); // pi's ordering: mutate first
+			this.onLabelChange?.(edit.entryId, label); // …then persist
+			this.clampSelection(); // a removal can shrink rows under the cursor (impl-review P3)
+		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			this.labelEdit = null; // cancel — nothing moves
+		} else if (matchesKey(data, "backspace")) {
+			edit.buffer = edit.buffer.slice(0, -1);
+		} else if (!data.startsWith("\x1b") && data !== "" && ![...data].some((ch) => ch < " ")) {
+			edit.buffer += data;
+		}
+		// arrows / tab / f / L etc: swallowed by design (nested input)
+	}
+
+	private findNodeLabel(entryId: string): string | undefined {
+		const stack = [...this.roots];
+		while (stack.length > 0) {
+			const node = stack.pop();
+			if (node === undefined) continue;
+			if (node.entry.id === entryId) return node.label;
+			stack.push(...node.children);
+		}
+		return undefined;
 	}
 
 	private clampSelection(): void {
@@ -344,9 +452,15 @@ export class TreeSelectorComponent implements Component {
 				lines.push(selected ? `\x1b[7m${truncateToWidth(line, width)}\x1b[0m` : truncateToWidth(line, width));
 			}
 		}
-		const modeTag = this.mode === "default" ? "" : ` [${this.mode}]`;
+		if (this.labelEdit !== null) {
+			lines.push(truncateToWidth(`  Label (empty to remove): ${this.labelEdit.buffer}▏`, width));
+			lines.push(dim(truncateToWidth("  enter=save  esc=cancel", width), true));
+			return lines;
+		}
+		const modeTagRaw = MODE_TAGS[this.mode];
+		const modeTag = modeTagRaw === undefined ? "" : ` [${modeTagRaw}]`;
 		const searchTag = this.query !== "" ? `  search: ${this.query}` : "";
-		const status = `  (${rows.length === 0 ? 0 : this.selected + 1}/${rows.length})${modeTag}${searchTag}  ·  enter=go tab=filter f=fold`;
+		const status = `  (${rows.length === 0 ? 0 : this.selected + 1}/${rows.length})${modeTag}${searchTag}  ·  enter=go tab=filter f=fold L=label`;
 		lines.push(dim(truncateToWidth(status, width), true));
 		return lines;
 	}

@@ -1933,20 +1933,23 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		env.terminal.data("\r"); // fork before "q2 world"
 		await waitUntil(() => env.terminal.frameSince(0).includes("forked before"), 8000);
-		expect(env.terminal.frameSince(0)).toContain("2 messages kept, 2 left on the old branch");
+		expect(env.terminal.frameSince(0)).toContain("2 messages kept on this branch"); // batch B D6
 		// the abandoned tail left the screen — post-fork frames only
 		const forkMark = env.terminal.writes.length;
 		await settle();
 		expect(env.terminal.frameSince(forkMark)).not.toContain("second answer");
-		env.terminal.data("q2 again differently\r");
+		// batch B D6: the forked message's TEXT sits in the editor for
+		// re-editing — the user amends it (not retypes)
+		env.terminal.data(" — edited\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("third answer"), 8000);
-		// the provider sees q1 + the NEW question, never the abandoned q2/answer
+		// the provider sees q1 + the AMENDED question — the abandoned
+		// assistant answer never returns, and the old text arrives only as
+		// the re-edit it now is
 		const last = env.requests[env.requests.length - 1];
 		expect(last).toBeDefined();
 		const userTexts = (last?.messages ?? []).filter((m) => m.role === "user").map((m) => m.content);
 		expect(userTexts).toContain("q1 hello");
-		expect(userTexts).toContain("q2 again differently");
-		expect(userTexts).not.toContain("q2 world");
+		expect(userTexts).toContain("q2 world — edited");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

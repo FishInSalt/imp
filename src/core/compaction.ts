@@ -346,12 +346,19 @@ export async function summarizeBranchSegment(args: {
 	 *  (compaction.ts:549 — options.reasoning = level when the model has a
 	 *  knob and the level is not "off"). */
 	thinking?: ThinkingLevel;
+	/** #tree: the user's "Summarize with custom prompt" instructions,
+	 *  appended after the fixed prompt (pi's customInstructions). */
+	customInstructions?: string;
 }): Promise<string> {
 	const transcript = serializeForSummary(args.messages);
+	const suffix =
+		args.customInstructions !== undefined && args.customInstructions.trim() !== ""
+			? `\n\nFollow these user instructions too:\n${args.customInstructions.trim()}`
+			: "";
 	let summary = "";
 	for await (const event of args.provider.stream({
 		system: SUMMARIZATION_SYSTEM_PROMPT,
-		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}` }],
+		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}${suffix}` }],
 		tools: [],
 		model: args.model,
 		maxTokens: 1024,

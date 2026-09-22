@@ -4,6 +4,16 @@ export interface SelectItemOption {
 	description?: string;
 }
 
+import type { TreeNode } from "../core/session/store.js";
+
+/** #tree: what treeSelect renders — the session tree (store.getTree()'s
+ * shape) plus the current position. */
+export interface TreeSelectRequest {
+	roots: TreeNode[];
+	leafId: string | null;
+	title?: string;
+}
+
 /** Options for LineInput.select — an interactive item picker. */
 export interface SelectOptions {
 	/** Line rendered above the items (e.g. "pick a model"). */
@@ -78,6 +88,11 @@ export interface LineInput {
 	 *  callers must fall back to a text flow when absent). Enter confirms,
 	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
 	select?(options: SelectOptions): Promise<number | null>;
+	/** #tree: session-tree navigator (TUI only). Renders the full tree with
+	 *  filter/search/fold (Tab/f/typing); Enter resolves the chosen ENTRY
+	 *  ID, cancel resolves null. Follows select()'s lifecycle contract
+	 *  (queued behind an open picker, torn down on close/SIGINT). */
+	treeSelect?(options: TreeSelectRequest): Promise<string | null>;
 	/** Queue visual (TUI only): one dim row per queued entry ("  steer: <preview>"
 	 *  style) under a "N queued" head and a dequeue hint — the whole region
 	 *  collapses to zero rows when empty. The readline shell has no such line

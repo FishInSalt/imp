@@ -18,6 +18,7 @@ import {
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
+import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
 import type {
 	ActivitySnapshot,
@@ -25,6 +26,7 @@ import type {
 	LineInputEvents,
 	QueueEntryView,
 	SelectOptions,
+	TreeSelectRequest,
 } from "./line-input.js";
 import type { TranscriptSink } from "./transcript.js";
 
@@ -769,6 +771,56 @@ export class TuiShell implements LineInput {
 			list.onCancel = () => finish(null);
 			this.askContainer.addChild(box);
 			tui.setFocus(list);
+			tui.requestRender();
+		});
+	}
+
+	/** #tree: session-tree navigator — select()'s full lifecycle contract
+	 *  (queued behind an open picker via pendingSelects, registered as the
+	 *  live selector so SIGINT/close tears it down, placeholder hidden while
+	 *  the tree owns the keys). Resolves the chosen entry id, or null. */
+	treeSelect(options: TreeSelectRequest): Promise<string | null> {
+		const tui = this.tui;
+		if (tui === null || this.closed) return Promise.resolve(null);
+		if (this.selector !== null) {
+			// Same FIFO semantic as select() (M10): a tree arriving while e.g.
+			// /model is open still opens after it — never silently declined.
+			return new Promise<string | null>((resolve) => {
+				this.pendingSelects.push(() => resolve(this.treeSelect(options)));
+			});
+		}
+		return new Promise<string | null>((resolve) => {
+			let settled = false; // enter, cancel and close all funnel here — once
+			const finish = (entryId: string | null): void => {
+				if (settled) return;
+				settled = true;
+				this.selector = null;
+				this.updatePlaceholder();
+				this.askContainer.removeChild(box);
+				tui.setFocus(this.editor);
+				tui.requestRender();
+				if (this.askLine === null) {
+					const next = this.pendingAsks[0];
+					if (next !== undefined) this.showAsk(next.question);
+				}
+				resolve(entryId);
+				const queued = this.pendingSelects.shift();
+				if (queued !== undefined) queued();
+			};
+			const box = new TreeSelectorBox(
+				new TreeSelectorComponent(
+					options.roots,
+					options.leafId,
+					Math.max(4, Math.min(16, tui.terminal.rows - 6)),
+					(entryId) => finish(entryId),
+					() => finish(null),
+				),
+				options.title ?? "Navigate the session tree (enter=go · tab=filter · f=fold · type to search)",
+			);
+			this.selector = { teardown: () => finish(null) };
+			this.updatePlaceholder();
+			this.askContainer.addChild(box);
+			tui.setFocus(box);
 			tui.requestRender();
 		});
 	}

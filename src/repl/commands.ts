@@ -42,7 +42,8 @@ import {
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import { copyToClipboard } from "./clipboard-write.js";
-import type { SelectOptions } from "./line-input.js";
+import { buildTreeRows } from "./components/tree-selector.js";
+import type { SelectOptions, TreeSelectRequest } from "./line-input.js";
 
 export interface CommandContext {
 	runner: Runner;
@@ -82,6 +83,15 @@ export interface CommandContext {
 	 *  fallback for a missing select. Resolves the chosen index, or null on
 	 *  cancel. */
 	select?: (options: SelectOptions) => Promise<number | null>;
+	/** #tree: session-tree navigator (TUI only; the legacy shell renders a
+	 *  numbered text tree instead). Resolves the chosen entry id, or null
+	 *  on cancel. */
+	treeSelect?: (options: TreeSelectRequest) => Promise<string | null>;
+	/** #tree: the editor's current draft (TUI only) — editorText backfill
+	 *  lands only when the user is not mid-typing (pi parity). */
+	getEditorText?: () => string;
+	/** #tree: replace the editor text (TUI only). */
+	setEditorText?: (text: string) => void;
 	/** Secret text question (/login's key prompt) — bound like select; both
 	 *  shells implement it (the readline one echoes). Resolves the typed
 	 *  text, or null on cancel. */
@@ -909,67 +919,158 @@ export const COMMANDS: readonly SlashCommand[] = [
 	},
 	{
 		name: "tree",
-		summary: "switch to another branch of this conversation (the left one is summarized in)",
+		summary: "navigate the session tree — jump to any point, optionally summarizing the left branch",
 		allowedDuringRun: false,
 		run: async (args, ctx): Promise<CommandOutcome> => {
-			const tips = ctx.runner.branchTips();
-			if (tips.length === 0) {
-				ctx.renderer.note("▪ only one branch — /fork creates others");
+			const session = ctx.runner.session;
+			if (session === null) {
+				ctx.renderer.note("▪ sessions are off — /tree needs a session to navigate");
+				return "handled";
+			}
+			// The numbered tree (legacy fallback AND /tree <n>) shares
+			// buildTreeRows with the TUI picker — one numbering, both shells.
+			const rows = buildTreeRows(session.getTree(), session.getLeafId(), { filter: "default" });
+			if (rows.length === 0) {
+				ctx.renderer.note("▪ nothing in this session yet");
 				return "handled";
 			}
 			const trimmed = args.trim();
-			let tipId: string | undefined;
-			if (/^[1-9]\d*$/.test(trimmed)) {
-				const target = tips[Number(trimmed) - 1];
+			let targetId: string | null = null;
+			let summarize = false;
+			let customInstructions: string | undefined;
+			let viaPicker = false; // the TUI navigator already asked; the numbered path never asks
+			if (/^0\d*$/.test(trimmed)) {
+				// numeric but invalid (zero / leading zero) — a precise message
+				ctx.renderer.error(`imp: /tree ${trimmed} — row numbers run #1–#${rows.length}`);
+				return "handled";
+			} else if (/^[1-9]\d*$/.test(trimmed)) {
+				const target = rows[Number(trimmed) - 1];
 				if (target === undefined) {
-					ctx.renderer.error(`imp: /tree ${trimmed} — the list runs #1–#${tips.length}`);
+					ctx.renderer.error(`imp: /tree ${trimmed} — the tree runs #1–#${rows.length}`);
 					return "handled";
 				}
-				tipId = target.id;
+				targetId = target.entryId;
 			} else if (trimmed !== "") {
-				ctx.renderer.error(
-					"imp: /tree takes no text — /tree opens the picker, /tree <n> switches to branch #n",
-				);
+				ctx.renderer.error("imp: /tree takes no text — /tree opens the navigator, /tree <n> goes to row #n");
 				return "handled";
-			} else if (ctx.select !== undefined) {
-				const pick = await ctx.select({
-					title: "Switch to which branch? (the current one is summarized into the new context)",
-					items: tips.map((t, i) => ({
-						label: t.label,
-						description: `#${i + 1} · ${t.count} message${t.count === 1 ? "" : "s"}`,
-					})),
-					filterable: true,
-				});
-				if (pick === null) return "handled"; // cancelled
-				tipId = tips[pick]?.id;
+			} else if (ctx.treeSelect !== undefined) {
+				// The pick → ask loop (review P2: Esc at the ask RETURNS TO THE
+				// TREE, and a cancelled custom prompt re-asks — pi's flow; only
+				// cancelling the tree itself ends the command).
+				viaPicker = true;
+				while (true) {
+					const picked = await ctx.treeSelect({
+						roots: session.getTree(),
+						leafId: session.getLeafId(),
+					});
+					if (picked === null) return "handled"; // cancelled the command
+					// The current position is a selectable row (absolute
+					// visibility) — pi answers "already there" BEFORE any ask.
+					if (picked === session.getLeafId()) {
+						ctx.renderer.note("▪ already at that point");
+						return "handled";
+					}
+					targetId = picked; // set before every exit from the loop
+					if (ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0") break;
+					const choice = await ctx.select({
+						title: "Summarize the branch you are leaving into the new one?",
+						items: [
+							{ label: "No summary", description: "switch without carrying the left branch over" },
+							{ label: "Summarize", description: "keep the left branch's lessons in context" },
+							{
+								label: "Summarize with custom prompt",
+								description: "add your own instructions",
+							},
+						],
+					});
+					if (choice === null) continue; // Esc → back to the tree selector
+					if (choice === 1 || choice === 2) summarize = true;
+					if (choice === 2) {
+						const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
+						if (typed === null || typed.trim() === "") continue; // re-ask (pi loops too)
+						customInstructions = typed.trim();
+					}
+					break;
+				}
 			} else {
-				ctx.renderer.writeLine(ctx.renderer.dim("switch to which branch?"));
-				tips.forEach((t, i) => {
+				// Legacy readline shell: the numbered text tree (same rows).
+				ctx.renderer.writeLine(ctx.renderer.dim("session tree (pick with /tree <n>):"));
+				rows.forEach((row, i) => {
+					const cursor = row.isCurrentLeaf ? " ◂" : "";
 					ctx.renderer.writeLine(
-						ctx.renderer.dim(`  #${i + 1} · ${t.count} message${t.count === 1 ? "" : "s"} `) + t.label,
+						ctx.renderer.dim(`  #${i + 1} ${row.prefix}`) + row.text + ctx.renderer.dim(cursor),
 					);
 				});
-				ctx.renderer.note(`▪ pick with /tree <n> (1–${tips.length})`);
+				ctx.renderer.note("▪ /tree <n> goes to that row (the left branch is summarized in)");
 				return "handled";
 			}
-			if (tipId === undefined) return "handled"; // unreachable; type guard
+			if (targetId === null) return "handled"; // unreachable; type guard
+			// The current position is a selectable row (absolute visibility) —
+			// pi's flow answers "already there" BEFORE any ask or progress note.
+			if (targetId === session.getLeafId()) {
+				ctx.renderer.note("▪ already at that point");
+				return "handled";
+			}
+
+			// /tree <n> (both shells) and IMP_BRANCH_SUMMARY=0 keep the old
+			// behavior — summarize when enabled, never otherwise (no ask).
+			if (targetId !== null && !viaPicker && process.env.IMP_BRANCH_SUMMARY !== "0") {
+				summarize = true;
+			}
+
 			// Progress feedback BEFORE the potentially 5-20s summarizer await —
 			// the state machine holds input in the queue meanwhile (review P2-1).
-			ctx.renderer.note("▪ switching branches…");
-			const { summary, messages } = await ctx.runner.switchSessionBranch(tipId);
-			ctx.clearView?.();
-			const session = ctx.runner.session;
-			if (session !== null && messages > 0) ctx.replay(session);
-			const tail =
-				summary === "written"
-					? "the left one is summarized in context"
-					: summary === "empty"
-						? "nothing was written on the left branch to summarize"
-						: summary === "disabled"
-							? "summary off — IMP_BRANCH_SUMMARY=0"
-							: "summarizer failed — see imp-log; switched without it";
-			ctx.renderer.note(`▪ switched branches — ${messages} messages here (${tail})`);
-			return "handled";
+			if (summarize) ctx.renderer.note("▪ switching branches… summarizing the left one");
+			else ctx.renderer.note("▪ switching branches…");
+			// The abort channel (design §3.4, review P1-3): compacting-state
+			// Ctrl+C aborts THIS controller (the /login precedent), which the
+			// summarizer sees and navigateTree reports as aborted.
+			const controller = new AbortController();
+			ctx.onLongOpAbort?.(controller);
+			try {
+				const result = await ctx.runner.navigateTree(targetId, {
+					summarize,
+					...(customInstructions === undefined ? {} : { customInstructions }),
+					signal: controller.signal,
+				});
+				if ("noop" in result) {
+					ctx.renderer.note("▪ already at that point");
+					return "handled";
+				}
+				if ("aborted" in result) {
+					ctx.renderer.note("▪ summarization cancelled — stayed on the current branch");
+					return "handled";
+				}
+				ctx.clearView?.();
+				if (result.messages > 0) ctx.replay(session);
+				// editorText backfill (design §3.4): a user-message target puts the
+				// old text back for re-editing — only over an EMPTY editor (pi parity),
+				// and as a note where there is no editor (legacy shell).
+				if (result.editorText !== undefined && result.editorText.trim() !== "") {
+					const current = ctx.getEditorText?.() ?? "";
+					// Design §7 P3: re-edit restores TEXT only — say so when the
+					// original message carried images.
+					const suffix = result.editorTextDroppedImages === true ? " (text only — images dropped)" : "";
+					if (current.trim() === "" && ctx.setEditorText !== undefined) {
+						ctx.setEditorText(result.editorText);
+						if (suffix !== "") ctx.renderer.note(`▪ re-edit restores text only${suffix}`);
+					} else {
+						ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”${suffix}`);
+					}
+				}
+				const tail =
+					result.summary === "written"
+						? "the left branch is summarized in context"
+						: result.summary === "empty"
+							? "nothing was written beyond that point to summarize"
+							: result.summary === "disabled"
+								? "summary off — IMP_BRANCH_SUMMARY=0"
+								: "summarizer failed — see imp-log; switched without it";
+				ctx.renderer.note(`▪ navigated — ${result.messages} messages here (${tail})`);
+				return "handled";
+			} finally {
+				ctx.onLongOpAbort?.(null);
+			}
 		},
 	},
 	{

@@ -91,12 +91,34 @@ export interface SessionInfoEntry extends EntryBase {
 	name: string;
 }
 
+/** #tree: a note pinned to another entry for navigation (pi's label entry,
+ *  DELIBERATELY different shape — see appendLabelChange). Labels never
+ *  advance the leaf and never sit on a content entry's parent chain, so
+ *  they cannot orphan subtrees in getTree and need no re-chaining. */
+export interface LabelEntry extends EntryBase {
+	type: "label";
+	/** The entry this label names (does not need to exist yet — tolerated). */
+	targetId: string;
+	/** The label text; an empty string removes the label (pi parity). */
+	label: string;
+}
+
 export type SessionEntry =
 	| MessageEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| ThinkingLevelChangeEntry
-	| SessionInfoEntry;
+	| SessionInfoEntry
+	| LabelEntry;
+
+/** One node of the session tree (#tree): a content entry (label entries
+ *  are folded into `label`, never nodes) with its children, oldest first. */
+export interface TreeNode {
+	entry: SessionEntry;
+	children: TreeNode[];
+	/** The latest label pinned to this entry (file-level, last write wins). */
+	label?: string;
+}
 
 export interface SessionStats {
 	messageCount: number;
@@ -165,6 +187,10 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 		if (typeof entry.name !== "string") {
 			throw new SessionError(`session line ${lineNo}: session_info entry missing name`);
 		}
+	} else if (entry.type === "label") {
+		if (typeof entry.targetId !== "string" || typeof entry.label !== "string") {
+			throw new SessionError(`session line ${lineNo}: label entry missing targetId/label`);
+		}
 	} else {
 		throw new SessionError(`session line ${lineNo}: unknown entry type "${String(entry.type)}"`);
 	}
@@ -178,6 +204,9 @@ export class SessionStore {
 	private byId = new Map<string, SessionEntry>();
 	/** Current leaf = id of the last appended entry (tree position). */
 	private leafId: string | null = null;
+	/** #tree: labels by target entry id (file-level — replay is last-write-wins,
+	 *  regardless of which branch the label entry was written on). */
+	private labelsById = new Map<string, string>();
 
 	private constructor(filePath: string, header: SessionHeader, entries: SessionEntry[]) {
 		this.filePath = filePath;
@@ -188,6 +217,14 @@ export class SessionStore {
 	private indexEntry(entry: SessionEntry): void {
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
+		// #tree: labels are side-attachments — they never become the write
+		// position, so the next content append stays a sibling of the label,
+		// never its child (design §3.1, review P1-5).
+		if (entry.type === "label") {
+			if (entry.label === "") this.labelsById.delete(entry.targetId);
+			else this.labelsById.set(entry.targetId, entry.label);
+			return;
+		}
 		this.leafId = entry.id;
 	}
 
@@ -399,11 +436,14 @@ export class SessionStore {
 
 	/** All OTHER branch tips with their picker metadata (#10 /tree): each
 	 *  leaf that is not on the current path, labeled by the first user
-	 *  message of its divergent segment, with that segment's message count. */
+	 *  message of its divergent segment, with that segment's message count.
+	 *  (#tree: the /tree picker now renders the full tree via getTree();
+	 *  this stays as the tests' convenience view of "the other branches".) */
 	otherBranchTips(): { id: string; label: string; count: number }[] {
 		const currentPathIds = new Set(this.getBranch().map((entry) => entry.id));
 		const tips: { id: string; label: string; count: number }[] = [];
 		for (const entry of this.entries) {
+			if (entry.type === "label") continue; // side-attachment, not a node
 			if (this.childrenOf(entry.id).length > 0) continue; // not a tip
 			if (currentPathIds.has(entry.id)) continue; // the current branch's own tip
 			const { other } = this.splitBranches(entry.id);
@@ -436,21 +476,79 @@ export class SessionStore {
 		return { abandoned: current.slice(i), other: other.slice(i) };
 	}
 
-	/** Switch the write position to another branch's TIP (#10 /tree). The
-	 *  current branch is abandoned in place (append-only; its entries stay).
-	 *  Targets must be leaves — an interior node would strand its children. */
-	switchBranch(tipId: string): void {
-		const target = this.byId.get(tipId);
-		if (target === undefined) throw new SessionError(`branch tip ${tipId} not found`);
-		if (tipId === this.leafId) throw new SessionError("already on that branch");
-		if (this.childrenOf(tipId).length > 0) {
-			throw new SessionError(`branch tip ${tipId} has children — not a tip`);
+	/** Move the write position to ANY entry — or to null, i.e. before the
+	 *  first entry, the re-edit-the-opening-move position (#tree; the
+	 *  generalization of the old tip-only switchBranch, which this replaces).
+	 *  The current branch is abandoned in place (append-only; its entries
+	 *  stay); the next append grows a new child of the target. Interior
+	 *  targets are legal — their existing children just become siblings of
+	 *  the new branch. Persisted via the position marker (reopen rule). */
+	branchTo(entryId: string | null): void {
+		if (entryId !== null) {
+			const target = this.byId.get(entryId);
+			if (target === undefined) throw new SessionError(`branch target ${entryId} not found`);
+			if (target.type === "label") throw new SessionError("labels are not branch targets");
+			if (entryId === this.leafId) throw new SessionError("already at that position");
 		}
-		if (this.getBranch().some((entry) => entry.id === tipId)) {
-			throw new SessionError(`branch tip ${tipId} is on the current branch`);
-		}
-		this.leafId = tipId;
+		this.leafId = entryId;
 		this.persistPosition(); // review P1-2: the move must survive a restart
+	}
+
+	/** The full session tree (#tree): content entries (labels folded into
+	 *  `label`, never nodes) with children oldest-first. A well-formed
+	 *  session has one root; orphans (broken parent chain, self-parent) are
+	 *  returned as additional roots (pi's rules). Iterative — deep trees
+	 *  must not overflow the stack. */
+	getTree(): TreeNode[] {
+		const nodeMap = new Map<string, TreeNode>();
+		const roots: TreeNode[] = [];
+		for (const entry of this.entries) {
+			if (entry.type === "label") continue; // folded into .label, not a node
+			const label = this.labelsById.get(entry.id);
+			nodeMap.set(entry.id, label === undefined ? { entry, children: [] } : { entry, children: [], label });
+		}
+		for (const entry of this.entries) {
+			if (entry.type === "label") continue;
+			const node = nodeMap.get(entry.id)!; // set in the pass above
+			if (entry.parentId === null || entry.parentId === entry.id) {
+				roots.push(node); // pi's self-parent rule: a self-referencing entry is a root
+				continue;
+			}
+			const parent = nodeMap.get(entry.parentId);
+			if (parent === undefined)
+				roots.push(node); // orphan → root
+			else parent.children.push(node);
+		}
+		const stack = [...roots]; // iterative sort — deep trees must not overflow
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			node.children.sort((a, b) => Date.parse(a.entry.timestamp) - Date.parse(b.entry.timestamp));
+			stack.push(...node.children);
+		}
+		return roots;
+	}
+
+	/** Pin a navigation label onto an entry (#tree, format-first batch A:
+	 *  produced by tests/fixtures now, edited via l-key in batch B). A
+	 *  side-attachment — never advances the leaf, never enters a content
+	 *  chain (design §3.1, review P1-5), so branching cannot lose it.
+	 *  An empty/undefined label REMOVES the note (pi parity). */
+	appendLabelChange(targetId: string, label: string | undefined): string {
+		const entry: LabelEntry = {
+			type: "label",
+			id: this.nextId(),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			targetId,
+			label: label ?? "",
+		};
+		this.append(entry); // indexEntry's label branch advances NO leaf
+		return entry.id;
+	}
+
+	/** The latest label pinned to an entry, if any (#tree). */
+	getLabel(id: string): string | undefined {
+		return this.labelsById.get(id);
 	}
 
 	/** Append the file-level position marker (#10 review P1-2). Best-effort:
@@ -466,9 +564,10 @@ export class SessionStore {
 	}
 
 	/** Children index for tip detection (rebuilt per call — branch counts
-	 *  stay tiny; the append-only file means no invalidation is needed). */
+	 *  stay tiny; the append-only file means no invalidation is needed).
+	 *  Labels are side-attachments, never children (#tree). */
 	private childrenOf(id: string): SessionEntry[] {
-		return this.entries.filter((entry) => entry.parentId === id);
+		return this.entries.filter((entry) => entry.type !== "label" && entry.parentId === id);
 	}
 
 	/** Append a branch summary at the current leaf (#10): the memory of the

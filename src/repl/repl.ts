@@ -1203,6 +1203,14 @@ class ReplMachine {
 		if (select !== undefined) ctx.select = select;
 		const secret = this.input.secret?.bind(this.input);
 		if (secret !== undefined) ctx.secret = secret;
+		// #tree: the navigator picker and the editor draft (editorText
+		// backfill — design §3.4 reuses the existing getText/setText seam).
+		const treeSelect = this.input.treeSelect?.bind(this.input);
+		if (treeSelect !== undefined) ctx.treeSelect = treeSelect;
+		const getEditorText = this.input.getText?.bind(this.input);
+		if (getEditorText !== undefined) ctx.getEditorText = getEditorText;
+		const setEditorText = this.input.setText?.bind(this.input);
+		if (setEditorText !== undefined) ctx.setEditorText = setEditorText;
 		return ctx;
 	}
 }

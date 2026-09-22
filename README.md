@@ -206,6 +206,22 @@ EOF
 - Scripted (piped) REPLs load them too when the directory is trusted — the
   same rule extension commands follow; print mode (`-p`) never loads them.
 
+## Custom system prompt (SYSTEM.md)
+
+Replace the default system prompt with your own file, or append to it:
+
+- `.imp/SYSTEM.md` (project, requires trust) or `~/.imp/SYSTEM.md` (global) —
+  the file's content replaces the default prompt body (identity, core rules,
+  tool catalog). The working directory line, project context files
+  (AGENTS.md/CLAUDE.md), skills, and the agent roster still load — those are
+  routing facts, not persona.
+- `.imp/APPEND_SYSTEM.md` / `~/.imp/APPEND_SYSTEM.md` — appended after the
+  prompt body in both modes (e.g. "Answer in Chinese").
+
+Project files need the directory trusted (`imp --trust`); the project tier
+wins over the global one per file. An empty file disables the custom prompt
+for that pair (the default prompt stays).
+
 ## Skills
 
 A skill is a self-contained instruction package ([Agent Skills](https://agentskills.io)

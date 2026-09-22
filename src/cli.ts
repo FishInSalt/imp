@@ -531,6 +531,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		runner = await createRunner({
 			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
+			systemPromptProjectAllowed: projectTrusted,
 			deferInit: !interactive,
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
@@ -783,6 +784,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		runner = await createRunner({
 			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
+			systemPromptProjectAllowed: projectTrusted,
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,
 			extensionFailures: extensions.failures,

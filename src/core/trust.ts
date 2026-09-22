@@ -224,6 +224,13 @@ export function trustRequiringResources(cwd: string, home: string): string[] {
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}
 	if (existsSync(join(cwd, ".imp", "settings.json"))) found.push(".imp/settings.json");
+	// #system-md: repo-shipped prompt redirects gate like settings (same M15
+	// file-level precedent). isFile — a directory shadowing the name must not
+	// trigger the ask (design review P3-1).
+	for (const name of ["SYSTEM.md", "APPEND_SYSTEM.md"]) {
+		const target = join(cwd, ".imp", name);
+		if (existsSync(target) && statSync(target).isFile()) found.push(`.imp/${name}`);
+	}
 	// `.agents/skills` ancestor walk (M12): cwd first, up to the git root,
 	// excluding the user-global ~/.agents/skills. Entries are relative to
 	// cwd ("../.agents/skills" for ancestors) so describeTrustResources can

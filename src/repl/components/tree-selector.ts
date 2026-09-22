@@ -396,6 +396,7 @@ export class TreeSelectorComponent implements Component {
 			const label = trimmed === "" ? undefined : trimmed;
 			this.setNodeLabel(edit.entryId, label); // pi's ordering: mutate first
 			this.onLabelChange?.(edit.entryId, label); // …then persist
+			this.clampSelection(); // a removal can shrink rows under the cursor (impl-review P3)
 		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.labelEdit = null; // cancel — nothing moves
 		} else if (matchesKey(data, "backspace")) {

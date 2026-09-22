@@ -513,7 +513,8 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 			ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
 			return "handled";
 		}
-		ctx.renderer.status(`settings: ${key} ${before} → ${String(parsed.value)} (${scope}, next session)`);
+		const when = key === "treeFilterMode" || key === "branchSummary.skipPrompt" ? "live" : "next session";
+		ctx.renderer.status(`settings: ${key} ${before} → ${String(parsed.value)} (${scope}, ${when})`);
 		return "handled";
 	}
 
@@ -613,7 +614,9 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
 		return "handled";
 	}
-	ctx.renderer.status(`settings: ${entry.key} ${entry.current} → ${next} (${scope}, next session)`);
+	const when =
+		entry.key === "treeFilterMode" || entry.key === "branchSummary.skipPrompt" ? "live" : "next session";
+	ctx.renderer.status(`settings: ${entry.key} ${entry.current} → ${next} (${scope}, ${when})`);
 	return "handled";
 }
 

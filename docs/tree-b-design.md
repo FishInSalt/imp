@@ -1,6 +1,6 @@
 # /tree 批 B:label 书签 + 两个设置 + /fork 合流
 
-状态:已实现(设计审查闭环 §4;实现审查待跑);测试 1104→1122。
+状态:已实现;实现审查闭环(0 P1+3 P2+4 P3,见 §5);测试 1104→1127。
 
 前置:`docs/tree-design.md`(批 A,已合并 main `6a542cd`,1104 tests)。本批是其中
 "批 B 候选"的用户选定组合:label 编辑 + labeled-only 过滤(书签系统)、
@@ -245,3 +245,35 @@ D4 LIVE 读/D5 正交性/D6 editorText 缺口与计数等价性均验证成立�
   try/catch + pi 先改内存后落库时序(§2 D1);状态行帮助串+模式标签映射
   `[labeled]`(§2 D3);pi 四处清折叠(搜索打字/退格/Esc 清)对齐(§2 D2);
   forkSessionAt 前置校验保留(§2 D6);skipPrompt LIVE 读明说(§2 D5)。
+
+
+## 5. 实现审查记录(`fc7d78e` 后,2026-02-09)
+
+判 needs-fixes:**生产码 0 P1**(§4 的 P1 noop 放宽、标签状态机、设置 coerce/
+深合并/raw 补丁、skipPrompt 正交、折叠四处清空、LIVE 读全部核实无缺陷);3 P2
+均为测试侧(钉子空转或名不符实),4 P3 小项。逐项核实后全部采纳修复:
+
+- **P2-1 折叠清空钉子空转**:`toBeGreaterThanOrEqual(folded)` 两种世界都绿。
+  重写为判别性断言(fold 后打字→折叠加点的**后代**行出现;退格→曾孙行出现;
+  Esc 清查询→6 行)。
+- **P2-2 project>global 名不符实**:原测试撞信任门后注释认输,只断言了 global。
+  makeEnv 增 `trusted`(透传 projectSettingsAllowed),trusted 环境下
+  global=user-only → project=labeled-only 两步断言,钉住命令层接缝。
+- **P2-3 all 模式只钉了状态标签**:簿记行从未进 fixture。新增专测:
+  thinkingLevelChange 节点在 default/no-tools/user-only/labeled-only 全隐、
+  all 显(text 含 "thinking: high")。
+- **P3-4 生产码**:标签提交后缺 `clampSelection()`——labeled-only 下删标签可
+  使 selected 越界(状态行 (N+1/N)、Enter 哑)。Enter 分支补一行。
+- **P3-5 搜索断言空转**:"ans"+"mark" 拼成 "ansmark" 永不匹配。改 Esc 清查询
+  再搜,断言 some(label === "mark")。
+- **P3-6 文案**:两个 LIVE 读的设置写成 "(next session)" 失实。status 行
+  按键给 "live"/"next session"。
+- **P3-7 面板 values 循环无钉**:真面板流测试(select 选 treeFilterMode 行→
+  Enter 循环→断言写盘 "no-tools" 且 echo "live")。回归到硬编码队列对会写
+  "one-at-a-time" 被 coerce 静默吞——此测试直接拦住。
+
+审查确认的有意偏离(pi 对照,记录):当前 leaf 绝对可见(强于 pi);标签编辑期
+树列表保持显示(pi 清空);`[user-only]` 标签字面(D3 映射);appendLabelChange
+try/catch(pi 裸抛);Tab 单循环无专用键。
+
+测试 1122→1127;门禁 1127/1127、typecheck 0、biome 0、build 0。

@@ -27,7 +27,13 @@ const toolResult = (): AgentMessage => ({
 
 /** Hand-build a tree in memory (the component only needs the shape). */
 function node(
-	entry: { id: string; type: "message" | "branchSummary"; message?: AgentMessage; summary?: string },
+	entry: {
+		id: string;
+		type: "message" | "branchSummary" | "thinkingLevelChange";
+		message?: AgentMessage;
+		summary?: string;
+		thinkingLevel?: string;
+	},
 	children: TreeNode[] = [],
 	label?: string,
 ): TreeNode {
@@ -39,6 +45,7 @@ function node(
 			timestamp: new Date().toISOString(),
 			...(entry.message !== undefined ? { message: entry.message } : {}),
 			...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+			...(entry.thinkingLevel !== undefined ? { thinkingLevel: entry.thinkingLevel } : {}),
 		} as TreeNode["entry"],
 		children,
 		...(label === undefined ? {} : { label }),
@@ -314,8 +321,9 @@ describe("label bookmarks + filter settings (#tree batch B)", () => {
 		expect(labeled?.label).toBe("mark");
 		// the tree row reflects it immediately, and search finds it
 		expect(selector.rows().some((r) => r.entryId === labeled?.entry.id && r.label === "mark")).toBe(true);
+		selector.handleInput("\x1b"); // clear "ans" first (the leaf survives)
 		selector.handleInput("mark");
-		expect(selector.rows().every((r) => r.label === "mark" || r.isCurrentLeaf)).toBe(true);
+		expect(selector.rows().some((r) => r.label === "mark")).toBe(true);
 	});
 
 	it("label-edit swallows every other key; Enter commits trimmed; empty removes; Esc cancels", () => {
@@ -357,18 +365,45 @@ describe("label bookmarks + filter settings (#tree batch B)", () => {
 		expect(calls[0]?.[1]).toBeUndefined();
 	});
 
-	it("initialFilterMode opens there; search typing and backspace clear folds", () => {
+	it("initialFilterMode opens there; search typing, backspace, and Esc-clear clear folds (discriminating)", () => {
 		const { selector } = harnessB("a3", { initialFilterMode: "user-only" });
 		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "q2new", "a3", "q2old"]); // a3: the leaf is absolute
-		// fold something, then typing clears folds (pi)
-		selector.handleInput("\t"); // → labeled-only (mode switch ALSO clears)
+		// Get to all mode, fold q1 (the root): ONLY q1's row remains.
+		selector.handleInput("\t"); // → labeled-only (mode switch clears folds too)
 		selector.handleInput("\t"); // → all
-		selector.handleInput("f"); // fold the selected row
-		const folded = selector.rows().length;
-		selector.handleInput("q"); // typing clears folds
-		expect(selector.rows().length).toBeGreaterThanOrEqual(folded);
-		selector.handleInput("\x7f"); // backspace (query still "…") — no crash
-		expect(selector.rows().length).toBeGreaterThanOrEqual(folded);
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "a1", "q2new", "a3", "q2old", "a2old"]);
+		selector.handleInput("f");
+		expect(selector.rows()).toHaveLength(1); // folded: descendants hidden
+		// TYPING clears the fold: "an" matches a1's text ("an answer"), a
+		// DESCENDANT of the folded node — visible only if folds were cleared.
+		selector.handleInput("an");
+		expect(selector.rows().map((r) => r.entryId)).toContain("a1");
+		// BACKSPACE also clears: query "a" now matches old direction/new
+		// direction/old result/… — more rows than the folded single, and
+		// critically the DESCENDANTS are visible (folds were cleared)
+		selector.handleInput("\x7f");
+		const backspaced = selector.rows().map((r) => r.entryId);
+		expect(backspaced).toContain("a1");
+		expect(backspaced).toContain("a2old"); // a GREAT-grandchild of the folded root
+		expect(backspaced.length).toBeGreaterThan(2);
+		// re-fold, then ESC-with-query clears folds AND the query
+		selector.handleInput("f");
+		expect(selector.rows()).toHaveLength(1);
+		selector.handleInput("\x1b");
+		expect(selector.rows()).toHaveLength(6);
+	});
+
+	it("all mode surfaces bookkeeping entries; every other mode hides them (impl-review P2-3)", () => {
+		const { roots } = posterTree();
+		const a1 = roots[0]?.children[0];
+		a1?.children.push(node({ id: "think1", type: "thinkingLevelChange", thinkingLevel: "high" }));
+		for (const mode of ["default", "no-tools", "user-only", "labeled-only"] as const) {
+			const rows = buildTreeRows(roots, "a3", { filter: mode });
+			expect(rows.some((r) => r.entryId === "think1")).toBe(false); // hidden
+		}
+		const allRows = buildTreeRows(roots, "a3", { filter: "all" });
+		expect(allRows.some((r) => r.entryId === "think1")).toBe(true); // surfaced
+		expect(allRows.some((r) => r.text.includes("thinking: high"))).toBe(true);
 	});
 
 	it("labeled-only shows exactly the pinned rows (leaf absolute); all shows bookkeeping", () => {
@@ -391,7 +426,7 @@ describe("label bookmarks + filter settings (#tree batch B)", () => {
 		expect(rows.every((r) => r.label !== undefined || r.isCurrentLeaf)).toBe(true);
 		// status line: pi literal tag
 		expect(selector.render(80).some((l) => l.includes("[labeled]"))).toBe(true);
-		// all mode: add a bookkeeping entry to the tree and see it
+		// all mode: the status tag AND the actual bookkeeping rows
 		selector.handleInput("\t"); // →all
 		expect(selector.render(80).some((l) => l.includes("[all]"))).toBe(true);
 	});

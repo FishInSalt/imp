@@ -151,6 +151,8 @@ async function makeEnv(args?: {
 	active?: boolean;
 	provider?: LLMProvider;
 	model?: string;
+	/** Trust the project dir — project settings participate (batch B P2-2). */
+	trusted?: boolean;
 }): Promise<TestEnv> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-cmds-"));
 	const settingsPath = path.join(baseDir, "settings.json");
@@ -166,6 +168,7 @@ async function makeEnv(args?: {
 		cwd,
 		argv: [],
 		settingsPath,
+		projectSettingsAllowed: args?.trusted === true,
 		model: args?.model ?? "claude-sonnet-4-5",
 		maxTokens: 1024,
 		maxTurns: 10,
@@ -1880,18 +1883,19 @@ describe("/think (#thinking-levels)", () => {
 });
 
 describe("/tree batch B (#tree-b)", () => {
-	async function branchedEnvB() {
+	async function branchedEnvB(args?: { trusted?: boolean }) {
 		const env = await makeEnv({
 			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+			trusted: args?.trusted,
 		});
 		const points = env.runner.forkPoints();
 		await dispatchCommand(`/fork ${points.length}`, env.ctx);
 		return env;
 	}
 
-	it("treeFilterMode setting feeds the picker's initialFilterMode (project wins over global)", async () => {
+	it("treeFilterMode setting feeds the picker's initialFilterMode; project wins over global (trusted)", async () => {
 		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
-		const env = await branchedEnvB();
+		const env = await branchedEnvB({ trusted: true });
 		const seen: (string | undefined)[] = [];
 		let pick: string | null = null;
 		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: { initialFilterMode?: string }) => {
@@ -1902,16 +1906,9 @@ describe("/tree batch B (#tree-b)", () => {
 		await dispatchCommand("/tree", env.ctx);
 		expect(seen[seen.length - 1]).toBe("default"); // unset → default
 		pick = null; // later dispatches only capture the setting (cancel)
-		// write PROJECT scope (trusted: the test cwd has no trust prompt — runner defaults)
 		const fs = await import("node:fs/promises");
 		const pathMod = await import("node:path");
-		const projSettings = pathMod.join(env.runner.runnerCwd, ".imp", "settings.json");
-		await fs.mkdir(pathMod.dirname(projSettings), { recursive: true });
-		await fs.writeFile(projSettings, JSON.stringify({ treeFilterMode: "labeled-only" }), "utf-8");
-		const base = env.output().length;
-		await dispatchCommand("/tree", env.ctx);
-		// trust gate: the makeEnv runner runs untrusted by default — project
-		// settings invisible. Write the GLOBAL scope instead.
+		// GLOBAL says user-only…
 		await fs.writeFile(
 			env.runner.globalSettingsPath(),
 			JSON.stringify({ treeFilterMode: "user-only" }),
@@ -1919,6 +1916,12 @@ describe("/tree batch B (#tree-b)", () => {
 		);
 		await dispatchCommand("/tree", env.ctx);
 		expect(seen[seen.length - 1]).toBe("user-only");
+		// …a TRUSTED project file wins (impl-review P2-2: pin the command seam)
+		const projSettings = pathMod.join(env.runner.runnerCwd, ".imp", "settings.json");
+		await fs.mkdir(pathMod.dirname(projSettings), { recursive: true });
+		await fs.writeFile(projSettings, JSON.stringify({ treeFilterMode: "labeled-only" }), "utf-8");
+		await dispatchCommand("/tree", env.ctx);
+		expect(seen[seen.length - 1]).toBe("labeled-only");
 	});
 
 	it("branchSummary.skipPrompt=true: the picker navigates with NO ask; env=0 still wins combined", async () => {

@@ -1,6 +1,6 @@
 # /tree 批 C:打磨池收官(打开定位/翻页/段跳转/水平视口/中止重开/复制)
 
-状态:设计审查闭环(2 P1+3 P2+7 P3 全核实采纳,修订见 §6);待实现。
+状态:已实现;实现审查闭环(1 P1+1 P2+5 P3,见 §7);测试 1127→1138。
 
 前置:`docs/tree-design.md`(批 A)、`docs/tree-b-design.md`(批 B,均已在 main)。
 本批是批 A 设计 §4 延后清单的收官:原 7 项中批 B 交付 4 项,本批交付剩余 3 项
@@ -250,3 +250,27 @@ labelEdit 中全吞)。
   引用移 5338-5349;KeyId 驼峰 "pageUp"/"pageDown";ToolResult 字段是 content 非
   output;"↑↓ 回绕"注明是 pi 行为(imp 夹紧是既有未记录偏离,不随本批改);
   §5 补键位测试churn(:256 的 \x1b[C);status() 文案去 ▪ 前缀。
+
+
+## 7. 实现审查记录(`2263c68` 后,2026-02-09)
+
+判 BLOCK→修后 OK:A-I 九项全查,D4 收养图/isFoldable/段算法、D5 视口逐行
+pi 对齐确认;1 P1+1 P2+5 P3,全部亲核采纳:
+
+- **P1 残留调试输出**:批 C 排障时我加的 `SHARED-NAV>>>` console.error——按
+  DEBUG_TC 行过滤清理时多行语句的续行漏网。numbered 路径每次导航都会打到
+  stderr。已删。
+- **P2 summarize/customInstructions 跨重开轮泄漏**:第一轮选"Summarize"→
+  摘要中止重开→第二轮选"No summary"仍会摘要(choice 0 只是不置 true,不清
+  旧值);custom 同理。pi 每次选择重新声明两变量。修:轮顶重置 + ask 循环内
+  `summarize = choice !== 0`(pi 的 wantsSummary 逐次重算)。
+- **P3-1** findNearestVisibleIndex 空 target 且行集非空时返回 0,pi 落末行
+  ——去掉 `|| targetId === null` 短路,走末行兜底。
+- **P3-5** 末次 truncate 补 pi 的 `""`(切片行干净收尾,不出默认省略号)。
+- **P3-4 补钉**:branchSummary→summary、thinkingLevelChange→undefined、
+  alt+←/→ 查询免疫、onCopy 写失败→"imp: copy failed —"。
+- **P3-2/P3-3 记账不修**:visibleLines 组件层 floor 3(pi 无,批量 A 自定,
+  生产路径不受影响);复制文本 assistant 块 join(" ")(pi 连接 "" )与
+  contentText 的 \n——设计 D7 原文如此,记为有意。
+
+测试 1137→1138(净增 1 个 it:P3-4 钉子并入既有测试);门禁 1138/1138、typecheck 0、biome 0、build 0。

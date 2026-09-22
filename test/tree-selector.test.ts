@@ -658,6 +658,51 @@ describe("#tree batch C — polish pool", () => {
 		toolSel.handleInput("\x1b[A"); // a1 (visible in "all"): text blocks empty → undefined
 		toolSel.handleInput("\x18");
 		expect(copies).toEqual(["first question", "an answer", "file-a file-b", undefined]);
+		// branchSummary → its summary text; thinkingLevelChange → undefined (P3-4 pins)
+		const summaryRoots: TreeNode[] = [
+			{
+				entry: {
+					type: "branchSummary",
+					id: "bs1",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:00Z",
+					summary: "  old lessons  ",
+				} as TreeNode["entry"],
+				children: [
+					{
+						entry: {
+							type: "thinkingLevelChange",
+							id: "tc1",
+							parentId: "bs1",
+							timestamp: "2026-01-01T00:00:01Z",
+							thinkingLevel: "high",
+						} as TreeNode["entry"],
+						children: [],
+					},
+				],
+			},
+		];
+		const sumCopies: (string | undefined)[] = [];
+		const sumSel = makeSelector(summaryRoots, {
+			leafId: "tc1",
+			initialFilterMode: "all", // both rows visible
+			initialSelectedId: "bs1",
+			onCopy: (t) => sumCopies.push(t),
+		});
+		sumSel.handleInput("\x18"); // branchSummary → trimmed summary
+		sumSel.handleInput("\x1b[B"); // thinkingLevelChange → undefined
+		sumSel.handleInput("\x18");
+		expect(sumCopies).toEqual(["old lessons", undefined]);
+	});
+
+	it("alt+←/→ mid-query never enter the query buffer (impl-review P3-4)", () => {
+		const { selector } = harnessB("a3");
+		selector.handleInput("question");
+		const q = selector.rows().length;
+		selector.handleInput("\x1b[1;3D"); // alt+left — segment jump, not a query char
+		selector.handleInput("\x1b[1;3C"); // alt+right
+		expect(selector.render(100).join("")).toContain("search: question"); // query untouched
+		expect(selector.rows().length).toBe(q); // no refilter
 	});
 
 	it("deep rows auto-pan: the selected anchor's content stays visible (D5)", () => {

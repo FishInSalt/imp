@@ -2125,5 +2125,13 @@ describe("/tree batch C (#tree-c)", () => {
 		const base = env.output().length;
 		onCopy?.(undefined);
 		expect(env.output().slice(base)).toContain("no text to copy");
+		// a REJECTED write surfaces as an error note (impl-review P3-4)
+		(env.ctx as { copyText?: unknown }).copyText = async () => {
+			throw new Error("no clipboard tool");
+		};
+		const base2 = env.output().length;
+		onCopy?.("more text");
+		await new Promise((r) => setTimeout(r, 10));
+		expect(env.output().slice(base2)).toContain("imp: copy failed — no clipboard tool");
 	});
 });

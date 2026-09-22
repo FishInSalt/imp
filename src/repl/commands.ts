@@ -1107,6 +1107,11 @@ export const COMMANDS: readonly SlashCommand[] = [
 						},
 					});
 					reopen = null;
+					// pi declares wantsSummary/customInstructions per selection
+					// (impl-review P2-1): a round-1 "Summarize" must not leak into
+					// a round-2 "No summary" after an abort-reopen.
+					summarize = false;
+					customInstructions = undefined;
 					if (picked === null) return "handled"; // cancelled the command
 					// The current position is a selectable row (absolute
 					// visibility) — pi answers "already there" BEFORE any ask.
@@ -1139,7 +1144,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 								backToTree = true; // Esc → back to the tree (same entry reselected)
 								break;
 							}
-							if (choice === 1 || choice === 2) summarize = true;
+							summarize = choice !== 0; // pi: wantsSummary = choice !== "No summary"
 							if (choice === 2) {
 								const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
 								if (typed === null || typed.trim() === "") continue; // re-ask (pi loops too)
@@ -1204,10 +1209,6 @@ export const COMMANDS: readonly SlashCommand[] = [
 			if (targetId !== null && !viaPicker && process.env.IMP_BRANCH_SUMMARY !== "0") {
 				summarize = true;
 			}
-			console.error(
-				`SHARED-NAV>>>targetId=${String(targetId)} viaPicker=${String(viaPicker)} summarize=${String(summarize)}`,
-			);
-
 			// Progress feedback BEFORE the potentially 5-20s summarizer await —
 			// the state machine holds input in the queue meanwhile (review P2-1).
 			if (summarize) ctx.renderer.note("▪ switching branches… summarizing the left one");

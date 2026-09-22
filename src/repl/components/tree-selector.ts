@@ -324,7 +324,7 @@ export class TreeSelectorComponent implements Component {
 	 *  by the filter — it then has no TreeRow); empty rows → 0; fallback last. */
 	private findNearestVisibleIndex(targetId: string | null): number {
 		const rows = this.rows();
-		if (rows.length === 0 || targetId === null) return 0;
+		if (rows.length === 0) return 0; // pi: empty → 0; a null target falls to the last row
 		const indexBy = new Map(rows.map((r, i) => [r.entryId, i] as const));
 		let current: string | null = targetId;
 		while (current !== null) {
@@ -682,7 +682,9 @@ export class TreeSelectorComponent implements Component {
 						: r.gutter + r.body;
 				// Reverse video marks the selected row (SelectList's affordance).
 				lines.push(
-					r.isSelected ? `\x1b[7m${truncateToWidth(line, width)}\x1b[0m` : truncateToWidth(line, width),
+					r.isSelected
+						? `\x1b[7m${truncateToWidth(line, width, "")}\x1b[0m`
+						: truncateToWidth(line, width, ""),
 				);
 			}
 		}

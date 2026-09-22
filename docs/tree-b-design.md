@@ -1,6 +1,6 @@
 # /tree 批 B:label 书签 + 两个设置 + /fork 合流
 
-状态:设计稿(待独立设计审查)。
+状态:设计审查闭环(1 P1+4 P2+6 P3,§4);待实现。
 
 前置:`docs/tree-design.md`(批 A,已合并 main `6a542cd`,1104 tests)。本批是其中
 "批 B 候选"的用户选定组合:label 编辑 + labeled-only 过滤(书签系统)、
@@ -42,12 +42,15 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
 
 ### D1 label 编辑的归属:组件内嵌(pi 同形)
 
-- 键:**大写 `L`**(`data === "L"`)。小写永远是搜索字符——pi 用 shift+l 解决
-  与搜索的冲突,imp 照抄;不需要 f 键那种 query 空守卫。
+- 键:**大写 `L`**(`data === "L"`),分支放在可打印守卫**之前**(pi 结构)。
+  小写永远是搜索字符;**大写 L 任何时刻都开编辑——包括搜索激活时**(pi 同:
+  editLabel 分支先于搜索追加分支,大写 L 进不了查询;搜索不区分大小写,想搜
+  含 L 的词用小写)。钉测试(§4 P2)。
 - `TreeSelectorComponent` 增一个内嵌输入态:`labelEdit: { entryId, buffer } | null`。
   激活时:render 画 `Label (empty to remove): <buffer>▏  enter=save esc=cancel`
-  (替代状态行位置,树列表保持显示);handleInput 全部路由进 buffer
-  (可打印字符/backspace;Enter=保存;Esc=取消)。
+  (替代状态行位置,树列表保持显示);handleInput **全部**路由进 buffer:
+  可打印字符进 buffer、backspace 删、Enter 保存、Esc 取消;**其余键(箭头/Tab/
+  f/L)吞掉**——嵌套输入不漏给树(钉测试,§4 P2)。
 - 保存动作组件内**不直接写库**:回调 `onLabelChange(entryId, label)`。
   组件内同时更新自己的 `roots` 副本?——**不更新**:TreeNode 是构造器传入的
   数组,组件对它只读。pi 的 updateNodeLabel 就地改 flatNode。imp 等价做法:
@@ -56,8 +59,11 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
   getTree() 每次调用都是新建的树(commands.ts 每次 `/tree` 现取),不存在共享;
   就地改 = pi 的 updateNodeLabel,渲染立即可见,无需重取。
 - 落库:commands.ts 把 `session.appendLabelChange` 作为回调传进 treeSelect。
-  **时序**:pi 是"提交即落库"。imp 相同——L 保存的瞬间 appendLabelChange
-  (append-only,无风险),选择器继续开着。
+  **时序**:pi 同——提交即落库,选择器继续开着。**回调 try/catch**(§4 P3:
+  appendFileSync 的磁盘满/只读异常会经 TUI 键路径裸抛杀进程——pi 同样裸奔,
+  imp 不学这处):失败 → renderer.error,选择器保持;此时树上展示的是未落库
+  的就地 label(理论态:rows 只列现存 entry 且目标已校验,实际不可达——记录)。
+  pi 的时序是先改内存后落库(tree-selector.ts:1394-1396),imp 照抄。
 - **两处不变式**:label entry 的 targetId 必须是**现存 entry**(防孤儿注记——
   校验 `store.getEntry(targetId)`,不存在则 note 拒绝);appendLabelChange 在
   选择器打开期间发生,leaf 未动,parentId=当前 leaf 语义不变。
@@ -75,14 +81,17 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
     当前 leaf 绝对可见规则不变。
   - `all`:跳过簿记隐藏(thinkingLevelChange/session_info 也显示)。
     describeEntryForTree 已能描述这两类(批 A 写过)。
-- **切模式清空折叠**(pi 同):Tab 后 `this.folded.clear()`。理由:labeled-only
-  下折叠一个书签会藏掉整个模式的意义;清空是防呆。搜索查询保留(pi:切模式
-  不清查询——pi 只在 Esc/退格时动查询。核实:pi 的 filter 键不清 searchQuery,
-  但 applyFilter 会带着查询过滤。imp 照抄:模式切换保留查询)。
+- **四处置折叠**(§4 P3 对齐 pi):Tab 切模式、搜索打字、backspace、
+  Esc 清查询——四处都 `this.folded.clear()`(pi:1077-1097 均清)。理由统一:
+  折叠是浏览态,过滤/搜索是找路,后者必须能照亮被折叠的子树;否则 labeled-only
+  下折叠一个书签节点会把它后面的书签全部藏掉。查询在模式切换时保留(pi 同)。
 
 ### D3 状态行与标题
 
-- 状态行模式标签:`[labeled]`/`[all]`(pi 字面)。
+- 状态行(§4 P3,两处都改,别只改标题):模式标签用映射(default 无、
+  no-tools/user-only 原样、**labeled-only→`[labeled]`、all→`[all]`**——pi 字面,
+  不是 `[labeled-only]`);状态行尾部帮助串加 `L=label`:
+  `· enter=go tab=filter f=fold L=label`。
 - 标题栏帮助文案加 `L=label`:
   `Navigate the session tree (enter=go · tab=filter · f=fold · L=label · type to search)`。
 
@@ -98,8 +107,13 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
   传入。**LIVE 读**(settingsEntries 同款:不信任 runner 构造时快照——/settings
   本会话改了要立刻生效)。
 - **不持久化 Tab 循环**(pi 同:设置面板才是写入口)。
-- /settings 面板:增条目 `treeFilterMode`,kind "mode",值列五字面;
-  `/settings treeFilterMode labeled-only [scope]` 可写。SETTING_KEYS 增补。
+- /settings 面板(§4 P2:`kind:"mode"` 的循环逻辑硬编码了队列两值
+  `all ↔ one-at-a-time`,直接挂 treeFilterMode 会把非法值写进文件再被 coerce
+  静默吞掉):`SettingEntry` 增 `values?: string[]`,mode 循环在 entry.values
+  里转(pi 的 settings-selector.ts:554-559 同款 values 数组);parseSettingValue
+  仍是两路(面板/命令行)唯一校验器,`as QueueMode` 类型谎话随之消灭。
+  条目 `treeFilterMode`,values 五字面;`/settings treeFilterMode labeled-only
+  [scope]` 可写。SETTING_KEYS 增补。
 - **编号树(legacy)不读它**:legacy 永远 default(pi 同——设置只喂选择器)。
 
 ### D5 branchSummary.skipPrompt 设置
@@ -111,8 +125,11 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
 - **与 IMP_BRANCH_SUMMARY=0 正交**:env=0 是硬关(摘要代码路径不跑,
   编号路径也看它);skipPrompt 只省一次交互。两者可同真(env 仍然全关)。
 - 编号路径(`/tree <n>`)不受 skipPrompt 影响——它本来就不问。
+- **LIVE 读**(§4 P3,与 D4 同理明说):三选跳过的判断在 picker 流程当场
+  effectiveSettings,不缓存(pi 在 ask 时点读,interactive-mode.ts:5236)。
 - /settings 面板:条目 `branchSummary.skipPrompt`,kind "boolean";
-  SETTING_KEYS/parseSettingValue/settingPatchFor 增补(嵌套走 mcp. 同款分支)。
+  SETTING_KEYS/parseSettingValue/settingPatchFor/**settingSource 的 pick()**
+  增补(嵌套走 mcp. 同款分支——漏了 pick() 则来源列永远显示 [default],§4 P3)。
 
 ### D6 /fork 合流(forkSessionAt → navigateTree 薄包装)
 
@@ -121,13 +138,28 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
 - navigateTree:user 消息目标 = branchTo(parentId)(同一移动)+ buildContext 重建
   + noop 守卫 + 身份守卫 + editorText 提取 + 图像丢弃标记 + 摘要
 
-**决策**:`forkSessionAt` 保留签名,实现改为调 `navigateTree(entryId,
-{summarize:false})`:
-- noop(目标 parent 就是当前 leaf,即"fork 最新一条消息"):原 forkBefore
-  会把 leaf 挪到 parent——若 parent 就是当前 leaf 则是原地空转;navigateTree
-  报 noop。/fork 的 UX:note "already forking at the newest message"。
-  **行为差异记录**:原实现此场景下 retained=全部、abandoned=0、无 note——
-  合流后多一句提示,更诚实。
+**决策**:`forkSessionAt` 改为 **async** 且**返回 navigateTree 的结果联合 +
+preview**(§4 P2:同步方法转发不了 async;retained/abandoned 被 D6 本身废弃,
+签名不可能保留)。Runner 接口与 /fork 调用点(await + 解构)随之改。
+
+**noop 映射(§4 P1,重写)**:navigateTree 的 noop 守卫是
+`targetId === store.getLeafId()`(目标**本身**是当前位置),不是"目标的
+parent 是当前 leaf"——后者走 positionMoves 分支,返回完整结果+editorText
+(批 A 实现审查轮加的)。/fork 的**主场景恰是前者**:未应答的最新用户消息
+(回合中止/出错,没有 assistant 落盘)= 目标就是 leaf,合流后 navigateTree
+报 noop,/fork 死路——**回归**。原 forkBefore 无 leaf 守卫,无条件
+`leafId = target.parentId`(store.ts:431),这正是 store.ts:404-410 文档串
+写的"重打最后一条消息"。修法(采纳审查建议):
+- **放宽 navigateTree**:`targetId === leafId` 且目标是 **user 消息** → 照常
+  走(newLeaf=parentId,返回 editorText),不再 noop;非 user 的 leaf 目标
+  仍 noop。/tree 两条面都先短路 leaf 选中(commands.ts:969 picker、
+  ~1004 编号——"already at that point"),内部守卫只有直接 API(/fork)
+  能摸到,放宽不影响 /tree 的 pi 对齐(pi 的 /tree 对 leaf 选中同样
+  "Already at this point")。
+- 等价测试钉这个场景(fork 最新未应答消息:位置移动、editorText 回填)。
+- noop 真触发面(非 user leaf,如 assistant tip):/fork 的选择器根本列不出
+  (只列 user 消息)——防御路径,note "already at that point"。
+
 - editorText:forkSessionAt **消费**它(fork 的语义就是"重打这条消息"),
   作为返回字段透传给 /fork 命令——**命令层已有回填逻辑**(/tree 写的),
   /fork 复用:空编辑器则回填,否则 note。原实现没有回填(一个既有缺口,
@@ -137,6 +169,9 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
   branch`)。N=navigateTree 返回的 messages;abandoned 从 note 里去掉
   (树还在,/tree 看得见;两个数字不如一个诚实)。**取舍**:教学性略降,
   单一事实源升。
+- **目标校验(§4 P3 明说)**:forkSessionAt 原有的 userForkPoints().find
+  防御(off-path/非 user 抛 SessionNotFoundError)随转发消失——navigateTree
+  收任何非 label entry。**保留为 wrapper 前置检查**(两行,防御不降级)。
 - forkBefore(存储层)保留——navigateTree 的 branchTo 是它的超集,但
   forkBefore 语义(含 onCurrentPath 防御)仍是 store 公共 API;不再有
   runner 调用方后标记 deprecated 注释,测试继续钉它。
@@ -145,19 +180,31 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
 
 ### D7 测试计划(§8 对应)
 
-- tree-selector.test.ts(+~10):L 键开输入/可打印进 buffer/backspace/Enter
-  落回调(含 trim、空=删=undefined)/Esc 取消不落/labeled-only 只显 label 行
-  (leaf 恒显)/all 显簿记/Tab 五循环+切模式清折叠保留查询/initialFilterMode
-  生效/就地改 label 后 rows 立即反映。
+**既有测试会破(§4 P2,先列清)**:
+- tree-selector.test.ts:256-269 Tab 三循环——第三次 Tab 断言回 default,
+  五模式后落在 labeled-only。改断言为五步。
+- repl-commands.test.ts:821-822、860-861 与 repl-tui.test.ts:1850、1892、
+  1935-1936——钉着 `forked before "…"` + `N messages kept, M left` 的
+  note;D6 去掉 abandoned 计数,note 文案变。逐处更新(repl-tui 进改动
+  文件清单)。
+
+**新增**:
+- tree-selector.test.ts(+~12):L 开输入(含**搜索激活时**)/可打印进
+  buffer/backspace/Enter 落回调(trim、空=undefined)/Esc 取消不落/
+  **label-edit 中箭头/Tab/f/L 吞掉**/labeled-only 只显 label 行(leaf 恒显)/
+  all 显簿记/Tab 五循环+清折叠保留查询/**搜索打字与 backspace 清折叠**/
+  initialFilterMode 生效/就地改 label 后 rows 立即反映。
 - settings.test.ts(+~6):treeFilterMode coerce(合法/非法/缺省)、嵌套
   branchSummary.skipPrompt(coerce/深合并/raw 未知键幸存/saveSettings 嵌套)。
-- repl-commands.test.ts(+~5):skipPrompt=true 时 picker 流程无三选直接切;
-  treeFilterMode 设置喂给选择器(拦截 treeSelect 断言 initialFilterMode);
-  /settings treeFilterMode 值解析五字面;/fork 走 navigateTree(mock 断言
-  调用与 noop note);/fork editorText 回填。
-- tree-nav.test.ts(+~2):forkSessionAt 与 navigateTree(user 消息,无摘要)
-  结果等价(位置、history);noop 场景。
-- 预计 1104 → ~1127。
+- repl-commands.test.ts(+~6):skipPrompt=true 时 picker 流程无三选直接切;
+  **skipPrompt=true 且 IMP_BRANCH_SUMMARY=0(env 仍赢:不问也不摘)**;
+  treeFilterMode 喂选择器(拦截 treeSelect 断言 initialFilterMode;
+  **project>global 优先**各一例);/settings treeFilterMode 值解析五字面;
+  /fork 走 navigateTree;/fork editorText 回填。
+- tree-nav.test.ts(+~3):forkSessionAt 与 navigateTree(user 消息,无摘要)
+  结果等价(位置、history);**fork 最新未应答消息(leaf 目标)位置移动+
+  editorText**(§4 P1 场景);非 user leaf 目标仍 noop。
+- 预计 1104 → ~1131(含破改)。
 
 ### D8 README/文档
 
@@ -173,3 +220,28 @@ pi 的 label 时间戳、复制键、每模式专用过滤键(imp 保持 Tab 单
 - **设置 LIVE 读**:effectiveSettings 每次读盘——/tree 频度低,无性能顾虑。
 - **/fork 合流的行为差异**:noop 场景的 note、abandoned 计数消失、
   editorText 回填新增——测试随改,README 记录。
+
+
+## 4. 设计审查记录(2026-02-09,fresh-context reviewer)
+
+判 needs-fixes:1 P1+4 P2+6 P3;§0 十行事实表全部复核无误,D1 就地改/D2 机制/
+D4 LIVE 读/D5 正交性/D6 editorText 缺口与计数等价性均验证成立。逐项亲自核实后
+全部采纳:
+
+- **P1 D6 noop 映射错误**:navigateTree 的 noop 守卫是 target=leaf(非
+  newLeaf=leaf);/fork 主场景(未应答的最新用户消息)恰是 target=leaf,
+  合流即死路。修:放宽 navigateTree(user 消息 leaf 目标照常走)、D6 重写、
+  等价测试钉死(§2 D6 noop 映射段)。
+- **P2 mode 循环硬编码**:kind:"mode" 的 Enter 循环写死 all↔one-at-a-time,
+  挂 treeFilterMode 会写非法值被 coerce 静默吞。修:SettingEntry.values 数组
+  (pi 先例),parseSettingValue 唯一校验(§2 D4)。
+- **P2 forkSessionAt 签名不可能保留**:sync 转发不了 async。修:async+结果
+  联合+preview(§2 D6)。
+- **P2 测试计划漏破改**:Tab 三循环断言、forked-before note 钉子
+  (repl-commands+repl-tui)。修:D7 先列破改(§2 D7)。
+- **P2 缺钉子**:L 带搜索激活、label-edit 嵌套吞键、skipPrompt×env=0、
+  treeFilterMode project>global。修:D7 补(§2 D7)。
+- **P3×6**:settingSource pick() 嵌套分支(§2 D5);appendLabelChange 回调
+  try/catch + pi 先改内存后落库时序(§2 D1);状态行帮助串+模式标签映射
+  `[labeled]`(§2 D3);pi 四处清折叠(搜索打字/退格/Esc 清)对齐(§2 D2);
+  forkSessionAt 前置校验保留(§2 D6);skipPrompt LIVE 读明说(§2 D5)。

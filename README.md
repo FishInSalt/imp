@@ -134,13 +134,18 @@ imp            # interactive REPL (streaming, one-line tool status)
   disk), `/fork` (branch the conversation before an earlier message — pick
   one from the filterable list or `/fork <n>`), `/tree` (navigate the
   session TREE: a visual picker over every turn and branch — arrows move,
-  Tab cycles the filter (default/no-tools/user-only), `f` folds a subtree,
-  typing searches, Enter jumps. Jumping to any point leaves the branch you
-  left summarized into the new position's context (a three-way ask — No
-  summary / Summarize / custom prompt); jumping to a USER message puts its
-  text back in the input for re-editing; disable summaries with
-  `IMP_BRANCH_SUMMARY=0`. The readline shell renders the same tree as a
-  numbered list — `/tree <n>` jumps to row n), `/sessions` (list
+  Tab cycles the filter (default/no-tools/user-only/labeled-only/all), `f`
+  folds a subtree, `L` labels the selected entry (bookmarks: labeled rows
+  are searchable and survive every filter as the labeled-only mode), typing
+  searches, Enter jumps. Jumping to any point leaves the branch you left
+  summarized into the new position's context (a three-way ask — No summary /
+  Summarize / custom prompt; `/settings branchSummary.skipPrompt true` skips
+  the ask); jumping to a USER message puts its text back in the input for
+  re-editing — `/fork` does exactly this from a user-message list, and seeds
+  the editor the same way; disable summaries with `IMP_BRANCH_SUMMARY=0`;
+  `/settings treeFilterMode <mode>` remembers your default filter. The
+  readline shell renders the same tree as a numbered list — `/tree <n>` jumps
+  to row n), `/sessions` (list
   saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
   `/model [id]` (applies from the next turn),

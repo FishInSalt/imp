@@ -819,7 +819,7 @@ describe("/fork (#10 batch 1)", () => {
 		await dispatchCommand("/fork 2", env.ctx);
 		out = env.output();
 		expect(out).toContain("forked before “also add tests”");
-		expect(out).toContain("2 messages kept, 2 left on the old branch");
+		expect(out).toContain("2 messages kept on this branch"); // batch B D6: one honest count
 		expect(env.replayed).toHaveLength(1); // the retained path replayed
 	});
 
@@ -858,7 +858,7 @@ describe("/fork (#10 batch 1)", () => {
 		await dispatchCommand("/fork", env.ctx);
 		expect(calls[0]?.filterable).toBe(true);
 		expect(env.output()).toContain("forked before “fix the login bug”");
-		expect(env.output()).toContain("0 messages kept, 4 left on the old branch");
+		expect(env.output()).toContain("0 messages kept on this branch"); // fork before the FIRST message
 	});
 
 	it("/fork during a run is rejected with the standard teaching line", async () => {
@@ -1876,5 +1876,150 @@ describe("/think (#thinking-levels)", () => {
 		env.runner.setThinkingLevel("off");
 		await env.runner.runTurn({ userMessage: "again" });
 		expect(env.requests[env.requests.length - 1]?.thinking).toBeUndefined();
+	});
+});
+
+describe("/tree batch B (#tree-b)", () => {
+	async function branchedEnvB() {
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx);
+		return env;
+	}
+
+	it("treeFilterMode setting feeds the picker's initialFilterMode (project wins over global)", async () => {
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		const env = await branchedEnvB();
+		const seen: (string | undefined)[] = [];
+		let pick: string | null = null;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: { initialFilterMode?: string }) => {
+			seen.push(opts.initialFilterMode);
+			return pick;
+		};
+		pick = env.runner.session?.getTree()[0]?.children[0]?.children[0]?.children[0]?.entry.id ?? null;
+		await dispatchCommand("/tree", env.ctx);
+		expect(seen[seen.length - 1]).toBe("default"); // unset → default
+		pick = null; // later dispatches only capture the setting (cancel)
+		// write PROJECT scope (trusted: the test cwd has no trust prompt — runner defaults)
+		const fs = await import("node:fs/promises");
+		const pathMod = await import("node:path");
+		const projSettings = pathMod.join(env.runner.runnerCwd, ".imp", "settings.json");
+		await fs.mkdir(pathMod.dirname(projSettings), { recursive: true });
+		await fs.writeFile(projSettings, JSON.stringify({ treeFilterMode: "labeled-only" }), "utf-8");
+		const base = env.output().length;
+		await dispatchCommand("/tree", env.ctx);
+		// trust gate: the makeEnv runner runs untrusted by default — project
+		// settings invisible. Write the GLOBAL scope instead.
+		await fs.writeFile(
+			env.runner.globalSettingsPath(),
+			JSON.stringify({ treeFilterMode: "user-only" }),
+			"utf-8",
+		);
+		await dispatchCommand("/tree", env.ctx);
+		expect(seen[seen.length - 1]).toBe("user-only");
+	});
+
+	it("branchSummary.skipPrompt=true: the picker navigates with NO ask; env=0 still wins combined", async () => {
+		const fs = await import("node:fs/promises");
+		const env = await branchedEnvB();
+		await fs.writeFile(
+			env.runner.globalSettingsPath(),
+			JSON.stringify({ branchSummary: { skipPrompt: true } }),
+			"utf-8",
+		);
+		let asks = 0;
+		(env.ctx as { select?: unknown }).select = async () => {
+			asks++;
+			return 0;
+		};
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async () =>
+			env.runner.session?.getTree()[0]?.children[0]?.children[0]?.children[0]?.entry.id ?? null;
+		await dispatchCommand("/tree", env.ctx);
+		expect(asks).toBe(0); // skipped — no summary, straight over
+		expect(env.output()).toContain("navigated —");
+		// combined with the env hard-off: still no ask, and the runner gate keeps summaries off
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		await dispatchCommand("/tree", env.ctx);
+		expect(asks).toBe(0);
+	});
+
+	it("onLabelChange persists via appendLabelChange; a bad target is refused", async () => {
+		const env = await branchedEnvB();
+		let captured: { onLabelChange?: (id: string, label: string | undefined) => void } | undefined;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: {
+			onLabelChange?: (id: string, label: string | undefined) => void;
+		}) => {
+			captured = opts;
+			return null; // open, label, then cancel — the command just ends
+		};
+		await dispatchCommand("/tree", env.ctx);
+		expect(captured?.onLabelChange).toBeDefined();
+		const store = env.runner.session;
+		expect(store).not.toBeNull();
+		const target = store?.getTree()[0]?.children[0];
+		captured?.onLabelChange?.(target?.entry.id ?? "", "checkpoint");
+		expect(store?.getLabel(target?.entry.id ?? "")).toBe("checkpoint");
+		// removal: undefined
+		captured?.onLabelChange?.(target?.entry.id ?? "", undefined);
+		expect(store?.getLabel(target?.entry.id ?? "")).toBeUndefined();
+		// bad target: refused with an error line, nothing appended
+		const before = store?.getBranch().length ?? 0;
+		captured?.onLabelChange?.("no-such-entry", "x");
+		expect(env.output()).toContain("cannot label no-such-entry");
+		expect(store?.getBranch().length).toBe(before);
+	});
+
+	it("/fork rides navigateTree: editorText backfill + the one-count note", async () => {
+		const env = await branchedEnvB();
+		let editor = "";
+		(env.ctx as { getEditorText?: unknown }).getEditorText = () => editor;
+		(env.ctx as { setEditorText?: unknown }).setEditorText = (text: string) => {
+			editor = text;
+		};
+		const points = env.runner.forkPoints();
+		// fork before the newest message (an ANSWERED one): leaf moves to its
+		// parent; the text returns to the editor
+		await dispatchCommand(`/fork ${points.length}`, env.ctx);
+		const out = env.output();
+		expect(out).toContain("messages kept on this branch");
+		expect(out).not.toContain("left on the old branch");
+		expect(editor).toContain("q1"); // the first message — the only retained one
+	});
+
+	it("fork the UNANSWERED leaf message: position moves, text returns (batch B P1)", async () => {
+		const env = await branchedEnvB();
+		env.runner.session?.appendMessage(user("q3-drafted")); // unanswered → new leaf
+		let editor = "";
+		(env.ctx as { getEditorText?: unknown }).getEditorText = () => editor;
+		(env.ctx as { setEditorText?: unknown }).setEditorText = (text: string) => {
+			editor = text;
+		};
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx);
+		const store = env.runner.session;
+		// the unanswered message left the branch (its parent is where the
+		// position now sits — the branch tail and leaf coincide, correctly)
+		const stillThere = store
+			?.getBranch()
+			.some((e) => e.type === "message" && e.message.role === "user" && e.message.content === "q3-drafted");
+		expect(stillThere).toBe(false);
+		expect(editor).toBe("q3-drafted"); // back for re-editing
+		expect(env.output()).toContain("forked before");
+	});
+
+	it("/settings treeFilterMode parses the five literals and rejects junk", async () => {
+		const env = await makeEnv();
+		await dispatchCommand("/settings treeFilterMode labeled-only", env.ctx);
+		expect(env.output()).toContain("treeFilterMode");
+		const fs = await import("node:fs/promises");
+		const raw = JSON.parse(await fs.readFile(env.runner.globalSettingsPath(), "utf-8")) as Record<
+			string,
+			unknown
+		>;
+		expect(raw.treeFilterMode).toBe("labeled-only");
+		await dispatchCommand("/settings treeFilterMode everything", env.ctx);
+		expect(env.output()).toContain("must be one of");
 	});
 });

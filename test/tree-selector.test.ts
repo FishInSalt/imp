@@ -193,10 +193,15 @@ describe("buildTreeRows (#tree)", () => {
 });
 
 describe("TreeSelectorComponent keymap (#tree)", () => {
-	function harness(leafId: string | null) {
+	function harness(
+		leafId: string | null,
+		opts?: {
+			initialFilterMode?: import("../src/repl/components/tree-selector.js").TreeFilterMode;
+			onLabelChange?: (entryId: string, label: string | undefined) => void;
+		},
+	) {
 		const { roots, ids } = posterTree();
 		const picked: string[] = [];
-		const cancelled = false;
 		const state = { cancelled: false }; // live holder — a bare boolean would destructure by value
 		const selector = new TreeSelectorComponent(
 			roots,
@@ -206,8 +211,9 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 			() => {
 				state.cancelled = true;
 			},
+			opts,
 		);
-		return { selector, picked, state, ids };
+		return { selector, picked, state, ids, roots };
 	}
 
 	it("arrows move; enter selects; escape cancels", () => {
@@ -253,7 +259,7 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 		expect(state.cancelled).toBe(true);
 	});
 
-	it("tab cycles default → no-tools → user-only; f folds", () => {
+	it("tab cycles the five modes (batch B); mode switches clear folds", () => {
 		const { selector } = harness("a3");
 		// default: 6 rows; no-tools (no toolResults here): 6; user-only: 3
 		selector.handleInput("\t");
@@ -262,11 +268,131 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 		// a3 is an assistant but the CURRENT LEAF — absolute visibility (§3.3)
 		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "q2new", "a3", "q2old"]);
 		selector.handleInput("\t");
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["a3"]); // labeled-only — nothing pinned; the leaf survives (absolute)
+		selector.handleInput("\t");
+		expect(selector.rows()).toHaveLength(6); // all — same fixture has no bookkeeping entries
+		selector.handleInput("\t");
 		expect(selector.rows()).toHaveLength(6); // back to default
-		// fold the root (selected=0)
+		// fold, then a mode switch must clear it
 		selector.handleInput("f");
 		expect(selector.rows()).toHaveLength(1);
-		selector.handleInput("f");
+		selector.handleInput("\t"); // no-tools (fold cleared)
 		expect(selector.rows()).toHaveLength(6);
+	});
+});
+
+describe("label bookmarks + filter settings (#tree batch B)", () => {
+	function harnessB(
+		leafId: string | null,
+		opts?: {
+			initialFilterMode?: import("../src/repl/components/tree-selector.js").TreeFilterMode;
+			onLabelChange?: (entryId: string, label: string | undefined) => void;
+		},
+	) {
+		const { roots } = posterTree();
+		const state = { cancelled: false };
+		const selector = new TreeSelectorComponent(
+			roots,
+			leafId,
+			10,
+			() => {},
+			() => {
+				state.cancelled = true;
+			},
+			opts,
+		);
+		return { selector, state, roots };
+	}
+
+	it("L opens the inline input even with an active search; lowercase stays searchable", () => {
+		const { selector, roots } = harnessB("a3");
+		selector.handleInput("ans"); // search active
+		selector.handleInput("L"); // opens the editor DESPITE the query (pi structure)
+		selector.handleInput("mark");
+		selector.handleInput("\r"); // commit
+		const labeled = roots[0]?.children[0]; // a1 was selected (row 0 after filter)
+		expect(labeled?.label).toBe("mark");
+		// the tree row reflects it immediately, and search finds it
+		expect(selector.rows().some((r) => r.entryId === labeled?.entry.id && r.label === "mark")).toBe(true);
+		selector.handleInput("mark");
+		expect(selector.rows().every((r) => r.label === "mark" || r.isCurrentLeaf)).toBe(true);
+	});
+
+	it("label-edit swallows every other key; Enter commits trimmed; empty removes; Esc cancels", () => {
+		const { selector } = harnessB("a3");
+		selector.handleInput("L");
+		selector.handleInput("\t"); // swallowed by the nested input
+		selector.handleInput("\x1b[A"); // up — swallowed
+		selector.handleInput("f"); // printable → buffer
+		selector.handleInput("L"); // ALSO printable mid-edit (pi's LabelInput types it)
+		selector.handleInput("\x7f"); // backspace deletes the L ("f" remains)
+		selector.handleInput("\x7f"); // …and the f — buffer empty again
+		selector.handleInput("  spaced  ");
+		selector.handleInput("\r");
+		expect(selector.rows().some((r) => r.label === "spaced")).toBe(true); // trimmed
+		// remove: L again, Enter on the prefilled buffer's spaces-only edit
+		selector.handleInput("L");
+		selector.handleInput("\r"); // prefilled "spaced" — need to clear first
+		selector.handleInput("L");
+		for (let i = 0; i < 7; i++) selector.handleInput("\x7f"); // delete "spaced"
+		selector.handleInput("\r");
+		expect(selector.rows().some((r) => r.label !== undefined)).toBe(false); // removed
+		// cancel path
+		selector.handleInput("L");
+		selector.handleInput("x");
+		selector.handleInput("\x1b");
+		expect(selector.rows().some((r) => r.label === "x")).toBe(false);
+	});
+
+	it("onLabelChange fires only on commit (label undefined = remove)", () => {
+		const calls: [string, string | undefined][] = [];
+		const { selector } = harnessB("a3", { onLabelChange: (id, l) => calls.push([id, l]) });
+		selector.handleInput("L");
+		selector.handleInput("x");
+		selector.handleInput("\x1b"); // cancel — no call
+		expect(calls).toEqual([]);
+		selector.handleInput("L");
+		selector.handleInput("\r"); // empty buffer → REMOVE
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.[1]).toBeUndefined();
+	});
+
+	it("initialFilterMode opens there; search typing and backspace clear folds", () => {
+		const { selector } = harnessB("a3", { initialFilterMode: "user-only" });
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "q2new", "a3", "q2old"]); // a3: the leaf is absolute
+		// fold something, then typing clears folds (pi)
+		selector.handleInput("\t"); // → labeled-only (mode switch ALSO clears)
+		selector.handleInput("\t"); // → all
+		selector.handleInput("f"); // fold the selected row
+		const folded = selector.rows().length;
+		selector.handleInput("q"); // typing clears folds
+		expect(selector.rows().length).toBeGreaterThanOrEqual(folded);
+		selector.handleInput("\x7f"); // backspace (query still "…") — no crash
+		expect(selector.rows().length).toBeGreaterThanOrEqual(folded);
+	});
+
+	it("labeled-only shows exactly the pinned rows (leaf absolute); all shows bookkeeping", () => {
+		const { selector } = harnessB("a3", { onLabelChange: () => {} });
+		// pin two labels
+		selector.handleInput("\x1b[B"); // down → row 1
+		selector.handleInput("L");
+		selector.handleInput("alpha");
+		selector.handleInput("\r"); // commit (a separate chunk — a mixed chunk is rejected wholesale)
+		selector.handleInput("\x1b[B");
+		selector.handleInput("\x1b[B");
+		selector.handleInput("L");
+		selector.handleInput("beta");
+		selector.handleInput("\r");
+		selector.handleInput("\t"); // default→no-tools
+		selector.handleInput("\t"); // →user-only
+		selector.handleInput("\t"); // →labeled-only
+		const rows = selector.rows();
+		expect(rows.filter((r) => r.label !== undefined)).toHaveLength(2);
+		expect(rows.every((r) => r.label !== undefined || r.isCurrentLeaf)).toBe(true);
+		// status line: pi literal tag
+		expect(selector.render(80).some((l) => l.includes("[labeled]"))).toBe(true);
+		// all mode: add a bookkeeping entry to the tree and see it
+		selector.handleInput("\t"); // →all
+		expect(selector.render(80).some((l) => l.includes("[all]"))).toBe(true);
 	});
 });

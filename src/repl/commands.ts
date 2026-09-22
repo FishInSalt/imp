@@ -42,7 +42,7 @@ import {
 import type { Renderer } from "../render.js";
 import type { Runner } from "../runner.js";
 import { copyToClipboard } from "./clipboard-write.js";
-import { buildTreeRows } from "./components/tree-selector.js";
+import { buildTreeRows, TREE_FILTER_MODES } from "./components/tree-selector.js";
 import type { SelectOptions, TreeSelectRequest } from "./line-input.js";
 
 export interface CommandContext {
@@ -287,6 +287,9 @@ interface SettingEntry {
 	envShadow?: string;
 	source: "env" | "project" | "global" | "default";
 	kind: "boolean" | "level" | "string" | "mode";
+	/** Cycle values for kind "mode" (batch B §4 P2: the queue pair is no
+	 *  longer hardcoded — pi's settings-selector values array). */
+	values?: string[];
 }
 
 /** Per-key source (review P2-3): env > project > global > default. */
@@ -294,6 +297,8 @@ function settingSource(ctx: CommandContext, key: string): "env" | "project" | "g
 	const pick = (o: object) => {
 		if (key.startsWith("images.")) return (o as { images?: { autoResize?: boolean } }).images?.autoResize;
 		if (key.startsWith("mcp.")) return (o as { mcp?: { enabled?: boolean } }).mcp?.enabled;
+		if (key.startsWith("branchSummary."))
+			return (o as { branchSummary?: { skipPrompt?: boolean } }).branchSummary?.skipPrompt;
 		return (o as Record<string, unknown>)[key];
 	};
 	if (key === "defaultModel" && process.env.IMP_MODEL !== undefined) return "env";
@@ -382,7 +387,23 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			label: "follow-up drain per run boundary",
 			current: effective.followUpMode ?? "one-at-a-time",
 			kind: "mode",
+			values: [...QUEUE_MODES],
 			source: src("followUpMode"),
+		},
+		{
+			key: "treeFilterMode",
+			label: "default filter when /tree opens",
+			current: effective.treeFilterMode ?? "default",
+			kind: "mode",
+			values: [...TREE_FILTER_MODES],
+			source: src("treeFilterMode"),
+		},
+		{
+			key: "branchSummary.skipPrompt",
+			label: "skip the “summarize branch?” ask on /tree",
+			current: bool(effective.branchSummary?.skipPrompt, false),
+			kind: "boolean",
+			source: src("branchSummary.skipPrompt"),
 		},
 	];
 }
@@ -397,6 +418,8 @@ const SETTING_KEYS = [
 	"mcp.enabled",
 	"steeringMode",
 	"followUpMode",
+	"treeFilterMode",
+	"branchSummary.skipPrompt",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
@@ -419,6 +442,7 @@ function parseSettingValue(
 		case "enableSkillCommands":
 		case "images.autoResize":
 		case "mcp.enabled":
+		case "branchSummary.skipPrompt":
 			if (raw === "true" || raw === "false") return { ok: true, value: raw === "true" };
 			return { ok: false, error: `${key} must be true or false` };
 		case "steeringMode":
@@ -426,6 +450,10 @@ function parseSettingValue(
 			return (QUEUE_MODES as readonly string[]).includes(raw)
 				? { ok: true, value: raw }
 				: { ok: false, error: `${key} must be one of: ${QUEUE_MODES.join(", ")}` };
+		case "treeFilterMode":
+			return (TREE_FILTER_MODES as readonly string[]).includes(raw)
+				? { ok: true, value: raw }
+				: { ok: false, error: `${key} must be one of: ${TREE_FILTER_MODES.join(", ")}` };
 		default:
 			return {
 				ok: false,
@@ -440,6 +468,9 @@ function settingPatchFor(key: string, value: unknown): Record<string, unknown> {
 	}
 	if (key.startsWith("mcp.")) {
 		return { mcp: { [key.slice("mcp.".length)]: value } };
+	}
+	if (key.startsWith("branchSummary.")) {
+		return { branchSummary: { [key.slice("branchSummary.".length)]: value } };
 	}
 	return { [key]: value };
 }
@@ -546,7 +577,12 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		const at = order.indexOf(entry.current === "(medium)" ? "medium" : entry.current);
 		next = order[(at + 1) % order.length] ?? null;
 	} else if (entry.kind === "mode") {
-		next = entry.current === "all" ? "one-at-a-time" : "all";
+		// Batch B §4 P2: cycle within the entry's own values (the hardcoded
+		// queue pair once wrote invalid treeFilterMode literals that coerce
+		// then silently dropped).
+		const cycle = entry.values ?? [...QUEUE_MODES];
+		const at = cycle.indexOf(entry.current);
+		next = at === -1 ? (cycle[0] ?? null) : (cycle[(at + 1) % cycle.length] ?? null);
 	} else {
 		next = entry.current === "true" ? "false" : "true";
 	}
@@ -565,10 +601,7 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		if (pick === null) return "handled";
 		scope = pick === 1 ? "project" : "global";
 	}
-	const patch = settingPatchFor(
-		entry.key,
-		entry.kind === "boolean" ? next === "true" : entry.kind === "mode" ? (next as QueueMode) : next,
-	);
+	const patch = settingPatchFor(entry.key, entry.kind === "boolean" ? next === "true" : next);
 	const saved =
 		scope === "project"
 			? saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd)
@@ -907,12 +940,33 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			if (entryId === undefined) return "handled"; // unreachable; type guard
-			const { retained, abandoned, preview } = ctx.runner.forkSessionAt(entryId);
+			// Batch B D6: the fork IS a tree navigation now (one "move the
+			// position + rebuild history" path in the runner). The note speaks
+			// navigateTree's language: one honest count (the tree keeps the
+			// abandoned tail visible — /tree switches back).
+			const result = await ctx.runner.forkSessionAt(entryId);
+			if ("noop" in result) {
+				ctx.renderer.note("▪ already at that point — nothing to fork before");
+				return "handled";
+			}
+			if ("aborted" in result) return "handled"; // summarize:false — unreachable, kept for the union
 			ctx.clearView?.(); // the abandoned tail leaves the screen FIRST
 			const session = ctx.runner.session;
-			if (session !== null && retained > 0) ctx.replay(session); // same flow as /resume
+			if (session !== null && result.messages > 0) ctx.replay(session); // same flow as /resume
+			if (result.editorText !== undefined && result.editorText.trim() !== "") {
+				// What /fork always lacked (D6): the re-typed message lands back
+				// in the editor — same backfill rules as /tree.
+				const current = ctx.getEditorText?.() ?? "";
+				const suffix = result.editorTextDroppedImages === true ? " (text only — images dropped)" : "";
+				if (current.trim() === "" && ctx.setEditorText !== undefined) {
+					ctx.setEditorText(result.editorText);
+					if (suffix !== "") ctx.renderer.note(`▪ re-edit restores text only${suffix}`);
+				} else {
+					ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”${suffix}`);
+				}
+			}
 			ctx.renderer.note(
-				`▪ forked before “${preview}” — ${retained} message${retained === 1 ? "" : "s"} kept, ${abandoned} left on the old branch (/tree switches back)`,
+				`▪ forked before “${result.preview}” — ${result.messages} message${result.messages === 1 ? "" : "s"} kept on this branch (/tree switches back)`,
 			);
 			return "handled";
 		},
@@ -958,10 +1012,37 @@ export const COMMANDS: readonly SlashCommand[] = [
 				// TREE, and a cancelled custom prompt re-asks — pi's flow; only
 				// cancelling the tree itself ends the command).
 				viaPicker = true;
+				// Batch B: LIVE reads (a /settings write this session applies
+				// immediately — settingsEntries precedent), not the runner's
+				// construction-time snapshot.
+				const live = effectiveSettings({
+					cwd: ctx.runner.runnerCwd,
+					projectAllowed: ctx.runner.projectSettingsAllowed,
+					globalPath: ctx.runner.globalSettingsPath(),
+				});
+				const skipPrompt = live.branchSummary?.skipPrompt === true;
 				while (true) {
 					const picked = await ctx.treeSelect({
 						roots: session.getTree(),
 						leafId: session.getLeafId(),
+						initialFilterMode: live.treeFilterMode ?? "default",
+						// Commit-to-disk for the L key. try/catch: an append
+						// failure must not ride the TUI key path out of the
+						// process (§4 P3); the in-place tree update already
+						// happened — the selector stays open either way.
+						onLabelChange: (entryId, label) => {
+							if (session.getEntry(entryId) === undefined) {
+								ctx.renderer.error(`imp: cannot label ${entryId} — entry not found`);
+								return;
+							}
+							try {
+								session.appendLabelChange(entryId, label);
+							} catch (err) {
+								ctx.renderer.error(
+									`imp: label write failed — ${err instanceof Error ? err.message : String(err)}`,
+								);
+							}
+						},
 					});
 					if (picked === null) return "handled"; // cancelled the command
 					// The current position is a selectable row (absolute
@@ -971,7 +1052,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 						return "handled";
 					}
 					targetId = picked; // set before every exit from the loop
-					if (ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0") break;
+					if (skipPrompt || ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0") break;
 					const choice = await ctx.select({
 						title: "Summarize the branch you are leaving into the new one?",
 						items: [

@@ -56,6 +56,19 @@ export interface ImpSettings {
 	 *  module is inert anyway, D4 zero-cost-without-config). false skips
 	 *  discovery and connections entirely; /mcp then reports the gate. */
 	mcp?: { enabled?: boolean };
+	/** /tree batch B: default filter when the tree selector OPENS (pi's
+	 *  treeFilterMode). Literals mirror TreeFilterMode
+	 *  (src/repl/components/tree-selector.ts) — kept local so core never
+	 *  imports the repl layer. Tab-cycling inside the selector does NOT
+	 *  persist; the settings panel/command is the only writer (pi parity).
+	 *  The legacy numbered tree ignores it (pi parity). */
+	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
+	/** /tree batch B: skip the "summarize the left branch?" ask — the picker
+	 *  flow navigates straight to no-summary (pi's branchSummary.skipPrompt,
+	 *  default false). Orthogonal to IMP_BRANCH_SUMMARY=0: the env var is the
+	 *  hard off (no summary code path at all, numbered path included);
+	 *  skipPrompt only removes one interaction. */
+	branchSummary?: { skipPrompt?: boolean };
 }
 
 /** The global settings file path (IMP_SETTINGS_PATH overrides — hermetic tests). */
@@ -103,6 +116,25 @@ function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
 		const outMcp: { enabled?: boolean } = {};
 		if (typeof mcp.enabled === "boolean") outMcp.enabled = mcp.enabled;
 		if (Object.keys(outMcp).length > 0) out.mcp = outMcp;
+	}
+	if (
+		parsed.treeFilterMode === "default" ||
+		parsed.treeFilterMode === "no-tools" ||
+		parsed.treeFilterMode === "user-only" ||
+		parsed.treeFilterMode === "labeled-only" ||
+		parsed.treeFilterMode === "all"
+	) {
+		out.treeFilterMode = parsed.treeFilterMode;
+	}
+	if (
+		parsed.branchSummary !== null &&
+		typeof parsed.branchSummary === "object" &&
+		!Array.isArray(parsed.branchSummary)
+	) {
+		const bs = parsed.branchSummary as Record<string, unknown>;
+		const outBs: { skipPrompt?: boolean } = {};
+		if (typeof bs.skipPrompt === "boolean") outBs.skipPrompt = bs.skipPrompt;
+		if (Object.keys(outBs).length > 0) out.branchSummary = outBs;
 	}
 	return out;
 }

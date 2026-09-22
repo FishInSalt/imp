@@ -20,6 +20,23 @@ import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
+
+/** navigateTree's success shape (batch B: named so forkSessionAt can extend
+ *  it; editorTextDroppedImages flags that the re-edited user message carried
+ *  image blocks — text is all that returns). */
+export type NavigateTreeSuccess = {
+	editorText?: string;
+	editorTextDroppedImages?: boolean;
+	summary: "written" | "empty" | "disabled" | "failed";
+	messages: number;
+};
+export type NavigateTreeResult = { noop: true } | { aborted: true } | NavigateTreeSuccess;
+/** forkSessionAt = navigateTree + the picked message's preview (the note). */
+export type NavigateTreeForkResult =
+	| { noop: true }
+	| { aborted: true }
+	| { editorText?: string; editorTextDroppedImages?: boolean; preview: string; messages: number };
+
 import { escapeXml, formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import {
 	buildSystemPrompt,
@@ -212,7 +229,7 @@ export interface Runner {
 	forkPoints(): { id: string; preview: string }[];
 	/** Branch before a user message: the store's leaf moves, history
 	 *  reloads from the new path (same wiring as resumeSession). */
-	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string };
+	forkSessionAt(entryId: string): Promise<NavigateTreeForkResult>;
 	/** `/tree` navigation result: noop = target was the current position;
 	 *  aborted = the summarizer was cancelled (nothing moved — abort is
 	 *  abort of the whole navigation, pi parity); otherwise the summary
@@ -621,19 +638,30 @@ class RunnerImpl implements Runner {
 		}));
 	}
 
-	/** `/fork <n>` / picker pick: branch before a user message — the store's
-	 *  leaf moves, the in-memory history reloads from the new path (same
-	 *  wiring as resumeSession). The abandoned tail stays on disk. */
-	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string } {
+	/** `/fork <n>` / picker pick: branch before a user message. Batch B D6:
+	 *  a thin wrapper over navigateTree(summarize:false) — ONE "move the
+	 *  position + rebuild history" path (/tree's), not two that can drift.
+	 *  Keeps forkSessionAt's own target validation (user message on the
+	 *  current branch) as a pre-check, and adds what /fork always lacked:
+	 *  the re-typed text lands back in the editor (editorText passthrough).
+	 *  forkBefore (store level) stays as a public API pinned by tests; no
+	 *  runner caller remains. */
+	async forkSessionAt(entryId: string): Promise<NavigateTreeForkResult> {
 		const store = this.sessionStore;
 		if (store === null) throw new SessionNotFoundError("no session to fork (sessions disabled)");
+		// Pre-check (defense kept from the old implementation): only a user
+		// message ON the current branch is a fork target.
 		const target = store.userForkPoints().find((entry) => entry.id === entryId);
 		if (target === undefined) throw new SessionNotFoundError(`fork target ${entryId} not found`);
 		const preview = shorten(userText(target.message));
-		const { retained, abandoned } = store.forkBefore(entryId);
-		this.history.length = 0;
-		this.history.push(...store.buildContext().messages); // same wiring as warmup()/resumeSession()
-		return { retained, abandoned, preview };
+		const result = await this.navigateTree(entryId, { summarize: false });
+		if ("noop" in result || "aborted" in result) return result;
+		return {
+			...(result.editorText === undefined ? {} : { editorText: result.editorText }),
+			...(result.editorTextDroppedImages === true ? { editorTextDroppedImages: true } : {}),
+			preview,
+			messages: result.messages,
+		};
 	}
 
 	/** `/tree` navigation (#tree, replaces the tip-only switchSessionBranch
@@ -655,18 +683,22 @@ class RunnerImpl implements Runner {
 	async navigateTree(
 		targetId: string,
 		opts?: { summarize?: boolean; customInstructions?: string; signal?: AbortSignal },
-	): Promise<
-		| { noop: true }
-		| { aborted: true }
-		| { editorText?: string; summary: "written" | "empty" | "disabled" | "failed"; messages: number }
-	> {
+	): Promise<NavigateTreeResult> {
 		const store = this.sessionStore;
 		if (store === null) throw new SessionNotFoundError("no session to navigate (sessions disabled)");
 		const target = store.getEntry(targetId);
 		if (target === undefined || target.type === "label") {
 			throw new SessionNotFoundError(`tree target ${targetId} not found`);
 		}
-		if (targetId === store.getLeafId()) return { noop: true };
+		// noop only for a NON-user leaf target. A USER message that IS the
+		// current leaf (an unanswered turn — aborted/errored before any
+		// assistant entry landed) still navigates: newLeaf = its parent,
+		// editorText = its text (batch B §4 P1 — /fork's primary case;
+		// unreachable from /tree, whose surfaces short-circuit leaf picks
+		// with "already at that point", matching pi).
+		const leafTargetIsUser =
+			target.type === "message" && target.message.role === "user" && targetId === store.getLeafId();
+		if (targetId === store.getLeafId() && !leafTargetIsUser) return { noop: true };
 		// The abandoned set must be computed BEFORE any mutation, keyed on the
 		// TARGET (review P1-1): a user-message target stays out of the summary
 		// — its text goes back to the editor instead.

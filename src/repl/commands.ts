@@ -40,7 +40,7 @@ import {
 	thinkingMetaFor,
 } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
-import type { Runner } from "../runner.js";
+import type { NavigateTreeSuccess, Runner } from "../runner.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import { buildTreeRows, TREE_FILTER_MODES } from "./components/tree-selector.js";
 import type { SelectOptions, TreeSelectRequest } from "./line-input.js";
@@ -869,6 +869,42 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	}
 }
 
+/** Shared post-navigation rendering for the /tree family (batch C D6): clear
+ *  + replay, editorText backfill, the tail note. Both the picker path (inside
+ *  its reopen loop) and the numbered path land here. */
+function renderNavigateSuccess(
+	ctx: CommandContext,
+	session: SessionStore,
+	result: NavigateTreeSuccess,
+): void {
+	ctx.clearView?.();
+	if (result.messages > 0) ctx.replay(session);
+	// editorText backfill (design §3.4): a user-message target puts the
+	// old text back for re-editing — only over an EMPTY editor (pi parity),
+	// and as a note where there is no editor (legacy shell).
+	if (result.editorText !== undefined && result.editorText.trim() !== "") {
+		const current = ctx.getEditorText?.() ?? "";
+		// Design §7 P3: re-edit restores TEXT only — say so when the
+		// original message carried images.
+		const suffix = result.editorTextDroppedImages === true ? " (text only — images dropped)" : "";
+		if (current.trim() === "" && ctx.setEditorText !== undefined) {
+			ctx.setEditorText(result.editorText);
+			if (suffix !== "") ctx.renderer.note(`▪ re-edit restores text only${suffix}`);
+		} else {
+			ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”${suffix}`);
+		}
+	}
+	const tail =
+		result.summary === "written"
+			? "the left branch is summarized in context"
+			: result.summary === "empty"
+				? "nothing was written beyond that point to summarize"
+				: result.summary === "disabled"
+					? "summary off — IMP_BRANCH_SUMMARY=0"
+					: "summarizer failed — see imp-log; switched without it";
+	ctx.renderer.note(`▪ navigated — ${result.messages} messages here (${tail})`);
+}
+
 export const COMMANDS: readonly SlashCommand[] = [
 	{
 		name: "help",
@@ -1011,9 +1047,14 @@ export const COMMANDS: readonly SlashCommand[] = [
 				ctx.renderer.error("imp: /tree takes no text — /tree opens the navigator, /tree <n> goes to row #n");
 				return "handled";
 			} else if (ctx.treeSelect !== undefined) {
-				// The pick → ask loop (review P2: Esc at the ask RETURNS TO THE
-				// TREE, and a cancelled custom prompt re-asks — pi's flow; only
-				// cancelling the tree itself ends the command).
+				// The pick → ask → navigate loop. Batch A P2: Esc at the ask
+				// RETURNS TO THE TREE (same entry reselected), a cancelled
+				// custom prompt re-asks. Batch C D6: an aborted summarization
+				// ALSO returns to the tree with the same entry preselected
+				// (pi:5298-5302) — only cancelling the tree itself ends the
+				// command. The picker path navigates INSIDE the loop so
+				// "aborted" can re-open; the numbered path keeps the shared
+				// navigate below.
 				viaPicker = true;
 				// Batch B: LIVE reads (a /settings write this session applies
 				// immediately — settingsEntries precedent), not the runner's
@@ -1024,11 +1065,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 					globalPath: ctx.runner.globalSettingsPath(),
 				});
 				const skipPrompt = live.branchSummary?.skipPrompt === true;
-				while (true) {
+				let reopen: string | null = null;
+				for (;;) {
 					const picked = await ctx.treeSelect({
-						roots: session.getTree(),
+						roots: session.getTree(), // fresh every round (abort may change nothing, but stay safe)
 						leafId: session.getLeafId(),
 						initialFilterMode: live.treeFilterMode ?? "default",
+						initialSelectedId: reopen ?? undefined,
 						// Commit-to-disk for the L key. try/catch: an append
 						// failure must not ride the TUI key path out of the
 						// process (§4 P3); the in-place tree update already
@@ -1046,7 +1089,29 @@ export const COMMANDS: readonly SlashCommand[] = [
 								);
 							}
 						},
+						// ctrl+x (batch C D7): through the ctx.copyText test
+						// seam like every other clipboard write in commands.
+						onCopy: (text) => {
+							if (text === undefined) {
+								ctx.renderer.error("imp: selected entry has no text to copy");
+								return;
+							}
+							const write = ctx.copyText ?? ((value: string) => copyToClipboard(value));
+							void write(text)
+								.then(() => ctx.renderer.status("Copied selected entry to clipboard"))
+								.catch((err) =>
+									ctx.renderer.error(
+										`imp: copy failed — ${err instanceof Error ? err.message : String(err)}`,
+									),
+								);
+						},
 					});
+					reopen = null;
+					// pi declares wantsSummary/customInstructions per selection
+					// (impl-review P2-1): a round-1 "Summarize" must not leak into
+					// a round-2 "No summary" after an abort-reopen.
+					summarize = false;
+					customInstructions = undefined;
 					if (picked === null) return "handled"; // cancelled the command
 					// The current position is a selectable row (absolute
 					// visibility) — pi answers "already there" BEFORE any ask.
@@ -1054,27 +1119,70 @@ export const COMMANDS: readonly SlashCommand[] = [
 						ctx.renderer.note("▪ already at that point");
 						return "handled";
 					}
-					targetId = picked; // set before every exit from the loop
-					if (skipPrompt || ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0") break;
-					const choice = await ctx.select({
-						title: "Summarize the branch you are leaving into the new one?",
-						items: [
-							{ label: "No summary", description: "switch without carrying the left branch over" },
-							{ label: "Summarize", description: "keep the left branch's lessons in context" },
-							{
-								label: "Summarize with custom prompt",
-								description: "add your own instructions",
-							},
-						],
-					});
-					if (choice === null) continue; // Esc → back to the tree selector
-					if (choice === 1 || choice === 2) summarize = true;
-					if (choice === 2) {
-						const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
-						if (typed === null || typed.trim() === "") continue; // re-ask (pi loops too)
-						customInstructions = typed.trim();
+					targetId = picked;
+					let backToTree = false;
+					if (!(skipPrompt || ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0")) {
+						for (;;) {
+							const choice = await ctx.select({
+								title: "Summarize the branch you are leaving into the new one?",
+								items: [
+									{
+										label: "No summary",
+										description: "switch without carrying the left branch over",
+									},
+									{
+										label: "Summarize",
+										description: "keep the left branch's lessons in context",
+									},
+									{
+										label: "Summarize with custom prompt",
+										description: "add your own instructions",
+									},
+								],
+							});
+							if (choice === null) {
+								backToTree = true; // Esc → back to the tree (same entry reselected)
+								break;
+							}
+							summarize = choice !== 0; // pi: wantsSummary = choice !== "No summary"
+							if (choice === 2) {
+								const typed = (await ctx.secret?.("custom summarization instructions:")) ?? null;
+								if (typed === null || typed.trim() === "") continue; // re-ask (pi loops too)
+								customInstructions = typed.trim();
+							}
+							break;
+						}
 					}
-					break;
+					if (backToTree) {
+						reopen = picked;
+						continue;
+					}
+					// Picker path navigates here (inside the loop) so an abort
+					// can re-open the selector on the same entry.
+					if (summarize) ctx.renderer.note("▪ switching branches… summarizing the left one");
+					else ctx.renderer.note("▪ switching branches…");
+					const controller = new AbortController();
+					ctx.onLongOpAbort?.(controller);
+					try {
+						const result = await ctx.runner.navigateTree(targetId, {
+							summarize,
+							...(customInstructions === undefined ? {} : { customInstructions }),
+							signal: controller.signal,
+						});
+						if ("noop" in result) {
+							ctx.renderer.note("▪ already at that point");
+							return "handled";
+						}
+						if ("aborted" in result) {
+							ctx.renderer.note("▪ summarization cancelled — stayed on the current branch");
+							reopen = targetId; // batch C D6: re-open ON the attempted entry (pi:5298-5302)
+							continue;
+						}
+						renderNavigateSuccess(ctx, session, result);
+						return "handled";
+					} finally {
+						ctx.onLongOpAbort?.(null);
+					}
 				}
 			} else {
 				// Legacy readline shell: the numbered text tree (same rows).
@@ -1101,7 +1209,6 @@ export const COMMANDS: readonly SlashCommand[] = [
 			if (targetId !== null && !viaPicker && process.env.IMP_BRANCH_SUMMARY !== "0") {
 				summarize = true;
 			}
-
 			// Progress feedback BEFORE the potentially 5-20s summarizer await —
 			// the state machine holds input in the queue meanwhile (review P2-1).
 			if (summarize) ctx.renderer.note("▪ switching branches… summarizing the left one");
@@ -1125,32 +1232,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					ctx.renderer.note("▪ summarization cancelled — stayed on the current branch");
 					return "handled";
 				}
-				ctx.clearView?.();
-				if (result.messages > 0) ctx.replay(session);
-				// editorText backfill (design §3.4): a user-message target puts the
-				// old text back for re-editing — only over an EMPTY editor (pi parity),
-				// and as a note where there is no editor (legacy shell).
-				if (result.editorText !== undefined && result.editorText.trim() !== "") {
-					const current = ctx.getEditorText?.() ?? "";
-					// Design §7 P3: re-edit restores TEXT only — say so when the
-					// original message carried images.
-					const suffix = result.editorTextDroppedImages === true ? " (text only — images dropped)" : "";
-					if (current.trim() === "" && ctx.setEditorText !== undefined) {
-						ctx.setEditorText(result.editorText);
-						if (suffix !== "") ctx.renderer.note(`▪ re-edit restores text only${suffix}`);
-					} else {
-						ctx.renderer.note(`▪ back in the editor: “${result.editorText.slice(0, 80)}”${suffix}`);
-					}
-				}
-				const tail =
-					result.summary === "written"
-						? "the left branch is summarized in context"
-						: result.summary === "empty"
-							? "nothing was written beyond that point to summarize"
-							: result.summary === "disabled"
-								? "summary off — IMP_BRANCH_SUMMARY=0"
-								: "summarizer failed — see imp-log; switched without it";
-				ctx.renderer.note(`▪ navigated — ${result.messages} messages here (${tail})`);
+				renderNavigateSuccess(ctx, session, result);
 				return "handled";
 			} finally {
 				ctx.onLongOpAbort?.(null);

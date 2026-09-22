@@ -223,12 +223,16 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 		return { selector, picked, state, ids, roots };
 	}
 
-	it("arrows move; enter selects; escape cancels", () => {
+	it("opens ON the current leaf; arrows move; enter selects; escape cancels (batch C D2)", () => {
 		const { selector, picked, state } = harness("a3");
-		selector.handleInput("\x1b[B"); // down
-		selector.handleInput("\x1b[A"); // up — back to row 0
-		selector.handleInput("\r"); // enter on row 0
-		expect(picked).toEqual(["q1"]);
+		// batch C: the selector opens with the cursor on the current leaf,
+		// not row 0 (pi's initialSelectedId ?? currentLeafId).
+		selector.handleInput("\r"); // enter immediately — picks the leaf row
+		expect(picked).toEqual(["a3"]);
+		selector.handleInput("\x1b[B"); // down off the leaf
+		selector.handleInput("\x1b[A"); // up — back on the leaf
+		selector.handleInput("\r");
+		expect(picked).toEqual(["a3", "a3"]);
 		selector.handleInput("\x1b"); // no search open — Esc cancels directly
 		expect(state.cancelled).toBe(true);
 	});
@@ -288,32 +292,39 @@ describe("TreeSelectorComponent keymap (#tree)", () => {
 	});
 });
 
-describe("label bookmarks + filter settings (#tree batch B)", () => {
-	function harnessB(
-		leafId: string | null,
-		opts?: {
-			initialFilterMode?: import("../src/repl/components/tree-selector.js").TreeFilterMode;
-			onLabelChange?: (entryId: string, label: string | undefined) => void;
+function harnessB(
+	leafId: string | null,
+	opts?: {
+		initialFilterMode?: import("../src/repl/components/tree-selector.js").TreeFilterMode;
+		onLabelChange?: (entryId: string, label: string | undefined) => void;
+		initialSelectedId?: string;
+		onCopy?: (text: string | undefined) => void;
+		visibleLines?: number;
+	},
+) {
+	const { roots } = posterTree();
+	const state = { cancelled: false };
+	const { visibleLines, ...componentOpts } = opts ?? {};
+	const selector = new TreeSelectorComponent(
+		roots,
+		leafId,
+		visibleLines ?? 10,
+		() => {},
+		() => {
+			state.cancelled = true;
 		},
-	) {
-		const { roots } = posterTree();
-		const state = { cancelled: false };
-		const selector = new TreeSelectorComponent(
-			roots,
-			leafId,
-			10,
-			() => {},
-			() => {
-				state.cancelled = true;
-			},
-			opts,
-		);
-		return { selector, state, roots };
-	}
+		componentOpts,
+	);
+	return { selector, state, roots };
+}
 
+describe("label bookmarks + filter settings (#tree batch B)", () => {
 	it("L opens the inline input even with an active search; lowercase stays searchable", () => {
 		const { selector, roots } = harnessB("a3");
 		selector.handleInput("ans"); // search active
+		// batch C: opening selects the leaf (a3, row 1 under this query);
+		// step UP to a1 so the label lands on the intended entry.
+		selector.handleInput("\x1b[A");
 		selector.handleInput("L"); // opens the editor DESPITE the query (pi structure)
 		selector.handleInput("mark");
 		selector.handleInput("\r"); // commit
@@ -429,5 +440,321 @@ describe("label bookmarks + filter settings (#tree batch B)", () => {
 		// all mode: the status tag AND the actual bookkeeping rows
 		selector.handleInput("\t"); // →all
 		expect(selector.render(80).some((l) => l.includes("[all]"))).toBe(true);
+	});
+});
+
+describe("#tree batch C — polish pool", () => {
+	/** q1 ─ a1(tool-only, hidden in default) ─ t1(toolResult)
+	 *   └─ q2 ─ a2 (visible sibling branch; a2 = leaf).
+	 * Default rows: [q1, t1, q2, a2] — t1 ADOPTS under q1 (review P1-1). */
+	function toolTurnRoots(): TreeNode[] {
+		const toolCall: AgentMessage = {
+			role: "assistant",
+			blocks: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }],
+			stopReason: "tool_use",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		};
+		const toolRes: AgentMessage = {
+			role: "toolResult",
+			results: [{ toolCallId: "c1", toolName: "bash", content: "file-a file-b", isError: false }],
+		};
+		const msg = (
+			id: string,
+			parentId: string | null,
+			message: AgentMessage,
+			children: TreeNode[] = [],
+		): TreeNode => ({
+			entry: {
+				type: "message",
+				id,
+				parentId,
+				timestamp: "2026-01-01T00:00:00Z",
+				message,
+			} as TreeNode["entry"],
+			children,
+		});
+		return [
+			msg("q1", null, user("start question"), [
+				msg("a1", "q1", toolCall, [msg("t1", "a1", toolRes)]),
+				msg("q2", "q1", user("second question"), [msg("a2", "q2", assistantText("second answer"))]),
+			]),
+		];
+	}
+
+	type ComponentOpts = NonNullable<ConstructorParameters<typeof TreeSelectorComponent>[5]>;
+	function makeSelector(
+		roots: TreeNode[],
+		opts: {
+			leafId?: string | null;
+			onPick?: (id: string) => void;
+			visibleLines?: number;
+		} & ComponentOpts = {},
+	) {
+		const { leafId, onPick, visibleLines, ...componentOpts } = opts;
+		return new TreeSelectorComponent(
+			roots,
+			leafId ?? null,
+			visibleLines ?? 10,
+			(id) => onPick?.(id),
+			() => {},
+			componentOpts,
+		);
+	}
+
+	it("opens ON the leaf; hidden/unknown initialSelectedId walks up or falls back (D2)", () => {
+		const { roots } = posterTree();
+		// open defaults to the current leaf row
+		const picked: string[] = [];
+		makeSelector(roots, { leafId: "a3", onPick: (id) => picked.push(id) }).handleInput("\r");
+		expect(picked).toEqual(["a3"]);
+		// explicit initialSelectedId
+		makeSelector(roots, {
+			leafId: "a3",
+			initialSelectedId: "a2old",
+			onPick: (id) => picked.push(id),
+		}).handleInput("\r");
+		expect(picked).toEqual(["a3", "a2old"]);
+		// hidden target under user-only: a1 (assistant) → nearest visible ancestor q1
+		makeSelector(roots, {
+			leafId: "a3",
+			initialFilterMode: "user-only",
+			initialSelectedId: "a1",
+			onPick: (id) => picked.push(id),
+		}).handleInput("\r");
+		expect(picked).toEqual(["a3", "a2old", "q1"]);
+		// unknown target → fallback LAST visible row
+		makeSelector(roots, {
+			leafId: "a3",
+			initialSelectedId: "no-such",
+			onPick: (id) => picked.push(id),
+		}).handleInput("\r");
+		expect(picked).toEqual(["a3", "a2old", "q1", "a2old"]);
+	});
+
+	it("the window re-centers on the selection (D2): mid-list open, window shifts on move", () => {
+		// default rows: [q1, a1, q2new, a3, q2old, a2old] (6); vis=4
+		const { selector } = harnessB("a3", { initialSelectedId: "a3", visibleLines: 4 });
+		// selected idx 3 → window [max(0, 3-2) .. +4) = [1,5): a1..q2old
+		const first = selector.render(120).join("\n");
+		expect(first).toContain("an answer"); // idx 1
+		expect(first).toContain("old direction"); // idx 4
+		expect(first).not.toContain("first question"); // idx 0 OUT (old model: [0,4) → IN — the discriminator)
+		expect(first).not.toContain("old result"); // idx 5 out
+		// one ↓ (selected 4) → window [2,6): the tail row enters
+		selector.handleInput("\x1b[B");
+		const after = selector.render(120).join("\n");
+		expect(after).toContain("old result"); // idx 5 now in — window shifted by one
+		expect(after).not.toContain("first question");
+	});
+
+	it("←/→/PgUp/PgDn page, clamped at both ends, and never touch the query (D3)", () => {
+		const { selector } = harnessB("a3", { visibleLines: 2 });
+		expect(selector.rows()).toHaveLength(6);
+		// page down from the leaf (idx 3): min(5, 3+2) = 5 → status shows (6/6)
+		selector.handleInput("\x1b[C"); // right
+		expect(selector.render(100).join("")).toContain("(6/6)");
+		selector.handleInput("\x1b[6~"); // PgDn — clamped, stays
+		expect(selector.render(100).join("")).toContain("(6/6)");
+		// page up: max(0, 5-2) = 3
+		selector.handleInput("\x1b[D"); // left (vis floors at 3): 5-3=2 → (3/6)
+		expect(selector.render(100).join("")).toContain("(3/6)");
+		// the query survives paging: type, page, query still shown and rows not refiltered
+		selector.handleInput("question");
+		const q = selector.rows().length;
+		selector.handleInput("\x1b[5~"); // PgUp mid-query — not a query char
+		const status = selector.render(100).join("");
+		expect(status).toContain("search: question");
+		expect(selector.rows().length).toBe(q);
+		// fewer rows than a page: PgUp stays put (no wrap, no negative)
+		const small = harnessB("a3", { visibleLines: 40, initialSelectedId: "q1" }); // idx 0
+		const before = small.selector.render(100).join("");
+		small.selector.handleInput("\x1b[5~");
+		expect(small.selector.render(100).join("")).toBe(before);
+	});
+
+	it("alt+← folds at branch points only; alt+→ unfolds; folded rows jump instead (D4)", () => {
+		// rows: [q1, a1, q2new, a3, q2old, a2old]. Foldable: q1 (root),
+		// q2new & q2old (branch children of a1). NOT a1 (single child of q1).
+		const { selector } = harnessB("a3", { initialSelectedId: "q2new" });
+		expect(selector.rows()).toHaveLength(6);
+		selector.handleInput("\x1b[1;3D"); // alt+left on q2new (foldable) → FOLD (a3 hidden)
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "a1", "q2new", "q2old", "a2old"]);
+		expect(selector.render(100).join("")).toContain("(3/5)"); // still on q2new
+		// alt+left AGAIN on the folded q2new → JUMP to segment start (not unfold)
+		// up-walk: q2new's group under a1 is [q2new, q2old] but q2new is AT the
+		// segment start (3 < 3 false) → continue; q1 root → land on q1 (idx 0)
+		selector.handleInput("\x1b[1;3D");
+		expect(selector.render(100).join("")).toContain("(1/5)");
+		expect(selector.rows()).toHaveLength(5); // still folded
+		// alt+right on folded q2new? We're on q1 now — q1 is foldable (root)!
+		// Instead verify unfold: select q2new (row 2) explicitly then alt+right.
+		const reopen = harnessB("a3", { initialSelectedId: "q2new" });
+		reopen.selector.handleInput("\x1b[1;3D"); // fold
+		expect(reopen.selector.rows()).toHaveLength(5);
+		reopen.selector.handleInput("\x1b[1;3C"); // alt+right → UNFOLD
+		expect(reopen.selector.rows()).toHaveLength(6);
+		// mid-chain NON-foldable row (a1: has children, but its parent q1's
+		// visible group is [a1] — single): alt+left JUMPS, never folds (P1-2 pin)
+		const mid = harnessB("a3", { initialSelectedId: "a1" });
+		mid.selector.handleInput("\x1b[1;3D");
+		expect(mid.selector.rows()).toHaveLength(6); // nothing folded
+		// a1 walks up to root q1 and lands there (its own segment start is itself)
+		expect(mid.selector.render(100).join("")).toContain("(1/6)");
+		// ctrl+left (dual binding) behaves the same
+		const dual = harnessB("a3", { initialSelectedId: "a1" });
+		dual.selector.handleInput("\x1b[1;5D");
+		expect(dual.selector.render(100).join("")).toContain("(1/6)");
+	});
+
+	it("hidden intermediates adopt to the visible ancestor (D4, review P1-1)", () => {
+		const roots = toolTurnRoots();
+		const picked: string[] = [];
+		const selector = makeSelector(roots, {
+			leafId: "a2",
+			initialSelectedId: "q1",
+			onPick: (id) => picked.push(id),
+		});
+		expect(selector.rows().map((r) => r.entryId)).toEqual(["q1", "q2", "a2", "t1"]); // a1 hidden; active-first puts q2 first, t1 adopts position after
+		// alt+right from q1: ADOPTED children = [q2, t1] (row order,
+		// active-first) — >1, so it jumps to the first child q2
+		selector.handleInput("\x1b[1;3C");
+		selector.handleInput("\r");
+		expect(picked).toEqual(["q2"]);
+		// alt+left from a2 (idx 2): q2's adopted group under q1 is [q2, t1]
+		// (>1) and idx(q2)=1 < 2 → jump to q2 — the ADOPTED chain, though a1
+		// itself has no row
+		const fresh = makeSelector(roots, {
+			leafId: "a2",
+			initialSelectedId: "a2",
+			onPick: (id) => picked.push(id),
+		});
+		fresh.handleInput("\x1b[1;3D");
+		fresh.handleInput("\r");
+		expect(picked).toEqual(["q2", "q2"]);
+	});
+
+	it("ctrl+x copies the selected entry's full text (D7)", () => {
+		const copies: (string | undefined)[] = [];
+		const { roots } = posterTree();
+		const selector = makeSelector(roots, {
+			leafId: "a3",
+			initialSelectedId: "q1",
+			onCopy: (t) => copies.push(t),
+		});
+		selector.handleInput("\x18");
+		expect(copies).toEqual(["first question"]); // raw content, no "user: " prefix
+		selector.handleInput("\x1b[B"); // a1
+		selector.handleInput("\x18");
+		expect(copies).toEqual(["first question", "an answer"]);
+		// toolResult content, and tool-only assistant → undefined (via "all")
+		const toolSel = makeSelector(toolTurnRoots(), {
+			leafId: "a2",
+			initialFilterMode: "all",
+			initialSelectedId: "t1",
+			onCopy: (t) => copies.push(t),
+		});
+		toolSel.handleInput("\x18"); // t1: toolResult → its content
+		expect(copies).toEqual(["first question", "an answer", "file-a file-b"]);
+		toolSel.handleInput("\x1b[A"); // a1 (visible in "all"): text blocks empty → undefined
+		toolSel.handleInput("\x18");
+		expect(copies).toEqual(["first question", "an answer", "file-a file-b", undefined]);
+		// branchSummary → its summary text; thinkingLevelChange → undefined (P3-4 pins)
+		const summaryRoots: TreeNode[] = [
+			{
+				entry: {
+					type: "branchSummary",
+					id: "bs1",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:00Z",
+					summary: "  old lessons  ",
+				} as TreeNode["entry"],
+				children: [
+					{
+						entry: {
+							type: "thinkingLevelChange",
+							id: "tc1",
+							parentId: "bs1",
+							timestamp: "2026-01-01T00:00:01Z",
+							thinkingLevel: "high",
+						} as TreeNode["entry"],
+						children: [],
+					},
+				],
+			},
+		];
+		const sumCopies: (string | undefined)[] = [];
+		const sumSel = makeSelector(summaryRoots, {
+			leafId: "tc1",
+			initialFilterMode: "all", // both rows visible
+			initialSelectedId: "bs1",
+			onCopy: (t) => sumCopies.push(t),
+		});
+		sumSel.handleInput("\x18"); // branchSummary → trimmed summary
+		sumSel.handleInput("\x1b[B"); // thinkingLevelChange → undefined
+		sumSel.handleInput("\x18");
+		expect(sumCopies).toEqual(["old lessons", undefined]);
+	});
+
+	it("alt+←/→ mid-query never enter the query buffer (impl-review P3-4)", () => {
+		const { selector } = harnessB("a3");
+		selector.handleInput("question");
+		const q = selector.rows().length;
+		selector.handleInput("\x1b[1;3D"); // alt+left — segment jump, not a query char
+		selector.handleInput("\x1b[1;3C"); // alt+right
+		expect(selector.render(100).join("")).toContain("search: question"); // query untouched
+		expect(selector.rows().length).toBe(q); // no refilter
+	});
+
+	it("deep rows auto-pan: the selected anchor's content stays visible (D5)", () => {
+		// A deep active chain: every level branches, indents stack up.
+		const { roots } = posterTree();
+		const { selector } = harnessB("a3", { initialSelectedId: "q2old" });
+		// posterTree alone is too shallow to pan — hang a deep chain off q2old
+		// via a long label instead? No: pan is INDENT-driven. Build depth by
+		// nesting: reuse toolTurn + a chained fixture.
+		const deepChain = (depth: number): TreeNode => {
+			const mk = (level: number, parentId: string | null): TreeNode =>
+				msgNode(level, parentId, level === depth ? "deep target text" : `lvl ${level}`);
+			const msgNode = (level: number, parentId: string | null, text: string): TreeNode => {
+				const id = `n${level}`;
+				const children: TreeNode[] = [];
+				const node: TreeNode = {
+					entry: {
+						type: "message",
+						id,
+						parentId,
+						timestamp: "2026-01-01T00:00:00Z",
+						message: level === depth ? user(text) : user(`lvl ${level}`),
+					} as TreeNode["entry"],
+					children,
+				};
+				if (level < depth) {
+					// two children: the chain continues in the FIRST (branch → indent grows)
+					children.push(mk(level + 1, id), mkSib(level + 1, id));
+				}
+				return node;
+			};
+			const mkSib = (level: number, parentId: string): TreeNode => ({
+				entry: {
+					type: "message",
+					id: `s${level}`,
+					parentId,
+					timestamp: "2026-01-01T00:00:00Z",
+					message: user(`sibling ${level}`),
+				} as TreeNode["entry"],
+				children: [],
+			});
+			return msgNode(0, null, "root");
+		};
+		const deepRoots = [deepChain(4)]; // indents 0..4 — the deepest active row prefixes ~14 cols
+		const selectorD = makeSelector(deepRoots, { leafId: "n4", initialSelectedId: "n4" });
+		const narrow = selectorD.render(20); // viewport 18; anchor ≈14 > 18-6 → pans
+		const selectedLine = narrow.find((l) => l.includes("\x1b[7m"));
+		expect(selectedLine).toBeDefined();
+		expect(selectedLine).toContain("deep"); // anchor CONTENT visible — the whole point
+		const wide = selectorD.render(120).join("\n");
+		expect(wide).toContain("deep target text"); // wide: no pan, full row
+		void roots;
+		void selector;
 	});
 });

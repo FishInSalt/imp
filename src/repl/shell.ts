@@ -816,11 +816,13 @@ export class TuiShell implements LineInput {
 					() => finish(null),
 					{
 						initialFilterMode: options.initialFilterMode,
+						initialSelectedId: options.initialSelectedId,
 						onLabelChange: options.onLabelChange,
+						onCopy: options.onCopy,
 					},
 				),
 				options.title ??
-					"Navigate the session tree (enter=go · tab=filter · f=fold · L=label · type to search)",
+					"Navigate the session tree (enter=go · tab=filter · f=fold · L=label · ←→/pgup/pgdn=page · alt+←→=branch · ctrl+x=copy · type to search)",
 			);
 			this.selector = { teardown: () => finish(null) };
 			this.updatePlaceholder();

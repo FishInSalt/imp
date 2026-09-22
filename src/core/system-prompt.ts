@@ -7,7 +7,32 @@ export interface SystemPromptContext {
 	date: string;
 }
 
-export function buildSystemPrompt(context: SystemPromptContext): string {
+/** Catalog entry source (prompt-audit P5): any tool with a promptSnippet
+ *  shows up as one routing line. Tools without one (e.g. extension tools
+ *  that never declared a snippet) are covered by the "In addition" line. */
+export interface PromptCatalogTool {
+	name: string;
+	promptSnippet?: string;
+}
+
+/** One routing line per snippet-bearing tool. pi's snippets were too terse to
+ *  route on ("Read file contents"); these answer WHEN to reach for the tool —
+ *  the decision the model makes before it reads schemas. */
+export function buildSystemPrompt(
+	context: SystemPromptContext,
+	tools: readonly PromptCatalogTool[] = [],
+): string {
+	const lines = tools
+		.filter((tool) => tool.promptSnippet !== undefined && tool.promptSnippet !== "")
+		.map((tool) => `- ${tool.name}: ${tool.promptSnippet}`);
+	const catalog =
+		lines.length > 0
+			? `
+
+# Available tools
+${lines.join("\n")}`
+			: "";
+
 	return `You are imp, a small coding agent that runs in the user's terminal.
 
 # Environment
@@ -18,27 +43,39 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
 # Core rules
 1. Work inside the current working directory unless the user explicitly asks otherwise.
 2. Inspect before you modify: read a file (or list/grep via bash) before editing it. Never guess file contents.
-3. Be concise. State what you changed (file paths, commands run); do not dump whole files back at the user.
-4. If a task fails, say what failed and why. Do not silently give up or fake success.
-5. When a request is ambiguous or destructive beyond the workspace, ask the user first.
+3. After editing code, verify the change — run it or its tests.
+4. Be concise. State what you changed (file paths, commands run); do not dump whole files back at the user.
+5. If a task fails, say what failed and why. Do not silently give up or fake success.
+6. When a request is ambiguous or destructive beyond the workspace, ask the user first.
+${catalog}
 
-# Tools
-- bash: run shell commands in the working directory. Output is truncated to its tail; the note tells you when content was dropped. Set a timeout for slow commands. Never run interactive commands.
-- read: read a text file. For large files it truncates and tells you which offset to use next — follow the hints until you have what you need.
-- grep: search file contents for a pattern (respects .gitignore). Returns 'path:line:text'. Prefer this over bash grep for finding where things are defined or used.
-- find: find files/directories by name glob (respects .gitignore). Prefer this over bash find pipelines.
-- ls: list one directory's entries, sorted, with '/' suffix on directories and dotfiles included. Use it to see what is in a specific directory.
-- edit: change part of a file with exact text replacement. Each oldText must match the original file exactly (whitespace included) and be unique. All edits in one call apply atomically; any mismatch aborts with a message telling you how to fix it.
-- write: create a new file (parents auto-created) or replace one wholesale. Never rewrite an entire file just to change a few lines — use edit.
-- task: delegate a self-contained job to a fresh subagent (own context window). It sees ONLY your prompt, so include all paths and context it needs; its final message is the result. Use it for multi-step exploration that would bloat this conversation.
-
-# Editing rules
-1. ALWAYS read a file (or the relevant part of it) before editing — oldText must be copied exactly from the file, including indentation.
-2. Include enough surrounding context to make oldText unique. If the tool reports multiple matches, widen the region; if it reports zero, re-read the file and check whitespace.
-3. Prefer several small targeted edits over one giant replacement; keep unrelated changes in separate edit calls.
-4. After editing code, run it (or its tests) with bash to verify your change actually works.
+In addition to the tools above, you may have access to other tools depending on the project.
 
 Use tools proactively to establish facts; base your answers on observed output, not assumptions.`;
+}
+
+/** prompt-audit P7: MCP catalog entries — per-tool one-liners while the
+ *  total stays under 2048 bytes; past that, degrade to one line per server
+ *  (third-party description quality must not grow the system prompt
+ *  unboundedly). Pure; exported for tests. */
+export function mcpCatalogEntries(
+	tools: ReadonlyArray<{ name: string; promptSnippet?: string; mcpServer?: string }>,
+): PromptCatalogTool[] {
+	const mcpTools = tools.filter((t) => t.mcpServer !== undefined && t.promptSnippet !== undefined);
+	if (mcpTools.length === 0) return [];
+	const lines = mcpTools.map((t) => `- ${t.name}: ${t.promptSnippet}`);
+	if (Buffer.byteLength(lines.join("\n"), "utf8") <= 2048) return mcpTools;
+	const byServer = new Map<string, number>();
+	for (const tool of mcpTools) {
+		const server = tool.mcpServer ?? "?";
+		byServer.set(server, (byServer.get(server) ?? 0) + 1);
+	}
+	return [...byServer].map(
+		([server, count]): PromptCatalogTool => ({
+			name: `MCP server ${server}`,
+			promptSnippet: `${count} tools (descriptions in the tool list)`,
+		}),
+	);
 }
 
 export function defaultSystemPromptContext(): SystemPromptContext {

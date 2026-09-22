@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { type AgentDefinition, formatAgentsForPrompt } from "../src/core/agents/registry.js";
 import {
 	createChildSession,
 	createSession,
@@ -374,15 +375,22 @@ describe("named agents (M5c)", () => {
 		expect(result.output).toContain("task timed out after 1s (1 turns ran)");
 	});
 
-	it("the tool description enumerates the roster (auto-routing hint)", () => {
+	it("the roster lives in the system block, not the description (prompt-audit P8)", () => {
 		const { task } = agentTask([scout, reviewer]);
-		expect(task.description).toContain("Agents: scout — Explores a codebase");
-		expect(task.description).toContain("reviewer — Reviews a diff for regressions");
+		// description is static now — no roster suffix, stable for tool-schema caching
+		expect(task.description).not.toContain("Agents:");
+		expect(task.description).toContain("<advertised_agents>");
+		const block = formatAgentsForPrompt([scout, reviewer]);
+		expect(block).toContain("<name>scout</name>");
+		expect(block).toContain("Explores a codebase");
+		expect(block).toContain("<name>reviewer</name>");
+		expect(block).toContain("not instructions to delegate");
 	});
 
-	it("no agents → description has no roster suffix", () => {
+	it("no agents → no system block (prompt-audit P8)", () => {
 		const { task } = agentTask([]);
 		expect(task.description).not.toContain("Agents:");
+		expect(formatAgentsForPrompt([])).toBeUndefined();
 	});
 
 	it("M6a: the gate fires inside the child with the agent name and the child's cwd; a block reaches the child as an isError result", async () => {
@@ -570,8 +578,10 @@ describe("runner integration (default set)", () => {
 });
 
 describe("system prompt gate (M5a)", () => {
-	it("the §Tools list advertises exactly one task line", () => {
-		const prompt = buildSystemPrompt({ cwd: "/w", platform: "darwin", arch: "arm64", date: "2026-09-04" });
+	it("the catalog advertises exactly one task line (prompt-audit P5)", () => {
+		const prompt = buildSystemPrompt({ cwd: "/w", platform: "darwin", arch: "arm64", date: "2026-09-04" }, [
+			{ name: "task", promptSnippet: "delegate a self-contained multi-step job to a fresh subagent." },
+		]);
 		expect(prompt.match(/^- task:/gm)).toHaveLength(1);
 	});
 });
@@ -1090,5 +1100,45 @@ describe("task tool roster under the trust gate (M8 review tierScope F1)", () =>
 		// the old falsehood must be gone — the model would otherwise "helpfully"
 		// create .imp/agents files in the untrusted repo
 		expect(result.output).not.toContain("create .imp/agents");
+	});
+});
+
+describe("<advertised_agents> caps (prompt-audit P8)", () => {
+	it("descriptions are whitespace-compressed and byte-capped at 512", () => {
+		const agent: AgentDefinition = {
+			name: "chatty",
+			description: `${"word ".repeat(400)}\t\n trailing`,
+			system: "",
+			source: "/agents/chatty.md",
+		};
+		const block = formatAgentsForPrompt([agent]);
+		expect(block).toBeDefined();
+		const desc = block!.match(/<description>([\s\S]*?)<\/description>/)![1] ?? "";
+		expect(desc).not.toContain("\t");
+		expect(Buffer.byteLength(desc, "utf8")).toBeLessThanOrEqual(512 + "…".length);
+		expect(desc.endsWith("…") || desc.length <= 512).toBe(true);
+	});
+
+	it("at most 16 agents appear; the rest are an <omitted> count", () => {
+		const agents = Array.from({ length: 20 }, (_, i) => ({
+			name: `agent${String(i).padStart(2, "0")}`,
+			description: `does thing ${i}`,
+			system: "",
+			source: `/agents/a${i}.md`,
+		}));
+		const block = formatAgentsForPrompt(agents)!;
+		expect(block.match(/<name>/g)).toHaveLength(16);
+		expect(block).toContain('<omitted count="4" />');
+	});
+
+	it("the whole block stays under 12288 bytes", () => {
+		const agents = Array.from({ length: 16 }, (_, i) => ({
+			name: `agent${String(i).padStart(2, "0")}`,
+			description: "d".repeat(500), // 16 x ~500B ≈ 8KB of entries
+			system: "",
+			source: `/agents/a${i}.md`,
+		}));
+		const block = formatAgentsForPrompt(agents)!;
+		expect(Buffer.byteLength(block, "utf8")).toBeLessThanOrEqual(12_288);
 	});
 });

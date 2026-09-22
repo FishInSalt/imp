@@ -593,6 +593,10 @@ function createMcpSetup(renderer: Renderer, runner: Runner): McpManager | undefi
 		cwd: process.cwd(),
 		version: VERSION,
 		renderer,
+		// prompt-audit P7: the catalog is assembled at warmup, before any MCP
+		// server has connected — refresh the system prompt whenever the tool
+		// array syncs so late-arriving tools appear in it.
+		onToolsChanged: () => runner.refreshSystemPrompt(),
 	});
 	manager.attachToolsArray(runner.tools);
 	manager.connectAll();

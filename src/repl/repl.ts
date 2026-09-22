@@ -584,7 +584,9 @@ class ReplMachine {
 		if (this.input.addFold === undefined) return;
 		const result = event.result;
 		if (!result.isError && result.toolName === "edit") {
-			const content = contentText(result.content);
+			// prompt-audit P1: the model gets a one-liner; the display string
+			// carries the "<summary>:<diff>" fold contract.
+			const content = result.display ?? contentText(result.content);
 			const split = content.indexOf(":\n");
 			if (split !== -1) {
 				// the built-in contract: "<summary>:\n<diff>" gets the decorated
@@ -597,7 +599,8 @@ class ReplMachine {
 				return;
 			}
 		}
-		const rawLines = contentText(result.content).split("\n");
+		const shown = result.display ?? contentText(result.content);
+		const rawLines = shown.split("\n");
 		// A trailing newline is a terminator, not a (blank) line — count it out
 		// (review P2: 400 physical lines + "\n" lied about one more).
 		if (rawLines[rawLines.length - 1] === "") rawLines.pop();
@@ -609,8 +612,7 @@ class ReplMachine {
 			capped.push(dim(`… (${rawLines.length - FOLD_LINE_CAP} more lines — full output in the session)`));
 		}
 		this.input.addFold(
-			summarizeResult(result.toolName, contentText(result.content)) +
-				imageSuffix(result, this.renderer.ansiEnabled),
+			summarizeResult(result.toolName, shown) + imageSuffix(result, this.renderer.ansiEnabled),
 			capped,
 			false,
 			result.isError === true,

@@ -138,3 +138,18 @@ describe("read tool", () => {
 		expect(result.output).toContain("beyond the end");
 	});
 });
+
+describe("read single-line-over-limit fallback (prompt-audit P9)", () => {
+	it("a line larger than the byte cap returns the bash sed hint", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-read-huge-"));
+		const file = path.join(root, "huge.txt");
+		const huge = `${"x".repeat(60 * 1024)}\nshort line\n`; // one 60KB line > 50KB cap
+		await writeFile(file, huge, "utf8");
+		const tool = createReadTool();
+		const result = await tool.execute({ path: file }, noSignal);
+		expect(result.isError).toBeFalsy();
+		expect(result.output).toContain("[Line 1 is 60KB, exceeds the 50KB limit.");
+		expect(result.output).toContain(`sed -n '1p' ${file} | head -c`);
+		expect(result.output).not.toContain("xxxx");
+	});
+});

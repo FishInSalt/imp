@@ -34,7 +34,8 @@ const taskSchema = Type.Object({
 	}),
 	agent: Type.Optional(
 		Type.String({
-			description: "Named agent to run (listed in the tool description); omit for a generic subagent",
+			description:
+				"Named agent to run (see <advertised_agents> in the system prompt if present); omit for a generic subagent",
 		}),
 	),
 	worktree: Type.Optional(
@@ -114,16 +115,15 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 	const timeoutMs = options.timeoutMs;
 	const agents = options.agents ?? [];
 	const agentsByName = new Map(agents.map((a) => [a.name, a] as const));
-	// Auto-routing hint (Claude Code prompt.ts pattern): the description
-	// enumerates agents so the model can pick one without guessing.
-	const roster = agents.length
-		? ` Agents: ${agents.map((a) => `${a.name} — ${a.description}`).join("; ")}.`
-		: "";
-
 	return {
 		name: "task",
 		concurrencySafe: true,
-		description: `Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time.${roster}`,
+		promptSnippet: "delegate a self-contained multi-step job to a fresh subagent.",
+		// prompt-audit P8: the roster moved to the <advertised_agents> system
+		// block (capped, escaped, budgeted) — a dynamic description defeats
+		// provider tool-schema caching and grows unbounded with agent count.
+		description:
+			"Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time. Named agents are listed in the system prompt's <advertised_agents> block.",
 		parameters: taskSchema,
 
 		async execute(args, signal): Promise<ToolExecuteResult> {

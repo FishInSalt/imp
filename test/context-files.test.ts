@@ -29,18 +29,19 @@ describe("context files", () => {
 		]);
 	});
 
-	it("concatenates with headers, global first, nearest last", async () => {
+	it("sections carry per-file content, global first, nearest last (prompt-audit P4)", async () => {
 		const { root, home } = await makeTree();
 		await writeFile(path.join(root, "AGENTS.md"), "# root\nparent rules");
 		await writeFile(path.join(root, "src", "AGENTS.md"), "# src\nmodule rules");
 
 		const loaded = loadContextFiles(path.join(root, "src"), home);
 		expect(loaded).not.toBeNull();
-		const text = loaded!.text;
+		const text = loaded!.sections.map((s) => s.content).join("\n");
 		const rootIdx = text.indexOf("parent rules");
 		const srcIdx = text.indexOf("module rules");
 		expect(rootIdx).toBeGreaterThan(-1);
 		expect(srcIdx).toBeGreaterThan(rootIdx);
+		expect(loaded!.sections.every((s) => s.path.endsWith("AGENTS.md"))).toBe(true);
 	});
 
 	it("returns null when nothing is found", async () => {
@@ -52,5 +53,46 @@ describe("context files", () => {
 		const { root, home } = await makeTree();
 		await writeFile(path.join(root, "AGENTS.md"), "   \n");
 		expect(loadContextFiles(root, home)).toBeNull();
+	});
+});
+
+describe("candidates + first-match (prompt-audit P4)", () => {
+	it("AGENTS.md shadows CLAUDE.md in the same directory", async () => {
+		const { root, home } = await makeTree();
+		await writeFile(path.join(root, "AGENTS.md"), "agent rules");
+		await writeFile(path.join(root, "CLAUDE.md"), "claude rules");
+		const loaded = loadContextFiles(root, home);
+		expect(loaded!.sections).toHaveLength(1);
+		expect(loaded!.sections[0]!.content).toBe("agent rules");
+	});
+
+	it("CLAUDE.md loads when no AGENTS.md exists (interop)", async () => {
+		const { root, home } = await makeTree();
+		await writeFile(path.join(root, "CLAUDE.md"), "claude only");
+		const loaded = loadContextFiles(root, home);
+		expect(loaded!.sections[0]!.content).toBe("claude only");
+		expect(loaded!.files[0]!.endsWith("CLAUDE.md")).toBe(true);
+	});
+
+	it("AGENTS.override.md outranks AGENTS.md", async () => {
+		const { root, home } = await makeTree();
+		await writeFile(path.join(root, "AGENTS.md"), "plain");
+		await writeFile(path.join(root, "AGENTS.override.md"), "override wins");
+		const loaded = loadContextFiles(root, home);
+		expect(loaded!.sections).toHaveLength(1);
+		expect(loaded!.sections[0]!.content).toBe("override wins");
+	});
+});
+
+describe("global tier stays AGENTS.md-only (impl review P2-1)", () => {
+	it("an unreadable global AGENTS.md does NOT fall through to ~/.imp/CLAUDE.md", async () => {
+		const { root, home } = await makeTree();
+		const imp = path.join(home, ".imp");
+		await mkdir(imp, { recursive: true });
+		await writeFile(path.join(imp, "CLAUDE.md"), "global claude must not load");
+		// AGENTS.md exists but is a directory → readFileSync throws
+		await mkdir(path.join(imp, "AGENTS.md"), { recursive: true });
+		const loaded = loadContextFiles(root, home);
+		expect(loaded).toBeNull();
 	});
 });

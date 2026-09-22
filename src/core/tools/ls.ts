@@ -33,6 +33,7 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "ls",
+		promptSnippet: "list one directory's entries (dotfiles included).",
 		description:
 			`List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. ` +
 			`Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${MAX_BYTES / 1024}KB ` +

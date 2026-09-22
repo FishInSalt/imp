@@ -58,6 +58,10 @@ export interface McpManagerOptions {
 	callTimeoutMs?: number;
 	/** Test seam: reconnect cooldown (default 30s — tests run in milliseconds). */
 	reconnectCooldownMs?: number;
+	/** prompt-audit P7: invoked after every tool-array sync (handshake
+	 *  completion and run-boundary flushes) so the host can refresh the
+	 *  system prompt's MCP catalog. Read-only for the manager. */
+	onToolsChanged?: () => void;
 }
 
 export class McpManager {
@@ -275,6 +279,8 @@ export class McpManager {
 			taken.add(tool.name);
 			state.registeredNames.add(tool.name);
 		}
+		// prompt-audit P7: notify the host AFTER the array reflects this sync.
+		this.options.onToolsChanged?.();
 	}
 
 	/** Call-triggered reconnect (single-flight, cooldown). */

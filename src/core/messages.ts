@@ -69,6 +69,10 @@ export interface ToolResult {
 	toolName: string;
 	content: string | ContentBlock[];
 	isError: boolean;
+	/** Render-only override (prompt-audit P1). Present ONLY on tool_end
+	 *  events — the loop strips it before the result enters history, so it
+	 *  never reaches the model, the session file, or resume replay. */
+	display?: string;
 }
 
 export interface ToolResultMessage {

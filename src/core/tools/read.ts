@@ -35,6 +35,7 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "read",
+		promptSnippet: "read files (text or images); truncation notes tell you how to continue reading.",
 		description:
 			"Read the contents of a text file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. " +
 			`For text files, output is truncated to ${MAX_LINES} lines or ${MAX_BYTES / 1024}KB ` +
@@ -142,6 +143,21 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			let lines = allLines.slice(startIdx, endIdx);
 			if (lines.length > MAX_LINES) {
 				lines = lines.slice(0, MAX_LINES);
+			}
+			// prompt-audit P9 (pi parity): a single line larger than the whole
+			// byte cap would be byte-cut mid-line (and the offset note would
+			// misdirect — offset N+1 skips the rest of THIS line). Hand the
+			// model a bash fallback instead.
+			const firstLineBytes = Buffer.byteLength(lines[0] ?? "", "utf8");
+			if (lines.length > 0 && firstLineBytes > MAX_BYTES) {
+				const size =
+					firstLineBytes >= 1024 * 1024
+						? `${(firstLineBytes / (1024 * 1024)).toFixed(1)}MB`
+						: `${Math.ceil(firstLineBytes / 1024)}KB`;
+				return {
+					output: `[Line ${startDisplay} is ${size}, exceeds the ${MAX_BYTES / 1024}KB limit. Use bash: sed -n '${startDisplay}p' ${requested} | head -c ${MAX_BYTES}]`,
+					isError: false,
+				};
 			}
 			let selected = lines.join("\n");
 			let truncatedByBytes = false;

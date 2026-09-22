@@ -525,12 +525,10 @@ export class Renderer {
 
 	private toolEnd(result: ToolResult): void {
 		if (this.options.toolStyle === "two-line") {
+			const shown = result.display ?? contentText(result.content);
 			const line = result.isError
-				? red(
-						`  ✗ ${firstLine(contentText(result.content))}${imageSuffix(result, this.options.ansi)}`,
-						this.options.ansi,
-					)
-				: dim(`  → ${summarizeResult(result.toolName, contentText(result.content))}`, this.options.ansi) +
+				? red(`  ✗ ${firstLine(shown)}${imageSuffix(result, this.options.ansi)}`, this.options.ansi)
+				: dim(`  → ${summarizeResult(result.toolName, shown)}`, this.options.ansi) +
 					imageSuffix(result, this.options.ansi);
 			this.write(`${line}\n`);
 			this.needsNewline = false;
@@ -584,7 +582,7 @@ export class Renderer {
 		// Claude-Code-calibrated gutter: two spaces + ⎿ + two spaces, one style
 		// wrap for the whole line (nested wraps reset each other mid-line).
 		const text =
-			`  ⎿  ${summarizeResult(result.toolName, contentText(result.content))}` +
+			`  ⎿  ${summarizeResult(result.toolName, result.display ?? contentText(result.content))}` +
 			imageSuffix(result, this.options.ansi);
 		return result.isError ? red(text, this.options.ansi) : dim(text, this.options.ansi);
 	}

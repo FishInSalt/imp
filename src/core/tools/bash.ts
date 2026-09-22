@@ -73,6 +73,8 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "bash",
+		promptSnippet:
+			"run shell commands — builds, tests, git; anything without a dedicated tool. Never interactive.",
 		description:
 			`Execute a bash command in the working directory (${cwd}) and return stdout/stderr. ` +
 			`Output is truncated to the last ${MAX_LINES} lines or ${MAX_BYTES / 1024}KB (whichever hits first). ` +

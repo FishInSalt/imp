@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { contentText } from "../src/core/messages.js";
 import { createEditTool } from "../src/core/tools/edit.js";
 import { applyEdits, countOccurrences, diffLines } from "../src/core/tools/edit-diff.js";
 import { withFileLock } from "../src/core/tools/file-lock.js";
@@ -228,5 +229,27 @@ describe("withFileLock", () => {
 			});
 		await Promise.all([task("/tmp/a"), task("/tmp/b")]);
 		expect(maxRunning).toBe(2);
+	});
+});
+
+describe("edit output contract (prompt-audit P1)", () => {
+	it("model content is a one-liner; the diff is display-only", async () => {
+		const dir = await tmp();
+		const file = path.join(dir, `p1-${Date.now()}.ts`);
+		await writeFile(file, "const a = 1;\nconst b = 2;\n");
+		const edit = createEditTool({ cwd: dir });
+		const result = await edit.execute(
+			{ path: file, edits: [{ oldText: "const a = 1;", newText: "const a = 42;" }] },
+			signal,
+		);
+		const modelText = contentText(result.content ?? "");
+		expect(modelText.trim()).toMatch(/^Edited .*: 1 edit applied\.$/);
+		expect(modelText).not.toContain("@@");
+		expect(result.display).toBeDefined();
+		expect(result.display).toContain("@@ line 1 @@");
+		expect(result.display).toContain("- const a = 1;");
+		expect(result.display).toContain("+ const a = 42;");
+		// output doubles as the pre-P1 display fallback (read-image pattern)
+		expect(result.output).toBe(result.display);
 	});
 });

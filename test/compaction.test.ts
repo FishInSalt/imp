@@ -3,16 +3,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	compactHistory,
 	compactSession,
 	estimateContextTokens,
 	estimateTokens,
 	findCutIndex,
 	serializeForSummary,
 	shouldCompact,
+	summarizeBranchSegment,
 } from "../src/core/compaction.js";
-import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
-import { SessionStore } from "../src/core/session/store.js";
+import { type AgentMessage, type AssistantMessage, contentText } from "../src/core/messages.js";
+import { SessionStore, summaryToMessage } from "../src/core/session/store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
+import { assistant, scriptedProvider } from "./helpers/fakes.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
@@ -299,5 +302,103 @@ describe("isContextOverflowError (overflow-grace)", () => {
 		).toBe(false);
 		expect(isContextOverflowError(new Error("OpenAI API error 401: bad key"))).toBe(false);
 		expect(isContextOverflowError("just a string")).toBe(false);
+	});
+});
+
+describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
+	function overflowishHistory(turns: number): AgentMessage[] {
+		const messages: AgentMessage[] = [{ role: "user", content: "go" }];
+		for (let i = 0; i < turns; i++) {
+			messages.push({
+				role: "assistant",
+				blocks: [{ type: "text", text: `turn ${i} ${"x".repeat(400)}` }],
+				usage: { inputTokens: 10, outputTokens: 10 },
+				stopReason: "end_turn",
+			});
+			messages.push({ role: "user", content: `next ${i}` });
+		}
+		return messages;
+	}
+
+	it("a max_tokens-capped summary is rejected — never persisted as a checkpoint", async () => {
+		const provider = scriptedProvider([
+			assistant([{ type: "text", text: "## Goal\nhalf a summary" }], "max_tokens"),
+		]);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await expect(
+			compactHistory({ messages: overflowishHistory(6), provider, model: "m", settings }),
+		).rejects.toThrow("token cap");
+	});
+
+	it("branch summary: same max_tokens gate", async () => {
+		const provider = scriptedProvider([assistant([{ type: "text", text: "half" }], "max_tokens")]);
+		await expect(
+			summarizeBranchSegment({ messages: overflowishHistory(3), provider, model: "m" }),
+		).rejects.toThrow("token cap");
+	});
+
+	it("second compaction UPDATES the previous summary instead of re-summarizing it", async () => {
+		// Round 1: CREATE. The spliced history starts with the framed summary.
+		const summary1 = "## Goal\nfirst checkpoint";
+		const provider1 = scriptedProvider([assistant([{ type: "text", text: summary1 }])]);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const round1 = await compactHistory({
+			messages: overflowishHistory(6),
+			provider: provider1,
+			model: "m",
+			settings,
+		});
+		expect(round1).not.toBeNull();
+		const spliced: AgentMessage[] = [summaryToMessage(round1!.summary), ...round1!.retainedTail];
+		// More work happens, then round 2 compact fires.
+		spliced.push(
+			{
+				role: "assistant",
+				blocks: [{ type: "text", text: "later work".padEnd(600, ".") }],
+				usage: { inputTokens: 10, outputTokens: 10 },
+				stopReason: "end_turn",
+			},
+			{ role: "user", content: "and more" },
+			{
+				role: "assistant",
+				blocks: [{ type: "text", text: "even later".padEnd(600, ".") }],
+				usage: { inputTokens: 10, outputTokens: 10 },
+				stopReason: "end_turn",
+			},
+		);
+		const sink: LLMRequest[] = [];
+		const provider2 = scriptedProvider([assistant([{ type: "text", text: "## Goal\nupdated" }])], sink);
+		const round2 = await compactHistory({ messages: spliced, provider: provider2, model: "m", settings });
+		expect(round2).not.toBeNull();
+		const first = sink[0]?.messages[0];
+		const sent = contentText(first !== undefined && first.role === "user" ? first.content : "");
+		expect(sent).toContain("<previous-summary>");
+		expect(sent).toContain("first checkpoint");
+		expect(sent).toContain("PRESERVE all existing information");
+		// The framed summary itself must NOT ride along as conversation.
+		expect(sent).not.toContain("[Conversation summary");
+	});
+
+	it("first compaction stays CREATE-shaped (no previous-summary tag)", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "## Goal\nfresh" }])], sink);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await compactHistory({ messages: overflowishHistory(6), provider, model: "m", settings });
+		const first = sink[0]?.messages[0];
+		const sent = contentText(first !== undefined && first.role === "user" ? first.content : "");
+		expect(sent).not.toContain("<previous-summary>");
+		expect(sent).toContain("conversation to summarize");
+	});
+
+	it("empty-transcript guard: only the old summary predates the boundary → null", async () => {
+		const settings = { reserveTokens: 16, keepRecentTokens: 200000, contextWindow: 131072 };
+		const provider = scriptedProvider([assistant([{ type: "text", text: "unused" }])]);
+		const result = await compactHistory({
+			messages: [summaryToMessage("old summary"), { role: "user", content: "hi" }],
+			provider,
+			model: "m",
+			settings,
+		});
+		expect(result).toBeNull();
 	});
 });

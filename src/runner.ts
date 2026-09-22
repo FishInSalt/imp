@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type AgentRegistry, loadAgentDefinitions } from "./core/agents/registry.js";
+import { type AgentRegistry, formatAgentsForPrompt, loadAgentDefinitions } from "./core/agents/registry.js";
 import {
 	type CompactionSettings,
 	compactSession,
@@ -19,8 +19,13 @@ import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
-import { formatSkillsForPrompt, type Skill } from "./core/skills.js";
-import { buildSystemPrompt, defaultSystemPromptContext } from "./core/system-prompt.js";
+import { escapeXml, formatSkillsForPrompt, type Skill } from "./core/skills.js";
+import {
+	buildSystemPrompt,
+	defaultSystemPromptContext,
+	mcpCatalogEntries,
+	type PromptCatalogTool,
+} from "./core/system-prompt.js";
 import { createBashTool } from "./core/tools/bash.js";
 import { createEditTool } from "./core/tools/edit.js";
 import { createFindTool } from "./core/tools/find.js";
@@ -134,6 +139,10 @@ export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session";
 
 export interface Runner {
 	readonly session: SessionStore | null;
+	/** The assembled system prompt (test/inspection seam). */
+	readonly system: string;
+	/** prompt-audit P7: re-run system assembly (MCP tool-set syncs). */
+	refreshSystemPrompt(): void;
 	/** The live tool table (M18: the MCP manager splices bridged tools in at
 	 *  run boundaries; identity stable for the loop's per-turn wire request).
 	 *  readonly = do not REASSIGN; the array itself is mutated in place. */
@@ -285,7 +294,7 @@ class RunnerImpl implements Runner {
 	}
 	private readonly branchSummaryEnabled: boolean;
 	private settings = DEFAULT_COMPACTION_SETTINGS; // contextWindow follows the model (multi-provider)
-	private system: string;
+	private systemText: string;
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
@@ -430,7 +439,7 @@ class RunnerImpl implements Runner {
 		this.autoCompact =
 			process.env.IMP_AUTOCOMPACT === "0" ? false : (this.effectiveSettings().autoCompact ?? true);
 		this.branchSummaryEnabled = process.env.IMP_BRANCH_SUMMARY !== "0"; // #10: /tree keeps the left branch’s lessons
-		this.system = "";
+		this.systemText = "";
 		if (!options.deferInit) this.warmup();
 	}
 
@@ -468,7 +477,7 @@ class RunnerImpl implements Runner {
 		for (const warning of this.agents.warnings) {
 			options.renderer.error(`imp: ${warning}`);
 		}
-		this.system = this.assembleSystem();
+		this.systemText = this.assembleSystem();
 	}
 
 	get session(): SessionStore | null {
@@ -479,27 +488,62 @@ class RunnerImpl implements Runner {
 		return this.options.renderer;
 	}
 
-	private assembleSystem(): string {
-		let system = buildSystemPrompt(defaultSystemPromptContext());
+	/** The assembled system prompt — readonly outside; rewritten by warmup,
+	 *  /new, /resume and MCP tool-set syncs (refreshSystemPrompt). */
+	get system(): string {
+		return this.systemText;
+	}
+
+	/** Re-run system assembly (prompt-audit P7): the MCP manager calls this
+	 *  whenever the tool set syncs (handshake completion, run boundaries) —
+	 *  assembleSystem at warmup alone would never see late-arriving tools.
+	 *  Notes are suppressed: an MCP sync is not a context event. The string
+	 *  only changes when the tool set actually changed, so provider prompt
+	 *  caching is unaffected. */
+	refreshSystemPrompt(): void {
+		this.systemText = this.assembleSystem(false);
+	}
+
+	private assembleSystem(notify = true): string {
+		const catalogTools: PromptCatalogTool[] = [
+			...this.tools.filter((t) => t.mcpServer === undefined),
+			...mcpCatalogEntries(this.tools),
+		];
+		let system = buildSystemPrompt(defaultSystemPromptContext(), catalogTools);
 		if (!this.options.noContextFiles) {
 			const context = loadContextFiles(this.options.cwd);
 			if (context) {
-				system += `\n\n# Project context (AGENTS.md)\n\n${context.text}`;
-				const display = context.files.map((f) => path.relative(this.options.cwd, f) || f).join(", ");
-				this.options.renderer.note(`▪ context: ${display}`);
+				// prompt-audit P4: XML wrappers — markdown headers can be forged
+				// by file content; tags give the model a reliable boundary and
+				// carry the file's provenance (pi's <project_context> shape).
+				const inner = context.sections
+					.map(
+						(s) =>
+							`<project_instructions path="${escapeXml(s.path)}">\n${s.content}\n</project_instructions>\n\n`,
+					)
+					.join("");
+				system += `\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n${inner}</project_context>`;
+				if (notify) {
+					const display = context.files.map((f) => path.relative(this.options.cwd, f) || f).join(", ");
+					this.options.renderer.note(`▪ context: ${display}`);
+				}
 			}
 		}
-		// Extension sections sit after the AGENTS.md block, in registration
+		// Extension sections sit after the project-context block, in registration
 		// (load) order — stable across runs (M4c design §8.3). /new re-runs
 		// assembleSystem, so sections outlive sessions without re-registration.
 		for (const section of this.options.extensions?.contextSections ?? []) {
 			system += `\n\n# Extension context: ${section.id}\n\n${section.text}`;
 		}
-		// Skills come last (M12): the progressive-disclosure catalog is only
-		// useful once a file-read tool exists to load bodies on demand.
+		// Skills (M12): the progressive-disclosure catalog is only useful once
+		// a file-read tool exists to load bodies on demand.
 		if (this.options.skills !== undefined && this.tools.some((t) => t.name === "read")) {
 			system += formatSkillsForPrompt(this.options.skills);
 		}
+		// prompt-audit P8: the agent roster (capped, escaped, budgeted) —
+		// task's description stays static; routing lives here.
+		const agentBlock = formatAgentsForPrompt(this.agents.agents);
+		if (agentBlock !== undefined) system += `\n\n${agentBlock}`;
 		return system;
 	}
 
@@ -514,7 +558,7 @@ class RunnerImpl implements Runner {
 			this.options.renderer.note("▪ new conversation (sessions disabled)");
 		}
 		this.history.length = 0;
-		this.system = this.assembleSystem();
+		this.systemText = this.assembleSystem();
 	}
 
 	listSessions(): SessionInfo[] {
@@ -622,7 +666,7 @@ class RunnerImpl implements Runner {
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()
 		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
-		this.system = this.assembleSystem();
+		this.systemText = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
 	}
 

@@ -34,6 +34,7 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "grep",
+		promptSnippet: "find where code is defined or used (respects .gitignore) — prefer over bash grep.",
 		description:
 			"Search file contents for a pattern (backed by ripgrep; respects .gitignore, skips binary files). " +
 			"Returns matching lines as 'path:line:text'. Use glob to narrow by file type. " +

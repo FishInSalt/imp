@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { Type } from "typebox";
@@ -253,6 +253,28 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		expect(without.runner.system).toContain("# Core rules");
 	});
 
+	it("mixed pairs render per-file superseded notes + unreadable warns (impl review P2)", async () => {
+		const base = await makeBase();
+		const home = join(base, "home");
+		await mkdir(join(home, ".imp"), { recursive: true });
+		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
+		await writeFile(join(base, ".imp", "APPEND_SYSTEM.md"), "project append");
+		await writeFile(join(home, ".imp", "APPEND_SYSTEM.md"), "global append");
+		const { output } = await makeRunner(base, { systemPromptProjectAllowed: false });
+		expect(output()).toContain("global APPEND_SYSTEM.md active — project .imp/APPEND_SYSTEM.md ignored");
+		expect(output()).not.toContain("global SYSTEM.md active"); // SYSTEM pair has no global takeover
+	});
+
+	it("an unreadable trusted file renders the skip warn (D5)", async () => {
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		const locked = join(base, ".imp", "APPEND_SYSTEM.md");
+		await writeFile(locked, "locked append");
+		await chmod(locked, 0o000);
+		const { output } = await makeRunner(base, { systemPromptProjectAllowed: true });
+		expect(output()).toContain("▪ could not read .imp/APPEND_SYSTEM.md — skipped");
+	});
+
 	it("untrusted + global takeover renders the superseded note (D6 copy)", async () => {
 		const base = await makeBase();
 		const home = join(base, "home");
@@ -261,7 +283,7 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
 		const { runner, output } = await makeRunner(base, { systemPromptProjectAllowed: false });
 		expect(runner.system.startsWith("global persona")).toBe(true);
-		expect(output()).toContain("global system prompt active — project .imp/SYSTEM.md ignored");
+		expect(output()).toContain("global SYSTEM.md active — project .imp/SYSTEM.md ignored");
 		expect(output()).toContain("imp --trust to enable");
 	});
 

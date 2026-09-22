@@ -22,7 +22,7 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		const sp = loadSystemPromptFiles(root, true, home);
 		expect(sp.override?.text).toBe("project persona");
 		expect(sp.append?.text).toBe("global append");
-		expect(sp.ignoredUntrusted).toBeUndefined();
+		expect(sp.ignoredUntrusted).toEqual([]);
 	});
 
 	it("untrusted project file: global takes over, flagged supersededByGlobal", async () => {
@@ -31,7 +31,8 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
 		const sp = loadSystemPromptFiles(root, false, home);
 		expect(sp.override?.text).toBe("global persona");
-		expect(sp.ignoredUntrusted).toEqual({ supersededByGlobal: true });
+		expect(sp.ignoredUntrusted).toEqual([join(root, ".imp", "SYSTEM.md")]);
+		expect(sp.supersededByGlobal).toEqual([join(root, ".imp", "SYSTEM.md")]);
 	});
 
 	it("untrusted project file with no global: absent, flagged but not superseded", async () => {
@@ -39,7 +40,8 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		await writeFile(join(root, ".imp", "SYSTEM.md"), "project persona");
 		const sp = loadSystemPromptFiles(root, false, home);
 		expect(sp.override).toBeUndefined();
-		expect(sp.ignoredUntrusted).toEqual({ supersededByGlobal: false });
+		expect(sp.ignoredUntrusted).toEqual([join(root, ".imp", "SYSTEM.md")]);
+		expect(sp.supersededByGlobal).toEqual([]);
 	});
 
 	it("global-only and empty-everything cases", async () => {
@@ -56,7 +58,7 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
 		const sp = loadSystemPromptFiles(root, true, home);
 		expect(sp.override).toBeUndefined();
-		expect(sp.ignoredUntrusted).toBeUndefined();
+		expect(sp.ignoredUntrusted).toEqual([]);
 	});
 
 	it("BOM is stripped and content trimmed", async () => {
@@ -66,14 +68,53 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		expect(sp.override?.text).toBe("bom persona");
 	});
 
-	it("read failure falls through to the global tier (D5)", async () => {
+	it("mixed pairs: supersession is tracked per file (impl review P2)", async () => {
 		const { root, home } = await makeTree();
-		const projectFile = join(root, ".imp", "SYSTEM.md");
-		await writeFile(projectFile, "locked persona");
+		// SYSTEM pair: untrusted project, NO global → absent, not superseded
+		await writeFile(join(root, ".imp", "SYSTEM.md"), "project persona");
+		// APPEND pair: untrusted project + global present → superseded
+		await writeFile(join(root, ".imp", "APPEND_SYSTEM.md"), "project append");
+		await writeFile(join(home, ".imp", "APPEND_SYSTEM.md"), "global append");
+		const sp = loadSystemPromptFiles(root, false, home);
+		expect(sp.override).toBeUndefined();
+		expect(sp.append?.text).toBe("global append");
+		expect(sp.ignoredUntrusted).toEqual([
+			join(root, ".imp", "SYSTEM.md"),
+			join(root, ".imp", "APPEND_SYSTEM.md"),
+		]);
+		expect(sp.supersededByGlobal).toEqual([join(root, ".imp", "APPEND_SYSTEM.md")]);
+	});
+
+	it("an unreadable trusted project file is surfaced (D5 warn half)", async () => {
+		const { root, home } = await makeTree();
+		const projectFile = join(root, ".imp", "APPEND_SYSTEM.md");
+		await writeFile(projectFile, "locked append");
 		await chmod(projectFile, 0o000);
-		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
 		const sp = loadSystemPromptFiles(root, true, home);
-		expect(sp.override?.text).toBe("global persona");
+		expect(sp.append).toBeUndefined();
+		expect(sp.unreadableProject).toEqual([projectFile]);
+	});
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"read failure falls through to the global tier (D5)",
+		async () => {
+			const { root, home } = await makeTree();
+			const projectFile = join(root, ".imp", "SYSTEM.md");
+			await writeFile(projectFile, "locked persona");
+			await chmod(projectFile, 0o000);
+			await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
+			const sp = loadSystemPromptFiles(root, true, home);
+			expect(sp.override?.text).toBe("global persona");
+			expect(sp.unreadableProject).toEqual([projectFile]);
+		},
+	);
+
+	it("APPEND pair shares the slot-taken semantics (D7)", async () => {
+		const { root, home } = await makeTree();
+		await writeFile(join(root, ".imp", "APPEND_SYSTEM.md"), "\n  ");
+		await writeFile(join(home, ".imp", "APPEND_SYSTEM.md"), "global append");
+		const sp = loadSystemPromptFiles(root, true, home);
+		expect(sp.append).toBeUndefined();
 	});
 
 	it("a directory shadowing the name counts as absent (isFile, P3-1)", async () => {
@@ -82,6 +123,6 @@ describe("loadSystemPromptFiles (#system-md)", () => {
 		expect(loadSystemPromptFiles(root, true, home).override).toBeUndefined();
 		// untrusted + directory shadow → not even recorded as ignored
 		const sp = loadSystemPromptFiles(root, false, home);
-		expect(sp.ignoredUntrusted).toBeUndefined();
+		expect(sp.ignoredUntrusted).toEqual([]);
 	});
 });

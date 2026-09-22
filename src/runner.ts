@@ -538,10 +538,14 @@ class RunnerImpl implements Runner {
 			if (sources.length > 0) {
 				this.options.renderer.note(`▪ system: ${sources.join(", ")}`);
 			}
-			if (promptFiles.ignoredUntrusted?.supersededByGlobal) {
+			const rel = (p: string) => path.relative(this.options.cwd, p) || p;
+			for (const file of promptFiles.supersededByGlobal) {
 				this.options.renderer.note(
-					"▪ global system prompt active — project .imp/SYSTEM.md ignored (imp --trust to enable)",
+					`▪ global ${path.basename(file)} active — project ${rel(file)} ignored (imp --trust to enable)`,
 				);
+			}
+			for (const file of promptFiles.unreadableProject) {
+				this.options.renderer.note(`▪ could not read ${rel(file)} — skipped`);
 			}
 		}
 		if (!this.options.noContextFiles) {

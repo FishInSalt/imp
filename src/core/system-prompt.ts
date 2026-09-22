@@ -45,7 +45,7 @@ ${lines.join("\n")}`
 			: "";
 
 	const appendSection = opts?.append ? `\n\n${opts.append}` : "";
-	if (opts?.override !== undefined) {
+	if (opts?.override) {
 		// The only machine fact that must survive replacement (D4): platform
 		// is discoverable via one bash call; cwd is not.
 		return `${opts.override}${appendSection}\n\nCurrent working directory: ${context.cwd}`;

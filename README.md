@@ -213,8 +213,8 @@ Replace the default system prompt with your own file, or append to it:
 - `.imp/SYSTEM.md` (project, requires trust) or `~/.imp/SYSTEM.md` (global) —
   the file's content replaces the default prompt body (identity, core rules,
   tool catalog). The working directory line, project context files
-  (AGENTS.md/CLAUDE.md), skills, and the agent roster still load — those are
-  routing facts, not persona.
+  (AGENTS.md/CLAUDE.md), skills, the agent roster, and extension context
+  sections still load — those are routing facts, not persona.
 - `.imp/APPEND_SYSTEM.md` / `~/.imp/APPEND_SYSTEM.md` — appended after the
   prompt body in both modes (e.g. "Answer in Chinese").
 

@@ -1,6 +1,6 @@
 # 系统提示整替(SYSTEM.md / APPEND_SYSTEM.md)设计
 
-状态:独立设计审查已闭环(needs-fixes:2 P1+4 P2+4 P3,逐条核实全落入 §6.5);**本稿取代 `docs/custom-system-prompt-design.md`**(同题旧草案,其正确接缝已并入,见 D 表与 §6.5 P2-1)
+状态:已实现(设计审查闭环后用户批准;实现审查再闭环,见 §6.7;测试 1052→1075);**本稿取代 `docs/custom-system-prompt-design.md`**(同题旧草案,其正确接缝已并入,见 D 表与 §6.5 P2-1)
 
 ## 0. 背景与目标
 
@@ -122,3 +122,13 @@ src 4 文件约 +160 行(新模块 ~85、system-prompt ~25、runner+cli 接线 ~
 - **P3-3/P3-4**:测试计划 +6 例(会话信任/密闭/旗标/refresh 实效/文案钉);规模更新 +160 行。
 
 verdict 摘录:"§1 fact-base itself is accurate — all eight rows confirmed";needs-fixes 集中在接缝(信任布尔、home 密闭)与双稿并存,均已落入。
+
+## 6.7 实现审查记录(`801830c` 后,同日)
+
+判 needs-fixes(1 P1+2 P2+4 P3),无组装/信任语义缺陷;D1-D10+§6.5 逐项核实落实(D5 半实现、P1-2 半落实除外)。全部亲自核实后修复:
+- **P1(密闭性回归)**:两个既有 runner 测试未注 `systemPromptHomeDir`,真实 `~/.imp/SYSTEM.md` 会让套件机器相关(恰是 §6.5 P1-2 要防的场景,新接缝加了旧测试没配)。修复升级为**全局 HOME 沙箱**(settings-setup.ts 先例):`process.env.HOME` 指向临时目录,os.homedir() 在 POSIX 解析 $HOME——修一类而非两个点,skills/task-tool/mcp-wiring 等所有 runner 测试免费继承隔离。
+- **P2(D6 混对文案失实)**:ignored/superseded 旗标跨两对共享+文案硬编码 SYSTEM.md——SYSTEM 未信任+全局 APPEND 接管时会打出"global system prompt active"却无全局 persona 生效。修复:逐对追踪(`ignoredUntrusted/supersededByGlobal/unreadableProject` 三数组),每条 superseded 注记点名真实文件。
+- **P2(D5 的 warn 半边未实现)**:已信任但不可读的项目文件静默穿层。修复:`unreadableProject` 数组+`▪ could not read … — skipped` 注记。
+- **P3×4**:`override: ""` 改真值判断(与 D7 对齐);chmod 测试加 win32/root 守卫;补 mixed-pair/APPEND slot/unreadable 注记钉(+5 测试,总 +18→+23 与 §4 对齐);README 幸存清单补扩展 context 区。
+
+测试 1052→1075(+23,与 §4 计划一致)。

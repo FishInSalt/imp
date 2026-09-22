@@ -22,11 +22,18 @@ export interface SystemPromptOverride {
 	override?: { text: string; path: string };
 	/** APPEND_SYSTEM.md — appended after the body in both modes. */
 	append?: { text: string; path: string };
-	/** An existing project-tier file was skipped because the directory is
-	 *  untrusted. `supersededByGlobal` marks the one surprising case worth a
-	 *  note: a global-tier file took over the pair the user probably meant
-	 *  (D6 — otherwise the startup trust line already told the story). */
-	ignoredUntrusted?: { supersededByGlobal: boolean };
+	/** Project-tier files skipped because the directory is untrusted
+	 *  (gate before peek — content never read). */
+	ignoredUntrusted: string[];
+	/** The surprising subset (D6): pairs where a GLOBAL-tier file took over
+	 *  an ignored project file — worth one note each, naming the actual
+	 *  file (impl review: shared flags + a hardcoded name misreported
+	 *  mixed SYSTEM/APPEND cases). */
+	supersededByGlobal: string[];
+	/** Trusted project files that exist but could not be read (D5's warn
+	 *  half — the pair fell through to the global tier or the default
+	 *  prompt; the user's file silently not applying needs a signal). */
+	unreadableProject: string[];
 }
 
 type Tier =
@@ -61,30 +68,34 @@ export function loadSystemPromptFiles(
 	projectAllowed: boolean,
 	home: string = os.homedir(),
 ): SystemPromptOverride {
-	let ignored = false;
-	let superseded = false;
+	const result: SystemPromptOverride = {
+		ignoredUntrusted: [],
+		supersededByGlobal: [],
+		unreadableProject: [],
+	};
 	const resolvePair = (name: string): { text: string; path: string } | undefined => {
 		const projectPath = path.join(cwd, ".imp", name);
+		let projectIgnored = false;
 		if (projectAllowed) {
 			const tier = readTier(projectPath);
 			if (tier !== "absent" && tier !== "unreadable" && tier !== "slot-taken") return tier;
 			if (tier === "slot-taken") return undefined;
+			if (tier === "unreadable") result.unreadableProject.push(projectPath);
 			// absent or unreadable → try the global tier (D5 fall-through)
 		} else if (isFile(projectPath)) {
-			ignored = true; // gate before peek — untrusted content is never read
+			result.ignoredUntrusted.push(projectPath); // gate before peek
+			projectIgnored = true;
 		}
 		const globalTier = readTier(path.join(home, ".imp", name));
 		if (globalTier !== "absent" && globalTier !== "unreadable" && globalTier !== "slot-taken") {
-			if (ignored) superseded = true;
+			if (projectIgnored) result.supersededByGlobal.push(projectPath);
 			return globalTier;
 		}
 		return undefined;
 	};
-	const result: SystemPromptOverride = {};
 	const override = resolvePair("SYSTEM.md");
 	if (override) result.override = override;
 	const append = resolvePair("APPEND_SYSTEM.md");
 	if (append) result.append = append;
-	if (ignored) result.ignoredUntrusted = { supersededByGlobal: superseded };
 	return result;
 }

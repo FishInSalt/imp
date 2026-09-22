@@ -1,7 +1,7 @@
 import { type AgentMessage, contentText } from "../../core/messages.js";
 import type { SessionEntry, TreeNode } from "../../core/session/store.js";
 import { dim } from "../../format.js";
-import { type Component, matchesKey, Text, truncateToWidth } from "../../tui.js";
+import { type Component, matchesKey, sliceByColumn, Text, truncateToWidth, visibleWidth } from "../../tui.js";
 
 /**
  * #tree: the session-tree navigator — rendering, filtering, search, fold.
@@ -10,12 +10,14 @@ import { type Component, matchesKey, Text, truncateToWidth } from "../../tui.js"
  * output. The TUI component (below) and the legacy shell's numbered text
  * tree both render from it, so the two cannot drift (design §3.3/§3.4).
  *
- * Deliberate cuts vs pi's TreeSelectorComponent (design §3.3, review-backed):
- * three filter modes instead of five (labeled-only needs label EDITING,
- * which is batch B; "all" is debug-only), fold on the `f` key instead of
- * overloading the arrows with pi's fold-or-jump dual semantics, and no
- * horizontal viewport — rows truncate (typical sessions are <8 levels deep;
- * fold covers the rest). Batch B may revisit each.
+ * Batch C (docs/tree-c-design.md) closes the polish pool: the selector opens
+ * ON the current position (nearest visible ancestor when filtered), the
+ * window re-centers on the selection (pi's model), ←/→/PgUp/PgDn page,
+ * alt+←/→ run pi's fold-or-up / unfold-or-down over the nearest-VISIBLE-
+ * ancestor structure, deep rows auto-pan horizontally (pi's viewport), and
+ * ctrl+x copies the selected entry. Remaining deliberate cuts: `f` folds
+ * anything (imp's own key — pi's alt-arrows gate on branch points), no
+ * label timestamps, no per-mode filter keys, single Tab cycle.
  */
 
 export type TreeFilterMode = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
@@ -262,7 +264,6 @@ export class TreeSelectorComponent implements Component {
 	private query = "";
 	private folded = new Set<string>();
 	private selected = 0;
-	private scrollOffset = 0;
 	private visibleLines: number;
 	private readonly roots: TreeNode[];
 	private readonly leafId: string | null;
@@ -272,6 +273,11 @@ export class TreeSelectorComponent implements Component {
 	 *  owns every key (pi's LabelInput). Empty string on save = REMOVE. */
 	private labelEdit: { entryId: string; buffer: string } | null = null;
 	private readonly onLabelChange?: (entryId: string, label: string | undefined) => void;
+	/** ctrl+x: copy the selected entry's full text (undefined = none). */
+	private readonly onCopy?: (text: string | undefined) => void;
+	/** RAW parent ids over the full tree (filters never apply here) — the
+	 *  base for open-positioning and the visible-ancestor walks (batch C D1). */
+	private readonly rawParent = new Map<string, string | null>();
 
 	constructor(
 		roots: TreeNode[],
@@ -286,6 +292,12 @@ export class TreeSelectorComponent implements Component {
 			 *  happens regardless — this is the disk side (pi's ordering:
 			 *  mutate first, persist second). */
 			onLabelChange?: (entryId: string, label: string | undefined) => void;
+			/** Open with this row selected (D6's reopen passes the attempted
+			 *  target); default = the current leaf (pi: initialSelectedId ??
+			 *  currentLeafId). Hidden targets walk up to the nearest VISIBLE
+			 *  ancestor via rawParent (pi's findNearestVisibleIndex). */
+			initialSelectedId?: string;
+			onCopy?: (text: string | undefined) => void;
 		},
 	) {
 		this.roots = roots;
@@ -295,6 +307,32 @@ export class TreeSelectorComponent implements Component {
 		this.onCancel = onCancel;
 		this.mode = opts?.initialFilterMode ?? "default";
 		this.onLabelChange = opts?.onLabelChange;
+		this.onCopy = opts?.onCopy;
+		this.buildRawParent(roots, null);
+		this.selected = this.findNearestVisibleIndex(opts?.initialSelectedId ?? leafId);
+	}
+
+	private buildRawParent(nodes: TreeNode[], parent: string | null): void {
+		for (const node of nodes) {
+			this.rawParent.set(node.entry.id, parent);
+			this.buildRawParent(node.children, node.entry.id);
+		}
+	}
+
+	/** pi's findNearestVisibleIndex (tree-selector.ts:153-176): walk the RAW
+	 *  parent chain until a row is visible (the target itself may be hidden
+	 *  by the filter — it then has no TreeRow); empty rows → 0; fallback last. */
+	private findNearestVisibleIndex(targetId: string | null): number {
+		const rows = this.rows();
+		if (rows.length === 0 || targetId === null) return 0;
+		const indexBy = new Map(rows.map((r, i) => [r.entryId, i] as const));
+		let current: string | null = targetId;
+		while (current !== null) {
+			const index = indexBy.get(current);
+			if (index !== undefined) return index;
+			current = this.rawParent.get(current) ?? null;
+		}
+		return rows.length - 1;
 	}
 
 	/** pi's updateNodeLabel: set the in-memory label so rows reflect the edit
@@ -324,6 +362,125 @@ export class TreeSelectorComponent implements Component {
 		});
 	}
 
+	/** The nearest-visible-ancestor structure (pi's recalculateVisualStructure,
+	 *  430-456): filters hide intermediate rows, so descendants ADOPT to the
+	 *  nearest visible ancestor. Raw-parent grouping would dead-end (batch C
+	 *  design review P1-1). */
+	private visibleStructure(): {
+		parent: Map<string, string | null>;
+		children: Map<string, string[]>;
+		indexBy: Map<string, number>;
+	} {
+		const rows = this.rows();
+		const indexBy = new Map(rows.map((r, i) => [r.entryId, i] as const));
+		const findVisibleAncestor = (id: string): string | null => {
+			let current = this.rawParent.get(id) ?? null;
+			while (current !== null) {
+				if (indexBy.has(current)) return current;
+				current = this.rawParent.get(current) ?? null;
+			}
+			return null;
+		};
+		const parent = new Map<string, string | null>();
+		const children = new Map<string, string[]>();
+		for (const row of rows) {
+			const p = findVisibleAncestor(row.entryId);
+			parent.set(row.entryId, p);
+			if (p !== null) {
+				const list = children.get(p);
+				if (list === undefined) children.set(p, [row.entryId]);
+				else list.push(row.entryId);
+			}
+		}
+		return { parent, children, indexBy };
+	}
+
+	/** pi's isFoldable (1105-1117): a row folds only at branch points —
+	 *  visible children exist AND (no visible parent, or that parent's
+	 *  visible group has siblings). Mid-chain rows never fold via alt+←. */
+	private isFoldable(id: string, maps: ReturnType<TreeSelectorComponent["visibleStructure"]>): boolean {
+		const kids = maps.children.get(id);
+		if (kids === undefined || kids.length === 0) return false;
+		const parentId = maps.parent.get(id) ?? null;
+		if (parentId === null) return true;
+		const siblings = maps.children.get(parentId) ?? [];
+		return siblings.length > 1;
+	}
+
+	/** pi's findBranchSegmentStart (1125-1153) over the adopted maps:
+	 *  down — first child of the next branching node (single-child chains
+	 *  descend); up — the start of the sibling-run the selection sits in,
+	 *  under the nearest branching ancestor. */
+	private findBranchSegmentStart(direction: "up" | "down"): void {
+		const rows = this.rows();
+		const selectedId = rows[this.selected]?.entryId;
+		if (selectedId === undefined) return;
+		const maps = this.visibleStructure();
+		const at = (id: string): number => maps.indexBy.get(id) ?? this.selected;
+		if (direction === "down") {
+			let currentId: string = selectedId;
+			for (;;) {
+				const kids = maps.children.get(currentId) ?? [];
+				if (kids.length === 0) {
+					this.selected = at(currentId);
+					return;
+				}
+				if (kids.length > 1) {
+					this.selected = at(kids[0] ?? currentId);
+					return;
+				}
+				currentId = kids[0] ?? currentId;
+			}
+		}
+		let currentId: string = selectedId;
+		for (;;) {
+			const parentId = maps.parent.get(currentId) ?? null;
+			if (parentId === null) {
+				this.selected = at(currentId);
+				return;
+			}
+			const siblings = maps.children.get(parentId) ?? [];
+			if (siblings.length > 1) {
+				const segmentStart = at(currentId);
+				if (segmentStart < this.selected) {
+					this.selected = segmentStart;
+					return;
+				}
+			}
+			currentId = parentId;
+		}
+	}
+
+	/** pi's getEntryCopyText (896-920), imp's message shapes: user/assistant
+	 *  text blocks, tool results' content, summaries. Trimmed-empty →
+	 *  undefined (pi signals "no text to copy" that way). */
+	private entryCopyText(entry: SessionEntry): string | undefined {
+		const orUndef = (text: string): string | undefined => {
+			const trimmed = text.trim();
+			return trimmed === "" ? undefined : trimmed;
+		};
+		switch (entry.type) {
+			case "message": {
+				const msg = entry.message;
+				if (msg.role === "user") return orUndef(contentText(msg.content));
+				if (msg.role === "assistant") {
+					return orUndef(
+						msg.blocks
+							.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+							.map((b) => b.text)
+							.join(" "),
+					);
+				}
+				return orUndef(msg.results.map((r) => contentText(r.content)).join("\n\n"));
+			}
+			case "branchSummary":
+			case "compaction":
+				return orUndef(entry.summary);
+			default:
+				return undefined;
+		}
+	}
+
 	handleInput(data: string): void {
 		if (this.labelEdit !== null) {
 			this.handleLabelEditInput(data);
@@ -345,9 +502,44 @@ export class TreeSelectorComponent implements Component {
 			this.selected = Math.max(0, this.selected - 1);
 		} else if (matchesKey(data, "down")) {
 			this.selected = Math.min(Math.max(0, this.rows().length - 1), this.selected + 1);
+		} else if (matchesKey(data, "left") || matchesKey(data, "pageUp")) {
+			// pi: left/PgUp page up — clamped, never wraps (arrows ↑↓ don't wrap
+			// in imp either; pi's do — recorded divergence, batch A).
+			this.selected = Math.max(0, this.selected - this.visibleLines);
+		} else if (matchesKey(data, "right") || matchesKey(data, "pageDown")) {
+			this.selected = Math.min(Math.max(0, this.rows().length - 1), this.selected + this.visibleLines);
+		} else if (matchesKey(data, "alt+left") || matchesKey(data, "ctrl+left")) {
+			// pi's foldOrUp: fold at branch points (isFoldable), otherwise jump
+			// to the segment start — including on an ALREADY-folded row.
+			const row = this.rows()[this.selected];
+			if (row !== undefined) {
+				const maps = this.visibleStructure();
+				if (this.isFoldable(row.entryId, maps) && !this.folded.has(row.entryId)) {
+					this.folded.add(row.entryId);
+					this.clampSelection();
+				} else {
+					this.findBranchSegmentStart("up");
+				}
+			}
+		} else if (matchesKey(data, "alt+right") || matchesKey(data, "ctrl+right")) {
+			// pi's unfoldOrDown: unfold the folded row, else jump down.
+			const row = this.rows()[this.selected];
+			if (row !== undefined) {
+				if (this.folded.has(row.entryId)) {
+					this.folded.delete(row.entryId);
+				} else {
+					this.findBranchSegmentStart("down");
+				}
+			}
 		} else if (matchesKey(data, "enter")) {
 			const row = this.rows()[this.selected];
 			if (row !== undefined) this.onSelectEntry(row.entryId);
+		} else if (matchesKey(data, "ctrl+x")) {
+			const row = this.rows()[this.selected];
+			if (row !== undefined) {
+				const node = this.findNode(row.entryId);
+				this.onCopy?.(node === undefined ? undefined : this.entryCopyText(node.entry));
+			}
 		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			if (this.query !== "") {
 				this.query = "";
@@ -407,15 +599,19 @@ export class TreeSelectorComponent implements Component {
 		// arrows / tab / f / L etc: swallowed by design (nested input)
 	}
 
-	private findNodeLabel(entryId: string): string | undefined {
+	private findNode(entryId: string): TreeNode | undefined {
 		const stack = [...this.roots];
 		while (stack.length > 0) {
 			const node = stack.pop();
 			if (node === undefined) continue;
-			if (node.entry.id === entryId) return node.label;
+			if (node.entry.id === entryId) return node;
 			stack.push(...node.children);
 		}
 		return undefined;
+	}
+
+	private findNodeLabel(entryId: string): string | undefined {
+		return this.findNode(entryId)?.label;
 	}
 
 	private clampSelection(): void {
@@ -432,24 +628,62 @@ export class TreeSelectorComponent implements Component {
 		if (rows.length === 0) {
 			lines.push(dim("  no entries match", true));
 		} else {
-			if (this.selected < this.scrollOffset) this.scrollOffset = this.selected;
-			if (this.selected >= this.scrollOffset + this.visibleLines) {
-				this.scrollOffset = this.selected - this.visibleLines + 1;
-			}
-			const end = Math.min(rows.length, this.scrollOffset + this.visibleLines);
-			for (let i = this.scrollOffset; i < end; i++) {
+			// Centered window (pi:672-678): every render re-centers on the
+			// selection; the tail clamps to the last visibleLines rows.
+			const start = Math.max(
+				0,
+				Math.min(this.selected - Math.floor(this.visibleLines / 2), rows.length - this.visibleLines),
+			);
+			const end = Math.min(rows.length, start + this.visibleLines);
+			// Horizontal viewport (pi:46-92): automatic panning — only when the
+			// SELECTED row's anchor (text start; the label counts as content)
+			// would fall past the viewport's guaranteed-visible anchor content.
+			const viewportRows: {
+				gutter: string;
+				body: string;
+				anchorCol: number;
+				bodyWidth: number;
+				isSelected: boolean;
+			}[] = [];
+			for (let i = start; i < end; i++) {
 				const row = rows[i];
 				if (row === undefined) continue;
 				const selected = i === this.selected;
 				const gutter = selected ? "› " : "  ";
 				const label = row.label !== undefined ? `[${row.label}] ` : "";
 				const marker = row.onActivePath ? "• " : "";
-				const body = `${dim(row.prefix, true)}${marker}${label}${row.text}${
-					row.isCurrentLeaf ? dim("  ◂", true) : ""
-				}`;
-				const line = `${gutter}${body}`;
+				const prefixPart = `${dim(row.prefix, true)}${marker}`;
+				const body = `${prefixPart}${label}${row.text}${row.isCurrentLeaf ? dim("  ◂", true) : ""}`;
+				viewportRows.push({
+					gutter,
+					body,
+					anchorCol: visibleWidth(prefixPart),
+					bodyWidth: visibleWidth(body),
+					isSelected: selected,
+				});
+			}
+			const gutterWidth = 2;
+			const viewportWidth = Math.max(0, width - gutterWidth);
+			const maxBodyWidth = viewportRows.reduce((max, r) => Math.max(max, r.bodyWidth), 0);
+			const maxHorizontalScroll = Math.max(0, maxBodyWidth - viewportWidth);
+			let horizontalScroll = 0;
+			const selectedRow = viewportRows.find((r) => r.isSelected);
+			if (selectedRow !== undefined && maxHorizontalScroll > 0) {
+				const minVisibleAnchorContentWidth = Math.min(20, Math.max(4, Math.floor(viewportWidth / 3)));
+				if (selectedRow.anchorCol > viewportWidth - minVisibleAnchorContentWidth) {
+					const anchorContextWidth = Math.min(12, Math.max(2, Math.floor(viewportWidth / 4)));
+					horizontalScroll = Math.min(maxHorizontalScroll, selectedRow.anchorCol - anchorContextWidth);
+				}
+			}
+			for (const r of viewportRows) {
+				const line =
+					horizontalScroll > 0
+						? `${r.gutter}${sliceByColumn(r.body, horizontalScroll, viewportWidth, true)}\x1b[0m`
+						: r.gutter + r.body;
 				// Reverse video marks the selected row (SelectList's affordance).
-				lines.push(selected ? `\x1b[7m${truncateToWidth(line, width)}\x1b[0m` : truncateToWidth(line, width));
+				lines.push(
+					r.isSelected ? `\x1b[7m${truncateToWidth(line, width)}\x1b[0m` : truncateToWidth(line, width),
+				);
 			}
 		}
 		if (this.labelEdit !== null) {
@@ -460,7 +694,7 @@ export class TreeSelectorComponent implements Component {
 		const modeTagRaw = MODE_TAGS[this.mode];
 		const modeTag = modeTagRaw === undefined ? "" : ` [${modeTagRaw}]`;
 		const searchTag = this.query !== "" ? `  search: ${this.query}` : "";
-		const status = `  (${rows.length === 0 ? 0 : this.selected + 1}/${rows.length})${modeTag}${searchTag}  ·  enter=go tab=filter f=fold L=label`;
+		const status = `  (${rows.length === 0 ? 0 : this.selected + 1}/${rows.length})${modeTag}${searchTag}  ·  enter=go tab=filter f=fold L=label ←→=page alt+←→=branch ^x=copy`;
 		lines.push(dim(truncateToWidth(status, width), true));
 		return lines;
 	}

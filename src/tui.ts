@@ -36,6 +36,7 @@ export {
 	ProcessTerminal,
 	SelectList,
 	StdinBuffer,
+	sliceByColumn,
 	type Terminal,
 	Text,
 	TUI,

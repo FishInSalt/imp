@@ -19,6 +19,11 @@ export interface TreeSelectRequest {
 	/** Persist a committed label edit (batch B; undefined label = remove).
 	 *  The store write lives here so the component stays UI-only. */
 	onLabelChange?: (entryId: string, label: string | undefined) => void;
+	/** Open with this row selected (batch C D6's abort-reopen passes the
+	 *  attempted target). Default: the current leaf. */
+	initialSelectedId?: string;
+	/** ctrl+x in the selector (batch C D7): undefined = entry has no text. */
+	onCopy?: (text: string | undefined) => void;
 }
 
 /** Options for LineInput.select — an interactive item picker. */

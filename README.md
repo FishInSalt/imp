@@ -137,7 +137,12 @@ imp            # interactive REPL (streaming, one-line tool status)
   Tab cycles the filter (default/no-tools/user-only/labeled-only/all), `f`
   folds a subtree, `L` labels the selected entry (bookmarks: labeled rows
   are searchable and survive every filter as the labeled-only mode), typing
-  searches, Enter jumps. Jumping to any point leaves the branch you left
+  searches, Enter jumps. The picker opens ON your current position, ←/→/PgUp/
+  PgDn page, alt+←/→ folds at branch points or jumps between branch segments,
+  ctrl+x copies the selected entry's text, and deep rows pan automatically so
+  the selection's text stays readable. An Esc at the summary ask — or a
+  cancelled summarization — returns to the picker with the same entry
+  preselected. Jumping to any point leaves the branch you left
   summarized into the new position's context (a three-way ask — No summary /
   Summarize / custom prompt; `/settings branchSummary.skipPrompt true` skips
   the ask); jumping to a USER message puts its text back in the input for

@@ -2026,3 +2026,104 @@ describe("/tree batch B (#tree-b)", () => {
 		expect(env.output()).toContain("must be one of");
 	});
 });
+
+describe("/tree batch C (#tree-c)", () => {
+	async function branchedEnvC(provider?: LLMProvider) {
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+			...(provider === undefined ? {} : { provider }),
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old
+		return env;
+	}
+
+	it("an aborted summarization re-opens the picker ON the attempted entry (D6)", async () => {
+		const hold = gate();
+		const provider: LLMProvider = {
+			name: "gated",
+			// biome-ignore lint/correctness/useYield: the throw IS the script (abort surfaces before any delta)
+			async *stream() {
+				await hold.promise;
+				throw new Error("branch summary: summarizer aborted — incomplete, rejected");
+			},
+		};
+		const env = await branchedEnvC(provider);
+		env.runner.session?.appendMessage(user("q3-new"));
+		// the abandoned old-branch tip a2-old (NOT the current leaf — the
+		// picker short-circuits "already at that point" on the leaf itself)
+		// after the fork the old chain q2-old → a2-old is the only subtree of
+		// a1 until q3-new lands beside it: a1.children[0] = q2-old branch
+		const a1node = env.runner.session?.getTree()[0]?.children[0];
+		const abandonedTip = a1node?.children[0]?.children[0]?.entry.id ?? null;
+		expect(abandonedTip).not.toBeNull();
+		const seen: (AbortController | null)[] = [];
+		(env.ctx as { onLongOpAbort?: unknown }).onLongOpAbort = (c: AbortController | null) => {
+			seen.push(c);
+		};
+		const reopenCalls: (string | undefined)[] = [];
+		let call = 0;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: { initialSelectedId?: string }) => {
+			call++;
+			reopenCalls.push(opts.initialSelectedId);
+			return call === 1 ? (abandonedTip ?? null) : null; // second round: cancel out
+		};
+		(env.ctx as { select?: unknown }).select = async () => 1; // "Summarize"
+		const pending = dispatchCommand("/tree", env.ctx);
+		await new Promise((r) => setTimeout(r, 20)); // summarizer now hanging
+		seen.find((c): c is AbortController => c !== null)?.abort(); // Ctrl+C path
+		hold.resolve();
+		await pending;
+		const out = env.output();
+		expect(out).toContain("summarization cancelled — stayed on the current branch");
+		expect(call).toBe(2); // the picker RE-OPENED…
+		expect(reopenCalls).toEqual([undefined, abandonedTip]); // …ON the attempted entry
+		expect(seen[seen.length - 1]).toBeNull(); // abort channel cleared both rounds
+	});
+
+	it("Esc at the three-choice ask re-opens the picker with the same entry preselected (D6, pi:5243-5246)", async () => {
+		const env = await branchedEnvC();
+		const tree = env.runner.session?.getTree() ?? [];
+		// a2-old: the abandoned tip (no new message yet — the old chain is the
+		// only subtree); never the current leaf (leaf short-circuits)
+		const target = tree[0]?.children[0]?.children[0]?.children[0]?.entry.id ?? null;
+		expect(target).not.toBeNull();
+		const reopenCalls: (string | undefined)[] = [];
+		let call = 0;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: { initialSelectedId?: string }) => {
+			call++;
+			reopenCalls.push(opts.initialSelectedId);
+			return call === 1 ? target : null; // round 2: user cancels the tree
+		};
+		(env.ctx as { select?: unknown }).select = async () => null; // Esc at the ask
+		await dispatchCommand("/tree", env.ctx);
+		expect(call).toBe(2);
+		expect(reopenCalls).toEqual([undefined, target]); // preselected on re-open
+		expect(env.output()).not.toContain("navigated"); // nothing moved
+	});
+
+	it("onCopy rides the ctx.copyText seam: text → status; undefined → error (D7)", async () => {
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		const env = await branchedEnvC();
+		let onCopy: ((text: string | undefined) => void) | undefined;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: {
+			onCopy?: (t: string | undefined) => void;
+		}) => {
+			onCopy = opts.onCopy;
+			return null;
+		};
+		const copied: string[] = [];
+		(env.ctx as { copyText?: unknown }).copyText = async (text: string) => {
+			copied.push(text);
+		};
+		await dispatchCommand("/tree", env.ctx);
+		expect(onCopy).toBeDefined();
+		onCopy?.("grabbed text");
+		await new Promise((r) => setTimeout(r, 10)); // the void promise flushes
+		expect(copied).toEqual(["grabbed text"]);
+		expect(env.output()).toContain("Copied selected entry to clipboard");
+		const base = env.output().length;
+		onCopy?.(undefined);
+		expect(env.output().slice(base)).toContain("no text to copy");
+	});
+});

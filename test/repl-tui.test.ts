@@ -1850,10 +1850,9 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("forked before"), 8000);
 		env.terminal.data("q3 new\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("answer three"), 8000);
-		// switch — the summarizer hangs on the gate
-		env.terminal.data("/tree\r");
-		await waitUntil(() => env.terminal.frameSince(0).includes("Switch to which branch?"), 8000);
-		env.terminal.data("\r");
+		// switch — the summarizer hangs on the gate (#tree: rows are ACTIVE-FIRST
+		// tree rows: q1, a1, q3, a3(current), q2-old, a2-old — #6 = the abandoned tip)
+		env.terminal.data("/tree 6\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("switching branches"), 8000);
 		// during the window: a typed line must QUEUE, not open a stale-history turn
 		env.terminal.data("typed during the switch\r");
@@ -1894,9 +1893,8 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("q3 new direction\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("answer three"), 8000);
 		// switch back to the old branch — summarizes the abandoned q3 branch
-		env.terminal.data("/tree\r");
-		await waitUntil(() => env.terminal.frameSince(0).includes("Switch to which branch?"), 8000);
-		env.terminal.data("\r"); // first tip = the old branch
+		// (active-first rows: q1, a1, q3, a3(current), q2, a2 — #6 = a2, the old tip)
+		env.terminal.data("/tree 6\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("summarized in context"), 8000);
 		// the screen shows the OLD branch again
 		expect(env.terminal.frameSince(0)).toContain("answer two");

@@ -79,7 +79,7 @@ describe("session_info entries (M16 /name)", () => {
 		expect(tips.length).toBeGreaterThan(0);
 		const nameTip = tips[tips.length - 1]; // the abandoned old branch
 		expect(nameTip).toBeDefined();
-		store.switchBranch(nameTip?.id ?? "");
+		store.branchTo(nameTip?.id ?? "");
 		expect(store.getSessionName()).toBe("on the main branch");
 	});
 

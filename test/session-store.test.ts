@@ -194,7 +194,7 @@ describe("SessionStore", () => {
 		expect(after).toEqual(["q1"]); // the tail is gone from the path
 	});
 
-	it("/tree ops: otherBranchTips, splitBranches, switchBranch (#10 batch 2)", async () => {
+	it("/tree ops: otherBranchTips, splitBranches, branchTo (#10 batch 2 / #tree)", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
 		store.appendMessage(user("q1"));
@@ -214,7 +214,7 @@ describe("SessionStore", () => {
 		expect(split.other).toHaveLength(2);
 		expect(split.abandoned).toHaveLength(2); // q2-new + a2-new
 		// switch: leaf moves; the old tip is back on the current path
-		store.switchBranch(tips[0]!.id);
+		store.branchTo(tips[0]!.id);
 		const texts = store
 			.getBranch()
 			.map((e) => (e.type === "message" && e.message.role === "user" ? e.message.content : ""))
@@ -222,17 +222,31 @@ describe("SessionStore", () => {
 		expect(texts).toEqual(["q1", "q2"]);
 	});
 
-	it("switchBranch rejects the current tip, interior nodes, and off-file ids", async () => {
+	it("branchTo (#tree): any entry, null, and the rejection rules", async () => {
 		const dir = await mkpath();
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
 		store.appendMessage(user("q1"));
 		const a1 = store.appendMessage(assistantText("a1"));
-		const u2 = store.appendMessage(user("q2"));
-		store.appendMessage(assistantText("a2"));
-		expect(() => store.switchBranch(store.getLeafId() ?? "")).toThrow(/already on that branch/);
-		expect(() => store.switchBranch(a1)).toThrow(/has children/); // interior
-		store.forkBefore(u2);
-		expect(() => store.switchBranch("deadbeef")).toThrow(/not found/);
+		store.appendMessage(user("q2"));
+		expect(() => store.branchTo(store.getLeafId() ?? "")).toThrow(/already at that position/);
+		expect(() => store.branchTo("deadbeef")).toThrow(/not found/);
+		// interior targets are LEGAL now (review P1-2/P1-4: the tip-only rule
+		// was the old switchBranch's; branchTo grows a sibling branch instead)
+		store.branchTo(a1);
+		expect(store.getLeafId()).toBe(a1);
+		const u3 = store.appendMessage(user("q3"));
+		// a1 now has two children — the tree shows the branch point
+		const tree = store.getTree();
+		const a1Node = tree[0]?.children.find((n) => n.entry.id === a1);
+		expect(a1Node?.children).toHaveLength(2);
+		// null = before everything (resetLeaf semantics, design §3.1)
+		store.branchTo(null);
+		expect(store.getLeafId()).toBeNull();
+		const reopened = SessionStore.open(store.filePath);
+		// reopen rule: a position with nothing appended after it wins
+		expect(reopened.getLeafId()).toBeNull();
+		expect(store.getBranch()).toEqual([]);
+		void u3;
 	});
 
 	it("branchSummary entries round-trip, join the context, and skip stats (#10 batch 2)", async () => {
@@ -293,7 +307,7 @@ describe("SessionStore", () => {
 		store.forkBefore(points[1]!.id);
 		store.appendMessage(user("q-new")); // the forked branch needs an entry to have a tip
 		const oldTip = store.otherBranchTips()[0]!;
-		store.switchBranch(oldTip.id);
+		store.branchTo(oldTip.id);
 		expect(SessionStore.open(file).otherBranchTips()).toHaveLength(1); // the forked branch's tip
 		// fork before the FIRST message → null leaf persists as an empty branch
 		const fresh = SessionStore.create(path.join(dir, "s3.jsonl"), "/w");
@@ -500,5 +514,109 @@ describe("thinkingLevelChange entries", () => {
 			})}\n`,
 		);
 		expect(() => SessionStore.open(store.filePath)).toThrow(/missing level/);
+	});
+});
+
+describe("#tree: getTree / branchTo / labels", () => {
+	it("getTree: shape, timestamp-sorted children, orphan and self-parent roots", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		const u2 = store.appendMessage(user("q2"));
+		store.forkBefore(u2);
+		store.appendMessage(user("q2-new"));
+		const tree = store.getTree();
+		expect(tree).toHaveLength(1); // one root
+		expect(tree[0]?.entry.id).toBe(u1);
+		// fork point a1? no — fork moved leaf to a1's id; children of a1: q2 and q2-new
+		const branchPoint = tree[0]?.children[0]; // a1
+		expect(branchPoint?.children).toHaveLength(2); // the branch point
+		// orphan: hand-append an entry whose parent does not exist
+		fsAppend(
+			store.filePath,
+			`${JSON.stringify({
+				type: "message",
+				id: "orphan1",
+				parentId: "missing",
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "orphan" },
+			})}\n`,
+		);
+		// self-parent: an entry naming itself becomes a root (pi rule)
+		fsAppend(
+			store.filePath,
+			`${JSON.stringify({
+				type: "message",
+				id: "selfpar1",
+				parentId: "selfpar1",
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "self" },
+			})}\n`,
+		);
+		const reopened = SessionStore.open(store.filePath);
+		const roots = reopened.getTree();
+		expect(roots.map((r) => r.entry.id)).toEqual([u1, "orphan1", "selfpar1"]);
+		void u2;
+	});
+
+	it("labels: side-attachment — no leaf advance, not a tree node, last write wins, empty clears", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("q1"));
+		const leafBefore = store.getLeafId();
+		store.appendLabelChange(u1, "the-question");
+		// 1) the leaf did NOT move (pure bookkeeping, review P1-5)
+		expect(store.getLeafId()).toBe(leafBefore);
+		// 2) the label rides along after a reopen (file-level replay)
+		let reopened = SessionStore.open(store.filePath);
+		expect(reopened.getTree()).toHaveLength(1); // label is NOT a node
+		expect(reopened.getLabel(u1)).toBe("the-question");
+		// the next message siblings the label — never its child
+		const a1 = store.appendMessage(assistantText("a1"));
+		expect(store.getEntry(a1)?.parentId).toBe(leafBefore);
+		// 3) last write wins; empty removes
+		store.appendLabelChange(u1, "renamed");
+		reopened = SessionStore.open(store.filePath);
+		expect(reopened.getLabel(u1)).toBe("renamed");
+		store.appendLabelChange(u1, "");
+		expect(SessionStore.open(store.filePath).getLabel(u1)).toBeUndefined();
+		// 4) labels never appear in any branch's context
+		store.appendLabelChange(a1, "the-answer");
+		const withLabel = SessionStore.open(store.filePath);
+		expect(withLabel.getBranch().some((e) => e.type === "label")).toBe(false);
+		expect(withLabel.buildContext().messages).toHaveLength(2); // q1 + a1 only
+	});
+
+	it("label folding: the latest label surfaces on the tree node", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("q1"));
+		store.appendLabelChange(u1, "mark");
+		expect(store.getTree()[0]?.label).toBe("mark");
+	});
+
+	it("branchTo + summary reopen ordering (#tree): the marker wins only when nothing follows", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		const u1 = store.appendMessage(user("q1"));
+		store.appendMessage(assistantText("a1"));
+		store.branchTo(u1); // write head back before the assistant reply
+		store.appendBranchSummary("lessons of the abandoned tail");
+		// branchTo wrote a position; the summary ENTRY appended after it implies
+		// its own leaf — reopen must land on the summary, not the stale marker
+		const reopened = SessionStore.open(store.filePath);
+		const leafEntry = reopened.getEntry(reopened.getLeafId() ?? "");
+		expect(leafEntry?.type).toBe("branchSummary");
+		// and buildContext carries q1 (still on the path) + the framed summary
+		expect(reopened.buildContext().messages).toHaveLength(2);
+	});
+
+	it("unknown label target is tolerated (design §3.1)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendLabelChange("deadbeef", "dangling");
+		expect(SessionStore.open(store.filePath).getLabel("deadbeef")).toBe("dangling");
 	});
 });

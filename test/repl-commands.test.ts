@@ -17,6 +17,7 @@ import { parseModelRef } from "../src/provider/resolve.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand, helpText, loginNeedsGuard, parseCommand } from "../src/repl/commands.js";
+import { buildTreeRows } from "../src/repl/components/tree-selector.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
@@ -284,7 +285,7 @@ describe("slash commands", () => {
 				"  /exit              exit (Ctrl+D works too)",
 				"  /new               start a fresh session (the old one stays on disk)",
 				"  /fork              branch the conversation before an earlier message (the old branch stays)",
-				"  /tree              switch to another branch of this conversation (the left one is summarized in)",
+				"  /tree              navigate the session tree — jump to any point, optionally summarizing the left branch",
 				"  /sessions          list saved sessions for this directory",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
@@ -880,22 +881,38 @@ describe("/tree (#10 batch 2)", () => {
 		return env;
 	}
 
-	it("with no other branches: teaching note", async () => {
+	/** branchedEnv with a custom provider (#tree integration). */
+	async function branchedEnvWith(provider: LLMProvider) {
+		const env = await makeEnv({
+			seed: [user("q1"), assistantText("a1"), user("q2-old"), assistantText("a2-old")],
+			provider,
+		});
+		const points = env.runner.forkPoints();
+		await dispatchCommand(`/fork ${points.length}`, env.ctx);
+		return env;
+	}
+
+	it("legacy shell: /tree renders the numbered text tree (#tree)", async () => {
 		const env = await makeEnv({ seed: [user("q1"), assistantText("a1")] });
 		await dispatchCommand("/tree", env.ctx);
-		expect(env.output()).toContain("only one branch");
+		const out = env.output();
+		expect(out).toContain("session tree (pick with /tree <n>)");
+		expect(out).toContain("user: q1");
+		expect(out).toContain("assistant: a1");
+		expect(out).toContain("/tree <n> goes to that row");
 	});
 
-	it("text fallback lists tips; /tree <n> switches and replays (summary off)", async () => {
+	it("text fallback lists tree rows; /tree <n> navigates and replays (summary off)", async () => {
 		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
 		const env = await branchedEnv();
 		await dispatchCommand("/tree", env.ctx);
 		let out = env.output();
 		expect(out).toContain("q2-old");
-		expect(out).toContain("/tree <n>");
-		await dispatchCommand("/tree 1", env.ctx);
+		expect(out).toContain("/tree <n> goes to that row");
+		// rows: #1 q1(user) #2 a1(assistant, current) #3 q2-old #4 a2-old
+		await dispatchCommand("/tree 4", env.ctx);
 		out = env.output();
-		expect(out).toContain("switched branches");
+		expect(out).toContain("navigated —");
 		expect(out).toContain("summary off — IMP_BRANCH_SUMMARY=0");
 		// history is the OLD branch again
 		const texts = env.runner.history.map((m) => (m.role === "user" ? m.content : ""));
@@ -910,8 +927,8 @@ describe("/tree (#10 batch 2)", () => {
 		});
 		const points = env.runner.forkPoints();
 		await dispatchCommand(`/fork ${points.length}`, env.ctx); // fork before q2-old, write nothing
-		await dispatchCommand("/tree 1", env.ctx); // switch back — left branch is EMPTY
-		expect(env.output()).toContain("nothing was written on the left branch to summarize");
+		await dispatchCommand("/tree 4", env.ctx); // to the abandoned tip — nothing was left behind
+		expect(env.output()).toContain("nothing was written beyond that point to summarize");
 	});
 
 	it("overflow-grace: a live overflow error recovers ONCE via compact-and-retry (no prompt duplication)", async () => {
@@ -1133,7 +1150,7 @@ describe("/tree (#10 batch 2)", () => {
 	it("bad args teach; running is rejected", async () => {
 		const env = await branchedEnv();
 		await dispatchCommand("/tree 5", env.ctx);
-		expect(env.output()).toContain("#1–#1");
+		expect(env.output()).toContain("#1–#4");
 		await dispatchCommand("/tree zzz", env.ctx);
 		expect(env.output()).toContain("/tree takes no text");
 	});
@@ -1170,7 +1187,8 @@ describe("/tree (#10 batch 2)", () => {
 		store?.appendMessage(user("q3-new direction"));
 		store?.appendMessage(assistantText("a3-new"));
 		// the summarizer call captured the abandoned segment
-		await dispatchCommand("/tree 1", env.ctx);
+		// (active-first rows: q1, a1, q3-new, a3-new, q2-old, a2-old — #6 = abandoned tip)
+		await dispatchCommand("/tree 6", env.ctx);
 		expect(env.output()).toContain("summarized in context");
 		expect(requests).toHaveLength(1); // exactly one call — the summary
 		const firstMsg = requests[0]?.messages[0] as UserMessage | undefined;
@@ -1185,17 +1203,103 @@ describe("/tree (#10 batch 2)", () => {
 		expect(typeof framed?.content === "string" && framed.content.includes("tried q3-work")).toBe(true);
 	});
 
-	it("picker cancel is silent; a pick switches", async () => {
+	it("TUI flow: three-way summary ask; custom prompt reaches the summarizer (#tree)", async () => {
+		const requests: LLMRequest[] = [];
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream(request) {
+				requests.push({ ...request, messages: [...request.messages] });
+				const isSummary = (request.system ?? "").includes("summarization");
+				const text = isSummary ? "SUMMARY: kept the lessons" : "ok";
+				yield { type: "text_delta", text };
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+				};
+			},
+		};
+		const env = await branchedEnvWith(provider);
+		// write on the new branch so there is something to summarize
+		env.runner.session?.appendMessage(user("q3-new"));
+		env.runner.session?.appendMessage(assistantText("a3-new"));
+		// the tree picker picks the abandoned tip (row 4 in the default tree)
+		let picked = "";
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async () => {
+			const rows = buildTreeRows(env.runner.session!.getTree(), env.runner.session!.getLeafId(), {
+				filter: "default",
+			});
+			picked = rows[5]?.entryId ?? ""; // a2-old, the abandoned tip
+			return picked;
+		};
+		let secretAnswer: string | null = "focus on the failures";
+		const selectAnswers: number[] = [2]; // "Summarize with custom prompt"
+		let selectCall = 0;
+		(env.ctx as { select?: unknown }).select = async () => selectAnswers[selectCall++] ?? null;
+		(env.ctx as { secret?: unknown }).secret = async () => secretAnswer;
+		await dispatchCommand("/tree", env.ctx);
+		const out = env.output();
+		expect(out).toContain("navigated —");
+		expect(out).toContain("summarized in context");
+		// the custom instructions reached the summarizer prompt
+		const summaryReq = requests[0];
+		expect(summaryReq).toBeDefined();
+		const prompt = summaryReq?.messages[0];
+		expect(prompt && "content" in prompt ? String(prompt.content) : "").toContain("focus on the failures");
+		// choosing "No summary" skips the summarizer entirely
+		requests.length = 0;
+		selectCall = 0;
+		selectAnswers[0] = 0;
+		await dispatchCommand("/tree", env.ctx);
+		expect(requests).toHaveLength(0);
+		expect(env.output()).toContain("navigated —");
+		// cancelling the ask cancels the navigation
+		selectCall = 0;
+		selectAnswers[0] = -1;
+		const leafBefore = env.runner.session?.getLeafId();
+		await dispatchCommand("/tree", env.ctx);
+		expect(env.runner.session?.getLeafId()).toBe(leafBefore);
+		secretAnswer = null;
+	});
+
+	it("editorText backfill lands only over an EMPTY editor (#tree)", async () => {
 		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
 		const env = await branchedEnv();
-		let answer: number | null = null;
-		(env.ctx as { select?: unknown }).select = async () => answer;
+		// rows: q1(1) a1(2) q2-old(3) a2-old(4); /tree 1 → q1 (user) → editorText
+		let editor = "";
+		(env.ctx as { getEditorText?: unknown }).getEditorText = () => editor;
+		(env.ctx as { setEditorText?: unknown }).setEditorText = (text: string) => {
+			editor = text;
+		};
+		await dispatchCommand("/tree 1", env.ctx);
+		expect(env.output()).toContain("navigated —");
+		expect(editor).toBe("q1");
+		// navigating to the current POSITION is a no-op
+		await dispatchCommand("/tree 2", env.ctx); // a1 — after /tree 1, leaf=null → moves to a1
+		editor = "i am mid-thought";
+		// a non-empty editor: the text goes to a note instead, editor untouched
+		await dispatchCommand("/tree 3", env.ctx); // q2-old (user) on the abandoned branch
+		expect(env.output()).toContain("back in the editor: “q2-old”");
+		expect(editor).toBe("i am mid-thought");
+	});
+
+	it("treeSelect cancel is silent; a pick navigates (#tree)", async () => {
+		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		const env = await branchedEnv();
+		let picked: string | null = null;
+		(env.ctx as { treeSelect?: unknown }).treeSelect = async () => picked;
 		const base = env.output().length; // ignore the setup fork's note
 		await dispatchCommand("/tree", env.ctx);
 		expect(env.output().slice(base)).toBe("");
-		answer = 0;
+		// rows: #1 q1 #2 a1(current) #3 q2-old #4 a2-old — pick the abandoned tip
+		picked = env.runner.session?.getTree()[0]?.children[0]?.children[0]?.children[0]?.entry.id ?? null;
+		expect(picked).not.toBeNull(); // a2-old — the abandoned tip
 		await dispatchCommand("/tree", env.ctx);
-		expect(env.output().slice(base)).toContain("switched branches");
+		expect(env.output().slice(base)).toContain("navigated —");
 	});
 });
 

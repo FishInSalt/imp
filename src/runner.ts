@@ -213,16 +213,18 @@ export interface Runner {
 	/** Branch before a user message: the store's leaf moves, history
 	 *  reloads from the new path (same wiring as resumeSession). */
 	forkSessionAt(entryId: string): { retained: number; abandoned: number; preview: string };
-	/** `/tree` candidates: other branch tips with previews and message
-	 *  counts (#10 batch 2). */
-	branchTips(): { id: string; label: string; count: number }[];
-	/** Switch to another branch tip — summarizing the left branch into the
-	 *  new one's context unless IMP_BRANCH_SUMMARY=0 (#10 batch 2).
-	 *  `summary` reports why the context did or did not gain a frame. */
-	switchSessionBranch(tipId: string): Promise<{
-		summary: "written" | "empty" | "disabled" | "failed";
-		messages: number;
-	}>;
+	/** `/tree` navigation result: noop = target was the current position;
+	 *  aborted = the summarizer was cancelled (nothing moved — abort is
+	 *  abort of the whole navigation, pi parity); otherwise the summary
+	 *  outcome and the rebuilt context size. */
+	navigateTree(
+		targetId: string,
+		opts?: { summarize?: boolean; customInstructions?: string; signal?: AbortSignal },
+	): Promise<
+		| { noop: true }
+		| { aborted: true }
+		| { editorText?: string; summary: "written" | "empty" | "disabled" | "failed"; messages: number }
+	>;
 	printRunStats(result: RunAgentLoopResult, options?: { statsLine?: boolean }): void;
 	printSessionStats(): void;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
@@ -629,54 +631,69 @@ class RunnerImpl implements Runner {
 		return { retained, abandoned, preview };
 	}
 
-	/** `/tree` candidates (#10 batch 2): other tips as the picker sees them. */
-	branchTips(): { id: string; label: string; count: number }[] {
-		if (this.sessionStore === null) return [];
-		return this.sessionStore.otherBranchTips().map((tip) => ({
-			id: tip.id,
-			label: shorten(tip.label),
-			count: tip.count,
-		}));
-	}
-
-	/** `/tree` switch (#10 batch 2): move to another tip; unless disabled,
-	 *  summarize the abandoned segment (pi's BranchSummaryEntry) so the new
-	 *  branch keeps the lessons of the left one. Best-effort: a summarizer
-	 *  failure still switches, just without the summary. */
-	async switchSessionBranch(tipId: string): Promise<{
-		summary: "written" | "empty" | "disabled" | "failed";
-		messages: number;
-	}> {
+	/** `/tree` navigation (#tree, replaces the tip-only switchSessionBranch
+	 *  — design §3.2). pi's navigateTree semantics, ported:
+	 *  - target === current leaf → noop;
+	 *  - target is a USER message → the write position moves to the
+	 *    message's PARENT (null before the first message) and the message
+	 *    text comes back as editorText for re-editing — the next submit
+	 *    re-grows the branch with the edited text (pi agent-session.ts:3264);
+	 *  - otherwise the write position moves TO the target;
+	 *  - the abandoned segment (everything after the TARGET on the old
+	 *    path — splitBranches(targetId), exactly pi's
+	 *    collectEntriesForBranchSummary set, review P1-1) may be summarized
+	 *    into the new position first (branchSummary entry, disabled by
+	 *    IMP_BRANCH_SUMMARY=0). Abort of the summarizer aborts the WHOLE
+	 *    navigation — nothing moves (not a failure; review P1-3).
+	 *  Identity guard (review P2-2): if the live session was swapped while
+	 *  awaiting, the append and reload belong to whoever swapped it. */
+	async navigateTree(
+		targetId: string,
+		opts?: { summarize?: boolean; customInstructions?: string; signal?: AbortSignal },
+	): Promise<
+		| { noop: true }
+		| { aborted: true }
+		| { editorText?: string; summary: "written" | "empty" | "disabled" | "failed"; messages: number }
+	> {
 		const store = this.sessionStore;
-		if (store === null) throw new SessionNotFoundError("no session to switch (sessions disabled)");
-		const { abandoned } = store.splitBranches(tipId); // BEFORE the switch
-		store.switchBranch(tipId);
+		if (store === null) throw new SessionNotFoundError("no session to navigate (sessions disabled)");
+		const target = store.getEntry(targetId);
+		if (target === undefined || target.type === "label") {
+			throw new SessionNotFoundError(`tree target ${targetId} not found`);
+		}
+		if (targetId === store.getLeafId()) return { noop: true };
+		// The abandoned set must be computed BEFORE any mutation, keyed on the
+		// TARGET (review P1-1): a user-message target stays out of the summary
+		// — its text goes back to the editor instead.
+		const { abandoned } = store.splitBranches(targetId);
+		const isUserMessage = target.type === "message" && target.message.role === "user";
+		const newLeaf = isUserMessage ? target.parentId : targetId;
+		const editorText = isUserMessage ? userText(target.message) : undefined;
+
 		let outcome: "written" | "empty" | "disabled" | "failed" = "disabled";
-		if (!this.branchSummaryEnabled) {
-			// outcome stays "disabled"
+		let summary: string | undefined;
+		if (opts?.summarize !== true || !this.branchSummaryEnabled) {
+			// no summary wanted or IMP_BRANCH_SUMMARY=0
 		} else {
 			const messages = abandoned
 				.filter((entry): entry is MessageEntry => entry.type === "message")
 				.map((entry) => entry.message);
 			if (messages.length === 0) {
-				outcome = "empty"; // forked, never wrote, switched back — nothing to summarize
+				outcome = "empty"; // nothing was written beyond the target — nothing to summarize
 			} else {
 				try {
-					const summary = await summarizeBranchSegment({
+					summary = await summarizeBranchSegment({
 						messages,
 						provider: this.provider,
 						model: this.model,
 						thinking: this.level, // pi: the summarizer thinks at the session level
+						signal: opts?.signal,
+						customInstructions: opts?.customInstructions,
 					});
-					// Identity guard (review P1-1 defense-in-depth): if the live
-					// session was swapped while we awaited, the append and the
-					// history reload belong to whoever swapped it — not us.
-					if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
-					store.appendBranchSummary(summary);
-					outcome = "written";
 				} catch (err) {
-					// best-effort by contract — but never silently: the run log
-					// carries the reason (review P2-2)
+					// Abort is abort of the NAVIGATION (review P1-3): distinguish by
+					// the signal, not the message — nothing moves, not a failure.
+					if (opts?.signal?.aborted) return { aborted: true };
 					this.logger.log("run_error", {
 						source: "branch-summary",
 						message: err instanceof Error ? err.message : String(err),
@@ -685,10 +702,26 @@ class RunnerImpl implements Runner {
 				}
 			}
 		}
+		// Identity guard (review P2-2): a session swap during the await owns
+		// the mutation, not us.
 		if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
+		// A user-message target whose parent IS the current position ("re-type
+		// this message here") moves nothing — branchTo would rightly reject it.
+		const positionMoves = newLeaf !== store.getLeafId();
+		if (positionMoves) store.branchTo(newLeaf);
+		if (summary !== undefined) {
+			if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
+			store.appendBranchSummary(summary); // parentId = newLeaf — heads the new position
+			outcome = "written";
+		}
+		// The editorText re-edit case may move nothing — history is already right.
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages);
-		return { summary: outcome, messages: this.history.length };
+		return {
+			...(editorText === undefined ? {} : { editorText }),
+			summary: outcome,
+			messages: this.history.length,
+		};
 	}
 
 	resumeSession(id: string): { id8: string; messages: number } {

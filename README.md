@@ -132,9 +132,15 @@ imp            # interactive REPL (streaming, one-line tool status)
   resume: `imp -r <id>`.
 - Slash commands: `/help`, `/exit`, `/new` (fresh session, old one stays on
   disk), `/fork` (branch the conversation before an earlier message — pick
-  one from the filterable list or `/fork <n>`), `/tree` (switch between the
-  branches `/fork` created; the branch you leave is summarized into the new
-  one's context — disable with `IMP_BRANCH_SUMMARY=0`), `/sessions` (list
+  one from the filterable list or `/fork <n>`), `/tree` (navigate the
+  session TREE: a visual picker over every turn and branch — arrows move,
+  Tab cycles the filter (default/no-tools/user-only), `f` folds a subtree,
+  typing searches, Enter jumps. Jumping to any point leaves the branch you
+  left summarized into the new position's context (a three-way ask — No
+  summary / Summarize / custom prompt); jumping to a USER message puts its
+  text back in the input for re-editing; disable summaries with
+  `IMP_BRANCH_SUMMARY=0`. The readline shell renders the same tree as a
+  numbered list — `/tree <n>` jumps to row n), `/sessions` (list
   saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
   `/model [id]` (applies from the next turn),

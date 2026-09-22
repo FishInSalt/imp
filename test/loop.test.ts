@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
+import { contentText } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { LLMProvider } from "../src/provider/types.js";
 
@@ -323,5 +324,52 @@ describe("M17 follow-up continuation (same run)", () => {
 			getFollowUpMessages: () => (calls === 1 ? [{ role: "user", content: "F" }] : []),
 		});
 		expect(result.stopReason).toBe("aborted");
+	});
+});
+
+describe("tool result display channel (prompt-audit P1)", () => {
+	it("display reaches tool_end events but never history (session stays clean)", async () => {
+		const displayTool: Tool = {
+			name: "echo_tool",
+			description: "x",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute() {
+				return {
+					output: "display text with diff",
+					content: [{ type: "text", text: "one-liner for the model" }],
+					display: "display text with diff",
+				};
+			},
+		};
+		const provider = scriptedProvider([
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "hi" } }],
+				"tool_use",
+			),
+			assistant([{ type: "text", text: "done" }]),
+		]);
+		const history: AgentMessage[] = [];
+		const events: AgentEvent[] = [];
+		await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [displayTool],
+			history,
+			userMessage: "run",
+			onEvent: (event) => events.push(event),
+		});
+		const toolResult = history.find((m) => m.role === "toolResult") as
+			| Extract<AgentMessage, { role: "toolResult" }>
+			| undefined;
+		expect(toolResult).toBeDefined();
+		// model sees the content blocks, and NO display key survives in history
+		expect(JSON.stringify(toolResult)).not.toContain("display");
+		const toolEnd = events.find((e) => e.type === "tool_end") as
+			| Extract<AgentEvent, { type: "tool_end" }>
+			| undefined;
+		expect(toolEnd).toBeDefined();
+		expect(toolEnd?.result.display).toBe("display text with diff");
+		expect(contentText(toolEnd?.result.content ?? "")).toBe("one-liner for the model");
 	});
 });

@@ -687,7 +687,7 @@ describe("context injection and loop events through the real path (M4c, design Â
 		env.send("one\n");
 		await waitUntil(() => env.output().includes("first done"));
 		const system = env.requests[0]?.system ?? "";
-		const agentsAt = system.indexOf("# Project context (AGENTS.md)");
+		const agentsAt = system.indexOf("<project_context>");
 		const alphaAt = system.indexOf("\n\n# Extension context: alpha\n\nAlpha context block.");
 		const omegaAt = system.indexOf("\n\n# Extension context: omega\n\nOmega context block.");
 		expect(agentsAt).toBeGreaterThanOrEqual(0);

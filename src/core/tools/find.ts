@@ -24,6 +24,7 @@ export function createFindTool(options: FindToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "find",
+		promptSnippet: "find files by name glob (respects .gitignore) — prefer over bash find.",
 		description:
 			"Find files and directories by name (backed by fd; respects .gitignore, includes hidden files). " +
 			"Pattern is a glob. Results are absolute-ish paths, truncated to the first results — " +

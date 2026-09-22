@@ -37,6 +37,7 @@ export function createEditTool(options: EditToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "edit",
+		promptSnippet: "precise in-place edits; each oldText must match exactly and be unique.",
 		description:
 			"Edit a file with exact text replacement. Each edits[].oldText must match a unique, non-overlapping " +
 			"region of the original file — include enough surrounding lines to make it unique. Read the file first and " +
@@ -86,12 +87,22 @@ export function createEditTool(options: EditToolOptions = {}): Tool {
 					return { output: `Error writing ${requested}: ${message}`, isError: true };
 				}
 
-				// First line is a summary (the CLI shows it collapsed); the diff follows.
+				const count = result.applied.length;
+				const plural = count > 1 ? "s" : "";
+				// prompt-audit P1: the model wrote oldText/newText and an exact
+				// match means the outcome is fully known to it — the diff is a
+				// zero-information restatement. Model gets one line; the diff
+				// stays display-only (⎿/fold keep today's shape).
 				const sections = result.applied.map(
 					(e) => `@@ line ${e.line} @@\n${diffLines(e.oldText, e.newText)}`,
 				);
+				const displayText = `Edited ${requested} (${count} edit${plural} applied):\n${sections.join("\n")}`;
 				return {
-					output: `Edited ${requested} (${result.applied.length} edit${result.applied.length > 1 ? "s" : ""} applied):\n${sections.join("\n")}`,
+					content: [{ type: "text", text: `Edited ${requested}: ${count} edit${plural} applied.` }],
+					// output doubles as the pre-P1 display fallback (the read-image
+					// pattern): content wins for the model, display wins for the UI.
+					output: displayText,
+					display: displayText,
 				};
 			});
 		},

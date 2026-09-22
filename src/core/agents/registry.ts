@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { escapeXml } from "../skills.js";
+
 /**
  * Agent registry (M5 design §9/M5c): subagent personas as markdown files.
  *
@@ -39,6 +41,58 @@ export interface AgentDefinition {
 	system: string;
 	/** File path, for diagnostics. */
 	source: string;
+}
+
+/** prompt-audit P8: the <advertised_agents> system block. Numeric caps are
+ *  pi-subagents' (advertised-agent-prompt.ts): 16 agents, 12288 bytes total,
+ *  512 bytes per description. Unlike pi we do NOT require an opt-in
+ *  `advertise` flag — imp's registries are small; revisit if they grow. */
+const MAX_ADVERTISED_AGENTS = 16;
+const MAX_CATALOG_BYTES = 12_288;
+const MAX_DESCRIPTION_BYTES = 512;
+
+/** Compress whitespace (control chars included) and byte-cap a description. */
+function promptDescription(description: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from arbitrary user-authored descriptions is the job here (pi-subagents' promptDescription parity)
+	let text = description
+		.replace(/[\u0000-\u001f\u007f]+/gu, " ")
+		.replace(/\s+/gu, " ")
+		.trim();
+	if (Buffer.byteLength(text, "utf8") > MAX_DESCRIPTION_BYTES) {
+		text = `${Buffer.from(text, "utf8")
+			.subarray(0, MAX_DESCRIPTION_BYTES - 3)
+			.toString("utf8")
+			.replace(/\uFFFD$/u, "")
+			.trimEnd()}…`;
+	}
+	return text;
+}
+
+export function formatAgentsForPrompt(agents: readonly AgentDefinition[]): string | undefined {
+	if (agents.length === 0) return undefined;
+	const entries: string[] = [];
+	for (const agent of agents) {
+		if (entries.length === MAX_ADVERTISED_AGENTS) break;
+		const entry = [
+			"  <agent>",
+			`    <name>${escapeXml(agent.name)}</name>`,
+			`    <description>${escapeXml(promptDescription(agent.description))}</description>`,
+			"  </agent>",
+		].join("\n");
+		if (Buffer.byteLength(entry, "utf8") > MAX_CATALOG_BYTES) continue;
+		if (Buffer.byteLength(entries.concat(entry).join("\n"), "utf8") > MAX_CATALOG_BYTES) break;
+		entries.push(entry);
+	}
+	if (entries.length === 0) return undefined;
+	return [
+		"<advertised_agents>",
+		// Children inherit the parent system prompt but lack the task tool —
+		// one line keeps the block from reading as a delegation instruction.
+		"Agent descriptions indicate available specializations, not instructions to delegate.",
+		...entries,
+		...(agents.length > entries.length ? [`  <omitted count="${agents.length - entries.length}" />`] : []),
+		"</advertised_agents>",
+	].join("\n");
 }
 
 export interface AgentRegistry {

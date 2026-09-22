@@ -10,7 +10,7 @@ import {
 	emptyUsage,
 	type Usage,
 } from "./messages.js";
-import type { SessionStore } from "./session/store.js";
+import { type SessionStore, SUMMARY_MARK } from "./session/store.js";
 
 /**
  * Context compaction: when the conversation nears the model's context window,
@@ -278,6 +278,45 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
+const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+
 // ============================================================================
 // Branch summaries (#10 /tree) — the abandoned branch's memory, carried into
 // the new branch's context. Same streaming pattern as compactHistory.
@@ -320,6 +359,12 @@ export async function summarizeBranchSegment(args: {
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
 		if (event.type === "text_delta") summary += event.text;
+		// prompt-audit P2: a token-capped summary is half a checkpoint — reject
+		// it rather than persist a truncated memory (imp's StopReason vocabulary
+		// has no pi-style "error"/"length"; provider failures already throw).
+		if (event.type === "message_end" && event.message.stopReason === "max_tokens") {
+			throw new Error("branch summary: hit the token cap — incomplete, rejected");
+		}
 	}
 	if (summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
 	return summary.trim();
@@ -373,16 +418,45 @@ export async function compactHistory(args: {
 
 	const cut = findCutIndex(args.messages, settings.keepRecentTokens);
 	if (cut <= 0) return null; // nothing older than the retained tail to summarize
-	const toSummarize = args.messages.slice(0, cut);
+
+	// prompt-audit P3: when the head is a previous compaction's framed summary,
+	// UPDATE it with only the new messages instead of re-summarizing the old
+	// summary as if it were conversation (each generation drifts). Content may
+	// be ContentBlock[] (M13) — type-check before the marker test.
+	const head = args.messages[0];
+	let previousSummary: string | undefined;
+	let summarizeFrom = 0;
+	if (
+		head !== undefined &&
+		head.role === "user" &&
+		typeof head.content === "string" &&
+		head.content.startsWith(SUMMARY_MARK)
+	) {
+		const markerEnd = head.content.indexOf("]\n\n");
+		if (markerEnd !== -1) {
+			previousSummary = head.content.slice(markerEnd + 3);
+			summarizeFrom = 1;
+		}
+	}
+	const toSummarize = args.messages.slice(summarizeFrom, cut);
+	// Empty-transcript guard (design review P3-1): cut === 1 means only the old
+	// summary predates the boundary — an UPDATE over nothing is exactly the
+	// drift this mode exists to stop. Skip; the next boundary retries.
+	if (toSummarize.length === 0) return null;
 	const retainedTail = args.messages.slice(cut);
 
 	const transcript = serializeForSummary(toSummarize);
+	const userContent =
+		previousSummary === undefined
+			? `${transcript}\n\n---\n\n${SUMMARIZATION_PROMPT}`
+			: `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n${transcript}\n\n---\n\n${UPDATE_SUMMARIZATION_PROMPT}`;
 	const usage = emptyUsage();
 	let summary = "";
 	let finalText: string | undefined;
+	let summarizerStopReason: string | null | undefined;
 	for await (const event of args.provider.stream({
 		system: SUMMARIZATION_SYSTEM_PROMPT,
-		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${SUMMARIZATION_PROMPT}` }],
+		messages: [{ role: "user", content: userContent }],
 		tools: [],
 		model: args.model,
 		maxTokens: 2048,
@@ -392,11 +466,18 @@ export async function compactHistory(args: {
 		if (event.type === "text_delta") summary += event.text;
 		if (event.type === "message_end") {
 			addUsage(usage, event.message.usage);
+			summarizerStopReason = event.message.stopReason;
 			finalText = event.message.blocks
 				.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
 				.map((b) => b.text)
 				.join("");
 		}
+	}
+	// prompt-audit P2: a token-capped summary is half a checkpoint — it must
+	// never become the session's resume point (imp's stopReason vocabulary is
+	// end_turn|tool_use|max_tokens|stop_sequence|null; provider errors throw).
+	if (summarizerStopReason === "max_tokens") {
+		throw new Error("compaction: summary hit the token cap — incomplete, rejected");
 	}
 	if (summary.trim() === "" && finalText !== undefined) summary = finalText;
 	if (summary.trim() === "") throw new Error("compaction: summarizer returned an empty summary");

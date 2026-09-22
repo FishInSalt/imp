@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TOOL_NAMES, MAX_BYTES } from "../src/core/constants.js";
-import { directToolName, mapCallResult, normalizeInputSchema } from "../src/mcp/bridge.js";
+import {
+	bridgeTool,
+	directToolName,
+	mapCallResult,
+	normalizeInputSchema,
+	truncateAtWord,
+} from "../src/mcp/bridge.js";
 
 describe("normalizeInputSchema (design §4)", () => {
 	it("passes an object schema through untouched", () => {
@@ -98,5 +104,28 @@ describe("mapCallResult (design §4)", () => {
 
 	it("leaves ordinary output alone", () => {
 		expect(mapCallResult({ content: [{ type: "text", text: "fine" }] }).output).toBe("fine");
+	});
+});
+
+describe("catalog snippet (prompt-audit P7)", () => {
+	it("truncateAtWord cuts at a word boundary within the cap", () => {
+		expect(truncateAtWord("short", 100)).toBe("short");
+		expect(truncateAtWord(`${"word ".repeat(30)}end`, 100)).toMatch(/…$/u);
+		expect(truncateAtWord(`${"word ".repeat(30)}end`, 100).length).toBeLessThanOrEqual(102);
+		expect(truncateAtWord("x".repeat(300), 100)).toHaveLength(101); // no space → hard cut + …
+	});
+
+	it("bridgeTool sets promptSnippet (≤100) and mcpServer", () => {
+		const long = `Analyze ${"very ".repeat(40)}long description`;
+		const { tool } = bridgeTool(
+			"zai-vision",
+			{ name: "analyze_image", description: long, inputSchema: { type: "object" } },
+			async () => ({ output: "ok" }),
+		);
+		expect(tool).toBeDefined();
+		expect(tool!.promptSnippet!.length).toBeLessThanOrEqual(101);
+		expect(tool!.promptSnippet!.endsWith("…")).toBe(true);
+		expect(tool!.mcpServer).toBe("zai-vision");
+		expect(tool!.description).toBe(long); // full description untouched
 	});
 });

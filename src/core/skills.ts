@@ -396,7 +396,7 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	return { skills, diagnostics };
 }
 
-function escapeXml(text: string): string {
+export function escapeXml(text: string): string {
 	return text
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")

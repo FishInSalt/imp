@@ -332,7 +332,7 @@ async function executeToolBatch(
 			// Serial path — event order and behavior identical to pre-M5b.
 			onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
 			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal, onToolCall);
-			results.push(result);
+			results.push(persistableResult(result));
 			onEvent?.({ type: "tool_end", result });
 			i++;
 			continue;
@@ -404,9 +404,18 @@ async function executeChunk(
 	const settled = await Promise.all(plans.map((plan) => ("run" in plan ? plan.run(signal) : plan.result)));
 	// Phase 3 — call-order emission: deterministic tool_end and result order.
 	for (const result of settled) {
-		results.push(result);
+		results.push(persistableResult(result));
 		onEvent?.({ type: "tool_end", result });
 	}
+}
+
+/** History-shaped result (prompt-audit P1): display is render-only and
+ *  must not reach history — the session persists results verbatim and resume
+ *  replay would resurrect a display string no renderer set. Events keep it. */
+function persistableResult(result: ToolResult): ToolResult {
+	if (result.display === undefined) return result;
+	const { display: _display, ...rest } = result;
+	return rest;
 }
 
 /** Validation without side effects: unknown tool / non-object args / schema
@@ -469,6 +478,7 @@ async function runTool(
 			// hand the model the blocks; `output` is display-only.
 			content: result.content ?? result.output,
 			isError: result.isError ?? false,
+			display: result.display,
 		};
 	} catch (err) {
 		return {

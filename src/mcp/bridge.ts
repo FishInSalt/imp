@@ -67,6 +67,17 @@ export function mapCallResult(result: McpCallResult): ToolExecuteResult {
 	return { output, isError: result.isError === true ? true : undefined };
 }
 
+/** prompt-audit P7 (pi adapter parity): a catalog one-liner for an MCP tool,
+ *  cut at a word boundary to ≤ max chars. The full description still rides
+ *  the tools array; this line exists for the system-prompt routing catalog. */
+export function truncateAtWord(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const slice = text.slice(0, max + 1);
+	const lastSpace = slice.lastIndexOf(" ");
+	const cut = lastSpace > 0 ? lastSpace : max;
+	return `${text.slice(0, cut).trimEnd()}…`;
+}
+
 /** Bridge one server tool. `call` is the manager route (reconnect-aware). */
 export function bridgeTool(
 	server: string,
@@ -75,13 +86,19 @@ export function bridgeTool(
 ): { tool?: Tool; error?: string } {
 	const named = directToolName(server, info.name);
 	if ("error" in named) return { error: `mcp ${server}: skipping "${info.name}" — ${named.error}` };
+	const description =
+		typeof info.description === "string" && info.description !== ""
+			? info.description
+			: `MCP tool ${info.name} from server "${server}"`;
 	return {
 		tool: {
 			name: named.name,
-			description:
-				typeof info.description === "string" && info.description !== ""
-					? info.description
-					: `MCP tool ${info.name} from server "${server}"`,
+			description,
+			// prompt-audit P7: routing catalog line (supersedes M18-D6 — the
+			// catalog is now the routing table; see the design's D10) plus the
+			// owning server's name for the catalog's total-budget degradation.
+			promptSnippet: truncateAtWord(description, 100),
+			mcpServer: server,
 			parameters: normalizeInputSchema(info.inputSchema),
 			async execute(args, signal): Promise<ToolExecuteResult> {
 				try {

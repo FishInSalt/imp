@@ -229,3 +229,30 @@ describe("McpManager shutdown", () => {
 		expect(result?.output).toContain("shutting down");
 	});
 });
+
+describe("onToolsChanged (prompt-audit P7)", () => {
+	it("fires after every tool-array sync — handshake and run boundary", async () => {
+		const shared: Tool[] = [];
+		let changed = 0;
+		const manager = new McpManager({
+			servers: [serverConfig("fake", "ok")],
+			cwd: process.cwd(),
+			version: "test",
+			renderer: fakeRenderer([]),
+			reconnectCooldownMs: 0,
+			...FAST,
+			onToolsChanged: () => {
+				changed += 1;
+			},
+		});
+		manager.attachToolsArray(shared);
+		manager.onRunStart(); // busy BEFORE connecting: the sync parks
+		manager.connectAll();
+		await waitFor(() => manager.statusLines()[0]?.status === "connected");
+		expect(changed).toBe(0); // parked — no array change happened yet
+		manager.onRunEnd(); // boundary flush performs the real sync
+		expect(changed).toBe(1);
+		expect(shared.length).toBeGreaterThan(0); // tools really landed
+		manager.close();
+	});
+});

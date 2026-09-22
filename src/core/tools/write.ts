@@ -17,6 +17,7 @@ export function createWriteTool(options: WriteToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "write",
+		promptSnippet: "create or overwrite whole files — never for small changes.",
 		description:
 			"Write full content to a file. Creates the file (and parent directories) if missing, overwrites if present. " +
 			"For new files this is the right tool; to change part of an existing file prefer edit — never rewrite a whole file just to change a few lines.",

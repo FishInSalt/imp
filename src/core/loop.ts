@@ -99,7 +99,10 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		userImages,
 		maxTokens = 8192,
 		thinking,
-		maxIterations = 40,
+		// Follows cli.ts's print default (100 since #no-turn-cap); callers
+		// that go through the Runner always pass an explicit value — this floor
+		// exists for direct/test callers.
+		maxIterations = 100,
 		onMessage,
 		onBeforeTurn,
 		getSteeringMessages,

@@ -1,6 +1,6 @@
 # 子代理软着陆设计 rev 3 —— 零注入 + 后备墙 + 失败信息保全
 
-状态：rev 3（2026-09-24，用户决策：零提示词污染方案）· 批次 `feat/subagent-softlanding`
+状态：rev 4（2026-09-24，双路对抗审查 A/B 的 NEEDS-FIXES 全部折入；用户确认"REPL 不限时 + print 模式默认 60min"）· 批次 `feat/subagent-softlanding`
 前置：M5 子代理设计（docs/m5-subagents-design.md）、#compaction-ux 批
 参照系（三方实测源码，2026-09-24）：
 - **pi-subagents 扩展 v0.69.0**（本机 `~/.pi/agent/npm/node_modules/pi-subagents`）
@@ -43,13 +43,18 @@
 - 联动注释改写：constants.ts:15-17 的"40 轮 × 45s ≈ 30min"推导失效（时钟已不限，见层 B）；M5 设计文档的墙值记档但不再作为推导链
 - 溢出恢复最坏情况：2×60 = 120 轮（每轮 maxTokens 有界，纯文本退化循环的烧钱上限仍被轮墙封顶）
 
-### 2.2 层 B —— 时钟：默认不限时，父代理可选设定
+### 2.2 层 B —— 时钟：REPL 不限时，print 模式默认 60 分钟，父代理可选设定
 
-- `CHILD_TIMEOUT_MS` 删除（subagent.ts:16,283 的 `AbortSignal.timeout` 链整体移除；`options.timeoutMs` 保留为注入缝，默认 `undefined` = 不限时）
-- task schema 加可选 `timeoutMs?: number`（毫秒，描述教："Default: no time limit — the child is bounded only by its turn cap and your Ctrl+C. Set a millisecond budget only for tasks expected to be cheap."）
-- 终止兜底链：用户 Ctrl+C（父 signal 转发链，已验证）→ 60 轮墙 → 父代理自设 timeoutMs（可选）
+- `CHILD_TIMEOUT_MS`（30min）删除，改为**按运行模式给默认**（审查 A-P0：墙只数已完成的轮次——子代理卡在永不返回的工具里时墙不前进；REPL 有 Ctrl+C 兜底，print/CI 无人值守会无限挂起；pi-subagents 在无人看守场景反而加了默认钟）：
+  - REPL（TTY 交互）：默认**不限时**——用户在场，Ctrl+C 随手可用（用户决策原样保留）
+  - print/非交互模式：默认 **60 分钟**——只防挂死，不干预正常长任务
+  - 解析时机：task 工具构造时读 `process.stdout.isTTY`（与 childSessions 的 env 读取同风格，构造时定型）；导出为 `defaultChildTimeoutMs()`
+- task schema 加可选 `timeoutMs?: Type.Integer({ minimum: 1000 })`（毫秒整数，审查 B-P2：防 0/负/NaN/小数；描述教："Optional wall-clock budget in ms. REPL default: no limit; print runs default to 60 min. Set only for tasks expected to be cheap."）
+- **timeoutMs 三方优先级（审查 B-P0 钉死）**：调用参数（args.timeoutMs）> agent frontmatter（registry.ts 解析的 agent.timeoutMs）> 模式默认。现有测试钉 task-tool.test.ts:354-373（frontmatter 胜工厂注入）改写为三方顺序钉
+- **时钟存在机制（审查 B-P1）**：runSubagent 内 `timeoutMs !== undefined` 才建 `AbortSignal.timeout` 与 relay；三处 `timedOut` 分类（subagent.ts:296/:344/:359）读同一条件化 clock（不存在时该判定恒 false，status 'timeout' 默认不可达——默认路径的 clock 中止只剩 'aborted'，即父 Ctrl+C，记档）；finally 清理（:417-419）同样条件化
+- 终止兜底链：REPL = 用户 Ctrl+C → 60 轮墙 → 父代理自设 timeoutMs；print = 60min 默认钟 → 60 轮墙 → 显式 timeoutMs。**注**（审查 B）：轮墙与钟都不数"挂起中的单个工具调用"——REPL 靠 Ctrl+C、print 靠默认钟兜这个洞
 - 无 `TaskStop`/steer 通道（CC 异步架构产物，imp 单 turn 同步派发用不上——Ctrl+C 即全链终止）
-- abort/timeout 分类逻辑保留（subagent.ts 现有 timedOut 判定不删——timeoutMs 显式设置时仍然可用）
+- **timeout 形态 isError 保持 true**（审查 A/B 共同修正：现状行为 task.ts:283-285；无产出+确定性终止+重试安全——与 cap 形态"有收尾文本"本质不同；设计 §2.3 原文"同构"表述废弃，timeout 分支独立渲染但 isError 不翻）
 
 ### 2.3 层 C —— 撞限失败信息保全（核心层，rev 1/2 的层 2 原样）
 
@@ -71,9 +76,11 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 (child: 60 turns, 33.7k in / 11.2k out)
 ```
 
-- transcript 路径：task.ts 已有 `where`（session 路径）；无 session 模式（IMP_CHILD_SESSIONS=0）退化为不含路径形态（"Re-dispatch with a narrower prompt" 仍成立，去掉 "read the transcript" 句）
+- transcript 路径（审查 A-P1 修正：现有 `where` 只是 8 字符 session id，非路径——需新机制）：`session.filePath`（store.ts:201，createChildSession 填充，审查 B 已验证存在）——taskResult 签名需加 prompt + path 两个入参；`where` 渲染同步升级为完整路径
+- 任务摘要取 `args.prompt` 原文前 200 字符（审查 B-P2：task.ts:183 会给 prompt 追加 worktree 通知，摘要必须取追加前的原始值；CJK 安全截断——避免 UTF-16 代理对劈半，repo 有 tailTruncate 先例）
+- 无 session 模式（IMP_CHILD_SESSIONS=0）退化为不含路径形态（"Re-dispatch with a narrower prompt" 仍成立，去掉 "read the transcript" 句）；`completed` 无文本的旧 no-output 标记只属于 completed，防误并（B 测试 9）
 - **isError 维持 false**（M5 "cap is a valve, not an error"；升 isError 诱导父代理盲目整体重试；带完整信息的成功形引导父代理做**缩小再派发/接手**决策）
-- timeout 形态（父设了 timeoutMs 且触发）：同构诚实渲染——`[task] child exceeded its N-minute budget (status: timeout)`，同样给 transcript 路径与再派发指引
+- timeout 形态（父设了 timeoutMs 且触发）：**isError: true 维持**（见 §2.2）；渲染补 transcript 路径与再派发指引——`[task] child exceeded its Ns budget (status: timeout)` + 路径 + 指引；单位沿用现有秒制（task.ts:273/:280，测试钉 task-tool.test.ts:348-352），不引入分钟表述
 
 ### 2.4 层 D —— 派发侧尺寸教学（保留 rev 1/2 层 3）
 
@@ -95,9 +102,9 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 
 | 文件 | 改动 | 量级 |
 |---|---|---|
-| src/core/constants.ts | `CHILD_MAX_TURNS = 60`；删 `CHILD_TIMEOUT_MS` 及其推导注释 | ~6 行 |
-| src/core/subagent.ts | 删 clock 中止链（:283 及 abort 分类里的 timeout 判定改由 timeoutMs 是否设置驱动）；`timeoutMs?: number` 保留 | ~20 行 |
-| src/core/tools/task.ts | schema 加 `timeoutMs`（透传 runSubagent）；撞限/timeout 二形渲染 + transcript 路径；描述加尺寸教学 | ~35 行 |
+| src/core/constants.ts | `CHILD_MAX_TURNS = 60`；删 `CHILD_TIMEOUT_MS` 块（:13-17）**及头部"时钟须随轮预算重推"注释（:3-6）**；新增 `defaultChildTimeoutMs()`（TTY 感知） | ~12 行 |
+| src/core/subagent.ts | 条件化 clock（timeoutMs 存在才建 :283-289）；三处 timedOut 分类（:296/:344/:359）与 finally 清理（:417-419）条件化；:155 改 `const timeoutMs = options.timeoutMs`（无默认） | ~35 行 |
+| src/core/tools/task.ts | schema 加 `timeoutMs`（Integer min 1000，三方优先级 :215 处重排）；taskResult 签名加 prompt/path；撞限二形 + timeout 补路径渲染；描述加尺寸教学 | ~60 行 |
 | test/subagent.test.ts | 时钟相关测试改写（默认无限时、显式 timeoutMs 触发 timeout 分类）；60 轮墙值钉子 | ~40 行 |
 | test/task.test.ts | 层 C 二形/三形态契约钉子 + 层 D 文案钉子 | ~35 行 |
 
@@ -122,19 +129,28 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 **层 D（task.test.ts）**
 11. prompt 描述含 "~300 words" 教学文案
 
+**审查补充（B 清单，全部纳入）**
+12. schema 校验：timeoutMs = 0/-1/NaN/1.5/"5000" 全部被 Value.Check 拒绝，provider 零调用
+13. 三方优先级：args > frontmatter > 模式默认，含两两组合（现钉 :354-373 改写）
+14. 200 字符边界：恰好 200/201/CJK 代理对；worktree 子代理的摘要不含 worktree 通知（args.prompt 原文）
+15. 路径落盘断言：渲染的 transcript 路径 === session.filePath 且文件存在、含子代理消息
+16. 溢出恢复第二 launchLoop 中的 timeout（:359 分支，现有钉只覆盖压缩中途 :383-418）
+17. timeoutMs 已设未触发时父 Ctrl+C → aborted 非 timeout（分类不混淆钉）
+18. finally 清理：默认无钟运行后父 signal abort 无悬挂监听/未处理拒绝
+19. `completed`+无文本的旧 no-output 标记只属 completed（防误并）
+20. 60 墙数字钉子更新（subagent.test.ts:112 的 toBe(40)→60）；CAP 文案钉全部改二形
+
 ## 5. 风险与开放问题
 
 - **零文本撞限在 60 轮下仍可能发生**（用户接受，记档）：本方案不保证最终文本；兜底 = transcript 保全 + 父代理接手。与 rev 2 "封锁保证文本" 是真实 tradeoff——换来零污染对全部正常子代理有效。60 轮比 40 轮多 50% 的挖掘+收尾余量
 - **60 数字依据**：三方演化方向（CC 内建无墙 / pi 拆墙 / CC fork 200）+ imp 保守折中；单事故样本，无对照。常量导出，dogfood 证据驱动调整
+- **烧钱上限入档（审查 A-P2）**：退化文本循环最坏 = 溢出重试 ×2 × 60 轮 × 131,072 maxTokens ≈ **15.7M 输出 token**；输入受自动压缩钳在窗内（glm-5.3 1M 窗，病理全窗每轮 ≈ 60-120M 输入）。glm-5.3 订阅制定价 0（models.ts:85 input:0/output:0/subscription:true）——主要模型下上限可接受；API 计价模型下真实但有限
 - **不限时的极端风险**：纯文本退化循环烧 token 直到 60 轮墙——每轮 maxTokens 有界，上限 = 60 × maxTokens 输出 + 输入膨胀。接受（与 CC 内建同风险面）；用户 Ctrl+C 随时可用
 - **transcript 路径被父代理整读**：read 有 50KB 截断救场 + 本批文案教 "narrower re-dispatch or continue yourself"；JSONL 单行大条目可能压满截断——首 200 字符任务摘要缓解定位
 - **开放**：层 D 教学有效性不可预验证（F4a 教训）；成本一行描述，可撤
 
-## 6. 审查问题清单（给对抗审查）
+## 6. 双路对抗审查结果（rev 3 → rev 4 折入记录）
 
-1. 60 轮 + 不限时 + 零注入的联立：最坏烧钱场景的量级估算是否可接受？上限是否需要在文档里显式算出来？
-2. timeoutMs 透传链（schema → task.ts → runSubagent → clock）在 abort 分类、溢出恢复、session 持久化各处是否有边角（e.g. timeout 发生在 compaction 中途）？
-3. 层 C 无 session 形态的指引文案是否足够可行动（无 transcript 可读时）？
-4. isError=false 决策：父代理模型会不会仍把 "hit the 60-turn cap" 文案当失败而整体重试？（教学靠文案，无机制保证）
-5. 删 CHILD_TIMEOUT_MS 的兼容面：M5 设计文档、既往 ledger、测试引用处是否全部同步？
-6. timeoutMs schema 参数的滥用面：父代理会不会给所有任务都设时限（反向污染）？描述文案是否足够约束？
+审查 A（设计决策）NEEDS-FIXES：P0 print 模式挂死 → 模式感知默认钟（§2.2 已折入，用户确认）；P1 `where` 非路径 → session.filePath（§2.3）；P2 烧钱上限入档（§5）、timeout isError 保持 true（§2.2）；P3×4 记档（60 数字"诚实的占位"、零注入拒绝有据、timeoutMs 暴露有 bash.timeout 先例、transcript 读取机制可用）。
+审查 B（实现面）NEEDS-FIXES：P0 timeoutMs 三方优先级 → 钉死 args > frontmatter > 模式默认（§2.2）；P1×5 → 条件化 clock 机制、timeout isError、taskResult 签名、测试计划补 9 项（§4 12-20）、finally 清理；P2×4 → args.prompt 原文摘要/CJK、schema Integer 约束、挂起工具不进钟墙的记档注、aborted 吸收原 timeout 默认路径记档；P3 行数估算修正（§3 已改）。
+两审均判核心架构 sound。rev 4 = 可实现版本。

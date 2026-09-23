@@ -570,6 +570,17 @@ class ReplMachine {
 						this.showResultFold(event); // TUI: every top-level result folds (M11); child edits could later
 					}
 					this.trackActivity(event, info);
+					// #footer-per-turn: pi refreshes the footer on every assistant
+					// message_end (interactive-mode.ts:3279 — footer.invalidate +
+					// requestRender); usage lands in history per TURN, so the ctx%
+					// shown during a multi-turn tool run is otherwise frozen at the
+					// pre-run value until settleSuccess. Render cost is absorbed by
+					// pi-tui's 16ms render throttle (TuiBase.MIN_RENDER_INTERVAL_MS);
+					// refreshFooter's estimate is O(messages) local work per turn —
+					// fine at turn cadence, never called from delta paths.
+					if (event.type === "message_end" && info === undefined) {
+						this.refreshFooter(); // the 80% warning note rides along, now also turn-timed
+					}
 				},
 				getSteeringMessages: () => this.steeringMessages(),
 				getFollowUpMessages: () => this.followUpMessages(),

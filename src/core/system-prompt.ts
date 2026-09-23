@@ -64,7 +64,6 @@ ${lines.join("\n")}`
 4. Be concise. State what you changed (file paths, commands run); do not dump whole files back at the user.
 5. If a task fails, say what failed and why. Do not silently give up or fake success.
 6. When a request is ambiguous or destructive beyond the workspace, ask the user first.
-7. Keep tool outputs small: narrow grep patterns, read with offset/limit, head/tail for long command output. Large outputs fill the context window fast.
 ${catalog}
 
 In addition to the tools above, you may have access to other tools depending on the project.

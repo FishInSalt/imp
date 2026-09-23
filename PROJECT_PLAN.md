@@ -79,6 +79,9 @@ imp/
 
 ---
 
+
+- **#footer-per-turn + 规则 7 撤回(2026-09-24,1159 tests,fix/footer-per-turn)**:用户两问驱动。①**footer 轮边界刷新**:确认 imp 的 ctx%/usage 状态栏只在 run 结束刷新——多轮工具 run 期间冻结在 run 前旧值(决策层不受影响:auto-compact 每轮 onBeforeTurn 活读);pi 亲读核实为每 assistant message_end 触发(interactive-mode.ts:3279,渲染由 pi-tui 16ms 节流吸收)。修法:onEvent tap 对顶层 message_end 调 refreshFooter(子代理事件带 info 排除——usage 落子 history 不落父 footer);80% 警告 note 随之轮边界化。钉子:gated 工具 run 中 turn1 的 message_end 后 usage 段已离开零值、run 仍在飞。②**#compaction-ux §10 执行**:核心规则 7 撤回——六条规则全是行为契约,第 7 条是效率建议,混入稀释契约区;动机证据在 1M 窗+订阅制下零实际损害;pi 无此规则;~25 tokens/请求常驻成本换不可验证效果。测试钉反转为"恰好六条+不含该文案"。F4b 截断 tip 保留。门禁:1159/1159、typecheck 0、biome 净、build+全局安装更新。审查评估:两项均为单点缝改动+行为钉子独立可验证,判无需独立对抗审查;撤回依据记设计文档 §10 并经用户拍板。
+
 ## 3. 里程碑计划
 
 > 时间按业余时间投入估算；全职可压缩到 1/3。

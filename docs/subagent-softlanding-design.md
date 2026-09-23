@@ -12,7 +12,7 @@
 | 版本 | 方案 | 被什么推翻 |
 |---|---|---|
 | rev 1 | 轮次提醒注入（75%/95% 双阈值）| pi-subagents 建过同构方案（turnBudget wrap-up 注入）又在 0.59.0 整体移除（CHANGELOG :454）|
-| rev 2 | 工具预算（soft 20 nudge + hard 30 封锁 read/grep/find/ls）| 用户质疑：预算提示词会污染子代理思维、影响任务质量；CC 实测内建 agent 零注入零封锁 |
+| rev 2 | 工具预算（soft 20 nudge + hard 30 封锁 read/grep/find/ls）| 用户质疑：预算提示词会污染子代理思维、影响任务质量；CC 实测内建 agent 零注入零封锁；**结构性反证：pi-subagents 的封锁表不含 bash——留有 bash 的子代理用 `cat` 即可旁路，"封锁"对会换工具的模型只是强化版恳求，非硬保证**（本条为 rev 2 拒绝的技术依据，与提示词污染的哲学依据相互独立）|
 | **rev 3** | **零注入 + 60 轮后备墙 + 时钟默认不限 + 失败信息保全** | —— |
 
 三方实测结论支撑零注入：
@@ -49,8 +49,10 @@
   - REPL（TTY 交互）：默认**不限时**——用户在场，Ctrl+C 随手可用（用户决策原样保留）
   - print/非交互模式：默认 **60 分钟**——只防挂死，不干预正常长任务
   - 解析时机：task 工具构造时读 `process.stdout.isTTY`（与 childSessions 的 env 读取同风格，构造时定型）；导出为 `defaultChildTimeoutMs()`
+  - **表示约定**：REPL（TTY）下返回 `undefined`——`undefined` 就是"不限时"哨兵，贯穿整个 seam（`AbortSignal.timeout(Infinity)` 会 RangeError，勿用 Infinity）；print 下返回 `60 * 60 * 1000`
+  - **推论**：REPL + 带 frontmatter `timeoutMs` 的命名 agent——前置链 `args > frontmatter > default` 中 frontmatter 生效，钟存在、`timeout` 可达；"'timeout' 默认不可达、坍缩为 'aborted'"只适用于 effective timeoutMs === undefined 的路径
 - task schema 加可选 `timeoutMs?: Type.Integer({ minimum: 1000 })`（毫秒整数，审查 B-P2：防 0/负/NaN/小数；描述教："Optional wall-clock budget in ms. REPL default: no limit; print runs default to 60 min. Set only for tasks expected to be cheap."）
-- **timeoutMs 三方优先级（审查 B-P0 钉死）**：调用参数（args.timeoutMs）> agent frontmatter（registry.ts 解析的 agent.timeoutMs）> 模式默认。现有测试钉 task-tool.test.ts:354-373（frontmatter 胜工厂注入）改写为三方顺序钉
+- **timeoutMs 三方优先级（审查 B-P0 钉死）**：调用参数（args.timeoutMs）> agent frontmatter（registry.ts 解析的 agent.timeoutMs）> 模式默认。现有测试钉 task-tool.test.ts:354-373（frontmatter 胜工厂注入）改写为三方顺序钉。**接受的对称性缺口**：schema 的 minimum:1000 只守 args 侧；frontmatter `timeout:`（registry.ts:133-140 秒转毫秒）无下限校验，`timeout: 0.5` → 500ms 可低于 schema 下限——记档接受，不在本批给 frontmatter 加校验
 - **时钟存在机制（审查 B-P1）**：runSubagent 内 `timeoutMs !== undefined` 才建 `AbortSignal.timeout` 与 relay；三处 `timedOut` 分类（subagent.ts:296/:344/:359）读同一条件化 clock（不存在时该判定恒 false，status 'timeout' 默认不可达——默认路径的 clock 中止只剩 'aborted'，即父 Ctrl+C，记档）；finally 清理（:417-419）同样条件化
 - 终止兜底链：REPL = 用户 Ctrl+C → 60 轮墙 → 父代理自设 timeoutMs；print = 60min 默认钟 → 60 轮墙 → 显式 timeoutMs。**注**（审查 B）：轮墙与钟都不数"挂起中的单个工具调用"——REPL 靠 Ctrl+C、print 靠默认钟兜这个洞
 - 无 `TaskStop`/steer 通道（CC 异步架构产物，imp 单 turn 同步派发用不上——Ctrl+C 即全链终止）
@@ -103,10 +105,11 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 | 文件 | 改动 | 量级 |
 |---|---|---|
 | src/core/constants.ts | `CHILD_MAX_TURNS = 60`；删 `CHILD_TIMEOUT_MS` 块（:13-17）**及头部"时钟须随轮预算重推"注释（:3-6）**；新增 `defaultChildTimeoutMs()`（TTY 感知） | ~12 行 |
-| src/core/subagent.ts | 条件化 clock（timeoutMs 存在才建 :283-289）；三处 timedOut 分类（:296/:344/:359）与 finally 清理（:417-419）条件化；:155 改 `const timeoutMs = options.timeoutMs`（无默认） | ~35 行 |
+| src/core/subagent.ts | 条件化 clock（timeoutMs 存在才建 :283-289）；三处 timedOut 分类（实际行号 :331/:376/:388）与 finally 清理（:410-411）条件化；:155 改 `const timeoutMs = options.timeoutMs`（无默认） | ~35 行 |
 | src/core/tools/task.ts | schema 加 `timeoutMs`（Integer min 1000，三方优先级 :215 处重排）；taskResult 签名加 prompt/path；撞限二形 + timeout 补路径渲染；描述加尺寸教学 | ~60 行 |
 | test/subagent.test.ts | 时钟相关测试改写（默认无限时、显式 timeoutMs 触发 timeout 分类）；60 轮墙值钉子 | ~40 行 |
 | test/task.test.ts | 层 C 二形/三形态契约钉子 + 层 D 文案钉子 | ~35 行 |
+| docs/m5-subagents-design.md | 墙值 40 的记档处补一行"60 后备墙决策见 subagent-softlanding-design rev 4，本值不再是推导链" | ~2 行 |
 
 ## 4. 测试计划
 
@@ -123,7 +126,7 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 6. max_iterations + text：wrap-up 标注 + trailer
 7. max_iterations + 无 text + session：transcript 路径 + 任务首 200 字符 + 双指引句
 8. max_iterations + 无 text + 无 session：无路径形态（指引句不含 "read the transcript"）
-9. timeout 形态：`[task] child exceeded its N-minute budget` + transcript 路径
+9. timeout 形态：`[task] child exceeded its Ns budget`（秒制，与 §2.3 一致）+ transcript 路径
 10. isError === false 全部形态
 
 **层 D（task.test.ts）**
@@ -132,6 +135,7 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 **审查补充（B 清单，全部纳入）**
 12. schema 校验：timeoutMs = 0/-1/NaN/1.5/"5000" 全部被 Value.Check 拒绝，provider 零调用
 13. 三方优先级：args > frontmatter > 模式默认，含两两组合（现钉 :354-373 改写）
+13a. `defaultChildTimeoutMs()` 本身的钉子：TTY / 非 TTY 两种构造下分别断言 undefined / 60min（防 isTTY 读取点回归漂移）
 14. 200 字符边界：恰好 200/201/CJK 代理对；worktree 子代理的摘要不含 worktree 通知（args.prompt 原文）
 15. 路径落盘断言：渲染的 transcript 路径 === session.filePath 且文件存在、含子代理消息
 16. 溢出恢复第二 launchLoop 中的 timeout（:359 分支，现有钉只覆盖压缩中途 :383-418）
@@ -153,4 +157,14 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 
 审查 A（设计决策）NEEDS-FIXES：P0 print 模式挂死 → 模式感知默认钟（§2.2 已折入，用户确认）；P1 `where` 非路径 → session.filePath（§2.3）；P2 烧钱上限入档（§5）、timeout isError 保持 true（§2.2）；P3×4 记档（60 数字"诚实的占位"、零注入拒绝有据、timeoutMs 暴露有 bash.timeout 先例、transcript 读取机制可用）。
 审查 B（实现面）NEEDS-FIXES：P0 timeoutMs 三方优先级 → 钉死 args > frontmatter > 模式默认（§2.2）；P1×5 → 条件化 clock 机制、timeout isError、taskResult 签名、测试计划补 9 项（§4 12-20）、finally 清理；P2×4 → args.prompt 原文摘要/CJK、schema Integer 约束、挂起工具不进钟墙的记档注、aborted 吸收原 timeout 默认路径记档；P3 行数估算修正（§3 已改）。
-两审均判核心架构 sound。rev 4 = 可实现版本。
+两审均判核心架构 sound。
+
+## 6b. 第二轮独立设计审查（rev 4 终审，2026-09-24）
+
+NEEDS-FIXES（doc-only，小集合）——已全部折入本版：
+- P1：§4 测试 9 "N-minute" 与 §2.3 秒制矛盾 → 改秒制（本版已改）
+- P2：`defaultChildTimeoutMs()` 的 undefined 哨兵未写明（Infinity 会 RangeError，表示是 load-bearing）→ §2.2 已写；REPL+frontmatter 钟存在的推论句已补
+- P2：缺 defaultChildTimeoutMs 的 TTY/非 TTY 构造钉子 → 测试 13a 已加
+- P2：rev 2 拒绝的技术反证（bash 旁路）未记档 → §0 演化表已补
+- P3（记档）：frontmatter 1000ms 下限不对称（接受，见 §2.2）、M5 文档编辑行（§3 已加）、subagent.ts 行号漂移（已更正为 :331/:376/:388、:410-411）
+审查确认：优先级 seam、摘要机制、session 生命周期（并发兄弟各得独立 UUID 文件）、条件化 clock、渲染形态全部内部自洽且与代码现状吻合。三个代码事实（store.ts:201 filePath、task.ts:215 现存优先级、task-tool.test.ts:341-375 现存钉）均验证属实。**rev 4（含本折入）= 可实现版本。**

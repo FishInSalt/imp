@@ -16,6 +16,7 @@ import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import { type AgentMessage, contentText, type ImageBlock } from "./core/messages.js";
+import { modelMaxTokensFor } from "./provider/catalog.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
@@ -729,6 +730,7 @@ class RunnerImpl implements Runner {
 						messages,
 						provider: this.provider,
 						model: this.model,
+						modelMaxTokens: modelMaxTokensFor(this.model), // #derived-budget
 						thinking: this.level, // pi: the summarizer thinks at the session level
 						signal: opts?.signal,
 						customInstructions: opts?.customInstructions,
@@ -1067,6 +1069,9 @@ class RunnerImpl implements Runner {
 			provider,
 			model,
 			settings,
+			// #derived-budget: the model reference resolves to the runner's live
+			// model (multi-provider switches mid-session keep the cap honest).
+			modelMaxTokens: modelMaxTokensFor(this.model),
 			thinking: this.level, // pi: the summarizer thinks at the session level
 		});
 		if (compacted) {

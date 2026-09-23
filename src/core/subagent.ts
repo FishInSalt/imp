@@ -1,4 +1,5 @@
 import { formatTokens } from "../format.js";
+import { modelMaxTokensFor } from "../provider/catalog.js";
 import type { LLMProvider } from "../provider/types.js";
 import {
 	type CompactHistoryResult,
@@ -215,6 +216,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					model: options.model,
 					signal: child.signal,
 					settings,
+					modelMaxTokens: modelMaxTokensFor(options.model), // #derived-budget
 				});
 				if (compacted) {
 					history.splice(0, history.length, ...options.session.buildContext().messages);
@@ -229,6 +231,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					model: options.model,
 					signal: child.signal,
 					settings,
+					modelMaxTokens: modelMaxTokensFor(options.model), // #derived-budget
 				});
 				if (compacted) {
 					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);

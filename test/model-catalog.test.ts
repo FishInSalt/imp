@@ -577,4 +577,46 @@ describe("M14 /model list fallback", () => {
 		});
 		expect(result.rows.map((r) => r.label)).toEqual(["claude-sonnet-5"]);
 	});
+
+	// #gateway-truth: the catalog/static-seed fallback describes FIRST-PARTY
+	// endpoints. When ANTHROPIC_BASE_URL points at a compat gateway (z.ai), a
+	// failed probe must NOT surface claude ids the gateway never listed.
+	it("redirected anthropic endpoint: probe failure shows no claude fallback rows", async () => {
+		const { buildModelList } = await import("../src/repl/commands.js");
+		const saved = process.env.ANTHROPIC_BASE_URL;
+		process.env.ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
+		try {
+			const result = await buildModelList("glm-5.3", {
+				configured: (family) => family === "anthropic",
+				discover: async () => null, // gateway probe failed
+				catalogIds: () => ["claude-opus-5", "claude-sonnet-5", "glm-5.3"], // pi.dev cache would answer
+			});
+			expect(result.rows.some((r) => r.label.startsWith("claude-"))).toBe(false);
+			expect(result.fallbackNotes).toHaveLength(1); // honest "unreachable" note
+			expect(result.rows[0]?.label).toBe("glm-5.3"); // current still leads
+		} finally {
+			if (saved === undefined) delete process.env.ANTHROPIC_BASE_URL;
+			else process.env.ANTHROPIC_BASE_URL = saved;
+		}
+	});
+
+	// #gateway-truth sibling: zai/openai redirected by their own env vars behave
+	// the same — no catalog/seed rows when the probe fails on a redirected family.
+	it("redirected zai endpoint: probe failure shows no seed rows", async () => {
+		const { buildModelList } = await import("../src/repl/commands.js");
+		const saved = process.env.ZAI_BASE_URL;
+		process.env.ZAI_BASE_URL = "https://gateway.example/api";
+		try {
+			const result = await buildModelList("zai/glm-5.3", {
+				configured: (family) => family === "zai",
+				discover: async () => null,
+				catalogIds: () => ["glm-5.3", "glm-5.3-flash"],
+			});
+			expect(result.rows.map((r) => r.label)).toEqual(["zai/glm-5.3"]);
+			expect(result.fallbackNotes).toHaveLength(1);
+		} finally {
+			if (saved === undefined) delete process.env.ZAI_BASE_URL;
+			else process.env.ZAI_BASE_URL = saved;
+		}
+	});
 });

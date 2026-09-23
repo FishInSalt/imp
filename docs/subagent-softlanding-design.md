@@ -1,15 +1,13 @@
-# 子代理软着陆设计（turn-cap soft landing）
+# 子代理软着陆设计（child tool budget — soft nudge + browse-block）
 
-状态：rev 1（2026-09-24）· 批次 `feat/subagent-softlanding`
-前置：M5 子代理设计（docs/m5-subagents-design.md）、#compaction-ux 批（childFloor/自动压缩已就位）
-本批无 pi 参照（pi 本体无 task/子代理工具；imp 子代理系统为 M5 自研）——参照系是 M5 设计
-文档本身与两次真实事故。
+状态：rev 2（2026-09-24，rev 1 的轮次提醒机制被 pi-subagents 演化证据推翻，改版为工具预算制）· 批次 `feat/subagent-softlanding`
+前置：M5 子代理设计（docs/m5-subagents-design.md）、#compaction-ux 批（childFloor 已就位）
+参照系：**pi-subagents 扩展 v0.69.0**（npm 安装于本机，`~/.pi/agent/npm/node_modules/pi-subagents`；pi 本体无子代理）——用户指引，替代 rev 1 的"无参照"结论。
 
 ## 0. 问题：硬墙式的 40 轮上限
 
 `CHILD_MAX_TURNS = 40`（constants.ts:13）是硬墙：第 40 轮若模型仍在发工具调用，
-loop.ts:213 直接封口（补 `(not executed: reached max turns)` 合成结果）返回
-`max_iterations`。三个具体伤害：
+loop.ts:213 直接封口返回 `max_iterations`。三个伤害：
 
 ### 事故 A（2026-09-23，本仓库审查子代理）
 
@@ -18,172 +16,202 @@ loop.ts:213 直接封口（补 `(not executed: reached max turns)` 合成结果�
 - 40 轮 / 40 次工具调用（每轮恰好 1 次，持续 read/grep）、工具输出共 83,902 字符
 - usage 33,714 in / 11,181 out（≈44.9k token）
 - **最终文本：无**——第 40 轮仍在发工具调用，报告一个字没写
-- 父代理收到的 tool result：`(subagent completed with no output)` + 40 轮 trailer
+- 父代理收到：`(subagent completed with no output)`——"completed" 是假的，且无再派发指引
 
-伤害面：44.9k token 零回报；渲染文案 **"completed" 是假的**（上限截断≠完成）；
-父代理无再派发指引，只能靠自己的经验重写 prompt。
+### 伤害 B（结构性）：子代理对预算无感知，硬墙不保最终文本
 
-### 伤害 B（结构性）：子代理对预算无感知
-
-子代理的 system prompt（父 prompt + CHILD_SUFFIX）从头到尾没有任何"你还剩多少轮"的
-信息。模型无法在剩余轮次内做质量取舍（"还剩 5 轮，够读 2 个文件，先写结论"）。
-主循环无此问题：它无轮上限（#no-turn-cap 批，100 轮仅为打印默认）。
+子代理的 system prompt 无任何预算信息；40 轮硬墙截断时若模型还在调工具，产出为零。
+硬墙的失败模式恰恰是"花了全部预算在挖、没写结论"——墙本身不制造结论。
 
 ### 伤害 C（派发侧）：prompt 尺寸无约束提示
 
-M5 §11 已知风险："parents paste huge context into prompt"。task 工具描述只教
-"self-contained"，不教"多大算大"。事故 A 的任务 prompt 约 700 字符（尚可），但
-更长的派发（粘贴整个审查上下文）会烧掉子代理的窗口预算，无任何提示。
+M5 §11 已知风险 "parents paste huge context into prompt"，task 工具描述只教
+self-contained，不教多大算大。
 
-## 1. 目标与非目标
+## 1. pi-subagents 的演化证据（本设计的直接依据）
+
+本机安装的 pi-subagents 0.69.0，源码与 CHANGELOG：
+
+1. **曾有轮次预算 + wrap-up 注入**（rev 1 同构）：`turnBudget { maxTurns, graceTurns }`，
+   软限经 system prompt 注入 wrap-up 警告、宽限轮后硬终止（CHANGELOG :1418）。
+2. **0.59.0（2026-08-28）整体移除**："Remove assistant turn budgets, including hard
+   termination, wrap-up prompt injection, and launch configuration."（CHANGELOG :454）。
+3. **替换为 `toolBudget`**（src/runs/shared/tool-budget.ts）：
+   - 计数单位改为**工具调用**（`tool_call` 事件，含被封锁的调用）
+   - 软限一次（`softNudged` 标记）经 `sendUserMessage(deliverAs:"steer")` 注入
+     （subagent-prompt-runtime.ts:392-396）：
+     `"Tool budget soft limit reached after N tool calls (soft S, hard H). Stop
+     starting new browsing/search work and finalize from the context you
+     already have."`（tool-budget.ts:60-62）
+   - 硬限**不终止 run、封锁工具**：`nextToolCount > hard && block 表命中 → { block:
+     true, reason }`（shouldBlockToolForBudget，tool-budget.ts:55-58），封锁消息
+     `"The 'X' tool is blocked so you can finalize from the context you
+     already have."`（:64-66）
+   - **默认封锁表 = `["read","grep","find","ls"]`**（DEFAULT_TOOL_BUDGET_BLOCK，:3），
+     `"*"` 可全封；**最终 assistant 文本永不被封**（docs/tool-reference.md:121）
+4. 政策注记（docs/tool-reference.md:135）：硬预算适合 read-only scout/reviewer；
+   不建议对有编辑权的 worker 设紧预算（封读会砍掉其编辑后验证）。
+5. 示例数值 soft:40 / hard:60（docs/workflows.md:104），soft/hard ≈ 2/3。
+
+**对事故 A 的映射**：若第 30 次工具调用后 read/grep 被封，剩 10 轮模型只能写报告——
+封锁机制**从结构上保证**最终文本可产生；提醒只恳求，封锁才保证。
+
+**rev 1 被推翻的点**：轮次阈值提醒（75%/95% 注入）= pi-subagents 已建又拆的方案。
+保留的是被验证的部分：steer 通道 user 消息注入 + 恰好一次；替换的是触发器
+（工具调用数）与终止语义（封工具，不封 run）。
+
+## 2. 目标与非目标
 
 **目标**
-1. 子代理在预算尾部收到的信息足以主动收尾（写结论而非继续挖）
-2. 撞限结果对父代理诚实、可行动（不是 "completed with no output"）
-3. 派发侧（父代理写 prompt 时）有尺寸意识提示
+1. 子代理在预算尾部被有效引导收尾，且**机制上保证**最终文本可产生
+2. 撞限/撞预算结果对父代理诚实、可行动
+3. 派发侧有尺寸意识提示
 
 **非目标**
-- 不改 CHILD_MAX_TURNS 值、不做自适应上限（M5 定 40：平均 45s/轮 × 40 ≈ 30min 恰配
-  30 分钟 wall clock；两常量联动，改值另议）
-- 不做子代理与用户的交互通道（子代理仍 one-shot、不能提问——CHILD_SUFFIX 契约不变）
-- 不做 prompt 硬截断（只在工具描述里教学，不设机器强制）
-- 不动 loop.ts 的核心循环结构（reminders 走既有 getSteeringMessages 缝）
+- 不改 CHILD_MAX_TURNS=40（M5：40 轮 ≈ 30min 恰配 wall clock；仍是绝对后备墙）
+- 不做子代理与用户交互（one-shot 契约不变）
+- 不做 per-agent 配置/设置暴露（常量 + 环境开关，settings 化留给未来批次）
+- 不封锁 bash/edit/write（封锁表只含 browse 类，见 §3.1 理由）
 
-## 2. 方案：三层软着陆
+## 3. 方案：三层
 
-### 2.1 层 1 —— 轮次预算提醒（收尾指令注入）
+### 3.1 层 1 —— 子代理工具预算（soft nudge + browse-block）
 
-**机制**：`runSubagent.launchLoop` 新增 `getSteeringMessages` 回调。loop.ts 零改动
-——该缝本来就是为轮边界消息注入设计的（M17 之前就有，主循环用于队列 steering），
-子代理从未接过它。
+**常量**（constants.ts，导出以便未来 settings 化）：
 
-**注入规则**（turn 从 1 数起）：
+```ts
+export const CHILD_TOOL_BUDGET_SOFT = 20; // advisory nudge, once
+export const CHILD_TOOL_BUDGET_HARD = 30; // browse tools blocked after this
+export const CHILD_TOOL_BUDGET_BLOCK = ["read", "grep", "find", "ls"];
+```
 
-| 时机 | 注入内容 |
-|---|---|
-| 第 30 轮边界（turns ≥ 0.75 × 40） | `[task] 10 turns left (cap 40). Start wrapping up: finish the current step, then write your final answer.` |
-| 第 38 轮边界（turns ≥ 0.95 × 40，即剩 2 轮） | `[task] 2 turns left. Write your final answer NOW — the next response after this one may be cut off.` |
+- **soft=20**：约 2/3 × hard，对齐 pi-subagents 的 40/60 比例；纯建议，不打断工作
+  （合法读 25 个文件的 scout 只在 20 收到一次"该收尾了"，仍可继续读到 30）
+- **hard=30**：40 − 30 = **≥10 轮纯文本余量**——事故 A 每轮恰 1 次工具调用的节奏下，
+  封锁后模型有 10 轮写报告；与 M5 的 30min wall clock 联动不变（封锁轮极廉价，
+  无工具执行、无工具输出）
+- **封锁表只含 browse 类**（read/grep/find/ls）：pi-subagents 默认表原样。bash
+  不封——它是 imp 的通用工具（审查子代理跑 `git log` 也靠它），封锁会误伤非浏览
+  用途；worker 的编辑-验证路径靠 bash/read 验证，30+ 读的 worker 被封读后仍可
+  报告"已编辑、验证未完成"，**父代理（主循环）无预算、总能接手验证**——这是
+  pi-subagents 政策（"workers 别设紧预算"）在 imp 单层派发结构下的等价物
+- **开关**：`IMP_CHILD_TOOL_BUDGET=0` 整体关闭（IMP_AUTOCOMPACT 同款逃逸口）
 
-- **形态**：user-role 消息（steering 通道的标准形态，loop.ts:145-151 原样 push）。
-  前缀 `[task]` 区别于任何用户 steering（子代理本无用户输入通道，前缀纯为可辨识）。
-- **为什么 user 消息而非 system**：system prompt 是请求级常量（每次 stream 都带上），
-  动态追加会把"剩余轮次"塞进所有后续请求并随缓存失效；user steering 消息只注入一次，
-  且是 loop.ts 唯一现成的注入通道。
-- **75%/95% 双阈值理由**：75% 是"开始收尾"的合理提前量（事故 A 第 30 轮时已读了
-  大量材料，有 10 轮余量写报告）；95% 是最后通牒（防模型把 75% 提醒当作"还有很久"）。
-  单阈值（只 75%）与事故 A 的行为模式不匹配——该模型直到第 40 轮仍在读。
-- **恰好一次**：每个阈值各注入一次（turns 计数器达到即置已发标记），不重复轰炸。
-- **溢出恢复交互**（overflow retry）：重试的第二次 runAgentLoop 轮次**重新计数**
-  （maxIterations 从头，overflow-pagination-design.md D3 决策），但提醒状态
-  （已发标记）**继承**——恢复场景本来罕见，若提醒已发过则不再发（子代理已被告知预算紧张）。
-- **userMessage 形态注意**：提醒消息经 getSteeringMessages 注入与正常 steering 完全
-  同形（role: user 字符串 content），进入 history、进入子代理 session 持久化（onMessage
-  回调 fire），replay 时可见——这是特性不是 bug（审计可见"系统在何时催促过子代理"）。
+**机制**（全部在 subagent.ts，loop.ts 零改动，两条现成缝）：
 
-### 2.2 层 2 —— 撞限结果升级（诚实 + 可行动）
+1. **计数 + 封锁**：包装 `onToolCall`——每次调用 `toolCount++`（含被封锁的尝试，
+   pi-subagents 同款）；`toolCount > HARD && name ∈ BLOCK` → 返回
+   `{ block: true, reason: 封锁消息 }`（不转发父 gate——封锁优先于父审批，
+   道理同 loop 内部 gate）；否则转发 `options.onToolCall`。封锁经 executeToolBatch
+   的 block 合成路径变成 isError 工具结果给子代理——即封锁消息本身。
+2. **软提醒**：计数器观察到 `toolCount >= SOFT && !nudged` 时，把 nudge 文案压入
+   本地队列；`launchLoop` 新接 `getSteeringMessages`（现成缝，M17 前就有，子代理
+   从未接过）回调排空该队列——**loop.ts:143-151 原样 push 进 history**，与
+   pi-subagents 的 `deliverAs:"steer"` 同形：user 消息、恰好一次、进子 history
+   与持久化（审计可见"系统何时催促过"）。
+3. **状态**：`softNudged` 布尔 + `toolCount` 计数器在 runSubagent 闭包，溢出恢复
+   的第二次 launchLoop 继续累计（与"提醒不重发"自洽——预算状态跨重试继承）。
+
+**文案**（对齐 pi-subagents 语义，imp 前缀 `[task]` 便于 transcript 辨识）：
+
+- nudge：`[task] tool budget soft limit reached after N tool calls (soft 20, hard 30). Stop starting new browsing/search work and finalize from the context you already have.`
+- block：`[task] tool budget hard limit reached after N tool calls — the 'X' tool is blocked so you can finalize from the context you already have.`
+
+### 3.2 层 2 —— 撞限结果升级（诚实 + 可行动）
 
 现状 task.ts:305：`[task] hit the turn cap; result may be incomplete.` + text 为空时
-父代理看到 `(subagent completed with no output)`。
+`(subagent completed with no output)`。按 text 有无分二形：
 
-改为按 text 有无分两形：
-
-**有 text**（子代理收尾了）：
+**有 text**：
 ```
 [last assistant text]
 [task] hit the 40-turn cap; this is the child's wrap-up answer, not a confirmed completion.
 (child: 40 turns, 33.7k in / 11.2k out)
 ```
 
-**无 text**（事故 A 形态——死于挖掘中）：
+**无 text**（事故 A 形态）：
 ```
 [task] child spent all 40 turns without producing a final answer (it was still calling tools on the last turn). Nothing was lost — the child's transcript is preserved. Re-dispatch with a narrower prompt: fewer files to read, or ask for partial findings.
 Transcript: /path/to/children/<id>.jsonl (first 200 chars of task: "…")
 (child: 40 turns, 33.7k in / 11.2k out)
 ```
 
-- **transcript 路径**：task.ts 已有 `where`（session 路径或 `not persisted`）。无 session
-  模式（IMP_CHILD_SESSIONS=0）则退化为不含路径的指引（"re-dispatch with a narrower
-  prompt"仍然成立）。
-- **isError 语义**：维持 `isError: false`（M5 决策"cap is a valve, not an error"不变）
-  ——文案升级是让父代理可行动，不是把上限变成失败。
-- **isError 例外**：无 text 时是否升 isError？**不升**。理由：升 isError 会让父代理
-  把它当失败而重试整个任务（更烧 token）；带指引的成功形让父代理做**缩小再派发**决策。
-  （此处与 M5 §3 原文"return last assistant text as a success-shaped result"一致——
-  升级的只是 text 为空这个此前未细分的分支。）
+- transcript 路径：task.ts 已有 `where`（session 路径 / `not persisted`）；无 session
+  模式退化为不含路径形态（"re-dispatch narrower" 仍成立）
+- **isError 维持 false**（M5 "cap is a valve, not an error"；升 isError 会诱导父代理
+  盲目整体重试；带指引的成功形引导**缩小再派发**决策）
+- 层 1 落地后此形态应趋罕见（封锁保文本）——层 2 是后备墙的诚实化，两层独立生效
 
-### 2.3 层 3 —— 派发侧尺寸教学（task 工具描述）
+### 3.3 层 3 —— 派发侧尺寸教学
 
-`taskSchema.prompt.description` 追加一句：
+`taskSchema.prompt.description` 追加：
 
 > Keep the prompt focused (~300 words max): the child re-reads files itself; pasting repo context into the prompt wastes its context window.
 
-- 只改描述文案，无 schema/机器强制。
-- 与层 1/2 独立可关（若教学无效果，未来可撤——同 F4a 的教训：无证据不常驻）。
-
-## 3. 改动清单
+## 4. 改动清单
 
 | 文件 | 改动 | 量级 |
 |---|---|---|
-| src/core/subagent.ts | launchLoop 加 getSteeringMessages（阈值常量 REMINDER_75=0.75/REMINDER_95=0.95，turns 计数从 onEvent 或外层包装计数） | ~30 行 |
-| src/core/tools/task.ts | 撞限结果二形渲染 + transcript 路径 | ~20 行 |
-| src/core/tools/task.ts | prompt 描述加尺寸教学 | 1 行 |
-| test/subagent.test.ts | 层 1：75%/95% 注入时机、恰好一次、aborted 不注入、溢出恢复继承状态；层 2：两形渲染钉子 | ~80 行 |
-| test/task.test.ts | 层 2/3 契约钉子 | ~20 行 |
+| src/core/constants.ts | 三个导出常量 | ~8 行 |
+| src/core/subagent.ts | onToolCall 包装（计数/封锁/nudge 入队）+ launchLoop 接 getSteeringMessages + 队列状态 | ~45 行 |
+| src/core/tools/task.ts | 撞限二形渲染 + transcript 路径；描述加尺寸教学 | ~25 行 |
+| test/subagent.test.ts | 层 1：soft 一次/硬封锁表/封锁消息形态/budget=0 关闭/溢出继承/不进父 history | ~90 行 |
+| test/task.test.ts | 层 2/3 契约钉子 | ~25 行 |
 
-**计数细节**：turns 在 runSubagent 侧怎么拿到？loop 的 turns 是内部计数器。两个方案：
-(a) onEvent 观察 message_end 事件计数（子代理 launchLoop 已传 onEvent 透传）——但
-onEvent 是 options.onEvent 可能未传；(b) onMessage 数 assistant 消息（已透传、必 fire）。
-**选**：外层包装现有 onMessage，计数 assistant role 消息——零侵入、两模式（session/
-无 session）都经过。注意溢出重试第二次 launchLoop 时 history 不清空，onMessage 计数
-继续累计——与"提醒状态继承"自洽（提醒阈值按累计轮数判断，第二次循环内不再重复注入）。
+**细节**：
+- 计数在包装的 onToolCall 里（每次 gate 调用 = 一次调用尝试，与 pi-subagents 的
+  tool_call 事件计数同义——被封锁的也计数）
+- nudge 入队发生在 gate 调用时刻（轮中），排空发生在下一个 top-of-loop poll——
+  与 pi-subagents 的 steer 投递时序一致；skipSteeringPoll 交互：子代理无其他
+  steering 源，队列只可能含 nudge，无竞态
+- `IMP_CHILD_TOOL_BUDGET=0` 读一次（runSubagent 入口，非每调用）
 
-**getSteeringMessages 的调用时机细节**（loop.ts:143-151）：每轮 top-of-loop poll 一次 +
-would-stop 边界 poll 一次。注入实现为：回调闭包查当前计数，达阈值且未发过 → 返回
-[reminder]；否则 []。would-stop 边界的额外 poll 无害（已发标记挡住重复）。
-
-## 4. 测试计划
+## 5. 测试计划
 
 **层 1（subagent.test.ts，hermetic fake provider）**
-1. 25 轮 fake（低于 30）：零注入（history 无 `[task]` 消息）
-2. 35 轮 fake：恰好 2 条注入（30 边界 1 + 38 边界…注意 fake 轮次粒度——用可数
-   provider 驱动到 31+ 轮验证 75% 那条；95% 用 39 轮验证）
-3. 注入消息形态：role user、以 `[task]` 开头、含 "turns left"
-4. 撞限（40 轮全是工具调用）：注入过且 outcome.status === max_iterations
-5. 溢出恢复：第一次循环注入过 75% → 恢复重试不再注入
-6. 提醒不影响 usage 计数（注入消息不计入 turns/usage）
+1. 15 次工具调用：无 nudge、无封锁
+2. 22 次调用（跨 soft 未到 hard）：恰好 1 条 nudge（形态：`[task]` 前缀、含
+   "soft limit"），其余不封
+3. 35 次调用（跨 hard）：第 31+ 次 read/grep 调用返回 isError 封锁消息（含工具名）；
+   bash 调用不封
+4. nudge 进子 history（onMessage/持久化可见）、**不进父 history**
+5. nudge 不计入 turns/usage 计账
+6. 撞 40 轮墙（封锁后仍不写文本的极端 fake）：outcome=max_iterations + 层 2 渲染
+7. IMP_CHILD_TOOL_BUDGET=0：全程无 nudge 无封锁
+8. 溢出恢复：第一次循环已 nudge → 重试不重发
+9. 并行批次跨 soft+hard：计数含全部调用，nudge 仍恰好一次
 
 **层 2（task.test.ts）**
-7. max_iterations + text：wrap-up 文案 + trailer
-8. max_iterations + 无 text + session：transcript 路径 + re-dispatch 指引 + 任务首 200 字符
-9. max_iterations + 无 text + 无 session：无路径形态
-10. isError === false 三形全部
+10. max_iterations + text：wrap-up 文案 + trailer
+11. max_iterations + 无 text + session：transcript 路径 + 再派发指引 + 任务首 200 字符
+12. max_iterations + 无 text + 无 session：无路径形态
+13. isError === false 三形全部
 
 **层 3（task.test.ts）**
-11. 描述含 "~300 words" 教学文案
+14. 描述含 "~300 words" 教学文案
 
-**层 1 拒绝路径**
-12. 提醒消息不进入父 history（只进子 history）——via onMessage 回调的 store mock 验证
+## 6. 风险与开放问题
 
-## 5. 风险与开放问题
+- **封锁被无视**（极端模型行为）：10 轮全领封锁结果仍不写文本 → 40 轮墙兜底 →
+  层 2 诚实渲染。最坏情况 = 现状（事故 A），不会更糟
+- **soft/hard=20/30 数字依据**：单事故 + pi-subagents 比例外推，无对照实验。常量
+  导出，未来可按 dogfood 证据调整
+- **worker 误伤**：30+ 读的编辑型子代理被封读 → 报告"编辑完成、验证受限"→
+  父代理验证（主循环无预算）。接受：比 40 轮零产出好
+- **`[task]` 前缀**：子代理 history 里 user 消息只可能是初始 prompt 或本机制注入，
+  无撞车面
+- **开放**：per-agent 预算（scout/reviewer/worker 差异化）、settings 暴露、
+  soft/hard 自适应——记 M5 后续，本批不做
+- **开放**：层 3 教学有效性不可预验证（F4a 教训）；成本一行描述，可撤
 
-- **提醒被当指令 obeyed 过头**：模型收到 "start wrapping up" 可能提前收尾，任务质量
-  下降。接受：40 轮用尽后的零产出比早收尾伤害大（事故 A 即证）。残余风险：75% 太早？
-  30/40 留 10 轮写报告，参考事故 A 每轮 1 工具调用的节奏，10 轮够写。
-- **`[task]` 前缀撞车**：子代理输出里若恰好含 `[task]` 开头的 user 消息形式（不可能——
-  子代理无用户输入，history 里 user 消息只可能是初始 prompt 或本机制注入）。
-- **turns 计数与 loop 内部计数漂移**：onMessage 数 assistant 消息 vs loop 的 turns++。
-  两者对"每 assistant 消息 turns++"语义一致（loop.ts:158-159）；溢出重试后 loop 重置
-  但 onMessage 累计——设计如此（见 §3 计数细节），提醒按累计判断。
-- **开放**：层 3 教学文案是否有效无法预验证（同 F4a 教训）。接受：成本一行描述，可撤。
-- **开放**：撞限无 text 时给父代理的 transcript 路径会不会被父代理直接 read 整个
-  JSONL（50KB 截断救场）？接受——read 截断 + 本批文案教"narrower re-dispatch"。
+## 7. 审查问题清单（给对抗审查）
 
-## 6. 审查问题清单（给对抗审查）
-
-1. 阈值 0.75/0.95 的数字依据是否充分？（事故 A 单样本 + 推理，无对照）
-2. 注入走 getSteeringMessages 与主循环 steering 语义冲突？（主循环该缝消费用户队列；
-   子代理消费系统提醒——同一 API 两种用途，是否该分缝？）
-3. onMessage 计数方案的边角：skipSteeringPoll 交互、would-stop 边界二次 poll 交互？
-4. 无 text 撞限不升 isError 的决策（§2.2）是否会被父代理系统性误读？
-5. 层 2 无 session 形态的指引文案是否足够可行动？
-6. 事故 A 里 fake 25 轮测试与真实 40 轮行为的代表性缺口？
+1. soft=20/hard=30 的数值与 40 轮墙、30min wall clock 的联立论证是否自洽？
+2. onToolCall 包装与父 gate 的组合语义（封锁优先于父审批）是否有边角——父 gate
+   的 allow-this-session 状态会不会被封锁绕乱？
+3. nudge 入队（gate 时刻）与排空（top-of-loop poll）之间的时序洞：同批后续调用、
+   would-stop 边界 poll 会不会漏投？
+4. 溢出恢复继承 toolCount/softNudged——第二次循环 maxIterations 重置但预算不重置，
+   子代理"预算已尽但轮次充裕"的怪态是否需要文案缓解？
+5. 层 2 无 text 形态不升 isError 的决策是否会被父代理系统性误读？
+6. IMP_CHILD_TOOL_BUDGET=0 与 autoCompact 开关的对称性（env 名、读取时机）是否一致？

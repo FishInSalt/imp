@@ -496,6 +496,10 @@ class ReplMachine {
 		if (stateful) {
 			this.state = "compacting";
 			this.input.setActive(true);
+			// #compaction-ux F2: the activity row shows the compacting spinner
+			// for the whole guarded window; the finally's flushQueue →
+			// returnToIdle → clearActivity parks it back at idle.
+			this.pushActivity();
 		}
 		try {
 			// authorizedCompact: this dispatch IS the authorized compact — the
@@ -801,7 +805,7 @@ class ReplMachine {
 		// point, but never call it from a streaming-delta path. pi's format:
 		// one decimal, the window size, and the auto-compaction tag.
 		const contextPercent =
-			(estimateContextTokens(this.runner.history).tokens / this.runner.contextWindow) * 100;
+			(estimateContextTokens(this.runner.history, this.runner.contextEstimateFloor).tokens / this.runner.contextWindow) * 100;
 		const contextSegment = `${contextPercent.toFixed(1)}%/${formatTokens(this.runner.contextWindow)}${
 			this.runner.autoCompactEnabled ? " (auto)" : ""
 		}`;
@@ -1031,8 +1035,14 @@ class ReplMachine {
 	private pushActivity(): void {
 		if (this.input.setActivity === undefined) return;
 		const working = this.activityTools.size > 0 || this.activityAgents.size > 0;
+		// #compaction-ux F2: the compacting state (long-op guard: /compact,
+		// /tree summarize, /login oauth) gets its own spinner row.
+		let phase: ActivitySnapshot["phase"];
+		if (this.state === "idle") phase = "idle";
+		else if (this.state === "compacting") phase = "compacting";
+		else phase = working ? "working" : "thinking";
 		const snapshot: ActivitySnapshot = {
-			phase: this.state === "idle" ? "idle" : working ? "working" : "thinking",
+			phase,
 			tools: [...this.activityTools.values()],
 			agents: [...this.activityAgents.values()],
 		};

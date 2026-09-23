@@ -170,6 +170,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// failure must not buy 40 silent paid retry calls.
 	let consecutiveFailures = 0;
 	let compactionDisabled = false;
+	// #compaction-ux F1: the child's local estimate floor — set when the
+	// child history is spliced by compaction, so the next boundary's
+	// shouldCompact check reads the new shape, not a stale pre-compaction
+	// anchor (main-loop estimateFloor parity; the child has no store).
+	let childFloor = 0;
 	// Stats carried away by compaction splices: on crash the trailer reports
 	// historyStats(history), which only sees the post-splice history — the
 	// summarized-away turns/usage are added back through this accumulator so
@@ -180,7 +185,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	const onBeforeTurn: RunAgentLoopOptions["onBeforeTurn"] | undefined = autoCompact
 		? async (history) => {
 				if (compactionDisabled) return;
-				const est = estimateContextTokens(history);
+				const est = estimateContextTokens(history, childFloor);
 				if (!shouldCompact(est.tokens, settings)) return;
 				await compactChildHistory(history);
 			}
@@ -220,6 +225,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				});
 				if (compacted) {
 					history.splice(0, history.length, ...options.session.buildContext().messages);
+					childFloor = options.session.buildContext().compactionBoundary;
 				}
 			} else {
 				// No session (sessions disabled): pure computation + in-place splice.
@@ -235,6 +241,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				});
 				if (compacted) {
 					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);
+					childFloor = 1 + compacted.retainedTail.length; // same shape as the store's boundary
 				}
 			}
 			if (compacted) {

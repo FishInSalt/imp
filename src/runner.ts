@@ -164,7 +164,7 @@ export interface AgentEventInfo {
 	cwd?: string;
 }
 
-export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session";
+export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session" | "aborted";
 
 export interface Runner {
 	readonly session: SessionStore | null;
@@ -209,6 +209,9 @@ export interface Runner {
 	supportsThinking(): boolean;
 	/** Effective context window for the CURRENT model (registry-backed). */
 	readonly contextWindow: number;
+	/** #compaction-ux F1: the estimate floor for consumers reading
+	 *  this.history (footer, /status) — see estimateContextTokens. */
+	readonly contextEstimateFloor: number;
 	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
 	readonly autoCompactEnabled: boolean;
 	/** Canonical display reference — "openai-codex/gpt-5.4" vs bare "glm-4.6". */
@@ -334,6 +337,12 @@ class RunnerImpl implements Runner {
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
+	/** #compaction-ux F1: index just past the compaction splice point in
+	 *  this.history (0 when uncompacted). Assistant usage reports BEFORE the
+	 *  boundary measured a pre-compaction context and must not anchor the
+	 *  token estimate (stale footer + false auto-compact triggers). Recomputed
+	 *  from the store at every history rebuild — see estimateFloorFromStore. */
+	private estimateFloor = 0;
 	private readonly agents: AgentRegistry;
 	private initialized = false;
 	private lastRunModel: string;
@@ -498,9 +507,10 @@ class RunnerImpl implements Runner {
 					this.sessionStore = resumed;
 					const loaded = resumed.buildContext();
 					this.history.push(...loaded.messages);
+					this.estimateFloor = loaded.compactionBoundary; // already built — no rebuild
 					this.restoreThinkingFromSession(resumed); // --resume/-c restore the branch's level too
 					const stats = resumed.stats();
-					const est = estimateContextTokens(this.history);
+					const est = estimateContextTokens(this.history, this.estimateFloor);
 					options.renderer.note(
 						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
 					);
@@ -610,6 +620,14 @@ class RunnerImpl implements Runner {
 		return system;
 	}
 
+	/** #compaction-ux F1: recompute the estimate floor from the store's
+	 *  compaction boundary. Call after EVERY history rebuild/splice (warmup
+	 *  resume, /resume, /tree, /fork, /new, compactAndSplice). With no
+	 *  session store the floor is 0 — no compaction can have happened. */
+	private syncEstimateFloor(): void {
+		this.estimateFloor = this.sessionStore?.buildContext().compactionBoundary ?? 0;
+	}
+
 	newSession(): void {
 		const previous = this.sessionStore;
 		if (previous) {
@@ -621,6 +639,7 @@ class RunnerImpl implements Runner {
 			this.options.renderer.note("▪ new conversation (sessions disabled)");
 		}
 		this.history.length = 0;
+		this.syncEstimateFloor(); // fresh session — no compaction boundary (review P0-2)
 		this.systemText = this.assembleSystem();
 	}
 
@@ -762,6 +781,7 @@ class RunnerImpl implements Runner {
 		// The editorText re-edit case may move nothing — history is already right.
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages);
+		this.syncEstimateFloor();
 		return {
 			...(editorText === undefined ? {} : { editorText }),
 			...(hadImages === true ? { editorTextDroppedImages: true } : {}),
@@ -782,6 +802,7 @@ class RunnerImpl implements Runner {
 		this.sessionStore = store;
 		this.history.length = 0;
 		this.history.push(...store.buildContext().messages); // same wiring as warmup()
+		this.syncEstimateFloor();
 		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.systemText = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
@@ -875,6 +896,12 @@ class RunnerImpl implements Runner {
 
 	get contextWindow(): number {
 		return contextWindowFor(this.model);
+	}
+
+	/** #compaction-ux F1: the current estimate floor for consumers that read
+	 *  this.history directly (footer, /status). See estimateFloor member. */
+	get contextEstimateFloor(): number {
+		return this.estimateFloor;
 	}
 
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult> {
@@ -993,7 +1020,10 @@ class RunnerImpl implements Runner {
 				onBeforeTurn: session
 					? async (history) => {
 							if (!this.autoCompact) return;
-							const est = estimateContextTokens(history);
+							// #compaction-ux F1: the floor keeps pre-compaction tail
+							// usage from anchoring — without it a just-compacted
+							// session re-triggers on the stale ~window-sized reading.
+							const est = estimateContextTokens(history, this.estimateFloor);
 							if (!shouldCompact(est.tokens, settings)) return;
 							this.options.renderer.note(`▪ context ~${formatTokens(est.tokens)} tokens — compacting…`);
 							// #overflow-grace: a failed pre-prompt compaction must not surface
@@ -1048,19 +1078,28 @@ class RunnerImpl implements Runner {
 		}
 	}
 
-	async compactNow(_signal?: AbortSignal): Promise<CompactOutcome> {
-		// The signal is deliberately NOT forwarded: aborting mid-summary would
-		// persist a truncated checkpoint (design §7.4). Ctrl+C twice force-exits.
+	async compactNow(signal?: AbortSignal): Promise<CompactOutcome> {
+		// #compaction-ux F3: the signal IS forwarded now. The old "never
+		// forward" rule (superseded design §7.4) assumed an aborted stream
+		// would persist a half checkpoint — the abort quality gate added later
+		// (compaction.ts: "summarizer aborted — incomplete, rejected") throws
+		// BEFORE appendCompaction, so an abort leaves the session untouched.
+		// Same channel /tree has used since its review (P1-3).
 		if (!this.sessionStore) return "no-session";
-		return (await this.compactAndSplice(this.provider, this.settings, this.model))
-			? "compacted"
-			: "nothing-to-compact";
+		try {
+			const compacted = await this.compactAndSplice(this.provider, this.settings, this.model, signal);
+			return compacted ? "compacted" : "nothing-to-compact";
+		} catch (err) {
+			if (signal?.aborted) return "aborted";
+			throw err;
+		}
 	}
 
 	private async compactAndSplice(
 		provider: LLMProvider,
 		settings: CompactionSettings,
 		model: string,
+		signal?: AbortSignal,
 	): Promise<boolean> {
 		const session = this.sessionStore;
 		if (!session) return false;
@@ -1068,6 +1107,7 @@ class RunnerImpl implements Runner {
 			session,
 			provider,
 			model,
+			signal,
 			settings,
 			// #derived-budget: the model reference resolves to the runner's live
 			// model (multi-provider switches mid-session keep the cap honest).
@@ -1076,6 +1116,7 @@ class RunnerImpl implements Runner {
 		});
 		if (compacted) {
 			this.history.splice(0, this.history.length, ...session.buildContext().messages);
+			this.syncEstimateFloor(); // the splice invalidated every prior anchor
 			this.options.renderer.note(
 				`▪ compacted: ~${formatTokens(compacted.tokensBefore)} → ~${formatTokens(compacted.tokensAfter)} tokens (${compacted.retainedCount} msgs kept verbatim)`,
 			);

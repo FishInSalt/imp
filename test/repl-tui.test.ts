@@ -2668,6 +2668,78 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+	// ── #compaction-ux F2: compacting phase row ──
+
+	/** A seeded assistant message with usage (a valid anchor shape). */
+	const assistantText = (text: string): AssistantMessage => ({
+		role: "assistant",
+		blocks: [{ type: "text", text }],
+		usage: { inputTokens: 10, outputTokens: 10 },
+		model: "test-model",
+		stopReason: "end_turn",
+	});
+
+	it("/compact paints a 'compacting context…' spinner row; the row clears on settle", async () => {
+		// Seed a long-enough history so /compact has something to summarize; the
+		// summarizer is the same scripted provider (tools: [] request shape).
+		// Big enough that findCutIndex keeps a real tail (DEFAULT keepRecent
+		// is 20000 tokens ≈ 80k chars — seed well past it).
+		const filler = (w: string) => `${w} `.repeat(12000);
+		const seed: AgentMessage[] = [
+			{ role: "user", content: filler("question") },
+			assistantText(filler("answer")),
+			{ role: "user", content: filler("more") },
+			assistantText(filler("reply")),
+		];
+		// Hold the summarizer open: with a scripted instant reply the whole
+		// command can finish inside one render tick and the row's frame and
+		// the clear's frame coalesce — observable window = zero. The gate
+		// guarantees the row is on screen while the request is in flight.
+		const g = gate();
+		const requests: LLMRequest[] = [];
+		const held: LLMProvider = {
+			name: "held",
+			async *stream(request) {
+				requests.push(request);
+				if (request.tools.length === 0) {
+					await g.promise; // the summarizer call — hold it open
+					yield { type: "text_delta", text: "## Goal\nsummarized" };
+					yield {
+						type: "message_end",
+						message: {
+							role: "assistant",
+							blocks: [{ type: "text", text: "## Goal\nsummarized" }],
+							usage: { inputTokens: 1, outputTokens: 1 },
+							stopReason: "end_turn",
+						},
+					};
+					return;
+				}
+				yield* scriptedProvider([reply("ok")], []).stream(request);
+			},
+		};
+		const env = await startTuiRepl([], { seed, provider: held });
+		// Wait for the seeded replay to fully paint (the /compact keystrokes
+		// must not race the replay stream) — "reply" is the last seed word.
+		await waitUntil(() => env.terminal.frameSince(0).includes("(/ for commands"));
+		await settle();
+		env.terminal.data("/compact\r");
+		// The activity row renders wrapped; frameSince inserts synthetic \n at
+		// write boundaries, so never match text across one — assert the
+		// spinner-anchored fragment (the static note is "compacting…", the
+		// activity row is "<frame> compacting"), then let ticks paint it.
+		await waitUntil(() => requests.some((r) => r.tools.length === 0), 3000); // summarizer in flight
+		await waitUntil(() => /\S compacting/.test(env.terminal.frameSince(0)), 3000);
+		g.resolve();
+		// the row disappears once the command settles (returnToIdle parks idle)
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("compacted:"));
+		await settle();
+		const mark = env.terminal.writes.length;
+		await settle(4);
+		expect(env.terminal.frameSince(mark)).not.toMatch(/\S compacting/);
+		env.terminal.data("/exit\r");
+		await settle();
+	});
 });
 
 describe("TuiShell activity region (M10 B)", () => {
@@ -2687,6 +2759,19 @@ describe("TuiShell activity region (M10 B)", () => {
 		shell.setActivity({ phase: "idle", tools: [], agents: [] });
 		await settle(30);
 		expect(terminal.frameSince(mark)).not.toContain("thinking");
+	});
+
+	it("compacting phase paints its own spinner row (#compaction-ux F2)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		shell.setActivity({ phase: "compacting", tools: [], agents: [] });
+		await settle(30);
+		expect(terminal.frameSince(0)).toContain("compacting context…");
+		const mark = terminal.writes.length;
+		shell.setActivity({ phase: "idle", tools: [], agents: [] });
+		await settle(30);
+		expect(terminal.frameSince(mark)).not.toContain("compacting context…");
 	});
 
 	it("working rows render pending tools and subagent tree lines", async () => {

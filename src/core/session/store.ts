@@ -614,8 +614,14 @@ export class SessionStore {
 	 * Build the LLM context from the current branch, honoring the latest
 	 * compaction on the path: everything before it collapses into one summary
 	 * message; its retainedTail plus all entries after it stay verbatim.
+	 *
+	 * compactionBoundary (#compaction-ux F1): the index of the first message
+	 * AFTER the compaction splice point (1 + retainedTail.length when
+	 * compacted, otherwise 0). Messages at index >= boundary belong to the
+	 * CURRENT context shape; earlier assistant usage reports describe a
+	 * pre-compaction context and must not anchor the token estimate.
 	 */
-	buildContext(): { messages: AgentMessage[]; compacted: boolean } {
+	buildContext(): { messages: AgentMessage[]; compacted: boolean; compactionBoundary: number } {
 		const branch = this.getBranch();
 		let lastCompactionIndex = -1;
 		for (let i = 0; i < branch.length; i++) {
@@ -624,6 +630,7 @@ export class SessionStore {
 
 		const messages: AgentMessage[] = [];
 		let compacted = false;
+		let compactionBoundary = 0;
 		if (lastCompactionIndex === -1) {
 			for (const entry of branch) {
 				if (entry.type === "message") messages.push(entry.message);
@@ -634,13 +641,14 @@ export class SessionStore {
 			const compaction = branch[lastCompactionIndex] as CompactionEntry;
 			messages.push(summaryToMessage(compaction.summary));
 			messages.push(...compaction.retainedTail);
+			compactionBoundary = 1 + compaction.retainedTail.length;
 			for (let i = lastCompactionIndex + 1; i < branch.length; i++) {
 				const entry = branch[i];
 				if (entry?.type === "message") messages.push(entry.message);
 				else if (entry?.type === "branchSummary") messages.push(branchSummaryToMessage(entry.summary));
 			}
 		}
-		return { messages, compacted };
+		return { messages, compacted, compactionBoundary };
 	}
 
 	/**

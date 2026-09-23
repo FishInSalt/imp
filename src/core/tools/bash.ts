@@ -193,10 +193,12 @@ async function formatOutput(
 			const file = path.join(tmpdir(), `imp-output-${Date.now()}-${process.pid}.log`);
 			await writeFile(file, full, "utf8");
 			sections.push(
-				`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more]`,
+				// #compaction-ux F4: teach prevention, not just recovery — every
+				// truncated result is a teachable moment for output discipline.
+				`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more (tip: pipe through head/tail or narrow the grep to keep output small)]`,
 			);
 		} catch {
-			sections.push("[output truncated: only the tail is shown; saving the full output failed]");
+			sections.push("[output truncated: only the tail is shown; saving the full output failed (tip: pipe through head/tail or narrow the grep to keep output small)]");
 		}
 	}
 	return sections.join("\n\n");

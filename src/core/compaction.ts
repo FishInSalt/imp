@@ -131,19 +131,24 @@ export interface ContextEstimate {
  * message's usage — that call's input+output IS the measured context size —
  * and only estimates the messages after it (chars/4).
  *
- * Known skew (accepted): right after a compaction the retained tail still
- * carries pre-compaction usage, so the estimate reads ~window-sized for one
- * turn. Consequence: one extra compaction attempt on resume. That attempt
- * hits the `cut <= 0` bail-out BEFORE any provider call when there is
- * nothing left to summarize, so the cost is a local estimate, not an LLM
- * call — no cascade, no loop. The anchor corrects itself on the first
- * post-compaction assistant message.
+ * minAnchorIndex (#compaction-ux F1): assistants BEFORE this index never
+ * anchor. Right after a compaction the retained tail still carries
+ * pre-compaction usage (it measured a context that no longer exists), so the
+ * estimate would read ~window-sized for one turn — stale footer AND a false
+ * auto-compact trigger. Callers that own a spliced/rebuilt history pass the
+ * compaction boundary (see SessionStore.buildContext); with no anchor above
+ * the boundary the estimate degrades to a pure char estimate of the new
+ * shape (measured: false), which is far closer to truth than the stale
+ * anchor. The first post-compaction assistant restores a real anchor.
  */
-export function estimateContextTokens(messages: AgentMessage[]): ContextEstimate {
+export function estimateContextTokens(
+	messages: AgentMessage[],
+	minAnchorIndex = 0,
+): ContextEstimate {
 	// Find the last assistant message with real usage.
 	let usageIndex = -1;
 	let usageTokens = 0;
-	for (let i = messages.length - 1; i >= 0; i--) {
+	for (let i = messages.length - 1; i >= minAnchorIndex; i--) {
 		const usage = assistantUsage(messages[i] as AgentMessage);
 		if (usage) {
 			usageIndex = i;

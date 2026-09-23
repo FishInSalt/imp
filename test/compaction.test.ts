@@ -446,3 +446,122 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		expect(result).toBeNull();
 	});
 });
+
+// ============================================================================
+// #compaction-ux F1 — anchor validity across the compaction boundary
+// ============================================================================
+
+describe("estimateContextTokens minAnchorIndex (F1)", () => {
+	const u = (inputTokens: number) =>
+		assistant([{ type: "text", text: "x" }], "end_turn", { inputTokens, outputTokens: 1 });
+
+	it("default 0 keeps the legacy behavior: anchors on the last assistant usage", () => {
+		const messages: AgentMessage[] = [u(100), { role: "user", content: "q" }, u(500)];
+		const est = estimateContextTokens(messages);
+		expect(est.tokens).toBe(501); // 500 anchor + no trailing
+		expect(est.measured).toBe(true);
+	});
+
+	it("assistants before the floor never anchor; estimate degrades to chars/4 of everything", () => {
+		// Post-compaction shape: [summary(user), ...tail] — the tail's last
+		// assistant carries the STALE pre-compaction usage (e.g. 224852).
+		const stale = u(224852);
+		const tail: AgentMessage[] = [
+			{ role: "user", content: "old question" },
+			stale,
+			{ role: "toolResult", results: [{ toolCallId: "c1", toolName: "t", content: "r", isError: false }] },
+		];
+		const messages: AgentMessage[] = [{ role: "user", content: "SUMMARY-TEXT ".repeat(10) }, ...tail];
+		// The floor is 1 + tail.length = 4 (everything is pre-boundary) → no
+		// anchor survives → pure char estimate, far below the stale reading.
+		const est = estimateContextTokens(messages, 4);
+		expect(est.measured).toBe(false);
+		expect(est.tokens).toBeLessThan(2000); // not ~225k
+		expect(est.tokens).toBeGreaterThan(0);
+		// Without the floor the same history anchors on the stale usage —
+		// this is the bug F1 fixes (the false "22.5% right after compaction").
+		expect(estimateContextTokens(messages).tokens).toBeGreaterThan(224000);
+	});
+
+	it("assistants AFTER the floor still anchor (resume/fork: floor must not disable them)", () => {
+		// A resumed compacted session: boundary at 2; a fresh post-resume
+		// assistant at index 3 with real usage IS a valid anchor.
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "summary" }, // 0
+			u(224852), // 1 — stale, pre-boundary
+			{ role: "user", content: "post-resume question" }, // 2 (boundary)
+			u(31000), // 3 — fresh, post-boundary: valid anchor
+		];
+		const est = estimateContextTokens(messages, 2);
+		expect(est.measured).toBe(true);
+		expect(est.tokens).toBe(31001); // anchored on the FRESH usage, not the stale one
+	});
+
+	it("trailing messages after a valid anchor are still char-estimated", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "summary" },
+			u(224852), // stale
+			{ role: "user", content: "q" }, // boundary at 2
+			u(31000), // fresh anchor
+			{ role: "user", content: "a".repeat(400) }, // trailing: 100 tokens
+		];
+		const est = estimateContextTokens(messages, 2);
+		expect(est.tokens).toBe(31001 + 100);
+	});
+});
+
+describe("SessionStore.buildContext compactionBoundary (F1)", () => {
+	it("uncompacted session: boundary 0", async () => {
+		const dir = await mkdtemp(`${tmpdir()}/imp-f1-`);
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "cwd");
+		store.appendMessage({ role: "user", content: "q" });
+		const ctx = store.buildContext();
+		expect(ctx.compactionBoundary).toBe(0);
+		expect(ctx.compacted).toBe(false);
+	});
+
+	it("compacted session: boundary = 1 + retainedTail.length; messages after the boundary still count", async () => {
+		const dir = await mkdtemp(`${tmpdir()}/imp-f1-`);
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "cwd");
+		const tail: AgentMessage[] = [
+			{ role: "user", content: "kept q" },
+			assistant([{ type: "text", text: "kept a" }], "end_turn", { inputTokens: 9, outputTokens: 1 }),
+		];
+		store.appendMessage({ role: "user", content: "old" });
+		store.appendCompaction("SUMMARY", tail, 12345, undefined);
+		store.appendMessage({ role: "user", content: "after compaction" });
+		const ctx = store.buildContext();
+		expect(ctx.compacted).toBe(true);
+		expect(ctx.compactionBoundary).toBe(3); // summary[0] + tail[1..2] → first post-splice = 3
+		expect(ctx.messages).toHaveLength(4);
+		// The stale tail assistant (index 1) is below the boundary; a future
+		// post-boundary assistant would anchor at index >= 3.
+	});
+});
+
+describe("post-compaction estimate floor kills the false auto-compact trigger (F1, design §2 test ④)", () => {
+	it("a compacted history on a 200k window does NOT re-cross shouldCompact once the floor is passed", () => {
+		// The real-world shape: retained tail's last assistant reported the
+		// PRE-compaction usage (224k on a 200k window). Without the floor the
+		// next onBeforeTurn re-triggers (and the "nothing safe to compact"
+		// note fires); with it the estimate is the new shape's char estimate.
+		const stale = assistant(
+			[{ type: "text", text: "answer" }],
+			"end_turn",
+			{ inputTokens: 224_852, outputTokens: 1 },
+		);
+		const post: AgentMessage[] = [
+			{ role: "user", content: "SUMMARY of everything before" }, // summary message
+			{ role: "user", content: "recent question" }, // retained tail (small)
+			stale, // stale usage anchor — must NOT count
+		];
+		const settings = { reserveTokens: 16_384, keepRecentTokens: 20_000, contextWindow: 200_000 };
+		// No floor: the stale anchor reads 224k → over the 200k-window threshold.
+		expect(shouldCompact(estimateContextTokens(post).tokens, settings)).toBe(true);
+		// With the boundary floor (everything is pre-boundary): char estimate
+		// of the small new shape → far under the threshold → no re-trigger.
+		const est = estimateContextTokens(post, post.length);
+		expect(shouldCompact(est.tokens, settings)).toBe(false);
+		expect(est.measured).toBe(false);
+	});
+});

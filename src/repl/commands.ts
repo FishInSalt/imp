@@ -1630,7 +1630,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					`▪ session ${session.header.id.slice(0, 8)}${name ? ` · ${name}` : ""} · ${stats.messageCount} msgs · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
 				);
 			}
-			const contextTokens = estimateContextTokens(runner.history).tokens;
+			const contextTokens = estimateContextTokens(runner.history, runner.contextEstimateFloor).tokens;
 			const contextPercent = Math.round((contextTokens / ctx.runner.contextWindow) * 100);
 			ctx.renderer.note(
 				`▪ context ~${formatTokens(contextTokens)} tokens · ${contextPercent}% of window${contextPercent >= 80 ? " — /compact to summarize older turns" : ""}`,
@@ -1788,7 +1788,19 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 			ctx.renderer.note("▪ compacting…");
-			await ctx.runner.compactNow(); // banners come from the runner (compacted / nothing)
+			// #compaction-ux F3: Ctrl+C during the summarizer aborts it — the
+			// abort gate rejects the half summary before anything persists, so
+			// the session is untouched (/tree's long-op abort channel).
+			const controller = new AbortController();
+			ctx.onLongOpAbort?.(controller);
+			try {
+				const outcome = await ctx.runner.compactNow(controller.signal); // banners come from the runner
+				if (outcome === "aborted") {
+					ctx.renderer.note("▪ compaction aborted — nothing changed");
+				}
+			} finally {
+				ctx.onLongOpAbort?.(null);
+			}
 			return "handled";
 		},
 	},

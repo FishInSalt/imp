@@ -156,7 +156,13 @@ export interface ActivityAgentLine {
  *  spinner). Elapsed times are computed shell-side from the clock captured
  *  per entry, so the shell can animate without machine pushes. */
 export interface ActivitySnapshot {
-	phase: "idle" | "thinking" | "working";
+	/** #compaction-ux F2: "compacting" renders its own spinner row — driven by
+	 *  the REPL state machine (state === "compacting" during /compact), so no
+	 *  manual clear is needed; the runCommand finally restores idle. */
+	phase: "idle" | "thinking" | "working" | "compacting";
+	/** The compacting row's text (review P2: /login shows its own label, not
+	 *  "compacting context…"). Absent → the shell's default row text. */
+	compactingLabel?: string;
 	tools: ActivityToolLine[];
 	agents: ActivityAgentLine[];
 }

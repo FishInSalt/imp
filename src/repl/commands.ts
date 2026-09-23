@@ -654,6 +654,19 @@ export async function buildModelList(
 	} else {
 		for (const family of configuredFamilies) {
 			let discovered = await deps.discover(family);
+			// #gateway-truth: pi.dev's catalog and the static seeds describe
+			// FIRST-PARTY endpoints. When a family's endpoint is redirected by an
+			// env var (ANTHROPIC_BASE_URL → a compat gateway), neither is a truth
+			// source for that endpoint — falling back there would invent ids the
+			// gateway never listed (live case: api.z.ai/api/anthropic serves only
+			// glm-*, but the catalog fallback surfaced claude-opus-5, which the
+			// gateway silently routes to GLM). Show the unreachable note instead;
+			// the current model still leads the picker so switching stays possible.
+			const firstParty =
+				(family === "anthropic" && process.env.ANTHROPIC_BASE_URL === undefined) ||
+				(family === "openai" && process.env.OPENAI_BASE_URL === undefined) ||
+				(family === "zai" && process.env.ZAI_BASE_URL === undefined) ||
+				family === "openai-codex";
 			// M14: the pi.dev disk cache stands between live discovery and the
 			// static floor — offline picker lists the real family catalog. The
 			// live probe still runs FIRST (fresh 5-min data wins; no staleness
@@ -676,6 +689,13 @@ export async function buildModelList(
 				continue;
 			}
 			if (discovered === null) {
+				if (!firstParty) {
+					// redirected endpoint: no catalog, no seeds — the honest empty
+					// row set plus a note. The current model still leads (added
+					// below), so the picker stays usable.
+					fallbackNotes.push(`!redirect ${familyLabel(`${family}/`)}`);
+					continue;
+				}
 				const catalogIds = deps.catalogIds?.(family) ?? null;
 				if (catalogIds !== null) {
 					// Same shaping as the discovery path — offline catalog rows
@@ -1332,6 +1352,15 @@ export const COMMANDS: readonly SlashCommand[] = [
 					catalogIds: catalogModelIds,
 				});
 				for (const note of fallbackNotes) {
+					// #gateway-truth: a redirected endpoint shows NO fallback rows —
+					// the generic suffix would lie. Prefix "!redirect" is stripped
+					// here and swaps the sentence (review P2).
+					if (note.startsWith("!redirect ")) {
+					ctx.renderer.note(
+						`▪ model list: ${note.slice("!redirect ".length)} unreachable (custom base URL) — no fallback ids invented; showing only what's listed`,
+					);
+						continue;
+					}
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);
 				}
 				const index = await select({

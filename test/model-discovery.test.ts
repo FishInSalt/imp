@@ -509,4 +509,22 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 			delete process.env.ZAI_API_KEY;
 		}
 	});
+
+	// #gateway-truth: a redirected ZAI_BASE_URL gateway that is unreachable
+	// returns null (NOT the static GLM seeds) so the picker shows the honest
+	// unreachable note instead of invented ids (review P1).
+	it("zai redirected + probe failure → null, never the static seeds", async () => {
+		const saved = process.env.ZAI_BASE_URL;
+		process.env.ZAI_BASE_URL = "http://127.0.0.1:1/api"; // nothing listens here
+		process.env.ZAI_API_KEY = "zai-key";
+		try {
+			const ids = await discoverModels("zai");
+			expect(ids).toBeNull();
+		} finally {
+			delete process.env.ZAI_API_KEY;
+			if (saved === undefined) delete process.env.ZAI_BASE_URL;
+			else process.env.ZAI_BASE_URL = saved;
+			resetDiscoveryCacheForTest();
+		}
+	});
 });

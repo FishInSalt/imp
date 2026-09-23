@@ -89,6 +89,7 @@ Re-dispatch with a narrower prompt, or read the transcript and continue the work
 - ~~wall-clock 写死 30min~~——推导基础已失效；父代理自决
 - ~~TaskStop/steer 通道~~——异步架构产物，imp 单 turn 同步派发不需要
 - 子代理观测面板/fleet 视图——未来批次，非本批范围
+- ~~异步派发（后台子代理 + 完成通知回流）~~——三方实测后搁置（用户决策 2026-09-24）：pi-subagents 的后台子系统 22,942 行（async-execution/tracker/retention/resume/status/intercom 四个交付面 + completion-batcher），CC 的通知回流带全局队列 + 轮边界排水 + 去重标记 + per-agent 路由 + 反猜测 prompt 教学（query.ts:1570-1631, LocalAgentTask.tsx:197-254, prompt.ts:93）——两家都为异步付了最重的工程量。imp 不做：①批内并行已覆盖主流需求（task 是 concurrencySafe，同批多个 task 并发，结果按位返回，零回流机制）；②异步通知是“干扰父代理思维”的最大单一污染源，与零注入哲学冲突；③“等子代理期间继续对话”的真实痛点未出现。**重启条件**：该痛点实际出现时，先加 wait 型工具（pi-subagents 的中间形态），不跳全套异步
 
 ## 3. 改动清单
 

@@ -559,8 +559,10 @@ export class TuiShell implements LineInput {
 		}
 		if (this.activity.phase === "compacting") {
 			// #compaction-ux F2: same Loader semantics as thinking — the state
-			// machine owns the row's lifetime (idle push clears it).
-			this.activityContainer.addChild(new Text(dim(`${frame} compacting context…`, true), 0, 0));
+			// machine owns the row's lifetime (idle push clears it). The label
+			// follows the guarded command (review P2: /login has its own).
+			const label = this.activity.compactingLabel ?? "compacting context…";
+			this.activityContainer.addChild(new Text(dim(`${frame} ${label}`, true), 0, 0));
 		}
 		for (const tool of this.activity.tools) {
 			const label = tool.label === "" ? "" : ` ${tool.label}`;

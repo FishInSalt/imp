@@ -160,6 +160,9 @@ export interface ActivitySnapshot {
 	 *  the REPL state machine (state === "compacting" during /compact), so no
 	 *  manual clear is needed; the runCommand finally restores idle. */
 	phase: "idle" | "thinking" | "working" | "compacting";
+	/** The compacting row's text (review P2: /login shows its own label, not
+	 *  "compacting context…"). Absent → the shell's default row text. */
+	compactingLabel?: string;
 	tools: ActivityToolLine[];
 	agents: ActivityAgentLine[];
 }

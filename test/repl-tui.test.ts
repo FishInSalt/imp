@@ -2732,11 +2732,16 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => requests.some((r) => r.tools.length === 0), 3000); // summarizer in flight
 		await waitUntil(() => SPINNER_COMPACTING.test(env.terminal.frameSince(0)), 3000);
 		g.resolve();
-		// the row disappears once the command settles (returnToIdle parks idle)
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("compacted:"));
-		await settle();
+		// Review P2: the clear assertion must not pass vacuously. The row's
+		// death flush (returnToIdle → idle snapshot) rides the same render as
+		// the banner, so mark BEFORE releasing the gate: frameSince(mark)
+		// then spans banner + clear + everything after, and the spinner row
+		// must be absent from all of it while the pre-mark frames carried it.
 		const mark = env.terminal.writes.length;
-		await settle(4);
+		expect(SPINNER_COMPACTING.test(env.terminal.frameSince(0))).toBe(true); // row was up
+		g.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("compacted:"));
+		await settle(2);
 		expect(env.terminal.frameSince(mark)).not.toMatch(SPINNER_COMPACTING);
 		env.terminal.data("/exit\r");
 		await settle();

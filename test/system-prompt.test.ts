@@ -297,3 +297,11 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		expect(runner.system.startsWith("edited persona")).toBe(true);
 	});
 });
+
+// #compaction-ux F4: rule 7 pins the output-discipline guideline (review P3).
+it("core rules include the output-discipline rule (7)", () => {
+	const prompt = buildSystemPrompt(CTX, [{ name: "bash", promptSnippet: "x" }]);
+	expect(prompt).toContain("Keep tool outputs small");
+	const rules = prompt.split("# Core rules")[1]?.split("#")[0]?.match(/^\d+\./gm) ?? [];
+	expect(rules).toHaveLength(7);
+});

@@ -496,9 +496,11 @@ class ReplMachine {
 		if (stateful) {
 			this.state = "compacting";
 			this.input.setActive(true);
-			// #compaction-ux F2: the activity row shows the compacting spinner
-			// for the whole guarded window; the finally's flushQueue →
-			// returnToIdle → clearActivity parks it back at idle.
+			// #compaction-ux F2: the activity row shows the long-op spinner for
+			// the whole guarded window; the finally's flushQueue → returnToIdle
+			// → clearActivity parks it back at idle. The label follows the
+			// command (review P2: /login ≠ compaction text).
+			this.longOpLabel = name === "login" ? "waiting for login…" : "compacting context…";
 			this.pushActivity();
 		}
 		try {
@@ -515,7 +517,10 @@ class ReplMachine {
 			// A command typed mid-login (runCommand is unstateful for it) must
 			// not null the controller — that disarmed Ctrl+C and left a double
 			// press force-quitting over a live OAuth poll.
-			if (stateful) this.longOpAbort = null;
+			if (stateful) {
+				this.longOpAbort = null;
+				this.longOpLabel = null;
+			}
 			if (stateful && this.state === "compacting") {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
@@ -1032,6 +1037,11 @@ class ReplMachine {
 	}
 
 	/** Push the current activity snapshot to the TUI shell (no-op elsewhere). */
+	/** #compaction-ux F2 review P2: the long-op row's label follows the
+	 *  command that armed the guard — "compacting context…" is a lie during
+	 *  a 15-minute /login OAuth poll. */
+	private longOpLabel: string | null = null;
+
 	private pushActivity(): void {
 		if (this.input.setActivity === undefined) return;
 		const working = this.activityTools.size > 0 || this.activityAgents.size > 0;
@@ -1043,6 +1053,9 @@ class ReplMachine {
 		else phase = working ? "working" : "thinking";
 		const snapshot: ActivitySnapshot = {
 			phase,
+			...(phase === "compacting" && this.longOpLabel !== null
+				? { compactingLabel: this.longOpLabel }
+				: {}),
 			tools: [...this.activityTools.values()],
 			agents: [...this.activityAgents.values()],
 		};

@@ -965,7 +965,10 @@ class RunnerImpl implements Runner {
 				this.logger.log("run_error", { source: "overflow-recovery", message: `retry failed: ${retryCause}` });
 				throw new Error(
 					overflowGuidance(
-						estimateContextTokens(this.history).tokens,
+						// #compaction-ux F1: the splice above invalidated prior
+						// anchors — pass the floor or the guidance quotes the
+						// pre-compaction size (review P3-1).
+						estimateContextTokens(this.history, this.estimateFloor).tokens,
 						settings,
 						"still over the window after one compaction",
 					),
@@ -1090,7 +1093,13 @@ class RunnerImpl implements Runner {
 			const compacted = await this.compactAndSplice(this.provider, this.settings, this.model, signal);
 			return compacted ? "compacted" : "nothing-to-compact";
 		} catch (err) {
-			if (signal?.aborted) return "aborted";
+			// Classify by the ERROR, not the signal's current state (review
+			// P2): a provider 500 racing a user Ctrl+C must stay a 500, not be
+			// mislabeled as a clean abort. The abort paths throw AbortError
+			// (provider layer) or compaction's explicit gate messages.
+			const aborted =
+				(signal?.aborted ?? false) && err instanceof Error && /abort/i.test(`${err.name} ${err.message}`);
+			if (aborted) return "aborted";
 			throw err;
 		}
 	}

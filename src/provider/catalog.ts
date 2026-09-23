@@ -30,6 +30,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProviderName } from "./resolve.js";
 import { parseModelRef } from "./resolve.js";
+import { thinkingMetaFor } from "./thinking.js";
 
 export const CATALOG_FAMILIES: readonly ProviderName[] = ["anthropic", "openai", "openai-codex", "zai"];
 
@@ -175,6 +176,22 @@ export function catalogEntryFor(provider: string, modelId: string): CatalogEntry
 export function catalogEntryForReference(reference: string): CatalogEntry | null {
 	const ref = parseModelRef(reference);
 	return catalogEntryFor(ref.provider, ref.modelId);
+}
+
+/** The model's output-token cap for budget math (#derived-budget), or
+ *  undefined when neither source knows. Sources, in order: the pi.dev
+ *  catalog's maxTokens; the thinking table's maxOutputTokens (pi's
+ *  model.maxTokens mirror). Callers treat undefined as "no model-side
+ *  bound" — never as zero. */
+export function modelMaxTokensFor(reference: string): number | undefined {
+	const entry = catalogEntryForReference(reference);
+	if (entry?.maxTokens !== undefined && Number.isFinite(entry.maxTokens) && entry.maxTokens > 0) {
+		return entry.maxTokens;
+	}
+	const ref = parseModelRef(reference);
+	const meta = thinkingMetaFor(ref.provider, ref.modelId);
+	if (meta?.maxOutputTokens !== undefined && meta.maxOutputTokens > 0) return meta.maxOutputTokens;
+	return undefined;
 }
 
 /** Family ids from the overlay (endpoint order preserved), or null when the

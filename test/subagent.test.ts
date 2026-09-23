@@ -1,6 +1,5 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { SUMMARY_MAX_TOKENS } from "../src/core/compaction.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
@@ -218,8 +217,12 @@ describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagin
 	};
 	/** compactHistory sends the summarizer with maxTokens 2048 and no tools —
 	 *  the loop's own requests carry 8192 + tools. */
+	// #derived-budget: the summarizer budget is derived from the settings in
+	// play — with TINY (reserveTokens 16) that is floor(0.8 × 16) = 12; the
+	// mock model "m" resolves no catalog cap. The loop's own requests carry
+	// the maxTokens they were configured with + tools.
 	const isSummarizerCall = (r: LLMRequest): boolean =>
-		r.maxTokens === SUMMARY_MAX_TOKENS && r.tools.length === 0;
+		r.maxTokens === Math.floor(0.8 * 16) && r.tools.length === 0;
 
 	it("overflow → compact → retry succeeds; no duplicated prompt (D3 accounting from history)", async () => {
 		const sink: LLMRequest[] = [];

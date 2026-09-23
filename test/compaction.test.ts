@@ -11,6 +11,7 @@ import {
 	serializeForSummary,
 	shouldCompact,
 	summarizeBranchSegment,
+	summarizerMaxTokens,
 } from "../src/core/compaction.js";
 import { type AgentMessage, type AssistantMessage, contentText } from "../src/core/messages.js";
 import { SessionStore, summaryToMessage } from "../src/core/session/store.js";
@@ -330,10 +331,11 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		).rejects.toThrow("token cap");
 	});
 
-	// #compaction-budget: the summarizer request must carry the enlarged
-	// budget (8192) — glm-5.3's thinking blocks count against max_tokens and a
-	// 2048 cap rejected honest full summaries (live /compact failure).
-	it("the summarizer request is budgeted at SUMMARY_MAX_TOKENS (8192), not the old 2048", async () => {
+	// #derived-budget: pi parity — min(0.8 × reserveTokens, model maxTokens
+	// ?? Infinity). No magic constants; the reserve share is the always-present
+	// bound. glm-5.3's thinking blocks count against max_tokens and the old
+	// hard 2048 rejected honest full summaries (live /compact failure).
+	it("summarizer budget derives from reserveTokens; a small model cap shrinks it further", async () => {
 		const seen: number[] = [];
 		const provider: LLMProvider = {
 			name: "mock",
@@ -351,9 +353,25 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 				};
 			},
 		};
-		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const settings = { reserveTokens: 16384, keepRecentTokens: 1, contextWindow: 131072 };
+		// No model cap → the reserve share alone (0.8 × 16384).
 		await compactHistory({ messages: overflowishHistory(3), provider, model: "m", settings });
-		expect(seen).toEqual([8192]);
+		// A 4096 model cap clamps below the reserve share.
+		await compactHistory({
+			messages: overflowishHistory(3),
+			provider,
+			model: "m",
+			settings,
+			modelMaxTokens: 4096,
+		});
+		expect(seen).toEqual([Math.floor(0.8 * 16384), 4096]);
+	});
+
+	it("summarizerMaxTokens: pi's min(0.8x reserve, modelMax) — undefined model data means reserve only", () => {
+		expect(summarizerMaxTokens(16384)).toBe(13107);
+		expect(summarizerMaxTokens(16384, 64000)).toBe(13107); // model cap ABOVE share: share wins
+		expect(summarizerMaxTokens(16384, 4096)).toBe(4096); // model cap BELOW share: model wins
+		expect(summarizerMaxTokens(16384, 0)).toBe(13107); // garbage model data ignored, not zero
 	});
 
 	it("branch summary: same max_tokens gate", async () => {

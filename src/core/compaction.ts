@@ -46,15 +46,29 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	contextWindow: envInt("IMP_CONTEXT_WINDOW", 131072),
 };
 
-/** Output cap for the compaction summarizer (pi parity, loose): pi uses
- *  min(0.8 × reserveTokens, model.maxTokens) ≈ 13k. imp's old hard 2048
- *  collided with models whose thinking blocks count against max_tokens
- *  (live repro on glm-5.3: thinking ≈1.5k + structured summary > 2048 →
- *  stopReason max_tokens → the P2 quality gate correctly rejected a half
- *  checkpoint and /compact failed). The budget is still bounded — a runaway
- *  summarizer cannot print forever — but sized for thinking + a full
- *  structured summary. */
-export const SUMMARY_MAX_TOKENS = 8192;
+/** The summarizer's output budget (#derived-budget, pi parity):
+ *  min(0.8 × reserveTokens, model maxTokens ?? Infinity).
+ *
+ *  - The 0.8 × reserve share (≈13107 at defaults) is the ALWAYS-present,
+ *  settings-scaled bound — it carries all the safety roles the old hard
+ *  2048/8192 constants played (runaway protection, cost ceiling).
+ *  - The model side caps at the model's own output limit when known
+ *  (catalog maxTokens, else the thinking table's maxOutputTokens); when
+ *  neither source has data the model side is UNbounded — the reserve share
+ *  is the only budget, exactly pi's `model.maxTokens > 0 ? … : Infinity`.
+ *  No magic fallback number: a wrong constant is how the live glm-5.3
+ *  failure happened (2048 < thinking + full summary → max_tokens → the P2
+ *  gate rejected a half checkpoint → /compact failed).
+ *  - Branch summaries use half the budget (shorter segments). */
+export function summarizerMaxTokens(
+	reserveTokens: number,
+	modelMaxTokens?: number,
+): number {
+	const reserveShare = Math.floor(0.8 * reserveTokens);
+	return modelMaxTokens !== undefined && modelMaxTokens > 0
+		? Math.min(reserveShare, modelMaxTokens)
+		: reserveShare;
+}
 
 // ============================================================================
 // Token estimation (pi's insight: the last assistant call's usage IS the
@@ -352,6 +366,10 @@ export async function summarizeBranchSegment(args: {
 	provider: LLMProvider;
 	model: string;
 	signal?: AbortSignal;
+	/** #derived-budget: model-side cap source — the runner resolves the
+	 *  model reference's maxTokens (catalog, else the thinking table) and
+	 *  passes it down; undefined leaves the reserve share as the only bound. */
+	modelMaxTokens?: number;
 	/** #thinking-levels: pi's summarizer rides the session's thinking level
 	 *  (compaction.ts:549 — options.reasoning = level when the model has a
 	 *  knob and the level is not "off"). */
@@ -371,10 +389,9 @@ export async function summarizeBranchSegment(args: {
 		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}${suffix}` }],
 		tools: [],
 		model: args.model,
-		// Same rationale as SUMMARY_MAX_TOKENS (glm-5.3 thinking counts
-		// against max_tokens); branch segments are shorter than full sessions
-		// so the cap is half the compaction budget.
-		maxTokens: Math.floor(SUMMARY_MAX_TOKENS / 2),
+		// Half the derived budget: branch segments are shorter than full
+		// sessions (#derived-budget).
+		maxTokens: Math.floor(summarizerMaxTokens(DEFAULT_COMPACTION_SETTINGS.reserveTokens, args.modelMaxTokens) / 2),
 		signal: args.signal,
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
@@ -433,6 +450,9 @@ export async function compactHistory(args: {
 	model: string;
 	signal?: AbortSignal;
 	settings?: CompactionSettings;
+	/** #derived-budget: the model-side cap source (see
+	 *  summarizeBranchSegment). undefined → reserve share only. */
+	modelMaxTokens?: number;
 	/** #thinking-levels: pi's summarizer rides the session's level. */
 	thinking?: ThinkingLevel;
 }): Promise<CompactHistoryResult | null> {
@@ -482,7 +502,7 @@ export async function compactHistory(args: {
 		messages: [{ role: "user", content: userContent }],
 		tools: [],
 		model: args.model,
-		maxTokens: SUMMARY_MAX_TOKENS,
+		maxTokens: summarizerMaxTokens(settings.reserveTokens, args.modelMaxTokens),
 		signal: args.signal,
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
@@ -534,6 +554,8 @@ export async function compactSession(args: {
 	model: string;
 	signal?: AbortSignal;
 	settings?: CompactionSettings;
+	/** #derived-budget: passed through to compactHistory (see there). */
+	modelMaxTokens?: number;
 	/** #thinking-levels: pi's summarizer rides the session's level. */
 	thinking?: ThinkingLevel;
 }): Promise<CompactResult | null> {
@@ -544,6 +566,7 @@ export async function compactSession(args: {
 		model: args.model,
 		signal: args.signal,
 		settings: args.settings,
+		modelMaxTokens: args.modelMaxTokens,
 		thinking: args.thinking,
 	});
 	if (result === null) return null;

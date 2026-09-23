@@ -538,3 +538,30 @@ describe("SessionStore.buildContext compactionBoundary (F1)", () => {
 		// post-boundary assistant would anchor at index >= 3.
 	});
 });
+
+describe("post-compaction estimate floor kills the false auto-compact trigger (F1, design §2 test ④)", () => {
+	it("a compacted history on a 200k window does NOT re-cross shouldCompact once the floor is passed", () => {
+		// The real-world shape: retained tail's last assistant reported the
+		// PRE-compaction usage (224k on a 200k window). Without the floor the
+		// next onBeforeTurn re-triggers (and the "nothing safe to compact"
+		// note fires); with it the estimate is the new shape's char estimate.
+		const stale = assistant(
+			[{ type: "text", text: "answer" }],
+			"end_turn",
+			{ inputTokens: 224_852, outputTokens: 1 },
+		);
+		const post: AgentMessage[] = [
+			{ role: "user", content: "SUMMARY of everything before" }, // summary message
+			{ role: "user", content: "recent question" }, // retained tail (small)
+			stale, // stale usage anchor — must NOT count
+		];
+		const settings = { reserveTokens: 16_384, keepRecentTokens: 20_000, contextWindow: 200_000 };
+		// No floor: the stale anchor reads 224k → over the 200k-window threshold.
+		expect(shouldCompact(estimateContextTokens(post).tokens, settings)).toBe(true);
+		// With the boundary floor (everything is pre-boundary): char estimate
+		// of the small new shape → far under the threshold → no re-trigger.
+		const est = estimateContextTokens(post, post.length);
+		expect(shouldCompact(est.tokens, settings)).toBe(false);
+		expect(est.measured).toBe(false);
+	});
+});

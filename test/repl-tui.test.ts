@@ -2725,18 +2725,19 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		env.terminal.data("/compact\r");
 		// The activity row renders wrapped; frameSince inserts synthetic \n at
-		// write boundaries, so never match text across one — assert the
-		// spinner-anchored fragment (the static note is "compacting…", the
-		// activity row is "<frame> compacting"), then let ticks paint it.
+		// write boundaries, so never match text across one. The static note
+		// "▪ compacting…" would match a loose "/\S compacting/" — pin the
+		// SPINNER FRAME specifically so only the activity row satisfies this.
+		const SPINNER_COMPACTING = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] compacting/;
 		await waitUntil(() => requests.some((r) => r.tools.length === 0), 3000); // summarizer in flight
-		await waitUntil(() => /\S compacting/.test(env.terminal.frameSince(0)), 3000);
+		await waitUntil(() => SPINNER_COMPACTING.test(env.terminal.frameSince(0)), 3000);
 		g.resolve();
 		// the row disappears once the command settles (returnToIdle parks idle)
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("compacted:"));
 		await settle();
 		const mark = env.terminal.writes.length;
 		await settle(4);
-		expect(env.terminal.frameSince(mark)).not.toMatch(/\S compacting/);
+		expect(env.terminal.frameSince(mark)).not.toMatch(SPINNER_COMPACTING);
 		env.terminal.data("/exit\r");
 		await settle();
 	});

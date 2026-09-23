@@ -90,6 +90,9 @@ interface CliOptions {
 	thinking: import("./provider/thinking.js").ThinkingLevel | undefined;
 	maxTokens: number;
 	maxTurns: number;
+	/** True when --max-turns was passed explicitly — interactive mode then
+	 *  honors it instead of running uncapped (#no-turn-cap). */
+	maxTurnsExplicit: boolean;
 	noContextFiles: boolean;
 	/** M8 trust gate: explicit --trust / --no-trust override the ask-once flow. */
 	trustDecision: "trust" | "no-trust" | undefined;
@@ -188,6 +191,7 @@ function parseArgs(argv: string[]): CliOptions {
 		thinking: envThinking(),
 		maxTokens: 16384,
 		maxTurns: 40,
+		maxTurnsExplicit: false,
 		noContextFiles: false,
 		trustDecision: undefined,
 		continueRecent: false,
@@ -234,6 +238,7 @@ function parseArgs(argv: string[]): CliOptions {
 				break;
 			case "--max-turns":
 				opts.maxTurns = Number.parseInt(next(), 10);
+				opts.maxTurnsExplicit = true;
 				break;
 			case "-nc":
 			case "--no-context-files":
@@ -390,6 +395,14 @@ async function main(): Promise<void> {
 			await runPrint(opts, argv);
 			return;
 		}
+		// #no-turn-cap (interactive): the REPL is supervised — the user can
+		// Ctrl+C at any time and auto-compaction bounds context growth, so a
+		// turn cap only kills honest long tasks mid-flight (pi parity: pi's
+		// loop has no turn counter at all). An EXPLICIT --max-turns still wins
+		// — it is a user decision, honored in both modes. Print mode keeps the
+		// default cap: one-shot runs are unsupervised (scripts, subagent-style
+		// callers) and need the cost ceiling.
+		if (!opts.maxTurnsExplicit) opts.maxTurns = Number.POSITIVE_INFINITY;
 		await runInteractive(opts, argv);
 	} finally {
 		catalogAbort.abort();

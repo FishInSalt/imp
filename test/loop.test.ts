@@ -161,6 +161,33 @@ describe("agent loop", () => {
 		expect(result.turns).toBe(1);
 	});
 
+	// #no-turn-cap: Infinity is the interactive default's sentinel — a long
+	// honest run must NEVER stop on the turn count alone (it still stops when
+	// the model stops calling tools, like any completed task).
+	it("maxIterations: Infinity never trips the cap — a long run completes naturally", async () => {
+		// 60 tool-turns then a final text answer — over the old default 40.
+		const scripts: AssistantMessage[] = [];
+		for (let i = 0; i < 60; i++) {
+			scripts.push(
+				assistant([{ type: "toolCall", id: `t${i}`, name: "echo_tool", arguments: { message: `n${i}` } }], "tool_use"),
+			);
+		}
+		scripts.push(assistant([{ type: "text", text: "done" }]));
+		const provider = scriptedProvider(scripts);
+		const history: AgentMessage[] = [];
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [echoTool()],
+			history,
+			userMessage: "do sixty steps",
+			maxIterations: Number.POSITIVE_INFINITY,
+		});
+		expect(result.turns).toBe(61);
+		expect(result.stopReason).toBe("completed");
+	});
+
 	it("returns immediately when already aborted", async () => {
 		const provider = scriptedProvider([assistant([{ type: "text", text: "never" }])]);
 		const controller = new AbortController();

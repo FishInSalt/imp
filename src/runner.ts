@@ -1087,6 +1087,8 @@ class RunnerImpl implements Runner {
 				this.options.renderer.note("(aborted)");
 				break;
 			case "max_iterations":
+				// An uncapped interactive run can never reach this branch; an
+				// explicit cap prints its number either way.
 				this.options.renderer.error(`(stopped: reached max turns (${this.options.maxTurns}))`);
 				break;
 			case "completed":

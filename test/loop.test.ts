@@ -165,7 +165,8 @@ describe("agent loop", () => {
 	// honest run must NEVER stop on the turn count alone (it still stops when
 	// the model stops calling tools, like any completed task).
 	it("maxIterations: Infinity never trips the cap — a long run completes naturally", async () => {
-		// 60 tool-turns then a final text answer — over the old default 40.
+		// 60 tool-turns then a final text answer — over the pre-#no-turn-cap
+		// default 40.
 		const scripts: AssistantMessage[] = [];
 		for (let i = 0; i < 60; i++) {
 			scripts.push(

@@ -126,7 +126,7 @@ Options:
   -p, --print <prompt>     Prompt to run
   -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
       --max-tokens <n>     Max output tokens per turn (default: 16384)
-      --max-turns <n>      Max agent turns per run (default: 40 for print/piped runs; interactive TTY sessions are uncapped)
+      --max-turns <n>      Max agent turns per run (default: 100 for print/piped runs; interactive TTY sessions are uncapped)
   -nc, --no-context-files  Skip AGENTS.md discovery
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
@@ -190,7 +190,11 @@ function parseArgs(argv: string[]): CliOptions {
 		model: defaultModel(argv),
 		thinking: envThinking(),
 		maxTokens: 16384,
-		maxTurns: 40,
+		// #no-turn-cap follow-up: the print/piped default rose 40 → 100 —
+		// 40 was tight for one-shot scripted work; 100 caps runaway cost at
+		// ~2.5x while honest scripted tasks finish. Explicit --max-turns wins;
+		// interactive TTY gets Infinity in main() regardless of this default.
+		maxTurns: 100,
 		maxTurnsExplicit: false,
 		noContextFiles: false,
 		trustDecision: undefined,

@@ -1,20 +1,28 @@
 /**
- * Shared cross-module limits. One home so their couplings stay visible:
- * docs/m5-subagents-design.md §4 — the child clock must be re-derived when
- * the child turn budget changes (~45s/turn average with slow tools).
+ * Shared cross-module limits. One home so their couplings stay visible.
  */
 
 /** Tail cap for oversized tool results (bash output, task results). */
 export const MAX_BYTES = 50 * 1024; // 50KB
 
-/** Subagent turn budget (M5). Parent parity — the valve guards runaway spin,
- * not honest work. Children auto-compact between turns like the main loop
- * (M7), so the practical ceiling is this turn cap, not context space. */
-export const CHILD_MAX_TURNS = 40;
+/** Subagent turn wall (#subagent-softlanding rev 4, demoted from budget to
+ *  backup: guards degenerate loops only — budget decisions belong to the
+ *  parent agent, and zero prompts are injected into the child). Children
+ *  auto-compact between turns like the main loop (M7), so the practical
+ *  ceiling for honest work is the parent's judgment, not this wall. */
+export const CHILD_MAX_TURNS = 60;
 
-/** Subagent wall clock (M5). Scales with CHILD_MAX_TURNS: 40 turns at
- * ~45s/turn average (slow tools) needs ~30 minutes. */
-export const CHILD_TIMEOUT_MS = 30 * 60 * 1000;
+/** Default child wall clock (#subagent-softlanding rev 4). REPL (TTY): no
+ *  clock — the user's Ctrl+C is the backstop. Print/headless runs: a
+ *  generous 60-minute hang guard (the turn wall does not tick while a
+ *  single tool call hangs; pi-subagents keeps a default clock for
+ *  unsupervised children for exactly this reason). Call-level timeoutMs /
+ *  agent frontmatter always win over this default. Returns `undefined`
+ *  under TTY — `undefined` IS the "unlimited" sentinel through the whole
+ *  timeout seam (never Infinity: AbortSignal.timeout(Infinity) throws). */
+export function defaultChildTimeoutMs(): number | undefined {
+	return process.stdout.isTTY ? undefined : 60 * 60 * 1000;
+}
 
 /** Max concurrent executions per chunk of concurrency-safe calls (M5b).
  *  The cap queues work into waves — it never drops calls — so it trades

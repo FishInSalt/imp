@@ -338,6 +338,7 @@ Reuse `test/helpers/fakes.ts` throughout ([C] §6); child-loop tests share the l
 ## 11. Risks & open questions for the human
 
 Risks (with mitigations):
+- **Turn-wall update (#subagent-softlanding rev 4, 2026-09-24)**: CHILD_MAX_TURNS is 60 and is a BACKUP wall against degenerate loops, not a budget; the 30-min wall clock was removed (mode-aware default: REPL unlimited / print 60min, optional timeoutMs on the task schema). Decisions and evidence: docs/subagent-softlanding-design.md. The "40 turns × ~45s ≈ 30min" coupling below is HISTORICAL.
 - **Cost amplification**: 5 children × 40 turns spend fast (owner accepts: completion over cost). Mitigation: usage trailer in every
   result; one constant to lower. Residual: no dollar figures (no price table yet).
 - **Fresh-context prompt bloat**: parents paste huge context into `prompt`. Mitigation: the tool

@@ -2,7 +2,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
-import { MAX_BYTES } from "../constants.js";
+import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
@@ -30,12 +30,19 @@ import type { Tool, ToolExecuteResult } from "./types.js";
 const taskSchema = Type.Object({
 	prompt: Type.String({
 		description:
-			"Complete, self-contained task for a fresh subagent. It sees nothing of this conversation; include all needed context (paths, what to return).",
+			"Complete, self-contained task for a fresh subagent. It sees nothing of this conversation; include all needed context (paths, what to return). Keep the prompt focused (~300 words max): the child re-reads files itself; pasting repo context into the prompt wastes its context window.",
 	}),
 	agent: Type.Optional(
 		Type.String({
 			description:
 				"Named agent to run (see <advertised_agents> in the system prompt if present); omit for a generic subagent",
+		}),
+	),
+	timeoutMs: Type.Optional(
+		Type.Integer({
+			minimum: 1000,
+			description:
+				"Optional wall-clock budget in ms for the child run. REPL default: no limit (Ctrl+C is the backstop); print/headless runs default to 60 min. Set only for tasks expected to be cheap.",
 		}),
 	),
 	worktree: Type.Optional(
@@ -212,7 +219,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				if ("isError" in narrowed) return narrowed;
 				tools = narrowed;
 			}
-			const effectiveTimeout = agent?.timeoutMs ?? timeoutMs;
+			// #subagent-softlanding rev 4 precedence: call args > agent
+			// frontmatter > mode default (TTY: undefined = unlimited).
+			const effectiveTimeout =
+				(args.timeoutMs as number | undefined) ?? agent?.timeoutMs ?? timeoutMs ?? defaultChildTimeoutMs();
 
 			let session: SessionStore | null = null;
 			let outcome: SubagentOutcome;
@@ -252,7 +262,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					}
 				}
 			}
-			const base = taskResult(outcome, session, effectiveTimeout);
+			const base = taskResult(outcome, session, effectiveTimeout, String(args.prompt));
 			if (wt === undefined && cleanupErrors.length === 0) return base;
 			if (wt === undefined) {
 				return {
@@ -266,13 +276,37 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 	};
 }
 
-/** Map a child outcome to the §3 result contract. Exported for tests. */
+/** Map a child outcome to the §3 result contract (#subagent-softlanding rev 4
+ *  layered honesty). Exported for tests. `originalPrompt` is args.prompt BEFORE
+ *  the worktree notice is appended — the excerpt must show the task, not the
+ *  isolation boilerplate. */
 export function taskResult(
 	outcome: SubagentOutcome,
 	session: SessionStore | null,
 	timeoutMs?: number,
+	originalPrompt?: string,
 ): ToolExecuteResult {
-	const where = session ? `session ${session.header.id.slice(0, 8)}` : "not persisted";
+	// Full transcript path when a child session exists — the parent can read
+	// it (read tool handles oversized JSONL lines) and continue the work.
+	const where = session ? session.filePath : "not persisted";
+	const handoff = () => {
+		const lines = ["work is preserved in the full transcript:"];
+		if (session) {
+			lines.push(`  ${where}`);
+			if (originalPrompt !== undefined) {
+				lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
+			}
+			lines.push(
+				"Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.",
+			);
+		} else {
+			if (originalPrompt !== undefined) {
+				lines.push(`(transcript not persisted) the child's task was: "${excerpt(originalPrompt, 200)}"`);
+			}
+			lines.push("Re-dispatch with a narrower prompt.");
+		}
+		return lines.join("\n");
+	};
 
 	if (outcome.status === "aborted" || outcome.status === "timeout") {
 		const lead =
@@ -280,20 +314,31 @@ export function taskResult(
 				? `task timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s`
 				: "task aborted before completion";
 		return {
-			output: `${lead} (${outcome.turns} turns ran). Partial transcript: ${where}.`,
+			output: `${lead} (${outcome.turns} turns ran). ${handoff()}`,
 			isError: true,
 		};
 	}
 
 	if (outcome.status === "crash" && outcome.text === undefined) {
 		return {
-			output: `task failed after ${outcome.turns} turns: ${outcome.reason ?? "unknown error"}. Partial transcript: ${where}.`,
+			output: `task failed after ${outcome.turns} turns: ${outcome.reason ?? "unknown error"}. ${handoff()}`,
 			isError: true,
 		};
 	}
 
 	// Success-shaped: completed / max_iterations / crash-with-partial.
-	const text = outcome.text ?? "(subagent completed with no output)";
+	// The no-output marker belongs to `completed` ONLY — a capped child with
+	// no text gets the honest handoff below (incident A: 40 turns of digging,
+	// zero text, parent misled by "completed with no output").
+	const text = outcome.text ?? (outcome.status === "completed" ? "(subagent completed with no output)" : undefined);
+	if (text === undefined) {
+		// max_iterations / crash with no assistant text anywhere: layered-C
+		// no-text form — honest failure report with full recovery guidance.
+		return {
+			output: `[task] child spent all ${outcome.turns} turns without producing a final answer (it was still calling tools on the last turn). Nothing was lost — ${handoff()}`,
+			isError: false,
+		};
+	}
 	const { text: tail, dropped } = tailTruncate(text);
 	const parts: string[] = [];
 	if (dropped > 0) {
@@ -303,11 +348,20 @@ export function taskResult(
 	}
 	parts.push(tail);
 	if (outcome.status === "max_iterations") {
-		parts.push("[task] hit the turn cap; result may be incomplete.");
+		parts.push(
+			`[task] hit the ${outcome.turns}-turn cap; this is the child's wrap-up answer, not a confirmed completion.`,
+		);
 	}
 	if (outcome.status === "crash") {
 		parts.push(`[task] child failed after ${outcome.turns} turns: ${outcome.reason}; partial result above.`);
 	}
 	parts.push(childUsageTrailer(outcome.turns, outcome.usage));
 	return { output: parts.join("\n\n"), isError: false };
+}
+
+/** CJK-safe head excerpt: cut on a code-point boundary so no surrogate pair
+ *  is split (tailTruncate is the byte-tail analogue on the output side). */
+function excerpt(text: string, maxChars: number): string {
+	const chars = Array.from(text);
+	return chars.length <= maxChars ? text : `${chars.slice(0, maxChars).join("")}…`;
 }

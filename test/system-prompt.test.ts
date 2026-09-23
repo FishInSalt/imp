@@ -298,10 +298,13 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 	});
 });
 
-// #compaction-ux F4: rule 7 pins the output-discipline guideline (review P3).
-it("core rules include the output-discipline rule (7)", () => {
+// #compaction-ux F4a withdrawal (design §10): the six core rules are behavior
+// contracts; the output-discipline guideline was an efficiency tip that diluted
+// them (and its motivating evidence was zero-cost under plan/1M-window usage).
+// Pin that it stays OUT and the count stays six.
+it("core rules stay exactly six — no output-discipline rule (F4a withdrawn)", () => {
 	const prompt = buildSystemPrompt(CTX, [{ name: "bash", promptSnippet: "x" }]);
-	expect(prompt).toContain("Keep tool outputs small");
+	expect(prompt).not.toContain("Keep tool outputs small");
 	const rules = prompt.split("# Core rules")[1]?.split("#")[0]?.match(/^\d+\./gm) ?? [];
-	expect(rules).toHaveLength(7);
+	expect(rules).toHaveLength(6);
 });

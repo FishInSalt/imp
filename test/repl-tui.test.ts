@@ -2746,6 +2746,44 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await settle();
 	});
+
+// ── #footer-per-turn: the ctx%/usage footer refreshes at every assistant
+// message_end DURING a run (pi: interactive-mode.ts:3279), not only at
+// settleSuccess ──
+
+it("footer repaints at turn boundaries inside a still-open run", async () => {
+	// Turn 1: a tool call (held open). Turn 2: final text. The footer's
+	// cumulative ↑↓ segments change after turn 1's message_end even though
+	// the run is still in flight (the tool is gated).
+	const g = gate();
+	const steps: ScriptStep[] = [
+		assistant(
+			[
+				{ type: "toolCall", id: "tc1", name: "gated", arguments: { hold: true } },
+			],
+			"tool_use",
+		),
+		reply("all finished"),
+	];
+	const env = await startTuiRepl(steps, { tools: [gatedTool(g)] });
+	await settle();
+	const before = env.terminal.frameSince(0);
+	// sanity: the startup footer exists (model + 0.0%)
+	expect(before).toContain("0.0%/131k");
+	env.terminal.data("go\r");
+	// turn 1's assistant message_end has landed once the activity row shows
+	// the gated tool running (tool events only fire after the assistant
+	// message completes).
+	await waitUntil(() => env.terminal.frameSince(0).includes("gated"), 3000);
+	const midRun = env.terminal.frameSince(0);
+	// The footer already reflects turn 1's usage: ↑/↓ moved off zero before
+	// the tool (and turn 2) resolved — the per-turn refresh.
+	expect(midRun).toMatch(/↑[1-9]/);
+	g.resolve();
+	await waitUntil(() => env.transcript.completedLines().join("\n").includes("all finished"));
+	env.terminal.data("/exit\r");
+	await env.repl;
+});
 });
 
 describe("TuiShell activity region (M10 B)", () => {

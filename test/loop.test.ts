@@ -169,7 +169,10 @@ describe("agent loop", () => {
 		const scripts: AssistantMessage[] = [];
 		for (let i = 0; i < 60; i++) {
 			scripts.push(
-				assistant([{ type: "toolCall", id: `t${i}`, name: "echo_tool", arguments: { message: `n${i}` } }], "tool_use"),
+				assistant(
+					[{ type: "toolCall", id: `t${i}`, name: "echo_tool", arguments: { message: `n${i}` } }],
+					"tool_use",
+				),
 			);
 		}
 		scripts.push(assistant([{ type: "text", text: "done" }]));

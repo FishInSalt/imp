@@ -126,7 +126,7 @@ Options:
   -p, --print <prompt>     Prompt to run
   -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
       --max-tokens <n>     Max output tokens per turn (default: 16384)
-      --max-turns <n>      Max agent turns per run (default: 40)
+      --max-turns <n>      Max agent turns per run (default: 40 for print/piped runs; interactive TTY sessions are uncapped)
   -nc, --no-context-files  Skip AGENTS.md discovery
   -c, --continue           Continue the most recent session in this directory
   -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
@@ -236,10 +236,18 @@ function parseArgs(argv: string[]): CliOptions {
 			case "--max-tokens":
 				opts.maxTokens = Number.parseInt(next(), 10);
 				break;
-			case "--max-turns":
-				opts.maxTurns = Number.parseInt(next(), 10);
+			case "--max-turns": {
+				const raw = next();
+				opts.maxTurns = Number.parseInt(raw, 10);
+				// A NaN cap never trips (`turns >= NaN` is false) — the run would
+				// be silently uncapped, the opposite of what the user asked for
+				// (review P3).
+				if (!Number.isFinite(opts.maxTurns) || opts.maxTurns < 1) {
+					throw new Error(`Invalid --max-turns value "${raw}" — must be a positive integer`);
+				}
 				opts.maxTurnsExplicit = true;
 				break;
+			}
 			case "-nc":
 			case "--no-context-files":
 				opts.noContextFiles = true;
@@ -395,14 +403,16 @@ async function main(): Promise<void> {
 			await runPrint(opts, argv);
 			return;
 		}
-		// #no-turn-cap (interactive): the REPL is supervised — the user can
-		// Ctrl+C at any time and auto-compaction bounds context growth, so a
-		// turn cap only kills honest long tasks mid-flight (pi parity: pi's
-		// loop has no turn counter at all). An EXPLICIT --max-turns still wins
-		// — it is a user decision, honored in both modes. Print mode keeps the
-		// default cap: one-shot runs are unsupervised (scripts, subagent-style
-		// callers) and need the cost ceiling.
-		if (!opts.maxTurnsExplicit) opts.maxTurns = Number.POSITIVE_INFINITY;
+		// #no-turn-cap (interactive TTY only): a supervised REPL — the user
+		// can Ctrl+C at any time and auto-compaction bounds context growth, so
+		// a turn cap only kills honest long tasks mid-flight (pi parity: pi's
+		// loop has no turn counter at all). Piped/scripted stdin (`imp < f.txt`)
+		// is UNsupervised — it keeps the default cap like print mode (review
+		// P1). An EXPLICIT --max-turns still wins everywhere — a user decision.
+		const interactiveTty = process.stdin.isTTY === true;
+		if (!opts.maxTurnsExplicit && interactiveTty) {
+			opts.maxTurns = Number.POSITIVE_INFINITY;
+		}
 		await runInteractive(opts, argv);
 	} finally {
 		catalogAbort.abort();

@@ -123,6 +123,7 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 		const cacheKey = "zai";
 		const hit = cache.get(cacheKey);
 		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
+		const redirected = process.env.ZAI_BASE_URL !== undefined; // #gateway-truth
 		const base = (process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL).replace(/\/+$/, "");
 		const ids = await fetchJson(
 			`${base}/models`,
@@ -132,7 +133,11 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 			},
 			cacheKey,
 		).catch(() => null);
-		return ids ?? ([...ZAI_SEED_MODELS] as string[]);
+		// #gateway-truth: the static GLM seeds describe Z.ai's own endpoint. On a
+		// redirected ZAI_BASE_URL gateway they would invent ids that gateway
+		// never listed — return null so the picker's redirect-aware branch
+		// shows the honest "unreachable" note instead (review P1).
+		return redirected ? ids : (ids ?? ([...ZAI_SEED_MODELS] as string[]));
 	}
 
 	const baseUrl = family === "anthropic" ? anthropicBaseUrl() : openaiBaseUrl();

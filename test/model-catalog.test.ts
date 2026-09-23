@@ -592,7 +592,8 @@ describe("M14 /model list fallback", () => {
 				catalogIds: () => ["claude-opus-5", "claude-sonnet-5", "glm-5.3"], // pi.dev cache would answer
 			});
 			expect(result.rows.some((r) => r.label.startsWith("claude-"))).toBe(false);
-			expect(result.fallbackNotes).toHaveLength(1); // honest "unreachable" note
+			// !redirect marker — the renderer swaps to the honest sentence (review P2)
+			expect(result.fallbackNotes[0]).toMatch(/^!redirect /);
 			expect(result.rows[0]?.label).toBe("glm-5.3"); // current still leads
 		} finally {
 			if (saved === undefined) delete process.env.ANTHROPIC_BASE_URL;
@@ -613,10 +614,54 @@ describe("M14 /model list fallback", () => {
 				catalogIds: () => ["glm-5.3", "glm-5.3-flash"],
 			});
 			expect(result.rows.map((r) => r.label)).toEqual(["zai/glm-5.3"]);
-			expect(result.fallbackNotes).toHaveLength(1);
+			// the !redirect marker drives the honest renderer sentence (review P2)
+			expect(result.fallbackNotes[0]).toMatch(/^!redirect /);
 		} finally {
 			if (saved === undefined) delete process.env.ZAI_BASE_URL;
 			else process.env.ZAI_BASE_URL = saved;
+		}
+	});
+
+	it("redirected openai endpoint: probe failure shows no fallback rows either", async () => {
+		const { buildModelList } = await import("../src/repl/commands.js");
+		const saved = process.env.OPENAI_BASE_URL;
+		process.env.OPENAI_BASE_URL = "https://gateway.example/v1";
+		try {
+			const result = await buildModelList("openai/gpt-5.2", {
+				configured: (family) => family === "openai",
+				discover: async () => null,
+				catalogIds: () => ["gpt-5.2", "gpt-5.2-mini"],
+			});
+			expect(result.rows.map((r) => r.label)).toEqual(["openai/gpt-5.2"]);
+			expect(result.fallbackNotes[0]).toMatch(/^!redirect /);
+		} finally {
+			if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+			else process.env.OPENAI_BASE_URL = saved;
+		}
+	});
+
+	// regression guard: the #gateway-truth change must not break the legitimate
+	// offline path — first-party + probe failure + catalog present still lists
+	// catalog rows with NO unreachable note.
+	it("first-party offline: catalog rows still shown, no note", async () => {
+		const { buildModelList } = await import("../src/repl/commands.js");
+		for (const [family, envVar, current, catalog] of [
+			["anthropic", "ANTHROPIC_BASE_URL", "claude-sonnet-5", ["claude-sonnet-5", "claude-opus-5"]],
+			["openai", "OPENAI_BASE_URL", "openai/gpt-5.2", ["gpt-5.2", "gpt-5.2-mini"]],
+		] as const) {
+			const saved = process.env[envVar as "ANTHROPIC_BASE_URL"];
+			delete process.env[envVar as "ANTHROPIC_BASE_URL"]; // ALWAYS unset — the runner's env may carry a gateway URL
+			const result = await buildModelList(current, {
+				configured: (f) => f === family,
+				discover: async () => null,
+				catalogIds: (f) => (f === family ? [...catalog] : null),
+			});
+			const labels = result.rows.map((r) => r.label);
+			expect(labels).toEqual(
+				family === "anthropic" ? [...catalog] : catalog.map((id) => `${family}/${id}`),
+			);
+			expect(result.fallbackNotes).toEqual([]);
+			if (saved !== undefined) process.env[envVar as "ANTHROPIC_BASE_URL"] = saved;
 		}
 	});
 });

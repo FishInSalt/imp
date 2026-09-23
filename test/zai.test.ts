@@ -112,14 +112,17 @@ describe("zai provider (pi's GLM connection path)", () => {
 		}
 	});
 
-	it("discovery: unreachable /models falls back to the pi.dev seeds; a configured family resolves them", async () => {
+	it("discovery: unreachable /models falls back to the pi.dev seeds on the DEFAULT endpoint; a redirected base URL returns null (#gateway-truth)", async () => {
 		const prevKey = process.env.ZAI_API_KEY;
 		const prevUrl = process.env.ZAI_BASE_URL;
 		try {
 			process.env.ZAI_API_KEY = "sk-test";
-			process.env.ZAI_BASE_URL = "http://127.0.0.1:1"; // nothing listens — immediate refusal
+			delete process.env.ZAI_BASE_URL; // default endpoint — seeds stay the floor
 			const ids = await discoverModels("zai");
 			expect(ids).toEqual([...ZAI_SEED_MODELS]);
+			process.env.ZAI_BASE_URL = "http://127.0.0.1:1"; // redirected + unreachable
+			const redirected = await discoverModels("zai");
+			expect(redirected).toBeNull(); // no invented ids on a custom gateway
 		} finally {
 			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevKey;

@@ -691,9 +691,9 @@ export async function buildModelList(
 			if (discovered === null) {
 				if (!firstParty) {
 					// redirected endpoint: no catalog, no seeds — the honest empty
-					// row set plus the unreachable note. The current model still
-					// leads (added below), so the picker stays usable.
-					fallbackNotes.push(familyLabel(`${family}/`));
+					// row set plus a note. The current model still leads (added
+					// below), so the picker stays usable.
+					fallbackNotes.push(`!redirect ${familyLabel(`${family}/`)}`);
 					continue;
 				}
 				const catalogIds = deps.catalogIds?.(family) ?? null;
@@ -1352,6 +1352,15 @@ export const COMMANDS: readonly SlashCommand[] = [
 					catalogIds: catalogModelIds,
 				});
 				for (const note of fallbackNotes) {
+					// #gateway-truth: a redirected endpoint shows NO fallback rows —
+					// the generic suffix would lie. Prefix "!redirect" is stripped
+					// here and swaps the sentence (review P2).
+					if (note.startsWith("!redirect ")) {
+					ctx.renderer.note(
+						`▪ model list: ${note.slice("!redirect ".length)} unreachable (custom base URL) — no fallback ids invented; showing only what's listed`,
+					);
+						continue;
+					}
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);
 				}
 				const index = await select({

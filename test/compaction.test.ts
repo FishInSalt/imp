@@ -330,6 +330,32 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		).rejects.toThrow("token cap");
 	});
 
+	// #compaction-budget: the summarizer request must carry the enlarged
+	// budget (8192) — glm-5.3's thinking blocks count against max_tokens and a
+	// 2048 cap rejected honest full summaries (live /compact failure).
+	it("the summarizer request is budgeted at SUMMARY_MAX_TOKENS (8192), not the old 2048", async () => {
+		const seen: number[] = [];
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream(req) {
+				seen.push(req.maxTokens);
+				yield { type: "text_delta", text: "## Goal\nok" };
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text: "## Goal\nok" }],
+						usage: { inputTokens: 1, outputTokens: 1 },
+						stopReason: "end_turn",
+					},
+				};
+			},
+		};
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await compactHistory({ messages: overflowishHistory(3), provider, model: "m", settings });
+		expect(seen).toEqual([8192]);
+	});
+
 	it("branch summary: same max_tokens gate", async () => {
 		const provider = scriptedProvider([assistant([{ type: "text", text: "half" }], "max_tokens")]);
 		await expect(

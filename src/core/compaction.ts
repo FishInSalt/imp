@@ -46,6 +46,16 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	contextWindow: envInt("IMP_CONTEXT_WINDOW", 131072),
 };
 
+/** Output cap for the compaction summarizer (pi parity, loose): pi uses
+ *  min(0.8 × reserveTokens, model.maxTokens) ≈ 13k. imp's old hard 2048
+ *  collided with models whose thinking blocks count against max_tokens
+ *  (live repro on glm-5.3: thinking ≈1.5k + structured summary > 2048 →
+ *  stopReason max_tokens → the P2 quality gate correctly rejected a half
+ *  checkpoint and /compact failed). The budget is still bounded — a runaway
+ *  summarizer cannot print forever — but sized for thinking + a full
+ *  structured summary. */
+export const SUMMARY_MAX_TOKENS = 8192;
+
 // ============================================================================
 // Token estimation (pi's insight: the last assistant call's usage IS the
 // measured context size; only trailing messages need char-based estimation)
@@ -361,7 +371,10 @@ export async function summarizeBranchSegment(args: {
 		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}${suffix}` }],
 		tools: [],
 		model: args.model,
-		maxTokens: 1024,
+		// Same rationale as SUMMARY_MAX_TOKENS (glm-5.3 thinking counts
+		// against max_tokens); branch segments are shorter than full sessions
+		// so the cap is half the compaction budget.
+		maxTokens: Math.floor(SUMMARY_MAX_TOKENS / 2),
 		signal: args.signal,
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {
@@ -469,7 +482,7 @@ export async function compactHistory(args: {
 		messages: [{ role: "user", content: userContent }],
 		tools: [],
 		model: args.model,
-		maxTokens: 2048,
+		maxTokens: SUMMARY_MAX_TOKENS,
 		signal: args.signal,
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {

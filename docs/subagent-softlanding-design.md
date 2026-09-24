@@ -48,7 +48,7 @@
 - `CHILD_TIMEOUT_MS`（30min）删除，改为**按运行模式给默认**（审查 A-P0：墙只数已完成的轮次——子代理卡在永不返回的工具里时墙不前进；REPL 有 Ctrl+C 兜底，print/CI 无人值守会无限挂起；pi-subagents 在无人看守场景反而加了默认钟）：
   - REPL（TTY 交互）：默认**不限时**——用户在场，Ctrl+C 随手可用（用户决策原样保留）
   - print/非交互模式：默认 **60 分钟**——只防挂死，不干预正常长任务
-  - 解析时机：task 工具构造时读 `process.stdout.isTTY`（与 childSessions 的 env 读取同风格，构造时定型）；导出为 `defaultChildTimeoutMs()`
+  - 解析时机：实现审查后定为 **execute 时**读 `process.stdout.isTTY`（比构造时更新鲜；isTTY 进程内不变，两者等价——设计原写"构造时"，实现取 execute 时并回写本注）；导出为 `defaultChildTimeoutMs()`
   - **表示约定**：REPL（TTY）下返回 `undefined`——`undefined` 就是"不限时"哨兵，贯穿整个 seam（`AbortSignal.timeout(Infinity)` 会 RangeError，勿用 Infinity）；print 下返回 `60 * 60 * 1000`
   - **推论**：REPL + 带 frontmatter `timeoutMs` 的命名 agent——前置链 `args > frontmatter > default` 中 frontmatter 生效，钟存在、`timeout` 可达；"'timeout' 默认不可达、坍缩为 'aborted'"只适用于 effective timeoutMs === undefined 的路径
 - task schema 加可选 `timeoutMs?: Type.Integer({ minimum: 1000 })`（毫秒整数，审查 B-P2：防 0/负/NaN/小数；描述教："Optional wall-clock budget in ms. REPL default: no limit; print runs default to 60 min. Set only for tasks expected to be cheap."）

@@ -290,6 +290,16 @@ export function taskResult(
 	// it (read tool handles oversized JSONL lines) and continue the work.
 	const where = session ? session.filePath : "not persisted";
 	const handoff = () => {
+		if (!session) {
+			// No transcript to hand off: say so plainly (never a dangling
+			// "transcript:" colon), keep the task excerpt + guidance.
+			const lines = ["(transcript not persisted — work was not saved)"];
+			if (originalPrompt !== undefined) {
+				lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
+			}
+			lines.push("Re-dispatch with a narrower prompt.");
+			return lines.join("\n");
+		}
 		const lines = ["work is preserved in the full transcript:"];
 		if (session) {
 			lines.push(`  ${where}`);
@@ -299,11 +309,6 @@ export function taskResult(
 			lines.push(
 				"Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.",
 			);
-		} else {
-			if (originalPrompt !== undefined) {
-				lines.push(`(transcript not persisted) the child's task was: "${excerpt(originalPrompt, 200)}"`);
-			}
-			lines.push("Re-dispatch with a narrower prompt.");
 		}
 		return lines.join("\n");
 	};

@@ -501,6 +501,7 @@ describe("child clock — rev 4 semantics", () => {
 		controller.abort(); // the ONLY terminator available
 		const outcome = await run;
 		expect(outcome.status).toBe("aborted"); // never 'timeout' — no clock exists
+		expect(outcome.turns).toBe(1); // stopped at the gated tool — nothing else ran (catches a 0/NaN-clock bug)
 	});
 
 	it("timeoutMs set but not fired + parent abort → 'aborted', not 'timeout'", async () => {

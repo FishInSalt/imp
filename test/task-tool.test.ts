@@ -116,7 +116,7 @@ describe("taskResult contract (§3)", () => {
 		const result = taskResult(outcome({ status: "aborted" }), null, undefined, "narrow task");
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("task aborted before completion (2 turns ran)");
-		expect(result.output).toContain("(transcript not persisted)");
+		expect(result.output).toContain("(transcript not persisted — work was not saved)");
 		expect(result.output).toContain("Re-dispatch with a narrower prompt.");
 		expect(result.output).not.toContain("read the transcript");
 	});
@@ -1306,6 +1306,45 @@ describe("defaultChildTimeoutMs (13a)", () => {
 });
 
 describe("cap-hit transcript handoff (e2e)", () => {
+	it("worktree child's task excerpt shows args.prompt — NOT the appended worktree notice (design test 14)", async () => {
+		const toolCallStep = assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } }]);
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-cap-"));
+		const parent = createSession(baseDir, baseDir);
+		// A repo is needed for worktree creation — build a minimal one.
+		const repo = path.join(baseDir, "repo");
+		const { mkdirSync: mk } = await import("node:fs");
+		mk(repo, { recursive: true });
+		const { spawnSync } = await import("node:child_process");
+		const rgit = (args: string[]) => {
+			const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+		};
+		rgit(["init", "-q", "-b", "main"]);
+		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.name", "t"]);
+		const { writeFileSync: wf } = await import("node:fs");
+		wf(path.join(repo, "seed.txt"), "committed\n", "utf8");
+		rgit(["add", "."]);
+		rgit(["commit", "-qm", "seed"]);
+		const wtTask = createTaskTool({
+			getProvider: () => scriptedProvider([toolCallStep]),
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [echo],
+			getSession: () => parent,
+			sessionBaseDir: baseDir,
+			cwd: repo,
+			worktreeBaseDir: path.join(baseDir, "wt"),
+			getToolsForCwd: () => [echo], // worktree children get a per-cwd echo pool
+		});
+		const result = await wtTask.execute(
+			{ prompt: "the original task words", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain('the child\'s task was: "the original task words"');
+		expect(result.output).not.toContain("worktree"); // the notice must not leak into the excerpt
+	}, 30000);
+
 	it("no-text max_iterations renders the REAL child file path and the file exists (15)", async () => {
 		// Drive a capped child through the tool: every turn is a tool call, so
 		// 60 turns pass with no final text — incident A's shape.

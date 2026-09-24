@@ -1170,7 +1170,7 @@ class ReplMachine {
 		this.state = "exited";
 		this.mcp?.close(); // M18: kill MCP children before goodbye
 		const session = this.runner.session;
-		if (session) {
+		if (session?.isPersisted) {
 			const id8 = session.header.id.slice(0, 8);
 			this.renderer.note(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
 		} else {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1336,14 +1337,17 @@ describe("runRepl with shell:tui", () => {
 		}
 	});
 
-	it("EOF on an empty editor exits gracefully with the session-saved note", async () => {
+	it("EOF on a pristine session exits gracefully without a file or saved hint", async () => {
 		const env = await startTuiRepl([reply("ok")]);
 		await settle();
 		env.terminal.data("\x04");
 		const code = await env.repl;
 		expect(code).toBe(0);
 		await settle(80); // deferred stop paints the final note
-		expect(env.terminal.frameSince(0)).toContain("saved");
+		expect(env.runner.session?.isPersisted).toBe(false);
+		expect(existsSync(env.runner.session?.filePath as string)).toBe(false);
+		expect(env.terminal.frameSince(0)).toContain("▪ bye");
+		expect(env.terminal.frameSince(0)).not.toContain("saved — resume with");
 	});
 
 	it("an edit tool result becomes a collapsed fold; Ctrl+O expands the diff (producer wiring)", async () => {

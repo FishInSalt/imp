@@ -634,7 +634,11 @@ class RunnerImpl implements Runner {
 			this.sessionStore = createSession(this.options.cwd, this.options.sessionBaseDir);
 			const id8 = this.sessionStore.header.id.slice(0, 8);
 			const old8 = previous.header.id.slice(0, 8);
-			this.options.renderer.note(`▪ new session ${id8} — previous ${old8} saved (imp -r ${old8})`);
+			this.options.renderer.note(
+				previous.isPersisted
+					? `▪ new session ${id8} — previous ${old8} saved (imp -r ${old8})`
+					: `▪ new session ${id8}`,
+			);
 		} else {
 			this.options.renderer.note("▪ new conversation (sessions disabled)");
 		}

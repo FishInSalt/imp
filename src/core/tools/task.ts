@@ -286,11 +286,10 @@ export function taskResult(
 	timeoutMs?: number,
 	originalPrompt?: string,
 ): ToolExecuteResult {
-	// Full transcript path when a child session exists — the parent can read
-	// it (read tool handles oversized JSONL lines) and continue the work.
-	const where = session ? session.filePath : "not persisted";
+	// A lazy session object alone does not guarantee a transcript exists.
+	const where = session?.isPersisted ? session.filePath : undefined;
 	const handoff = () => {
-		if (!session) {
+		if (where === undefined) {
 			// No transcript to hand off: say so plainly (never a dangling
 			// "transcript:" colon), keep the task excerpt + guidance.
 			const lines = ["(transcript not persisted — work was not saved)"];
@@ -300,16 +299,13 @@ export function taskResult(
 			lines.push("Re-dispatch with a narrower prompt.");
 			return lines.join("\n");
 		}
-		const lines = ["work is preserved in the full transcript:"];
-		if (session) {
-			lines.push(`  ${where}`);
-			if (originalPrompt !== undefined) {
-				lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
-			}
-			lines.push(
-				"Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.",
-			);
+		const lines = ["work is preserved in the full transcript:", `  ${where}`];
+		if (originalPrompt !== undefined) {
+			lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
 		}
+		lines.push(
+			"Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.",
+		);
 		return lines.join("\n");
 	};
 
@@ -340,7 +336,7 @@ export function taskResult(
 		// max_iterations / crash with no assistant text anywhere: layered-C
 		// no-text form — honest failure report with full recovery guidance.
 		return {
-			output: `[task] child spent all ${outcome.turns} turns without producing a final answer (it was still calling tools on the last turn). Nothing was lost — ${handoff()}`,
+			output: `[task] child spent all ${outcome.turns} turns without producing a final answer (it was still calling tools on the last turn). ${handoff()}`,
 			isError: false,
 		};
 	}

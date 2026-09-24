@@ -122,7 +122,14 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 				: userMessage;
 		const user: AgentMessage = { role: "user", content };
 		history.push(user);
-		onMessage?.(user);
+		try {
+			onMessage?.(user);
+		} catch (error) {
+			// Lazy session initialization can fail before the first request. Do
+			// not carry an unsaved prompt into the next attempt's live context.
+			history.pop();
+			throw error;
+		}
 	}
 
 	const usage = emptyUsage();

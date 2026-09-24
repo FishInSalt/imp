@@ -104,6 +104,9 @@ describe("taskResult contract (§3)", () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
 		const parent = createSession(baseDir, baseDir);
 		const child = createChildSession(parent, baseDir);
+		child.appendMessage(user("review the code"));
+		expect(child.isPersisted).toBe(true);
+		expect(existsSync(child.filePath)).toBe(true);
 		const result = taskResult(outcome({ status: "aborted", turns: 3 }), child, undefined, "review the code");
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("task aborted before completion (3 turns ran)");
@@ -111,6 +114,27 @@ describe("taskResult contract (§3)", () => {
 		expect(result.output).toContain('the child\'s task was: "review the code"');
 		expect(result.output).toContain("Re-dispatch with a narrower prompt, or read the transcript");
 	});
+
+	it.each(["aborted", "timeout", "crash", "max_iterations"] as const)(
+		"%s with an unpersisted session never advertises a transcript",
+		async (status) => {
+			const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+			const child = createChildSession(createSession(baseDir, baseDir), baseDir);
+			const result = taskResult(
+				outcome({ status, text: undefined, turns: 0, reason: "connection refused" }),
+				child,
+				1000,
+				"review the code",
+			);
+			expect(result.isError).toBe(status !== "max_iterations");
+			expect(child.isPersisted).toBe(false);
+			expect(existsSync(child.filePath)).toBe(false);
+			expect(result.output).toContain("transcript not persisted");
+			expect(result.output).not.toContain(child.filePath);
+			expect(result.output).not.toContain("read the transcript");
+			expect(result.output).not.toContain("Nothing was lost");
+		},
+	);
 
 	it("aborted without a session: guidance survives without the path", () => {
 		const result = taskResult(outcome({ status: "aborted" }), null, undefined, "narrow task");

@@ -19,13 +19,16 @@ const assistantText = (text: string): AgentMessage => ({
 });
 
 describe("SessionStore", () => {
-	it("creates a session file with a header and appends message entries", async () => {
+	it("creates a session file only on the first message, with one header", async () => {
 		const dir = await mkpath();
 		const file = path.join(dir, "s.jsonl");
 		const store = SessionStore.create(file, "/proj");
-		expect(existsSync(file)).toBe(true);
+		expect(existsSync(file)).toBe(false);
+		expect(store.isPersisted).toBe(false);
 
 		store.appendMessage(user("hello"));
+		expect(store.isPersisted).toBe(true);
+		expect(readFileSync(file, "utf8").trim().split("\n")).toHaveLength(2);
 		store.appendMessage(assistantText("hi there"));
 
 		const lines = readFileSync(file, "utf8").trim().split("\n");

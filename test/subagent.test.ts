@@ -109,7 +109,7 @@ describe("runSubagent", () => {
 			prompt: "loop",
 		});
 		expect(outcome.status).toBe("max_iterations");
-		expect(outcome.turns).toBe(40);
+		expect(outcome.turns).toBe(60); // #subagent-softlanding: backup wall 40→60
 		expect(outcome.text).toBeUndefined();
 	}, 20000);
 
@@ -474,5 +474,122 @@ describe("childUsageTrailer", () => {
 		expect(childUsageTrailer(1, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0 })).toBe(
 			"(child: 1 turns, 10 in / 5 out)",
 		);
+	});
+});
+
+// ── #subagent-softlanding rev 4: mode-aware clock semantics ──
+
+describe("child clock — rev 4 semantics", () => {
+	it("no timeoutMs → no clock: a hung tool ends only via the parent signal, status 'aborted'", async () => {
+		// The old implicit 30-min CHILD_TIMEOUT_MS is gone. A gate that never
+		// opens + no timeoutMs = the run lives until the parent aborts; the
+		// abort-aware tool resolves on the forwarded child signal.
+		const g = gate();
+		const controller = new AbortController();
+		const run = runSubagent({
+			provider: scriptedProvider([
+				assistant([{ type: "toolCall", id: "c1", name: "gated", arguments: { message: "hold" } }]),
+			]),
+			model: "m",
+			system: "",
+			tools: [abortAwareTool(g)],
+			prompt: "go",
+			signal: controller.signal,
+			// deliberately NO timeoutMs — no clock may exist
+		});
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		controller.abort(); // the ONLY terminator available
+		const outcome = await run;
+		expect(outcome.status).toBe("aborted"); // never 'timeout' — no clock exists
+		expect(outcome.turns).toBe(1); // stopped at the gated tool — nothing else ran (catches a 0/NaN-clock bug)
+	});
+
+	it("timeoutMs set but not fired + parent abort → 'aborted', not 'timeout'", async () => {
+		const g = gate();
+		const controller = new AbortController();
+		const run = runSubagent({
+			provider: scriptedProvider([
+				assistant([{ type: "toolCall", id: "c1", name: "gated", arguments: { message: "hold" } }]),
+			]),
+			model: "m",
+			system: "",
+			tools: [abortAwareTool(g)],
+			prompt: "go",
+			signal: controller.signal,
+			timeoutMs: 60_000, // far away — the parent abort wins the race
+		});
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		controller.abort();
+		const outcome = await run;
+		expect(outcome.status).toBe("aborted");
+	});
+
+	it("timeout firing inside the overflow-recovery retry loop → status 'timeout'", async () => {
+		// call 1: a real tool-call turn (recovery needs cut > 0);
+		// call 2: overflow error → compact (summarizer answers) → retry loop;
+		// retry: gated tool call; the 300ms clock fires while it hangs.
+		const g = gate();
+		const controller = new AbortController();
+		let call = 0;
+		const isSummarizer = (r: LLMRequest) => r.maxTokens === Math.floor(0.8 * 16) && r.tools.length === 0;
+		const provider = {
+			name: "retry-timeout",
+			async *stream(request: LLMRequest) {
+				call += 1;
+				if (call === 1) {
+					const message = assistant(
+						[{ type: "toolCall", id: "c1", name: "gated", arguments: { message: "hi" } }],
+						"tool_use",
+					);
+					yield { type: "tool_call_start", id: "c1", name: "gated" } as never;
+					yield { type: "message_end", message } as never;
+					return;
+				}
+				if (call === 2 && !isSummarizer(request)) {
+					throw new Error("context window exceeded");
+				}
+				if (isSummarizer(request)) {
+					const summary = assistant([{ type: "text", text: "summary" }], undefined);
+					yield { type: "text_delta", text: "summary" } as never;
+					yield { type: "message_end", message: summary } as never;
+					return;
+				}
+				const message = assistant(
+					[{ type: "toolCall", id: "r1", name: "gated", arguments: { message: "hold" } }],
+					"tool_use",
+				);
+				yield { type: "tool_call_start", id: "r1", name: "gated" } as never;
+				yield { type: "message_end", message } as never;
+				await g.promise;
+			},
+		};
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [abortAwareTool(g)],
+			prompt: "go",
+			signal: controller.signal,
+			timeoutMs: 300,
+			settings: { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 8 },
+		});
+		expect(outcome.status).toBe("timeout");
+		expect(outcome.turns).toBeGreaterThanOrEqual(1);
+	});
+
+	it("default (no timeoutMs) completed run: a post-run parent abort is clean (finally removed listeners)", async () => {
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])]);
+		const controller = new AbortController();
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [],
+			prompt: "go",
+			signal: controller.signal,
+		});
+		expect(outcome.status).toBe("completed");
+		controller.abort(); // must not throw (dangling relay would only warn; pin cleanliness)
+		expect(controller.signal.aborted).toBe(true);
 	});
 });

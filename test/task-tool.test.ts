@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { type AgentDefinition, formatAgentsForPrompt } from "../src/core/agents/registry.js";
 import {
@@ -30,6 +31,26 @@ const echo: Tool = {
 		return { output: `echo: ${String(args.message)}` };
 	},
 };
+
+/** A tool that resolves only when the gate opens or the signal aborts —
+ *  the vehicle for timeout-classification tests. */
+function holdingTool(g: { promise: Promise<void> }): Tool {
+	return {
+		name: "echo",
+		description: "holds",
+		parameters: Type.Object({ message: Type.String() }),
+		async execute(_args, signal) {
+			await Promise.race([
+				g.promise,
+				new Promise<void>((resolve) => {
+					if (signal.aborted) return resolve();
+					signal.addEventListener("abort", () => resolve(), { once: true });
+				}),
+			]);
+			return { output: "held" };
+		},
+	};
+}
 
 function outcome(overrides: Partial<SubagentOutcome>): SubagentOutcome {
 	return {
@@ -79,27 +100,32 @@ describe("taskResult contract (§3)", () => {
 		expect(result.output).not.toContain("\uFFFD"); // no replacement chars
 	});
 
-	it("aborted: isError teaching line with the child session id", async () => {
+	it("aborted: isError + full transcript path (file exists on disk)", async () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
 		const parent = createSession(baseDir, baseDir);
 		const child = createChildSession(parent, baseDir);
-		const result = taskResult(outcome({ status: "aborted", turns: 3 }), child);
+		const result = taskResult(outcome({ status: "aborted", turns: 3 }), child, undefined, "review the code");
 		expect(result.isError).toBe(true);
-		expect(result.output).toBe(
-			`task aborted before completion (3 turns ran). Partial transcript: session ${child.header.id.slice(0, 8)}.`,
-		);
+		expect(result.output).toContain("task aborted before completion (3 turns ran)");
+		expect(result.output).toContain(child.filePath); // real path, not the 8-char id
+		expect(result.output).toContain('the child\'s task was: "review the code"');
+		expect(result.output).toContain("Re-dispatch with a narrower prompt, or read the transcript");
 	});
 
-	it("aborted without a session: 'not persisted'", () => {
-		const result = taskResult(outcome({ status: "aborted" }), null);
-		expect(result.output).toBe(
-			"task aborted before completion (2 turns ran). Partial transcript: not persisted.",
-		);
+	it("aborted without a session: guidance survives without the path", () => {
+		const result = taskResult(outcome({ status: "aborted" }), null, undefined, "narrow task");
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("task aborted before completion (2 turns ran)");
+		expect(result.output).toContain("(transcript not persisted — work was not saved)");
+		expect(result.output).toContain("Re-dispatch with a narrower prompt.");
+		expect(result.output).not.toContain("read the transcript");
 	});
 
-	it("timeout: isError with the injected budget in seconds", () => {
-		const result = taskResult(outcome({ status: "timeout", turns: 1 }), null, 1000);
-		expect(result.output).toBe("task timed out after 1s (1 turns ran). Partial transcript: not persisted.");
+	it("timeout: isError, seconds, path + re-dispatch guidance", () => {
+		const result = taskResult(outcome({ status: "timeout", turns: 1 }), null, 1000, "quick scan");
+		expect(result.isError).toBe(true); // stays true: deterministic kill, retry-safe (rev 4 §2.2)
+		expect(result.output).toContain("task timed out after 1s (1 turns ran)");
+		expect(result.output).toContain("Re-dispatch with a narrower prompt.");
 	});
 
 	it("crash with partial text: success-shaped + failure trailer; no usage ambiguity", () => {
@@ -110,23 +136,58 @@ describe("taskResult contract (§3)", () => {
 		);
 	});
 
-	it("zero-turn crash: isError teaching line", () => {
+	it("zero-turn crash: isError + handoff", () => {
 		const result = taskResult(
 			outcome({ status: "crash", reason: "connection refused", text: undefined, turns: 0 }),
 			null,
+			undefined,
+			"the original task",
 		);
 		expect(result.isError).toBe(true);
-		expect(result.output).toBe(
-			"task failed after 0 turns: connection refused. Partial transcript: not persisted.",
-		);
+		expect(result.output).toContain("task failed after 0 turns: connection refused");
+		expect(result.output).toContain('the child\'s task was: "the original task"');
 	});
 
-	it("max_iterations: success-shaped + cap trailer + usage trailer", () => {
+	it("max_iterations with text: wrap-up annotation, isError false", () => {
 		const result = taskResult(outcome({ status: "max_iterations" }), null);
 		expect(result.isError).toBe(false);
 		expect(result.output).toBe(
-			"answer text\n\n[task] hit the turn cap; result may be incomplete.\n\n(child: 2 turns, 10 in / 5 out)",
+			"answer text\n\n[task] hit the 2-turn cap; this is the child's wrap-up answer, not a confirmed completion.\n\n(child: 2 turns, 10 in / 5 out)",
 		);
+	});
+
+	// #subagent-softlanding layer C — incident A form: capped, zero text.
+	it("max_iterations without text: honest no-text handoff (path + excerpt + guidance), isError false", () => {
+		const result = taskResult(
+			outcome({ status: "max_iterations", text: undefined, turns: 60 }),
+			null,
+			undefined,
+			"investigate the regression",
+		);
+		expect(result.isError).toBe(false); // valve, not error — narrow re-dispatch beats blind retry
+		expect(result.output).toContain("child spent all 60 turns without producing a final answer");
+		expect(result.output).toContain("it was still calling tools on the last turn");
+		expect(result.output).toContain('the child\'s task was: "investigate the regression"');
+		expect(result.output).toContain("Re-dispatch with a narrower prompt.");
+	});
+
+	it("completed without text keeps the legacy no-output marker (no cross-contamination)", () => {
+		const result = taskResult(outcome({ text: undefined }), null);
+		expect(result.output).toContain("(subagent completed with no output)");
+		expect(result.output).not.toContain("still calling tools");
+	});
+
+	it("excerpt: CJK-safe head cut at the boundary", () => {
+		const cjk = "调".repeat(201);
+		const result = taskResult(
+			outcome({ status: "max_iterations", text: undefined, turns: 60 }),
+			null,
+			undefined,
+			cjk,
+		);
+		expect(result.output).not.toContain("\uFFFD"); // no split surrogate
+		const m = result.output.match(/task was: "(.{200})…"/);
+		expect(m?.[1]).toBe("调".repeat(200));
 	});
 });
 
@@ -368,11 +429,93 @@ describe("named agents (M5c)", () => {
 			getTools: () => [slow],
 			getSession: () => null,
 			agents: [timed],
-			timeoutMs: 60_000, // factory default — the agent's 1s must win
+			timeoutMs: 60_000, // factory injection — frontmatter (1s) must win over it
 		});
 		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("task timed out after 1s (1 turns ran)");
+	});
+
+	// #subagent-softlanding rev 4 §2.2 — precedence: args > frontmatter > factory > mode default.
+	it("call-level timeoutMs beats agent frontmatter", async () => {
+		const g = gate();
+		const slow = holdingTool(g);
+		const timed = { ...scout, tools: undefined, timeoutMs: 2000 };
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hold" } }])],
+			sink,
+		);
+		const task = createTaskTool({
+			getProvider: () => provider,
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [slow],
+			getSession: () => null,
+			agents: [timed],
+		});
+		const result = await task.execute(
+			{ prompt: "go", agent: "scout", timeoutMs: 1000 },
+			new AbortController().signal,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("task timed out after 1s"); // not 2s
+	});
+
+	it("frontmatter applies in REPL too (mode default yields only to set values)", async () => {
+		const g = gate();
+		const slow = holdingTool(g);
+		const timed = { ...scout, tools: undefined, timeoutMs: 1000 };
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hold" } }])],
+			sink,
+		);
+		const task = createTaskTool({
+			getProvider: () => provider,
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [slow],
+			getSession: () => null,
+			agents: [timed],
+			// no factory timeoutMs, and tests run non-TTY → mode default is
+			// 60min; frontmatter (1s) must beat BOTH the factory gap and the default
+		});
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("task timed out after 1s");
+	});
+
+	it("schema rejects bad timeoutMs values (0/negative/float/string)", () => {
+		// Validation lives in the loop's Value.Check gate (prepareToolCall), not
+		// inside execute — pin the SCHEMA, not a bypassed execute path.
+		const task = createTaskTool({
+			getProvider: () => scriptedProvider([]),
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [echo],
+			getSession: () => null,
+		});
+		for (const bad of [0, -5, 1.5, "5000", NaN]) {
+			expect(Value.Check(task.parameters as object, { prompt: "go", timeoutMs: bad })).toBe(false);
+		}
+		for (const good of [1000, 60_000, undefined]) {
+			expect(Value.Check(task.parameters as object, { prompt: "go", timeoutMs: good })).toBe(true);
+		}
+	});
+
+	it("prompt description carries the ~300-words size teaching (layer D)", () => {
+		const task = createTaskTool({
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "x" }])]),
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [echo],
+			getSession: () => null,
+		});
+		expect(task.description).not.toContain("~300 words"); // teaching lives in the param, not the tool body
+		const params = JSON.stringify(task.parameters);
+		expect(params).toContain("~300 words max");
+		expect(params).toContain("wall-clock budget in ms");
 	});
 
 	it("the roster lives in the system block, not the description (prompt-audit P8)", () => {
@@ -1141,4 +1284,91 @@ describe("<advertised_agents> caps (prompt-audit P8)", () => {
 		const block = formatAgentsForPrompt(agents)!;
 		expect(Buffer.byteLength(block, "utf8")).toBeLessThanOrEqual(12_288);
 	});
+});
+
+// ── #subagent-softlanding rev 4: mode default + transcript path e2e ──
+
+describe("defaultChildTimeoutMs (13a)", () => {
+	it("returns undefined under TTY, 60min without — the undefined-is-unlimited sentinel", async () => {
+		const { defaultChildTimeoutMs } = await import("../src/core/constants.js");
+		const saved = process.stdout.isTTY as boolean | undefined;
+		try {
+			(process.stdout as { isTTY?: boolean }).isTTY = true;
+			expect(defaultChildTimeoutMs()).toBeUndefined(); // REPL: unlimited
+			(process.stdout as { isTTY?: boolean }).isTTY = false;
+			expect(defaultChildTimeoutMs()).toBe(60 * 60 * 1000); // print: hang guard
+			(process.stdout as { isTTY?: boolean }).isTTY = undefined;
+			expect(defaultChildTimeoutMs()).toBe(60 * 60 * 1000); // headless default
+		} finally {
+			(process.stdout as { isTTY?: boolean }).isTTY = saved;
+		}
+	});
+});
+
+describe("cap-hit transcript handoff (e2e)", () => {
+	it("worktree child's task excerpt shows args.prompt — NOT the appended worktree notice (design test 14)", async () => {
+		const toolCallStep = assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } }]);
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-cap-"));
+		const parent = createSession(baseDir, baseDir);
+		// A repo is needed for worktree creation — build a minimal one.
+		const repo = path.join(baseDir, "repo");
+		const { mkdirSync: mk } = await import("node:fs");
+		mk(repo, { recursive: true });
+		const { spawnSync } = await import("node:child_process");
+		const rgit = (args: string[]) => {
+			const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+		};
+		rgit(["init", "-q", "-b", "main"]);
+		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.name", "t"]);
+		const { writeFileSync: wf } = await import("node:fs");
+		wf(path.join(repo, "seed.txt"), "committed\n", "utf8");
+		rgit(["add", "."]);
+		rgit(["commit", "-qm", "seed"]);
+		const wtTask = createTaskTool({
+			getProvider: () => scriptedProvider([toolCallStep]),
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [echo],
+			getSession: () => parent,
+			sessionBaseDir: baseDir,
+			cwd: repo,
+			worktreeBaseDir: path.join(baseDir, "wt"),
+			getToolsForCwd: () => [echo], // worktree children get a per-cwd echo pool
+		});
+		const result = await wtTask.execute(
+			{ prompt: "the original task words", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain('the child\'s task was: "the original task words"');
+		expect(result.output).not.toContain("worktree"); // the notice must not leak into the excerpt
+	}, 30000);
+
+	it("no-text max_iterations renders the REAL child file path and the file exists (15)", async () => {
+		// Drive a capped child through the tool: every turn is a tool call, so
+		// 60 turns pass with no final text — incident A's shape.
+		const toolCallStep = assistant([
+			{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } },
+		]);
+		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const parent = createSession(baseDir, baseDir);
+		const task = createTaskTool({
+			getProvider: () => scriptedProvider([toolCallStep]),
+			getModel: () => "m",
+			getSystem: () => "",
+			getTools: () => [echo],
+			getSession: () => parent,
+			sessionBaseDir: baseDir,
+		});
+		const result = await task.execute({ prompt: "loop forever" }, new AbortController().signal);
+		expect(result.isError).toBe(false);
+		expect(result.output).toContain("child spent all 60 turns");
+		// the rendered path is a real file on disk with the child's messages
+		const m = result.output.match(/transcript:\n {2}(\S+\.jsonl)/);
+		expect(m).not.toBeNull();
+		const file = m?.[1] ?? "";
+		expect(existsSync(file)).toBe(true);
+		expect(readFileSync(file, "utf8")).toContain("loop forever");
+	}, 30000);
 });

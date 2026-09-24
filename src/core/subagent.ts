@@ -13,7 +13,7 @@ import {
 	overflowGuidance,
 	shouldCompact,
 } from "./compaction.js";
-import { CHILD_MAX_TURNS, CHILD_TIMEOUT_MS } from "./constants.js";
+import { CHILD_MAX_TURNS } from "./constants.js";
 import { type RunAgentLoopOptions, type RunAgentLoopResult, runAgentLoop } from "./loop.js";
 import { type AgentMessage, addUsage, type Usage } from "./messages.js";
 import { type SessionStore, summaryToMessage } from "./session/store.js";
@@ -49,7 +49,9 @@ export interface SubagentOptions {
 	/** Agent profile body (M5c): appended AFTER CHILD_SUFFIX — append-only mode. */
 	extraSystem?: string;
 	signal?: AbortSignal;
-	/** Wall-clock budget. Default CHILD_TIMEOUT_MS; injectable for tests. */
+	/** Wall-clock budget (#subagent-softlanding rev 4). undefined = unlimited
+	 *  (the REPL default — see defaultChildTimeoutMs). The caller resolves
+	 *  args.timeoutMs > agent frontmatter > mode default; injectable for tests. */
 	timeoutMs?: number;
 	/** M15: the parent's resolved auto-compaction decision (env > project
 	 *  settings > global settings > on). The child honors the parent's
@@ -152,7 +154,11 @@ function historyStats(messages: AgentMessage[]): { turns: number; usage: Usage }
 }
 
 export async function runSubagent(options: SubagentOptions): Promise<SubagentOutcome> {
-	const timeoutMs = options.timeoutMs ?? CHILD_TIMEOUT_MS;
+	// #subagent-softlanding rev 4: no implicit clock. `undefined` (the REPL
+	// default) means unlimited — see defaultChildTimeoutMs. The caller resolves
+	// the precedence chain (args.timeoutMs > agent frontmatter > mode default);
+	// this module only honors the resolved value.
+	const timeoutMs = options.timeoutMs;
 	const history: AgentMessage[] = [];
 	const settings = options.settings ?? DEFAULT_COMPACTION_SETTINGS;
 
@@ -206,7 +212,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	): Promise<{ compacted: boolean; error?: string }> {
 		try {
 			// The child's signal IS forwarded (unlike the runner's /compact, which
-			// deliberately waits): children have a wall clock the main loop lacks,
+			// deliberately waits): children may carry a caller-set wall clock,
 			// and persistence only happens after a fully streamed summary — an
 			// aborted stream throws here, is caught below, and nothing is persisted.
 			const beforeStats = historyStats(history);
@@ -279,8 +285,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// Composite abort: parent signal OR the child's own clock. A manual relay
 	// (not AbortSignal.any) keeps engines ">=20" exactly true — any() needs
 	// 20.3. Timeout is detectable afterwards: the clock fired, the parent
-	// signal did not.
-	const clock = AbortSignal.timeout(timeoutMs);
+	// signal did not. #subagent-softlanding rev 4: the clock exists ONLY when
+	// timeoutMs is set (REPL default = no clock; every timedOut classification
+	// below reads `clock?.aborted ?? false`, so 'timeout' is unreachable on the
+	// default path — a clock-less abort is always the parent signal/Ctrl+C).
+	const clock = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
 	const child = new AbortController();
 	const relay = () => child.abort();
 	// An ALREADY-aborted signal never fires "abort" again — attach the
@@ -288,8 +297,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// during worktree setup used to deadlock the child forever).
 	if (options.signal?.aborted) child.abort();
 	else options.signal?.addEventListener("abort", relay);
-	if (clock.aborted) child.abort();
-	else clock.addEventListener("abort", relay);
+	if (clock?.aborted) child.abort();
+	else clock?.addEventListener("abort", relay);
 
 	/** The child's one launch seam: userMessage is undefined on the overflow
 	 *  retry — the failed attempt already left the prompt in history (the loop
@@ -328,7 +337,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	try {
 		const result = await launchLoop(options.prompt);
 		if (result.stopReason === "aborted") {
-			const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
+			const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
 			return {
 				status: timedOut ? "timeout" : "aborted",
 				text: finalAssistantText(history),
@@ -373,7 +382,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			// by compactChildHistory's internal catch (it only returns false) —
 			// re-detect it here so the clock is not misreported as a crash.
 			if (child.signal.aborted) {
-				const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
+				const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
 				return {
 					status: timedOut ? "timeout" : "aborted",
 					text: finalAssistantText(history),
@@ -385,7 +394,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		try {
 			const result = await launchLoop(undefined);
 			if (result.stopReason === "aborted") {
-				const timedOut = !(options.signal?.aborted ?? false) && clock.aborted;
+				const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
 				return {
 					status: timedOut ? "timeout" : "aborted",
 					text: finalAssistantText(history),
@@ -408,7 +417,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		}
 	} finally {
 		options.signal?.removeEventListener("abort", relay);
-		clock.removeEventListener("abort", relay);
+		clock?.removeEventListener("abort", relay);
 	}
 }
 

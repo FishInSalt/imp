@@ -663,7 +663,13 @@ class ReplMachine {
 			if (this.modes.steering === "one-at-a-time") break;
 		}
 		if (picked.length === 0) return [];
-		for (const text of picked) this.renderer.note(`▪ steering: ${shorten(text)}`);
+		for (const text of picked) {
+			// Like submitTurn, the TUI needs a retained user block after the
+			// editor/queue preview clears. Keep the full text, including newlines.
+			// Legacy/print output retains its existing compact note.
+			if (this.input.setFooter !== undefined) this.renderer.user(text);
+			else this.renderer.note(`▪ steering: ${shorten(text)}`);
+		}
 		this.syncQueue();
 		return picked.map((text) => ({ role: "user" as const, content: text }));
 	}
@@ -671,9 +677,9 @@ class ReplMachine {
 	/** M17 follow-up drain: consumed by the LOOP at would-stop boundaries
 	 *  (runner.runTurn getFollowUpMessages → loop.ts), so queued follow-ups
 	 *  continue the SAME run instead of settling into independent turns.
-	 *  Echo is a full user block — a follow-up opens a new exchange, unlike a
-	 *  steering injection mid-turn (note). "one-at-a-time" (imp default, pi
-	 *  parity): one entry per boundary — the esc+p revision window between
+	 *  Echo is a full user block, as with steering in the TUI.
+	 *  "one-at-a-time" (imp default, pi parity): one entry per boundary —
+	 *  the esc+p revision window between
 	 *  boundaries is the point (design §2). */
 	private followUpMessages(): AgentMessage[] {
 		const picked: string[] = [];

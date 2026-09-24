@@ -1531,6 +1531,12 @@ describe("runRepl with shell:tui", () => {
 		const request2 = env.requests[1]?.messages ?? [];
 		expect(request2.some((m) => m.role === "user" && m.content === "queued A")).toBe(true);
 		expect(request2.some((m) => m.role === "user" && m.content === "queued B")).toBe(true);
+		const expectedUsers = new TranscriptSink();
+		for (const text of ["go", "queued A", "queued B"]) expectedUsers.feedUser(text);
+		expect(env.transcript.render(80).filter((row) => row.includes("\x1b[48;5;237m"))).toEqual(
+			expectedUsers.render(80),
+		);
+		expect(env.transcript.completedLines().join("\n")).not.toContain("▪ steering:");
 		// wait for a REAL post-drain repaint first (the tool's ✓ row) so the
 		// region-clear check below cannot pass on an empty window vacuously
 		await waitUntil(() => env.terminal.frameSince(mark).includes("✓"));
@@ -1541,6 +1547,48 @@ describe("runRepl with shell:tui", () => {
 		const code = await env.repl;
 		expect(code).toBe(0);
 	});
+
+	it.each(["all", "one-at-a-time"])(
+		"consumed steer uses a full user block at the final-response boundary (%s mode)",
+		async (steeringMode) => {
+			const g = gate();
+			const g2 = gate();
+			const env = await startTuiRepl([
+				() => g.promise.then(() => reply("initial answer")),
+				() => g2.promise.then(() => reply("steer acknowledged")),
+			]);
+			await writeFile(path.join(env.baseDir, "settings.json"), JSON.stringify({ steeringMode }));
+			const text = `${"Keep the full steering message visible. ".repeat(4)}\nSecond line must remain visible.`;
+			try {
+				env.terminal.data("go\r");
+				await waitUntil(() => env.requests.length === 1);
+				env.terminal.data(`\x1b[200~${text}\x1b[201~`);
+				env.terminal.data("\r");
+				await frameContains(env, "1 queued");
+				expect(env.transcript.completedLines().join("\n")).not.toContain(text);
+				g.resolve();
+				await waitUntil(() => env.requests.length === 2);
+				expect(env.requests[1]?.messages.at(-1)).toEqual({ role: "user", content: text });
+				const expectedUsers = new TranscriptSink();
+				expectedUsers.feedUser("go");
+				expectedUsers.feedUser(text);
+				for (const width of [40, 120]) {
+					expect(env.transcript.render(width).filter((row) => row.includes("\x1b[48;5;237m"))).toEqual(
+						expectedUsers.render(width),
+					);
+				}
+				const transcript = env.transcript.completedLines().join("\n");
+				expect(transcript).toContain(text);
+				expect(transcript).not.toContain("▪ steering:");
+			} finally {
+				g.resolve();
+				g2.resolve();
+				await waitUntil(() => env.transcript.completedLines().join("\n").includes("steer acknowledged"));
+				env.terminal.data("/exit\r");
+				await env.repl;
+			}
+		},
+	);
 
 	it("queue visual: an abort restores the queue to the editor and clears the region", async () => {
 		const g = gate();

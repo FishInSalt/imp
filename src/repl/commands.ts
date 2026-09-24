@@ -108,6 +108,8 @@ export interface CommandContext {
 	 *  the machine's Ctrl+C can cancel it (the OAuth poll runs up to 15 min).
 	 *  Wired by the machine's commandContext; absent in dispatch-only tests. */
 	onLongOpAbort?: (controller: AbortController | null) => void;
+	/** Guard-owner activity text; null hides the row without releasing the guard. */
+	onLongOpLabel?: (label: string | null) => void;
 	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
 	worktreeCwd?: string;
 }
@@ -1185,6 +1187,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					else ctx.renderer.note("▪ switching branches…");
 					const controller = new AbortController();
 					ctx.onLongOpAbort?.(controller);
+					ctx.onLongOpLabel?.(summarize ? "summarizing branch…" : "switching branches…");
 					try {
 						const result = await ctx.runner.navigateTree(targetId, {
 							summarize,
@@ -1203,6 +1206,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 						renderNavigateSuccess(ctx, session, result);
 						return "handled";
 					} finally {
+						ctx.onLongOpLabel?.(null);
 						ctx.onLongOpAbort?.(null);
 					}
 				}
@@ -1240,6 +1244,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			// summarizer sees and navigateTree reports as aborted.
 			const controller = new AbortController();
 			ctx.onLongOpAbort?.(controller);
+			ctx.onLongOpLabel?.(summarize ? "summarizing branch…" : "switching branches…");
 			try {
 				const result = await ctx.runner.navigateTree(targetId, {
 					summarize,
@@ -1257,6 +1262,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				renderNavigateSuccess(ctx, session, result);
 				return "handled";
 			} finally {
+				ctx.onLongOpLabel?.(null);
 				ctx.onLongOpAbort?.(null);
 			}
 		},

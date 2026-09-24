@@ -1833,6 +1833,82 @@ describe("runRepl with shell:tui", () => {
 		shell.close();
 	});
 
+	it("/tree opens and cancels the picker without a busy row or provider call, while input stays guarded", async () => {
+		const env = await startTuiRepl([], {
+			seed: [{ role: "user", content: "tree question" }, reply("tree answer")],
+		});
+		const active = vi.spyOn(TuiShell.prototype, "setActive");
+		try {
+			await settle();
+			const mark = env.terminal.writes.length;
+			env.terminal.data("/tree\r");
+			await frameContains(env, "Navigate the session tree");
+			expect(active).toHaveBeenLastCalledWith(true);
+			expect(env.terminal.frameSince(mark)).not.toContain("compacting");
+			expect(env.terminal.frameSince(mark)).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+			expect(env.requests).toHaveLength(0);
+			env.terminal.data("\x1b");
+			await waitUntil(() => active.mock.calls.at(-1)?.[0] === false);
+			await settle();
+			expect(env.terminal.frameSince(mark)).not.toContain("compacting");
+			expect(env.requests).toHaveLength(0);
+		} finally {
+			active.mockRestore();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		}
+	});
+
+	it.each([false, true])("/tree picker navigation labels work and clears on abort=%s", async (abort) => {
+		const env = await startTuiRepl([], {
+			seed: [
+				{ role: "user", content: "first tree question" }, reply("first tree answer"),
+				{ role: "user", content: "second tree question" }, reply("second tree answer"),
+			],
+		});
+		const held = gate();
+		const navigate = env.runner.navigateTree.bind(env.runner);
+		const spy = vi.spyOn(env.runner, "navigateTree").mockImplementation(async (id, options) => {
+			options?.signal?.addEventListener("abort", () => held.resolve(), { once: true });
+			await held.promise;
+			return abort ? { aborted: true } : navigate(id, options);
+		});
+		const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] switching branches…/;
+		try {
+			await settle();
+			env.terminal.data("/tree\r");
+			await frameContains(env, "Navigate the session tree");
+			env.terminal.data("\x1b[A\r");
+			await frameContains(env, "Summarize the branch");
+			expect(env.terminal.frameSince(0)).not.toContain("compacting context");
+			env.terminal.data("\r"); // default choice: No summary
+			await waitUntil(() => spy.mock.calls.length === 1);
+			expect(spy.mock.calls[0]?.[1]?.summarize).toBe(false);
+			await waitUntil(() => spinner.test(env.terminal.frameSince(0)));
+			expect(env.requests).toHaveLength(0);
+			const mark = env.terminal.writes.length;
+			if (abort) env.terminal.data("\x03");
+			else held.resolve();
+			await waitUntil(() => spy.mock.settledResults[0]?.type === "fulfilled");
+			await settle();
+			if (abort) {
+				expect(env.terminal.frameSince(mark)).toContain("Navigate the session tree");
+				expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+			}
+			expect(env.terminal.frameSince(mark)).not.toMatch(spinner);
+			expect(env.terminal.frameSince(mark)).not.toContain("compacting context");
+			expect(env.requests).toHaveLength(0);
+		} finally {
+			held.resolve();
+			spy.mockRestore();
+			env.terminal.data("\x1b");
+			await settle();
+			// Navigating to a user entry restores its prompt in the editor.
+			env.terminal.data("\x15/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		}
+	});
+
 	it("/tree (review P1-1): the summarizer window holds state — typed lines QUEUE, /new is refused", async () => {
 		let releaseSummary: () => void = () => {};
 		const gated = new Promise<void>((resolve) => {
@@ -1857,7 +1933,9 @@ describe("runRepl with shell:tui", () => {
 		// switch — the summarizer hangs on the gate (#tree: rows are ACTIVE-FIRST
 		// tree rows: q1, a1, q3, a3(current), q2-old, a2-old — #6 = the abandoned tip)
 		env.terminal.data("/tree 6\r");
-		await waitUntil(() => env.terminal.frameSince(0).includes("switching branches"), 8000);
+		const summarySpinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] summarizing branch…/;
+		await waitUntil(() => summarySpinner.test(env.terminal.frameSince(0)), 8000);
+		expect(env.terminal.frameSince(0)).not.toContain("compacting context");
 		// during the window: a typed line must QUEUE, not open a stale-history turn
 		env.terminal.data("typed during the switch\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("1 queued"), 8000);
@@ -1865,10 +1943,12 @@ describe("runRepl with shell:tui", () => {
 		// and /new is refused while the switch is in flight
 		env.terminal.data("/new\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("waits for the running turn"), 8000);
+		const clearMark = env.terminal.writes.length;
 		releaseSummary();
 		await waitUntil(() => env.terminal.frameSince(0).includes("summarized in context"), 8000);
 		// the queued line flushes as a real turn ON the new branch
 		await waitUntil(() => env.terminal.frameSince(0).includes("flushed turn reply"), 8000);
+		expect(env.terminal.frameSince(clearMark)).not.toMatch(summarySpinner);
 		const flushed = env.requests[4];
 		const userTexts = (flushed?.messages ?? [])
 			.filter((m): m is UserMessage => m.role === "user")

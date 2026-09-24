@@ -500,7 +500,8 @@ class ReplMachine {
 			// the whole guarded window; the finally's flushQueue → returnToIdle
 			// → clearActivity parks it back at idle. The label follows the
 			// command (review P2: /login ≠ compaction text).
-			this.longOpLabel = name === "login" ? "waiting for login…" : "compacting context…";
+			this.longOpLabel =
+				name === "tree" ? null : name === "login" ? "waiting for login…" : "compacting context…";
 			this.pushActivity();
 		}
 		try {
@@ -1060,7 +1061,7 @@ class ReplMachine {
 		// /tree summarize, /login oauth) gets its own spinner row.
 		let phase: ActivitySnapshot["phase"];
 		if (this.state === "idle") phase = "idle";
-		else if (this.state === "compacting") phase = "compacting";
+		else if (this.state === "compacting") phase = this.longOpLabel === null ? "idle" : "compacting";
 		else phase = working ? "working" : "thinking";
 		const snapshot: ActivitySnapshot = {
 			phase,
@@ -1230,6 +1231,14 @@ class ReplMachine {
 				this.longOpAbort = controller;
 			},
 		};
+		// Only the command that owns the guard may change its visible activity.
+		// Browsing /tree remains guarded without claiming background work.
+		if (authorizedStateful) {
+			ctx.onLongOpLabel = (label) => {
+				this.longOpLabel = label;
+				this.pushActivity();
+			};
+		}
 		// The item picker exists only on shells that implement it (TuiShell —
 		// M9 phase 2); binding it to the input keeps the method's `this`.
 		// Commands without it keep their text fallbacks.

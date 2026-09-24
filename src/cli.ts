@@ -83,6 +83,8 @@ interface CliOptions {
 	/** M13 batch 2: `@path` positionals → file attachments (print mode). */
 	fileArgs: string[];
 	model: string;
+	/** True only for -m/--model; defaults must not override a saved session model. */
+	modelExplicit: boolean;
 	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity).
 	 *  UNDEFINED when neither is set — the runner then applies the settings
 	 *  default, then pi's "medium" (a defined "off" sentinel here would make
@@ -188,6 +190,7 @@ function parseArgs(argv: string[]): CliOptions {
 		prompt: undefined,
 		fileArgs: [],
 		model: defaultModel(argv),
+		modelExplicit: false,
 		thinking: envThinking(),
 		maxTokens: 16384,
 		// #no-turn-cap follow-up: the print/piped default rose 40 → 100 —
@@ -228,6 +231,7 @@ function parseArgs(argv: string[]): CliOptions {
 			case "-m":
 			case "--model":
 				opts.model = next();
+				opts.modelExplicit = true;
 				break;
 			case "--thinking": {
 				const raw = next();
@@ -672,6 +676,7 @@ function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): Ru
 		cwd: process.cwd(),
 		argv,
 		model: opts.model,
+		modelExplicit: opts.modelExplicit,
 		thinking: opts.thinking,
 		maxTokens: opts.maxTokens,
 		maxTurns: opts.maxTurns,

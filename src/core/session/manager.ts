@@ -76,12 +76,18 @@ function inspectSessionFile(filePath: string, includeEmpty: boolean): SessionInf
 	}
 	// A fresh or metadata-only session has no conversation to restore. Check
 	// the whole tree: an empty current branch can still have saved history.
-	if (!includeEmpty && !store.getEntries().some((entry) => entry.type === "message")) return null;
+	const hasMessages = store.getEntries().some((entry) => entry.type === "message");
+	if (!includeEmpty && !hasMessages && !store.hasModelSelection) return null;
 	const header: SessionHeader = store.header;
 	// M16: a /name'd session titles by its name — the whole point of
 	// naming is finding it again in /sessions and --resume previews.
 	const name = store.getSessionName();
-	let title = name ?? "(empty session)";
+	const model = store.getModel();
+	let title =
+		name ??
+		(!hasMessages && store.hasModelSelection && model !== undefined
+			? `(model: ${model.provider}/${model.modelId})`
+			: "(empty session)");
 	if (name === undefined) {
 		for (const entry of store.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "user") {

@@ -749,7 +749,9 @@ function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 		ctx.clearView?.(); // the old conversation leaves the screen FIRST (debt clearance)
 		const session = ctx.runner.session;
 		if (session !== null && messages > 0) ctx.replay(session);
-		ctx.renderer.note(`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored`);
+		ctx.renderer.note(
+			`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored · ${ctx.runner.modelReference()}`,
+		);
 	} catch (err) {
 		ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
 	}
@@ -1356,9 +1358,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 					// the generic suffix would lie. Prefix "!redirect" is stripped
 					// here and swaps the sentence (review P2).
 					if (note.startsWith("!redirect ")) {
-					ctx.renderer.note(
-						`▪ model list: ${note.slice("!redirect ".length)} unreachable (custom base URL) — no fallback ids invented; showing only what's listed`,
-					);
+						ctx.renderer.note(
+							`▪ model list: ${note.slice("!redirect ".length)} unreachable (custom base URL) — no fallback ids invented; showing only what's listed`,
+						);
 						continue;
 					}
 					ctx.renderer.note(`▪ model list: ${note} unreachable — showing known fallback ids`);

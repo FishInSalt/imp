@@ -151,7 +151,7 @@ describe("createRunner", () => {
 		})) as RunnerWithOutput;
 
 		const id8 = store.header.id.slice(0, 8);
-		expect(runner.capturedOutput()).toBe(`▪ resumed ${id8} · 2 msgs · ~120 tokens\n`);
+		expect(runner.capturedOutput()).toBe(`▪ resumed ${id8} · test-model · 2 msgs · ~120 tokens\n`);
 		expect(runner.history.map((m) => m.role)).toEqual(["user", "assistant"]);
 		expect(runner.session?.header.id).toBe(store.header.id);
 	});
@@ -170,7 +170,9 @@ describe("createRunner", () => {
 		expect(runner.session?.header.id).toBe(store.header.id);
 		expect(runner.session?.isPersisted).toBe(true);
 		expect(runner.history).toEqual([]);
-		expect(runner.capturedOutput()).toContain(`▪ resumed ${store.header.id.slice(0, 8)} · 0 msgs`);
+		expect(runner.capturedOutput()).toContain(
+			`▪ resumed ${store.header.id.slice(0, 8)} · test-model · 0 msgs`,
+		);
 	});
 
 	it("-c with no prior session prints the starting-fresh banner", async () => {

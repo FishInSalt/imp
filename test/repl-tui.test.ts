@@ -14,6 +14,7 @@ import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
 import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
+import { Fold } from "../src/repl/components/fold.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
@@ -1124,6 +1125,8 @@ describe("runRepl with shell:tui", () => {
 			provider?: LLMProvider; // inject an abort-aware hold stream when needed
 			model?: string; // default test-model is knob-less; Claude opts into thinking
 			seed?: AgentMessage[]; // pre-written session history (replayed at startup)
+			noSession?: boolean;
+			markdown?: boolean;
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
@@ -1137,12 +1140,13 @@ describe("runRepl with shell:tui", () => {
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
 			write: transcript.feed,
+			thinkingSink: transcript.thinkingSink,
 			userSink: (text) => transcript.feedUser(text),
 			statusSink: (text) => transcript.feedStatus(text),
 			ansi: false,
 			liveTools: false, // no spinner timers; the byte path is what matters
 			toolStyle: "one-line",
-			markdown: false,
+			markdown: options?.markdown ?? false,
 			foldedResults: true, // mirrors cli.ts's TUI wiring (M11 #1)
 		});
 		const runner = await createRunner({
@@ -1152,7 +1156,7 @@ describe("runRepl with shell:tui", () => {
 			maxTokens: 1024,
 			maxTurns: 10,
 			noContextFiles: true,
-			noSession: false,
+			noSession: options?.noSession ?? false,
 			continueRecent: options?.seed !== undefined && options.seed.length > 0 ? true : undefined,
 			sessionBaseDir: baseDir,
 			settingsPath: path.join(baseDir, "settings.json"),
@@ -2620,20 +2624,25 @@ describe("runRepl with shell:tui", () => {
 			];
 			const env = await startTuiRepl([reply("ok")], { model: "claude-sonnet-4-5", seed });
 			await settle();
-			const before = env.transcript.completedLines().join("\n");
+			const before = stripAnsi(env.transcript.render(80).join("\n"));
 			expect(before).toContain("very secret trace text"); // visible by default
 			expect(before).toContain("public answer");
 			env.terminal.data("\x14"); // ctrl+t — pi's app.thinking.toggle
 			await settle();
-			const after = env.transcript.completedLines().join("\n");
+			const after = stripAnsi(env.transcript.render(80).join("\n"));
 			expect(after).toContain("Thinking..."); // the static label replaced the trace
 			expect(after).not.toContain("very secret trace text");
-			expect(after).toContain("public answer"); // the answer itself survives the rebuild
+			expect(after).toContain("public answer"); // the answer itself survives the toggle
+			expect(after).toContain("replayed 2 messages");
+			env.terminal.data("\x14");
+			await settle();
+			expect(stripAnsi(env.transcript.render(80).join("\n"))).toBe(before);
+			expect(env.requests).toHaveLength(0);
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});
 
-		it("ctrl+t DURING a run: the flag flips with a status line, but NO rebuild truncates the streaming turn", async () => {
+		it("ctrl+t DURING a run: presentation notice preserves the streaming turn", async () => {
 			let releaseTurn: () => void = () => {};
 			const gated = new Promise<void>((resolve) => {
 				releaseTurn = resolve;
@@ -2652,6 +2661,67 @@ describe("runRepl with shell:tui", () => {
 			releaseTurn();
 			await settle();
 			await settle();
+			env.terminal.data("/exit\r");
+			await expect(env.repl).resolves.toBe(0);
+		});
+
+		it("no-session toggles retain active thinking, buffered answers, folds and draft without model calls", async () => {
+			const g = gate();
+			const answerGate = gate();
+			let calls = 0;
+			const provider: LLMProvider = {
+				name: "toggle-test",
+				async *stream() {
+					calls++;
+					yield { type: "thinking_delta", text: "current partial thought" };
+					await g.promise;
+					yield { type: "text_delta", text: "unfinished answer" };
+					await answerGate.promise;
+					yield { type: "text_delta", text: " completed" };
+					yield { type: "message_end", message: reply("unfinished answer completed") };
+				},
+			};
+			const env = await startTuiRepl([], { provider, noSession: true, markdown: true });
+			await settle();
+			const clear = vi.spyOn(env.transcript, "clear");
+			const view = () => stripAnsi(env.transcript.render(80).join("\n"));
+			const prior = env.transcript.thinkingSink.begin();
+			prior.append("prior retained thought");
+			prior.end();
+			const component = new Fold("tool result", ["expanded tool result"], false);
+			component.setExpanded(true);
+			env.transcript.appendChild(component);
+			env.terminal.data("go\r");
+			await waitUntil(() => view().includes("current partial thought"));
+			env.terminal.data("preserved draft");
+			env.terminal.data("\x14");
+			await settle();
+			expect(view().match(/Thinking\.\.\./g)).toHaveLength(2);
+			expect(view()).not.toContain("retained thought");
+			expect(view()).not.toContain("current partial thought");
+			expect(view()).toContain("expanded tool result");
+			expect(component.isExpanded()).toBe(true);
+			expect(view()).not.toContain("Thinking blocks:");
+			env.terminal.data("\x14");
+			await settle();
+			expect(view()).toContain("current partial thought");
+			expect(view()).toContain("prior retained thought");
+			g.resolve();
+			await settle();
+			const buffered = env.transcript.completedLines().join("\n");
+			expect(buffered).not.toContain("unfinished answer");
+			env.terminal.data("\x14\x14");
+			await settle();
+			expect(env.transcript.completedLines().join("\n")).toBe(buffered);
+			answerGate.resolve();
+			await waitUntil(() => view().includes("unfinished answer completed"));
+			env.terminal.data("\x14\x14"); // idle, without a session
+			await settle();
+			expect(clear).not.toHaveBeenCalled();
+			expect(calls).toBe(1);
+			expect(env.runner.session).toBeNull();
+			expect(env.terminal.frameSince(0)).toContain("preserved draft");
+			env.terminal.data("\x7f".repeat("preserved draft".length));
 			env.terminal.data("/exit\r");
 			await expect(env.repl).resolves.toBe(0);
 		});
@@ -2864,6 +2934,79 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all finished"));
 		env.terminal.data("/exit\r");
 		await env.repl;
+	});
+});
+
+describe("TuiShell presentation notices", () => {
+	it("keeps draft, ask and interrupt hints independent; selectors suppress notices", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		shell.setText("draft text");
+		shell.setActive(true);
+		shell.showNotice("Thinking blocks: hidden");
+		let mark = terminal.writes.length;
+		shell.forceRender();
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("Thinking blocks: hidden");
+		expect(terminal.frameSince(mark)).toContain("esc to interrupt");
+		expect(shell.getText()).toBe("draft text");
+		const asked = shell.ask("Keep this question?");
+		mark = terminal.writes.length;
+		shell.forceRender();
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("Keep this question?");
+		expect(terminal.frameSince(mark)).toContain("Thinking blocks: hidden");
+		const selected = shell.select({ items: [{ label: "choice" }] });
+		mark = terminal.writes.length;
+		shell.forceRender();
+		await settle();
+		expect(terminal.frameSince(mark)).not.toContain("Thinking blocks: hidden");
+		expect(transcript.completedLines()).toEqual([]);
+		shell.close();
+		await expect(selected).resolves.toBeNull();
+		await expect(asked).resolves.toBe(false);
+		await shell.whenSettled();
+	});
+
+	it("replaces expiry, expires while suppressed, and cancels immediately on close", async () => {
+		vi.useFakeTimers();
+		const { shell } = makeShell();
+		try {
+			shell.start();
+			const state = shell as unknown as {
+				noticeText: string;
+				noticeTimer: unknown;
+				noticeRow: { render(width: number): string[] };
+			};
+			expect(state.noticeRow.render(80)).toEqual([]);
+			shell.showNotice("expires while visible");
+			expect(state.noticeRow.render(80)).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(state.noticeRow.render(80)).toEqual([]);
+			shell.showNotice("first");
+			await vi.advanceTimersByTimeAsync(1500);
+			shell.showNotice("second");
+			await vi.advanceTimersByTimeAsync(600);
+			// Inspect presentation state, not the terminal byte log's old frames.
+			expect(state.noticeText).toBe("second");
+			expect(state.noticeRow.render(80)).toHaveLength(1);
+			const selected = shell.select({ items: [{ label: "choice" }] });
+			await vi.advanceTimersByTimeAsync(1400);
+			expect(state.noticeText).toBe("");
+			expect(state.noticeRow.render(80)).toEqual([]);
+			shell.showNotice("last");
+			shell.close();
+			expect(state.noticeTimer).toBeNull();
+			expect(state.noticeText).toBe("");
+			shell.showNotice("after close");
+			expect(state.noticeTimer).toBeNull();
+			await vi.advanceTimersByTimeAsync(2500);
+			await expect(selected).resolves.toBeNull();
+			await shell.whenSettled();
+		} finally {
+			shell.close();
+			vi.useRealTimers();
+		}
 	});
 });
 

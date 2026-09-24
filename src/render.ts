@@ -1,5 +1,6 @@
 import type { AgentEvent } from "./core/loop.js";
 import { contentText, type ToolResult } from "./core/messages.js";
+import type { ThinkingSection, ThinkingSink } from "./thinking-sink.js";
 
 /** M13 §8: the display note for an image attachment — base64 length back to
  *  bytes (4/3), human units. Empty for text-only results. */
@@ -54,6 +55,8 @@ export interface RendererOptions {
 	statusSink?: (text: string) => void;
 	/** pi's hideThinkingBlock at startup (ctrl+t flips the live field). */
 	hideThinking?: boolean;
+	/** Retained TUI thinking sections; absent preserves the byte-only path. */
+	thinkingSink?: ThinkingSink;
 	/** TUI mode: successful tool results fold instead of writing the `⎿`
 	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
 	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
@@ -107,7 +110,17 @@ export class Renderer {
 	private thinkingBuffer = "";
 	/** pi's hideThinkingBlock (ctrl+t): hidden traces render one dim static
 	 *  label per section ("Thinking...") instead of the full text. */
-	hideThinking = false;
+	private thinkingHidden = false;
+	private semanticThinking: ThinkingSection | undefined;
+
+	get hideThinking(): boolean {
+		return this.thinkingHidden;
+	}
+
+	set hideThinking(hidden: boolean) {
+		this.thinkingHidden = hidden;
+		this.options.thinkingSink?.setHidden(hidden);
+	}
 	private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 	private thinkTimer: ReturnType<typeof setTimeout> | null = null;
 	private spinnerLabel: string | null = null;
@@ -126,6 +139,7 @@ export class Renderer {
 	event(event: AgentEvent): void {
 		switch (event.type) {
 			case "message_end":
+				this.closeSemanticThinking();
 				// The next model call may follow (tool results posted) — start the
 				// thinking spinner; endRun/note/tool events cancel it if none comes.
 				this.think("Thinking…");
@@ -154,6 +168,7 @@ export class Renderer {
 
 	/** Dim status line (`▪ …`). Starts on a fresh line when streaming left one open. */
 	note(text: string): void {
+		this.closeSemanticThinking();
 		this.stopSpinner();
 		this.flushMarkdown();
 		this.ensureNewline();
@@ -164,6 +179,7 @@ export class Renderer {
 	 *  consecutive statuses into one line; without a sink (print/legacy)
 	 *  it degrades to a note — those modes never switch mid-stream. */
 	status(text: string): void {
+		this.closeSemanticThinking();
 		if (this.options.statusSink === undefined) {
 			this.note(text);
 			return;
@@ -179,6 +195,7 @@ export class Renderer {
 	 *  transcript must gain it — print mode relies on the terminal's own
 	 *  readline echo and its byte contract stays frozen. */
 	user(text: string): void {
+		this.closeSemanticThinking();
 		this.stopSpinner();
 		this.flushMarkdown();
 		this.ensureNewline();
@@ -191,6 +208,7 @@ export class Renderer {
 
 	/** Red error line. Starts on a fresh line when streaming left one open. */
 	error(text: string): void {
+		this.closeSemanticThinking();
 		this.stopSpinner();
 		this.flushMarkdown();
 		this.ensureNewline();
@@ -199,6 +217,7 @@ export class Renderer {
 
 	/** Plain line (help text, model info). */
 	writeLine(text: string): void {
+		this.closeSemanticThinking();
 		this.stopSpinner();
 		this.flushMarkdown();
 		this.ensureNewline();
@@ -237,6 +256,19 @@ export class Renderer {
 			this.write("\n");
 			this.needsNewline = false;
 		}
+	}
+
+	/** Replay boundary: settle output without starting a spinner or clearing tools. */
+	completeAssistantMessage(): void {
+		this.closeSemanticThinking();
+		this.flushMarkdown();
+		this.ensureNewline();
+	}
+
+	private closeSemanticThinking(): void {
+		const section = this.semanticThinking;
+		this.semanticThinking = undefined;
+		section?.end();
 	}
 
 	// ── spinner ─────────────────────────────────────────────────────────────
@@ -342,6 +374,13 @@ export class Renderer {
 
 	/** A settled reasoning trace (replay path): one dim section, no streaming. */
 	thinking(text: string): void {
+		if (this.options.thinkingSink !== undefined) {
+			this.closeSemanticThinking();
+			this.stopSpinner();
+			this.streamThinking(text);
+			this.closeSemanticThinking();
+			return;
+		}
 		this.thinkingBuffer += text;
 		this.flushThinking();
 	}
@@ -350,6 +389,15 @@ export class Renderer {
 	 *  parity — the trace grows as it streams, like the answer text). The
 	 *  hidden mode buffers whole (pi's hidden label is static). */
 	private streamThinking(delta: string): void {
+		if (this.options.thinkingSink !== undefined) {
+			if (this.semanticThinking === undefined) {
+				this.flushMarkdown();
+				this.ensureNewline();
+				this.semanticThinking = this.options.thinkingSink.begin();
+			}
+			this.semanticThinking.append(delta);
+			return;
+		}
 		this.thinkingBuffer += delta;
 		if (this.hideThinking) return;
 		for (;;) {
@@ -364,6 +412,7 @@ export class Renderer {
 	/** Flush the remaining (incomplete) reasoning paragraph — the run's
 	 *  answer is beginning, a tool follows, or the stream ended. */
 	private flushThinking(): void {
+		this.closeSemanticThinking();
 		if (this.thinkingBuffer === "") return;
 		const text = this.thinkingBuffer.trim();
 		this.thinkingBuffer = "";
@@ -420,6 +469,7 @@ export class Renderer {
 
 	/** Streaming text (event or direct). Spinner-aware; markdown-buffered when enabled. */
 	raw(text: string): void {
+		this.closeSemanticThinking();
 		this.stopSpinner();
 		if (!this.markdown) {
 			this.write(text);
@@ -524,6 +574,7 @@ export class Renderer {
 	}
 
 	private toolEnd(result: ToolResult): void {
+		this.closeSemanticThinking();
 		if (this.options.toolStyle === "two-line") {
 			const shown = result.display ?? contentText(result.content);
 			const line = result.isError

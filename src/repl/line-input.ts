@@ -88,6 +88,8 @@ export interface LineInput {
 	/** TUI shell only: persistent bottom status line (model · session ·
 	 *  cumulative tokens). The legacy shell has no such line and ignores it. */
 	setFooter?(text: string): void;
+	/** Short-lived presentation feedback; never writes into the transcript. */
+	showNotice?(text: string): void;
 	/** Append a collapsed fold (expandable body) INTO the transcript
 	 *  stream at its current end — inline, directly below the line that
 	 *  just completed (pi parity); a TUI-shell-only affordance, the

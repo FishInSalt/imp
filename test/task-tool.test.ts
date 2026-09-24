@@ -196,6 +196,7 @@ describe("createTaskTool end-to-end", () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
 		const cwd = path.join(baseDir, "proj");
 		const parent = createSession(cwd, baseDir);
+		parent.appendMessage(user("find the bug"));
 		const sink: LLMRequest[] = [];
 		const provider = scriptedProvider([assistant([{ type: "text", text: "the bug is on line 3" }])], sink);
 		const task = createTaskTool({

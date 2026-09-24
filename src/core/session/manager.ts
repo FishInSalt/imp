@@ -63,7 +63,7 @@ export function createChildSession(parent: SessionStore, baseDir?: string): Sess
 }
 
 /** Cheap header + title scan of one session file (reads the whole file; files are small). */
-function inspectSessionFile(filePath: string): SessionInfo | null {
+function inspectSessionFile(filePath: string, includeEmpty: boolean): SessionInfo | null {
 	let store: SessionStore;
 	let stats: SessionStats;
 	try {
@@ -74,6 +74,9 @@ function inspectSessionFile(filePath: string): SessionInfo | null {
 	} catch {
 		return null; // unreadable/corrupt files are skipped, not fatal
 	}
+	// A fresh or metadata-only session has no conversation to restore. Check
+	// the whole tree: an empty current branch can still have saved history.
+	if (!includeEmpty && !store.getEntries().some((entry) => entry.type === "message")) return null;
 	const header: SessionHeader = store.header;
 	// M16: a /name'd session titles by its name — the whole point of
 	// naming is finding it again in /sessions and --resume previews.
@@ -105,14 +108,18 @@ function inspectSessionFile(filePath: string): SessionInfo | null {
 	};
 }
 
-/** List sessions for a cwd, newest first. */
-export function listSessions(cwd: string, baseDir?: string): SessionInfo[] {
+/** List sessions with conversation history for a cwd, newest first. */
+export function listSessions(
+	cwd: string,
+	baseDir?: string,
+	options: { includeEmpty?: boolean } = {},
+): SessionInfo[] {
 	const dir = sessionsDirFor(cwd, baseDir);
 	if (!existsSync(dir)) return [];
 	const infos: SessionInfo[] = [];
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".jsonl")) continue;
-		const info = inspectSessionFile(path.join(dir, name));
+		const info = inspectSessionFile(path.join(dir, name), options.includeEmpty === true);
 		if (info) infos.push(info);
 	}
 	infos.sort((a, b) => b.modified.getTime() - a.modified.getTime());
@@ -139,13 +146,14 @@ export class SessionNotFoundError extends SessionError {}
 /**
  * Resolve which session to use:
  *   --resume <id>   -> that session (error if not found or ambiguous)
- *   --continue      -> most recent session for cwd, or null if none exists
+ *   --continue      -> most recent session with history for cwd, or null
  *   neither         -> null (caller creates a new one)
  */
 export function resolveSession(cwd: string, options: ResolveSessionOptions): SessionStore | null {
 	if (options.resume !== undefined) {
 		const wanted = options.resume;
-		const sessions = listSessions(cwd, options.baseDir);
+		// Explicit lookup still allows empty sessions and preserves ambiguity checks.
+		const sessions = listSessions(cwd, options.baseDir, { includeEmpty: true });
 		const found = sessions.filter((s) => matches(wanted, s));
 		if (found.length === 0) {
 			throw new SessionNotFoundError(

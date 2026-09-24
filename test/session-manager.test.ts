@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -68,6 +68,65 @@ describe("session manager", () => {
 		expect(list[0]?.title).toBe("second session question");
 		expect(list[0]?.messageCount).toBe(2);
 		expect(list[0]?.turnCount).toBe(1);
+	});
+
+	it("hides fresh and metadata-only sessions, with an explicit opt-in to list them", async () => {
+		const { baseDir, cwd } = await setup();
+		const empty = seed(baseDir, cwd, []);
+		const named = seed(baseDir, cwd, []);
+		named.appendSessionName("planned work");
+		const thinking = seed(baseDir, cwd, []);
+		thinking.appendThinkingLevelChange("high");
+
+		expect(listSessions(cwd, baseDir)).toEqual([]);
+		expect(resolveSession(cwd, { continueRecent: true, baseDir })).toBeNull();
+		expect(
+			listSessions(cwd, baseDir, { includeEmpty: true })
+				.map((s) => s.id)
+				.sort(),
+		).toEqual([empty.header.id, named.header.id, thinking.header.id].sort());
+	});
+
+	it("keeps an unanswered user message and skips newer empty sessions when continuing", async () => {
+		const { baseDir, cwd } = await setup();
+		const saved = seed(baseDir, cwd, [user("pending question")]);
+		await utimes(saved.filePath, new Date(1000), new Date(1000));
+		seed(baseDir, cwd, []);
+		const metadata = seed(baseDir, cwd, []);
+		metadata.appendSessionName("unused");
+
+		const list = listSessions(cwd, baseDir);
+		expect(list.map((s) => s.id)).toEqual([saved.header.id]);
+		expect(list[0]?.turnCount).toBe(0);
+		expect(resolveSession(cwd, { continueRecent: true, baseDir })?.header.id).toBe(saved.header.id);
+	});
+
+	it("keeps sessions whose history exists only on an abandoned branch", async () => {
+		const { baseDir, cwd } = await setup();
+		const store = createSession(cwd, baseDir);
+		const first = store.appendMessage(user("saved on another branch"));
+		store.appendMessage(assistantText("answer"));
+		store.forkBefore(first);
+
+		const list = listSessions(cwd, baseDir);
+		expect(list.map((s) => s.id)).toEqual([store.header.id]);
+		expect(list[0]?.messageCount).toBe(0);
+		expect(list[0]?.title).toBe("saved on another branch");
+		expect(resolveSession(cwd, { continueRecent: true, baseDir })?.header.id).toBe(store.header.id);
+	});
+
+	it("explicit resume still matches empty sessions by id, prefix, and filename", async () => {
+		const { baseDir, cwd } = await setup();
+		const store = seed(baseDir, cwd, []);
+		const fileName = path.basename(store.filePath);
+		for (const resume of [
+			store.header.id,
+			store.header.id.slice(0, 8),
+			fileName,
+			fileName.replace(/\.jsonl$/, ""),
+		]) {
+			expect(resolveSession(cwd, { resume, baseDir })?.header.id).toBe(store.header.id);
+		}
 	});
 
 	it("continueRecent resolves the latest session, or null when none", async () => {

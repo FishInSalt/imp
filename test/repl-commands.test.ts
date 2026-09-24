@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, utimes } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1430,6 +1430,41 @@ describe("/resume picker (M10)", () => {
 		expect(env.output()).toContain("▪ resume cancelled");
 		expect(env.runner.session?.header.id).toBe(before);
 		expect(env.replayed).toEqual([]);
+	});
+
+	it("hides more than 20 newer empty sessions before limiting the picker and /sessions", async () => {
+		const env = await makeEnv(); // the current session is also empty
+		const target = createSession(env.cwd, env.baseDir);
+		target.appendMessage(userMsg("older conversation"));
+		await utimes(target.filePath, new Date(1000), new Date(1000));
+		const emptyIds = [env.runner.session?.header.id.slice(0, 8) as string];
+		for (let i = 0; i < 21; i++) {
+			emptyIds.push(createSession(env.cwd, env.baseDir).header.id.slice(0, 8));
+		}
+		await dispatchCommand("/sessions", env.ctx);
+		expect(env.output()).toContain(target.header.id.slice(0, 8));
+		for (const id of emptyIds) expect(env.output()).not.toContain(id);
+		expect(env.output()).not.toContain("older hidden");
+
+		const picks = pickerFor(env, target.header.id.slice(0, 8));
+		await dispatchCommand("/resume", env.ctx);
+		expect(picks[0]?.items.map((item) => item.label)).toEqual([target.header.id.slice(0, 8)]);
+		expect(env.runner.session?.header.id).toBe(target.header.id);
+	});
+
+	it("only empty sessions → no picker, while explicit resume still works", async () => {
+		const env = await makeEnv();
+		const target = createSession(env.cwd, env.baseDir);
+		target.appendSessionName("not started");
+		const picks = pickerFor(env, null);
+		await dispatchCommand("/resume", env.ctx);
+		expect(picks).toHaveLength(0);
+		expect(env.output()).toContain("no saved sessions for this directory yet");
+		await dispatchCommand("/sessions", env.ctx);
+		expect(env.output()).not.toContain(target.header.id.slice(0, 8));
+		await dispatchCommand(`/resume ${target.header.id}`, env.ctx);
+		expect(env.runner.session?.header.id).toBe(target.header.id);
+		expect(env.output()).toContain("0 messages restored");
 	});
 
 	it("a picker but zero saved sessions → the /sessions empty note, no picker opened", async () => {

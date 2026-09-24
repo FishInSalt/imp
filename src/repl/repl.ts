@@ -712,26 +712,13 @@ class ReplMachine {
 		);
 	}
 
-	/** ctrl+t (pi's app.thinking.toggle): flip trace visibility, persist it
-	 *  (pi's setHideThinkingBlock), and REBUILD the transcript from history —
-	 *  pi rebuilds its chat container; imp clears the sink and replays. Only
-	 *  when idle: a mid-run rebuild would truncate the streaming line. */
+	/** Ctrl+T changes presentation only, including retained and active thinking. */
 	toggleThinkingVisibility(): void {
 		this.renderer.hideThinking = !this.renderer.hideThinking;
-		saveSettings({ hideThinkingBlock: this.renderer.hideThinking });
-		// pi's exact showStatus line (interactive-mode.ts:3833) — also the
-		// only feedback a mid-run toggle gets (no rebuild while streaming)
-		this.renderer.status(`Thinking blocks: ${this.renderer.hideThinking ? "hidden" : "visible"}`);
-		if (this.state !== "idle") return; // this run's remaining sections follow the flag
-		// pi rebuilds its chat container from session messages; imp clears
-		// the sink and re-renders history through the same replay path as
-		// /resume (the replay picks the live hideThinking flag up). Without
-		// a session store there is nothing durable to rebuild from — the
-		// flag applies to everything rendered after this point.
-		const session = this.runner.session;
-		if (session === null) return;
-		this.input.clearConversation?.(); // same wipe as /resume — replay never clears
-		this.replay(session);
+		saveSettings({ hideThinkingBlock: this.renderer.hideThinking }, this.runner.globalSettingsPath());
+		const text = `Thinking blocks: ${this.renderer.hideThinking ? "hidden" : "visible"}`;
+		if (this.input.showNotice !== undefined) this.input.showNotice(text);
+		else this.renderer.status(text);
 	}
 
 	/** shift+tab / bare /think: cycle the level (pi's cycleThinkingLevel —
@@ -1307,6 +1294,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				userSink: tuiSink ? (text) => tuiSink.feedUser(text) : undefined,
 				statusSink: tuiSink ? (text) => tuiSink.feedStatus(text) : undefined,
 				hideThinking: renderer.hideThinking,
+				thinkingSink: tuiSink?.thinkingSink,
 			},
 			session,
 		);

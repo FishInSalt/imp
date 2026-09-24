@@ -4,6 +4,7 @@ import { BRANCH_MARK, SUMMARY_MARK } from "../core/session/store.js";
 import { skillBlockSummary } from "../core/skills.js";
 import { firstLine, summarizeArgs } from "../format.js";
 import { Renderer } from "../render.js";
+import type { ThinkingSink } from "../thinking-sink.js";
 
 export interface ReplayOptions {
 	write: (text: string) => void;
@@ -18,6 +19,7 @@ export interface ReplayOptions {
 	statusSink?: (text: string) => void;
 	/** pi's hideThinkingBlock: replays render the "Thinking..." label. */
 	hideThinking?: boolean;
+	thinkingSink?: ThinkingSink;
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
@@ -41,12 +43,13 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 		userSink: options.userSink,
 		statusSink: options.statusSink,
 		hideThinking: options.hideThinking,
+		thinkingSink: options.thinkingSink,
 	});
 	const { messages } = session.buildContext();
 	if (messages.length === 0) return 0;
 	const unmatchedTools = new Map<string, { name: string; args: unknown }>(); // dangling tool_use
 	for (const message of messages) {
-		renderMessage(renderer, message, unmatchedTools, options.userSink);
+		renderMessage(renderer, message, unmatchedTools, options.userSink, options.thinkingSink !== undefined);
 	}
 	renderer.raw("\n"); // settle any markdown tail; blank line before the prompt
 	renderer.endRun();
@@ -64,6 +67,7 @@ function renderMessage(
 	message: AgentMessage,
 	unmatchedTools: Map<string, { name: string; args: unknown }>,
 	userSink?: (text: string) => void,
+	semanticThinking = false,
 ): void {
 	switch (message.role) {
 		case "user": {
@@ -90,6 +94,10 @@ function renderMessage(
 				renderer.note(skillLine);
 				return;
 			}
+			if (semanticThinking) {
+				renderer.user(userText);
+				return;
+			}
 			if (userSink !== undefined) {
 				// TUI: the full message body as a background block — the live
 				// echo and the replay show the same shape (pi parity).
@@ -109,8 +117,8 @@ function renderMessage(
 				} else if (block.type === "thinking") {
 					// dim like the live stream (#thinking-levels): runs of
 					// thinking render as one dim section above the text
-					const thinking = block.thinking.trim();
-					if (thinking !== "") renderer.thinking(thinking);
+					const thinking = semanticThinking ? block.thinking : block.thinking.trim();
+					if (semanticThinking || thinking !== "") renderer.thinking(thinking);
 				} else {
 					unmatchedTools.set(block.id, { name: block.name, args: block.arguments });
 					renderer.event({
@@ -121,6 +129,7 @@ function renderMessage(
 					});
 				}
 			}
+			if (semanticThinking) renderer.completeAssistantMessage();
 			return;
 		}
 		case "toolResult": {

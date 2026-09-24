@@ -210,6 +210,9 @@ export class TuiShell implements LineInput {
 	private footer: Text | null = null;
 	/** The dim hint row above the editor (M10). */
 	private placeholder: Text | null = null;
+	private noticeRow: Text | null = null;
+	private noticeText = "";
+	private noticeTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Marker-side mirror of the machine's active flag (setActive). */
 	private active = false;
 	/** Editor text mirror (onChange keeps it current) — placeholder input. */
@@ -252,6 +255,8 @@ export class TuiShell implements LineInput {
 
 		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
+		const noticeRow = new Text("", 0, 0);
+		this.noticeRow = noticeRow;
 		const editorBox = new Container();
 		const editor = new Editor(tui, this.theme, this.options.editorOptions);
 		this.editor = editor;
@@ -291,7 +296,8 @@ export class TuiShell implements LineInput {
 		const queueLine = new Text(this.queueText, 0, 0);
 		this.queueLine = queueLine;
 		tui.addChild(queueLine); // queue visual sits between the ask line and the hint row
-		tui.addChild(placeholder); // hint row: after the queue line, right above the editor
+		tui.addChild(placeholder); // base hints stay independent of temporary feedback
+		tui.addChild(noticeRow);
 		tui.addChild(editorBox);
 		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true), 0, 0);
 		this.footer = footer;
@@ -839,9 +845,27 @@ export class TuiShell implements LineInput {
 		});
 	}
 
+	showNotice(text: string): void {
+		if (this.closed) return;
+		if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+		this.noticeText = text;
+		const timer = setTimeout(() => {
+			if (this.closed || this.noticeTimer !== timer) return;
+			this.noticeTimer = null;
+			this.noticeText = "";
+			this.updatePlaceholder();
+		}, 2000);
+		this.noticeTimer = timer;
+		this.updatePlaceholder();
+	}
+
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
+		if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+		this.noticeTimer = null;
+		this.noticeText = "";
+		this.noticeRow?.setText("");
 		this.setActivity({ phase: "idle", tools: [], agents: [] }); // stop the ticker
 		this.detachInput?.();
 		this.detachInput = null;
@@ -917,6 +941,9 @@ export class TuiShell implements LineInput {
 		// of hiding (M11 #8) — blocked (ask/selector) still clears it.
 		const text = blocked ? "" : this.active ? INTERRUPT_HINT : this.editorText === "" ? PLACEHOLDER_HINT : "";
 		this.placeholder.setText(text);
+		this.noticeRow?.setText(
+			this.selector === null && this.noticeText !== "" ? dim(this.noticeText, true) : "",
+		);
 		this.tui?.requestRender();
 	}
 

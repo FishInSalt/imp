@@ -471,6 +471,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		write: transcript ? transcript.feed : (text) => process.stdout.write(text),
 		userSink: transcript ? (text) => transcript.feedUser(text) : undefined,
 		statusSink: transcript ? (text) => transcript.feedStatus(text) : undefined,
+		thinkingSink: transcript?.thinkingSink,
 		hideThinking: loadSettings().hideThinkingBlock ?? false, // pi's getHideThinkingBlock
 		ansi: process.stdout.isTTY === true,
 		// In-place pending tool lines only on the legacy readline shell. TUI

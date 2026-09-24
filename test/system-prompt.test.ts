@@ -305,6 +305,10 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 it("core rules stay exactly six — no output-discipline rule (F4a withdrawn)", () => {
 	const prompt = buildSystemPrompt(CTX, [{ name: "bash", promptSnippet: "x" }]);
 	expect(prompt).not.toContain("Keep tool outputs small");
-	const rules = prompt.split("# Core rules")[1]?.split("#")[0]?.match(/^\d+\./gm) ?? [];
+	const rules =
+		prompt
+			.split("# Core rules")[1]
+			?.split("#")[0]
+			?.match(/^\d+\./gm) ?? [];
 	expect(rules).toHaveLength(6);
 });

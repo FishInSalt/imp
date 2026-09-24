@@ -303,9 +303,7 @@ export function taskResult(
 		if (originalPrompt !== undefined) {
 			lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
 		}
-		lines.push(
-			"Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.",
-		);
+		lines.push("Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.");
 		return lines.join("\n");
 	};
 
@@ -331,7 +329,8 @@ export function taskResult(
 	// The no-output marker belongs to `completed` ONLY — a capped child with
 	// no text gets the honest handoff below (incident A: 40 turns of digging,
 	// zero text, parent misled by "completed with no output").
-	const text = outcome.text ?? (outcome.status === "completed" ? "(subagent completed with no output)" : undefined);
+	const text =
+		outcome.text ?? (outcome.status === "completed" ? "(subagent completed with no output)" : undefined);
 	if (text === undefined) {
 		// max_iterations / crash with no assistant text anywhere: layered-C
 		// no-text form — honest failure report with full recovery guidance.

@@ -198,7 +198,9 @@ async function formatOutput(
 				`[output truncated: only the tail is shown above. Full output saved to ${file} — read it with the read tool if you need more (tip: pipe through head/tail or narrow the grep to keep output small)]`,
 			);
 		} catch {
-			sections.push("[output truncated: only the tail is shown; saving the full output failed (tip: pipe through head/tail or narrow the grep to keep output small)]");
+			sections.push(
+				"[output truncated: only the tail is shown; saving the full output failed (tip: pipe through head/tail or narrow the grep to keep output small)]",
+			);
 		}
 	}
 	return sections.join("\n\n");

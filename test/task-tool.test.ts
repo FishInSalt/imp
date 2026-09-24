@@ -1332,7 +1332,9 @@ describe("defaultChildTimeoutMs (13a)", () => {
 
 describe("cap-hit transcript handoff (e2e)", () => {
 	it("worktree child's task excerpt shows args.prompt — NOT the appended worktree notice (design test 14)", async () => {
-		const toolCallStep = assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } }]);
+		const toolCallStep = assistant([
+			{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } },
+		]);
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-cap-"));
 		const parent = createSession(baseDir, baseDir);
 		// A repo is needed for worktree creation — build a minimal one.

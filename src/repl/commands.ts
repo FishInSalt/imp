@@ -7,7 +7,6 @@ import {
 	loadProjectSettings,
 	loadSettings,
 	projectSettingsPath,
-	type QueueMode,
 	saveProjectSettings,
 	saveSettings,
 } from "../core/settings.js";

@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path, { join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadSystemPromptFiles } from "../src/core/system-prompt-files.js";
 

@@ -16,11 +16,11 @@ import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
 import { type AgentMessage, contentText, type ImageBlock } from "./core/messages.js";
-import { modelMaxTokensFor } from "./provider/catalog.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
+import { modelMaxTokensFor } from "./provider/catalog.js";
 
 /** navigateTree's success shape (batch B: named so forkSessionAt can extend
  *  it; editorTextDroppedImages flags that the re-edited user message carried
@@ -90,6 +90,8 @@ export interface RunnerOptions {
 	cwd: string;
 	argv: string[]; // for the run logger
 	model: string;
+	/** Only an explicit startup -m/--model overrides a saved session model. */
+	modelExplicit?: boolean;
 	maxTokens: number;
 	/** Startup thinking level (#thinking-levels, pi parity): --thinking /
 	 *  IMP_THINKING. Clamped per model family on warmup; default "off". */
@@ -490,12 +492,10 @@ class RunnerImpl implements Runner {
 
 	warmup(): void {
 		if (this.initialized) return;
-		this.initialized = true;
 		const options = this.options;
 		// #glm-retire: bare glm-* routes to zai unconditionally now — a
 		// missing credential teaches /login instead of silently falling
 		// back to the (retired) anthropic-compat path.
-		this.noteMissingZaiCredential(options.model, this.providerName);
 		if (!options.noSession) {
 			if (options.resume !== undefined || options.continueRecent === true) {
 				const resumed = resolveSession(options.cwd, {
@@ -504,26 +504,30 @@ class RunnerImpl implements Runner {
 					baseDir: options.sessionBaseDir,
 				});
 				if (resumed) {
-					this.sessionStore = resumed;
 					const loaded = resumed.buildContext();
+					this.restoreModelFromSession(resumed, true);
+					this.sessionStore = resumed;
 					this.history.push(...loaded.messages);
 					this.estimateFloor = loaded.compactionBoundary; // already built — no rebuild
 					this.restoreThinkingFromSession(resumed); // --resume/-c restore the branch's level too
 					const stats = resumed.stats();
 					const est = estimateContextTokens(this.history, this.estimateFloor);
 					options.renderer.note(
-						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
+						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${this.modelReference()} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
 					);
 				} else {
 					options.renderer.note("▪ no previous session, starting fresh");
 				}
 			}
 			this.sessionStore ??= createSession(options.cwd, options.sessionBaseDir);
+			this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 		}
+		this.noteMissingZaiCredential(`${this.providerName}/${this.model}`, this.providerName);
 		for (const warning of this.agents.warnings) {
 			options.renderer.error(`imp: ${warning}`);
 		}
 		this.systemText = this.assembleSystem();
+		this.initialized = true;
 	}
 
 	get session(): SessionStore | null {
@@ -632,6 +636,7 @@ class RunnerImpl implements Runner {
 		const previous = this.sessionStore;
 		if (previous) {
 			this.sessionStore = createSession(this.options.cwd, this.options.sessionBaseDir);
+			this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 			const id8 = this.sessionStore.header.id.slice(0, 8);
 			const old8 = previous.header.id.slice(0, 8);
 			this.options.renderer.note(
@@ -803,10 +808,12 @@ class RunnerImpl implements Runner {
 		if (store === null) {
 			throw new SessionNotFoundError(`no session matching "${id}" — run /sessions to list them`);
 		}
+		const loaded = store.buildContext();
+		this.restoreModelFromSession(store, false);
 		this.sessionStore = store;
 		this.history.length = 0;
-		this.history.push(...store.buildContext().messages); // same wiring as warmup()
-		this.syncEstimateFloor();
+		this.history.push(...loaded.messages);
+		this.estimateFloor = loaded.compactionBoundary;
 		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.systemText = this.assembleSystem();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
@@ -872,23 +879,44 @@ class RunnerImpl implements Runner {
 		);
 	}
 
-	setModel(reference: string): void {
+	/** Prepare before persistence so a failed selection cannot partially swap state. */
+	private prepareModel(reference: string) {
 		const ref = parseModelRef(reference);
-		this.model = ref.modelId;
-		this.noteMissingZaiCredential(reference, ref.provider);
-		// Swap the provider INSTANCE only when the protocol family changes —
-		// a same-family switch keeps the current instance (test fakes inject
-		// here; in production the kept instance IS the real one).
-		// The swapped instance goes through withLogging like the construction-time
-		// one (review P1-4: run_log must not go silent after a cross-family switch).
-		if (ref.provider !== this.providerName) {
-			this.provider = withLogging(createProviderFor(ref.provider), this.logger);
-			this.providerName = ref.provider;
-		}
-		this.settings = { ...this.settings, contextWindow: contextWindowFor(reference) };
-		// pi clamps the thinking level on model switch; a model with no knob
-		// drops it to "off" (kept silently — /think and the footer report it).
-		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), this.level);
+		if (!ref.modelId.trim()) throw new Error("model must not be blank");
+		const provider =
+			ref.provider === this.providerName
+				? this.provider
+				: withLogging(createProviderFor(ref.provider), this.logger);
+		return { ref, provider, reference: `${ref.provider}/${ref.modelId}` };
+	}
+
+	private applyModel(prepared: ReturnType<RunnerImpl["prepareModel"]>, level = this.level): void {
+		this.model = prepared.ref.modelId;
+		this.providerName = prepared.ref.provider;
+		this.provider = prepared.provider;
+		this.settings = { ...this.settings, contextWindow: contextWindowFor(prepared.reference) };
+		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), level);
+	}
+
+	private restoreModelFromSession(store: SessionStore, startup: boolean): void {
+		const saved = store.getModel();
+		const explicit = startup && this.options.modelExplicit === true;
+		const reference = !explicit && saved ? `${saved.provider}/${saved.modelId}` : this.options.model;
+		const prepared = this.prepareModel(reference);
+		if (explicit) store.setModel(prepared.ref);
+		else store.seedModel(prepared.ref);
+		const level = startup
+			? (this.options.thinking ?? this.effectiveSettings().defaultThinkingLevel ?? "medium")
+			: this.level;
+		this.applyModel(prepared, level);
+		if (!startup) this.noteMissingZaiCredential(prepared.reference, prepared.ref.provider);
+	}
+
+	setModel(reference: string): void {
+		const prepared = this.prepareModel(reference);
+		this.sessionStore?.setModel(prepared.ref);
+		this.applyModel(prepared);
+		this.noteMissingZaiCredential(prepared.reference, prepared.ref.provider);
 	}
 
 	/** The model's canonical display reference — prefixed for non-anthropic

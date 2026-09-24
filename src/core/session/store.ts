@@ -29,6 +29,26 @@ import { type AgentMessage, contentText, type Usage } from "../messages.js";
  *    position only wins when nothing was appended after it.
  */
 
+export interface SessionModel {
+	provider: string;
+	modelId: string;
+}
+
+/** Keep validation local: reading sessions must not load provider runtimes. */
+function parseModel(value: unknown, context: string): SessionModel {
+	const model = value as Partial<SessionModel> | null;
+	if (
+		typeof model !== "object" ||
+		model === null ||
+		!["anthropic", "openai", "openai-codex", "zai"].includes(model.provider ?? "") ||
+		typeof model.modelId !== "string" ||
+		model.modelId.trim() === ""
+	) {
+		throw new SessionError(`${context}: invalid session model`);
+	}
+	return { provider: model.provider as string, modelId: model.modelId };
+}
+
 export interface SessionHeader {
 	type: "session";
 	version: 1;
@@ -39,6 +59,7 @@ export interface SessionHeader {
 	 *  Absent on top-level sessions — its presence identifies a child.
 	 *  Readers ignore unknown header fields, so the format stays version 1. */
 	parent?: string;
+	model?: SessionModel;
 }
 
 interface EntryBase {
@@ -202,6 +223,9 @@ export class SessionStore {
 	readonly header: SessionHeader;
 	private persisted = false;
 	private initializationFailed = false;
+	private savedModel?: SessionModel;
+	private pendingModel?: SessionModel;
+	private explicitModelSelection = false;
 	private entries: SessionEntry[] = [];
 	private byId = new Map<string, SessionEntry>();
 	/** Current leaf = id of the last appended entry (tree position). */
@@ -235,6 +259,29 @@ export class SessionStore {
 		return this.persisted;
 	}
 
+	get hasModelSelection(): boolean {
+		return this.explicitModelSelection;
+	}
+
+	getModel(): SessionModel | undefined {
+		const model = this.savedModel ?? this.pendingModel;
+		return model === undefined ? undefined : { ...model };
+	}
+
+	seedModel(model: SessionModel): void {
+		if (this.getModel() === undefined) this.pendingModel = parseModel(model, "seedModel");
+	}
+
+	setModel(model: SessionModel): void {
+		const next = parseModel(model, "setModel");
+		const current = this.getModel();
+		if (current?.provider === next.provider && current.modelId === next.modelId) return;
+		this.writeRecords(`${JSON.stringify({ type: "session_model", ...next, explicit: true })}\n`);
+		this.savedModel = next;
+		this.pendingModel = undefined;
+		this.explicitModelSelection = true;
+	}
+
 	/** Allocate a session identity; the file is created on its first entry. */
 	static create(filePath: string, cwd: string, id = randomUUID(), parent?: string): SessionStore {
 		const header: SessionHeader = {
@@ -265,6 +312,8 @@ export class SessionStore {
 			throw new SessionError(`session file ${filePath}: missing or unsupported session header`);
 		}
 
+		let model = header.model === undefined ? undefined : parseModel(header.model, "session header");
+		let explicitModelSelection = false;
 		const entries: SessionEntry[] = [];
 		let lastEntryIndex = -1;
 		let lastPosition: { leafId: string | null; index: number } | null = null;
@@ -284,6 +333,21 @@ export class SessionStore {
 				// fall through to parseEntryLine for the canonical error report
 			}
 			try {
+				let metadata: { type?: unknown; explicit?: unknown } | null = null;
+				try {
+					metadata = JSON.parse(raw);
+				} catch {
+					/* canonical error below */
+				}
+				if (metadata?.type === "session_model") {
+					const next = parseModel(metadata, `session line ${i + 1}`);
+					if (typeof metadata.explicit !== "boolean") {
+						throw new SessionError(`session line ${i + 1}: invalid session model explicit flag`);
+					}
+					model = next;
+					explicitModelSelection ||= metadata.explicit;
+					continue;
+				}
 				entries.push(parseEntryLine(raw, i + 1));
 				lastEntryIndex = i;
 			} catch (err) {
@@ -298,6 +362,8 @@ export class SessionStore {
 		}
 		const store = new SessionStore(filePath, header, entries);
 		store.persisted = true;
+		store.savedModel = model;
+		store.explicitModelSelection = explicitModelSelection;
 		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
 		// position implies its own leaf; otherwise the position records where
 		// /fork or /tree moved the write head. An id that no longer resolves
@@ -310,16 +376,31 @@ export class SessionStore {
 	}
 
 	private append(entry: SessionEntry): void {
+		const seed = this.pendingModel;
+		let lines = `${JSON.stringify(entry)}\n`;
+		if (seed !== undefined && this.persisted) {
+			lines = `${JSON.stringify({ type: "session_model", ...seed, explicit: false })}\n${lines}`;
+		}
+		this.writeRecords(lines, seed);
+		if (seed !== undefined) {
+			this.savedModel = seed;
+			this.pendingModel = undefined;
+		}
+		this.indexEntry(entry);
+	}
+
+	/** Shared exclusive lazy writer; callers commit memory only after success. */
+	private writeRecords(line: string, headerModel?: SessionModel): void {
 		if (this.initializationFailed) {
 			throw new SessionError(
 				`session initialization previously failed: ${this.filePath} — start a new session`,
 			);
 		}
-		const line = `${JSON.stringify(entry)}\n`;
 		if (this.persisted) {
 			appendFileSync(this.filePath, line, { encoding: "utf8" });
 		} else {
-			const initial = `${JSON.stringify(this.header)}\n${line}`;
+			const header = headerModel === undefined ? this.header : { ...this.header, model: headerModel };
+			const initial = `${JSON.stringify(header)}\n${line}`;
 			// Exclusive creation must never adopt or overwrite a competing file.
 			// An open failure is retryable; after opening, a failed write/close may
 			// leave partial bytes. Preserve that artifact and fail closed on retry.
@@ -341,8 +422,8 @@ export class SessionStore {
 				throw error;
 			}
 			this.persisted = true;
+			if (headerModel !== undefined) this.header.model = { ...headerModel };
 		}
-		this.indexEntry(entry);
 	}
 
 	private nextId(): string {

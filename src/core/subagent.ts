@@ -1,5 +1,6 @@
 import { formatTokens } from "../format.js";
 import { modelMaxTokensFor } from "../provider/catalog.js";
+import { compactionSettingsFor } from "../provider/compaction-settings.js";
 import type { LLMProvider } from "../provider/types.js";
 import {
 	type CompactHistoryResult,
@@ -7,7 +8,6 @@ import {
 	type CompactResult,
 	compactHistory,
 	compactSession,
-	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	isContextOverflowError,
 	overflowGuidance,
@@ -40,6 +40,8 @@ have the task tool; complete the job yourself.`;
 export interface SubagentOptions {
 	provider: LLMProvider;
 	model: string;
+	/** Provider-qualified metadata reference; does not change wire routing. */
+	modelReference?: string;
 	/** The parent's assembled system prompt (AGENTS.md + extension contexts ride along). */
 	system: string;
 	/** The parent's tool pool — the caller filters out the task tool itself. */
@@ -65,8 +67,8 @@ export interface SubagentOptions {
 	 *  The caller owns persistence wiring: onMessage must append to this store
 	 *  (the task tool does), or the splice would rebuild from a stale file. */
 	session?: SessionStore;
-	/** Compaction settings (runner pattern: DEFAULT_COMPACTION_SETTINGS by
-	 *  default, injectable for hermetic tests). Gates the between-turn
+	/** Compaction settings (model-aware by default; explicit settings win).
+	 *  Gates the between-turn
 	 *  auto-compaction hook only — never the child's own LLM calls. */
 	settings?: CompactionSettings;
 	/** The parent's permission gate, forwarded to the child loop (M6a): a
@@ -160,7 +162,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// this module only honors the resolved value.
 	const timeoutMs = options.timeoutMs;
 	const history: AgentMessage[] = [];
-	const settings = options.settings ?? DEFAULT_COMPACTION_SETTINGS;
+	const settings = options.settings ?? compactionSettingsFor(options.modelReference ?? options.model);
 
 	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
 	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.

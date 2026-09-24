@@ -136,18 +136,30 @@ export function costFor(reference: string): ModelCost | undefined {
 	return MODEL_COSTS[modelId];
 }
 
-/**
- * The effective context window for a model reference (canonical or bare).
- * Priority: IMP_CONTEXT_WINDOW > registry lookup (prefix stripped) > default.
- */
-export function contextWindowFor(reference: string): number {
+export interface ContextWindowInfo {
+	contextWindow: number;
+	source: "env" | "catalog" | "discovery" | "static" | "fallback";
+}
+
+/** Effective context window and provenance for a canonical or bare reference.
+ * Priority: environment > catalog > discovery > static table > fallback. */
+export function contextWindowInfoFor(reference: string): ContextWindowInfo {
 	const env = envInt("IMP_CONTEXT_WINDOW");
-	if (env !== undefined) return env;
+	if (env !== undefined) return { contextWindow: env, source: "env" };
 	const slash = reference.indexOf("/");
 	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
 	// env > catalog (pi.dev, M14 single truth) > runtime-enriched (discovery
 	// metadata) > static table > default
 	const entry = catalogEntryForReference(reference);
-	if (entry?.contextWindow !== undefined) return entry.contextWindow;
-	return discoveredWindowFor(modelId) ?? MODEL_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_WINDOW;
+	if (entry?.contextWindow !== undefined) return { contextWindow: entry.contextWindow, source: "catalog" };
+	const discovered = discoveredWindowFor(modelId);
+	if (discovered !== undefined) return { contextWindow: discovered, source: "discovery" };
+	const fixed = MODEL_CONTEXT_WINDOWS[modelId];
+	if (fixed !== undefined) return { contextWindow: fixed, source: "static" };
+	return { contextWindow: DEFAULT_CONTEXT_WINDOW, source: "fallback" };
+}
+
+/** Number-only compatibility wrapper for context-window consumers. */
+export function contextWindowFor(reference: string): number {
+	return contextWindowInfoFor(reference).contextWindow;
 }

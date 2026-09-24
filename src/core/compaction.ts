@@ -20,8 +20,10 @@ import { type SessionStore, SUMMARY_MARK } from "./session/store.js";
  */
 
 export interface CompactionSettings {
-	/** Trigger when estimated context tokens exceed window - reserve. Default 16384. */
+	/** Summary budget reserve; also used by the legacy trigger. Default 16384. */
 	reserveTokens: number;
+	/** Explicit automatic-compaction threshold; absent uses window - reserve. */
+	triggerTokens?: number;
 	/** Approximate tokens of recent messages kept verbatim. Default 20000. */
 	keepRecentTokens: number;
 	/** Model context window. Default from IMP_CONTEXT_WINDOW or 131072. */
@@ -162,7 +164,7 @@ export function estimateContextTokens(messages: AgentMessage[], minAnchorIndex =
 }
 
 export function shouldCompact(contextTokens: number, settings: CompactionSettings): boolean {
-	return contextTokens > settings.contextWindow - settings.reserveTokens;
+	return contextTokens > (settings.triggerTokens ?? settings.contextWindow - settings.reserveTokens);
 }
 
 /**

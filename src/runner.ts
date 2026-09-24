@@ -4,7 +4,6 @@ import { type AgentRegistry, formatAgentsForPrompt, loadAgentDefinitions } from 
 import {
 	type CompactionSettings,
 	compactSession,
-	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	isContextOverflowError,
 	overflowGuidance,
@@ -58,6 +57,7 @@ import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens, shorten } from "./format.js";
+import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
 import { contextWindowFor } from "./provider/models.js";
 import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
@@ -334,7 +334,7 @@ class RunnerImpl implements Runner {
 		return this.autoCompact;
 	}
 	private readonly branchSummaryEnabled: boolean;
-	private settings = DEFAULT_COMPACTION_SETTINGS; // contextWindow follows the model (multi-provider)
+	private settings: CompactionSettings;
 	private systemText: string;
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
@@ -363,7 +363,7 @@ class RunnerImpl implements Runner {
 		this.model = initialModel;
 		// Multi-provider review P1-3: the compaction window must follow the
 		// registry from construction — not only after an explicit /model switch.
-		this.settings = { ...this.settings, contextWindow: contextWindowFor(options.model) };
+		this.settings = compactionSettingsFor(`${this.providerName}/${this.model}`);
 		// M15: every runner settings read goes through the merged view (global ←
 		// trust-gated project). Snapshot at construction — pi's read definitions
 		// capture settings the same way (recorded in M13 batch 2).
@@ -421,6 +421,7 @@ class RunnerImpl implements Runner {
 			createTaskTool({
 				getProvider: () => this.provider,
 				getModel: () => this.model,
+				getModelReference: () => `${this.providerName}/${this.model}`,
 				getAutoCompact: () => this.autoCompact,
 				getSystem: () => this.system,
 				getTools: () => this.tools,
@@ -894,7 +895,7 @@ class RunnerImpl implements Runner {
 		this.model = prepared.ref.modelId;
 		this.providerName = prepared.ref.provider;
 		this.provider = prepared.provider;
-		this.settings = { ...this.settings, contextWindow: contextWindowFor(prepared.reference) };
+		this.settings = compactionSettingsFor(prepared.reference);
 		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), level);
 	}
 

@@ -60,10 +60,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
  *  failure happened (2048 < thinking + full summary → max_tokens → the P2
  *  gate rejected a half checkpoint → /compact failed).
  *  - Branch summaries use half the budget (shorter segments). */
-export function summarizerMaxTokens(
-	reserveTokens: number,
-	modelMaxTokens?: number,
-): number {
+export function summarizerMaxTokens(reserveTokens: number, modelMaxTokens?: number): number {
 	const reserveShare = Math.floor(0.8 * reserveTokens);
 	return modelMaxTokens !== undefined && modelMaxTokens > 0
 		? Math.min(reserveShare, modelMaxTokens)
@@ -141,10 +138,7 @@ export interface ContextEstimate {
  * shape (measured: false), which is far closer to truth than the stale
  * anchor. The first post-compaction assistant restores a real anchor.
  */
-export function estimateContextTokens(
-	messages: AgentMessage[],
-	minAnchorIndex = 0,
-): ContextEstimate {
+export function estimateContextTokens(messages: AgentMessage[], minAnchorIndex = 0): ContextEstimate {
 	// Find the last assistant message with real usage.
 	let usageIndex = -1;
 	let usageTokens = 0;
@@ -396,7 +390,9 @@ export async function summarizeBranchSegment(args: {
 		model: args.model,
 		// Half the derived budget: branch segments are shorter than full
 		// sessions (#derived-budget).
-		maxTokens: Math.floor(summarizerMaxTokens(DEFAULT_COMPACTION_SETTINGS.reserveTokens, args.modelMaxTokens) / 2),
+		maxTokens: Math.floor(
+			summarizerMaxTokens(DEFAULT_COMPACTION_SETTINGS.reserveTokens, args.modelMaxTokens) / 2,
+		),
 		signal: args.signal,
 		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
 	})) {

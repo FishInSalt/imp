@@ -657,9 +657,7 @@ describe("M14 /model list fallback", () => {
 				catalogIds: (f) => (f === family ? [...catalog] : null),
 			});
 			const labels = result.rows.map((r) => r.label);
-			expect(labels).toEqual(
-				family === "anthropic" ? [...catalog] : catalog.map((id) => `${family}/${id}`),
-			);
+			expect(labels).toEqual(family === "anthropic" ? [...catalog] : catalog.map((id) => `${family}/${id}`));
 			expect(result.fallbackNotes).toEqual([]);
 			if (saved !== undefined) process.env[envVar as "ANTHROPIC_BASE_URL"] = saved;
 		}

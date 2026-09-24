@@ -545,11 +545,10 @@ describe("post-compaction estimate floor kills the false auto-compact trigger (F
 		// PRE-compaction usage (224k on a 200k window). Without the floor the
 		// next onBeforeTurn re-triggers (and the "nothing safe to compact"
 		// note fires); with it the estimate is the new shape's char estimate.
-		const stale = assistant(
-			[{ type: "text", text: "answer" }],
-			"end_turn",
-			{ inputTokens: 224_852, outputTokens: 1 },
-		);
+		const stale = assistant([{ type: "text", text: "answer" }], "end_turn", {
+			inputTokens: 224_852,
+			outputTokens: 1,
+		});
 		const post: AgentMessage[] = [
 			{ role: "user", content: "SUMMARY of everything before" }, // summary message
 			{ role: "user", content: "recent question" }, // retained tail (small)

@@ -822,7 +822,9 @@ class ReplMachine {
 		// point, but never call it from a streaming-delta path. pi's format:
 		// one decimal, the window size, and the auto-compaction tag.
 		const contextPercent =
-			(estimateContextTokens(this.runner.history, this.runner.contextEstimateFloor).tokens / this.runner.contextWindow) * 100;
+			(estimateContextTokens(this.runner.history, this.runner.contextEstimateFloor).tokens /
+				this.runner.contextWindow) *
+			100;
 		const contextSegment = `${contextPercent.toFixed(1)}%/${formatTokens(this.runner.contextWindow)}${
 			this.runner.autoCompactEnabled ? " (auto)" : ""
 		}`;
@@ -1065,9 +1067,7 @@ class ReplMachine {
 		else phase = working ? "working" : "thinking";
 		const snapshot: ActivitySnapshot = {
 			phase,
-			...(phase === "compacting" && this.longOpLabel !== null
-				? { compactingLabel: this.longOpLabel }
-				: {}),
+			...(phase === "compacting" && this.longOpLabel !== null ? { compactingLabel: this.longOpLabel } : {}),
 			tools: [...this.activityTools.values()],
 			agents: [...this.activityAgents.values()],
 		};

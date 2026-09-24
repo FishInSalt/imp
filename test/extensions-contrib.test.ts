@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,6 +32,22 @@ const toolCall = (id: string, name: string, args: Record<string, unknown>): Scri
 	assistant([{ type: "toolCall", id, name, arguments: args }], "tool_use");
 
 const example = (name: string): string => readFileSync(path.resolve("examples/extensions", name), "utf8");
+
+// Preserve relative helper imports when installing the complete directory fixture.
+function webSearchFiles(): Record<string, string> {
+	return Object.fromEntries(
+		readdirSync(path.resolve("examples/extensions/web-search"), { recursive: true, withFileTypes: true })
+			.filter((entry) => entry.isFile())
+			.map((entry) => {
+				const file = path.join(entry.parentPath, entry.name);
+				return [path.relative(path.resolve("examples/extensions"), file), readFileSync(file, "utf8")];
+			}),
+	);
+}
+
+function webSearchEnv(base: string, key = "test-key"): Record<string, string> {
+	return { TAVILY_API_KEY: key, IMP_WEB_SEARCH_CONFIG: path.join(base, "missing-config.json") };
+}
 
 interface Env {
 	cwd: string;
@@ -184,31 +200,21 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 	});
 });
 
-describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
-	it("no key → keyless mode: x-tavily-access-mode header, no bearer, results still returned", async () => {
-		const fetchMock = vi.fn().mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					results: [{ title: "Keyless hit", url: "https://example.com/k", content: "kc" }],
-				}),
-				{ status: 200, headers: { "content-type": "application/json" } },
-			),
-		);
+describe("web-search (Tavily search + page reader, fetch stubbed)", () => {
+	it("no key → local missing-key error without fetching", async () => {
+		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "web_search", { query: "imp agent" }), reply("got it")],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
-			env: () => ({ IMP_TAVILY_KEY: "" }),
+			extensionFiles: webSearchFiles(),
+			env: (base) => webSearchEnv(base, ""),
 		});
-		expect(env.output()).toContain("▪ extension web_search [project] — 2 tools");
+		expect(env.output()).toContain("▪ extension web-search [project] — 2 tools");
 		env.send("search something\n");
 		await waitUntil(() => env.output().includes("got it"));
-		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-		expect(url).toBe("https://api.tavily.com/search");
-		const headers = init.headers as Record<string, string>;
-		expect(headers["x-tavily-access-mode"]).toBe("keyless");
-		expect(headers.authorization).toBeUndefined();
-		expect(env.sessionText()).toContain("[1] Keyless hit");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(env.sessionText()).toContain("needs a Tavily API key");
+		expect(env.sessionText()).toContain("set TAVILY_API_KEY");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -226,19 +232,25 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "web_search", { query: "what is imp", max_results: 3 }), reply("summarized")],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
-			env: () => ({ IMP_TAVILY_KEY: "test-key" }),
+			extensionFiles: webSearchFiles(),
+			env: webSearchEnv,
 		});
 		env.send("search\n");
 		await waitUntil(() => env.output().includes("summarized"));
-		// request shape: URL, bearer key, body carries query and clamped max
+		// request shape: URL, bearer key, body carries query, result limit and explicit search mode
 		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 		expect(url).toBe("https://api.tavily.com/search");
 		expect((init.headers as Record<string, string>).authorization).toBe("Bearer test-key");
 		const body = JSON.parse(String(init.body)) as { query: string; max_results: number };
-		expect(body).toEqual({ query: "what is imp", max_results: 3 });
-		// the formatted result (answer + citation) is persisted for the model
-		expect(env.sessionText()).toContain("Answer: imp is a minimal coding agent");
+		expect(body).toEqual({
+			query: "what is imp",
+			max_results: 3,
+			search_depth: "basic",
+			include_answer: false,
+		});
+		// Sources reach the model, but the provider-generated answer is ignored.
+		expect(env.sessionText()).not.toContain("Answer:");
+		expect(env.sessionText()).not.toContain("imp is a minimal coding agent");
 		expect(env.sessionText()).toContain("[1] Imp repo");
 		expect(env.sessionText()).toContain("https://example.com/imp");
 		env.fake.eof();
@@ -246,7 +258,7 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 	});
 
 	it("filters + full: days/topic, include_domains, include_raw_content pass through and render", async () => {
-		const raw = "R".repeat(4000); // exceeds the 3KB per-result cap
+		const raw = "R".repeat(4000); // exceeds the 3000-character per-result cap
 		const fetchMock = vi.fn().mockResolvedValue(
 			new Response(
 				JSON.stringify({
@@ -268,8 +280,8 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 				}),
 				reply("done"),
 			],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
-			env: () => ({ IMP_TAVILY_KEY: "test-key" }),
+			extensionFiles: webSearchFiles(),
+			env: webSearchEnv,
 		});
 		env.send("search\n");
 		await waitUntil(() => env.output().includes("done"));
@@ -278,6 +290,8 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		expect(body).toEqual({
 			query: "recent release",
 			max_results: 5,
+			search_depth: "basic",
+			include_answer: false,
 			topic: "news",
 			days: 7,
 			include_domains: ["docs.example.com"],
@@ -309,8 +323,8 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 				toolCall("t2", "web_search", { query: "same question" }),
 				reply("second"),
 			],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
-			env: () => ({ IMP_TAVILY_KEY: "test-key" }),
+			extensionFiles: webSearchFiles(),
+			env: webSearchEnv,
 		});
 		env.send("go\n");
 		await waitUntil(() => env.output().includes("first"));
@@ -329,13 +343,13 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "web_search", { query: "x" }), reply("ok")],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
-			env: () => ({ IMP_TAVILY_KEY: "bad-key" }),
+			extensionFiles: webSearchFiles(),
+			env: (base) => webSearchEnv(base, "bad-key"),
 		});
 		env.send("search\n");
 		await waitUntil(() => env.output().includes("ok"));
 		expect(env.sessionText()).toContain("401");
-		expect(env.sessionText()).toContain("check IMP_TAVILY_KEY");
+		expect(env.sessionText()).toContain("check TAVILY_API_KEY");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -354,7 +368,8 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 		);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "url_read", { url: "https://example.com/page" }), reply("read it")],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
+			extensionFiles: webSearchFiles(),
+			env: webSearchEnv,
 		});
 		env.send("read that page\n");
 		await waitUntil(() => env.output().includes("read it"));
@@ -382,7 +397,8 @@ describe("web_search.mjs (Tavily search + page reader, fetch stubbed)", () => {
 				toolCall("t2", "url_read", { url: "https://example.com/doc.pdf" }),
 				reply("r2"),
 			],
-			extensionFiles: { "web_search.mjs": example("web_search.mjs") },
+			extensionFiles: webSearchFiles(),
+			env: webSearchEnv,
 		});
 		env.send("go\n");
 		await waitUntil(() => env.output().includes("r1"));

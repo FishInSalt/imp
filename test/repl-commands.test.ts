@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, utimes } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, UserMessage } from "../src/core/messages.js";
-import { createSession } from "../src/core/session/manager.js";
+import { createSession, listSessions } from "../src/core/session/manager.js";
 import { loadSettings } from "../src/core/settings.js";
 import { setTrust } from "../src/core/trust.js";
 import { clearApiKey, loadApiKey, saveApiKey } from "../src/provider/auth-store.js";
@@ -174,7 +174,7 @@ async function makeEnv(args?: {
 		maxTurns: 10,
 		noContextFiles: true,
 		noSession: args?.noSession ?? false,
-		resume: store ? store.header.id : undefined,
+		resume: store?.isPersisted ? store.header.id : undefined,
 		sessionBaseDir: baseDir,
 		renderer,
 		provider: args?.provider ?? scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
@@ -459,6 +459,23 @@ describe("slash commands", () => {
 			.trim()
 			.split("\n");
 		expect(lines).toHaveLength(3);
+	});
+
+	it("repeated /new on fresh sessions creates no files or previous-saved claims", async () => {
+		const env = await makeEnv();
+		for (let i = 0; i < 3; i++) {
+			const previous = env.runner.session;
+			expect(previous).not.toBeNull();
+			expect(previous?.isPersisted).toBe(false);
+			await dispatchCommand("/new", env.ctx);
+			expect(env.runner.session?.header.id).not.toBe(previous?.header.id);
+			expect(existsSync(previous?.filePath as string)).toBe(false);
+			expect(env.runner.session?.isPersisted).toBe(false);
+			expect(existsSync(env.runner.session?.filePath as string)).toBe(false);
+		}
+		expect(listSessions(env.cwd, env.baseDir, { includeEmpty: true })).toEqual([]);
+		expect(env.output()).not.toContain("previous");
+		expect(env.output()).not.toContain("saved");
 	});
 
 	it("/new during a run is rejected with a teaching line", async () => {
@@ -1439,8 +1456,13 @@ describe("/resume picker (M10)", () => {
 		await utimes(target.filePath, new Date(1000), new Date(1000));
 		const emptyIds = [env.runner.session?.header.id.slice(0, 8) as string];
 		for (let i = 0; i < 21; i++) {
-			emptyIds.push(createSession(env.cwd, env.baseDir).header.id.slice(0, 8));
+			const legacy = createSession(env.cwd, env.baseDir);
+			// Actual header-only files must precede the older conversation on disk.
+			mkdirSync(path.dirname(legacy.filePath), { recursive: true });
+			writeFileSync(legacy.filePath, `${JSON.stringify(legacy.header)}\n`);
+			emptyIds.push(legacy.header.id.slice(0, 8));
 		}
+		expect(listSessions(env.cwd, env.baseDir, { includeEmpty: true })).toHaveLength(22);
 		await dispatchCommand("/sessions", env.ctx);
 		expect(env.output()).toContain(target.header.id.slice(0, 8));
 		for (const id of emptyIds) expect(env.output()).not.toContain(id);

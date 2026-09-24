@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { createSession, SessionNotFoundError } from "../src/core/session/manager.js";
+import { SessionStore } from "../src/core/session/store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
 import { createRunner, type Runner, resolveRunMode } from "../src/runner.js";
@@ -153,6 +154,23 @@ describe("createRunner", () => {
 		expect(runner.capturedOutput()).toBe(`▪ resumed ${id8} · 2 msgs · ~120 tokens\n`);
 		expect(runner.history.map((m) => m.role)).toEqual(["user", "assistant"]);
 		expect(runner.session?.header.id).toBe(store.header.id);
+	});
+
+	it("resumes a legacy header-only file as persisted with empty history", async () => {
+		const { baseDir, cwd } = await setup();
+		const store = createSession(cwd, baseDir);
+		// Older versions eagerly wrote the header even without any entries.
+		await writeFile(store.filePath, `${JSON.stringify(store.header)}\n`);
+		const runner = (await makeRunner({
+			provider: scriptedProvider([]),
+			cwd,
+			baseDir,
+			resume: store.header.id,
+		})) as RunnerWithOutput;
+		expect(runner.session?.header.id).toBe(store.header.id);
+		expect(runner.session?.isPersisted).toBe(true);
+		expect(runner.history).toEqual([]);
+		expect(runner.capturedOutput()).toContain(`▪ resumed ${store.header.id.slice(0, 8)} · 0 msgs`);
 	});
 
 	it("-c with no prior session prints the starting-fresh banner", async () => {
@@ -361,6 +379,53 @@ describe("Runner.runTurn", () => {
 });
 
 describe("Runner.newSession", () => {
+	it("recovers from first-open failure without retaining an unsaved prompt in history", async () => {
+		const { baseDir, cwd } = await setup();
+		const requests: LLMRequest[] = [];
+		const runner = await makeRunner({
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests),
+			cwd,
+			baseDir,
+		});
+		const store = runner.session;
+		if (!store) throw new Error("expected session");
+		const dir = path.dirname(store.filePath);
+		await rename(dir, `${dir}-moved`);
+		await expect(runner.runTurn({ userMessage: "unsaved prompt" })).rejects.toThrow(/ENOENT/);
+		expect(runner.history).toEqual([]);
+		expect(store.isPersisted).toBe(false);
+		expect(store.getEntries()).toEqual([]);
+		expect(requests).toHaveLength(0);
+
+		await mkdir(dir);
+		await runner.runTurn({ userMessage: "retry prompt" });
+		expect(store.isPersisted).toBe(true);
+		expect(runner.history).toHaveLength(2);
+		expect(runner.history[0]).toEqual(userMsg("retry prompt"));
+		expect(SessionStore.open(store.filePath).buildContext().messages).toEqual(runner.history);
+		expect(requests).toHaveLength(1);
+	});
+
+	it("replacing a pristine store creates no files and does not claim the previous session was saved", async () => {
+		const { baseDir, cwd } = await setup();
+		const runner = (await makeRunner({
+			provider: scriptedProvider([]),
+			cwd,
+			baseDir,
+		})) as RunnerWithOutput;
+		const previous = runner.session;
+		if (!previous) throw new Error("expected session");
+		runner.newSession();
+		expect(runner.session?.header.id).not.toBe(previous.header.id);
+		expect(previous.isPersisted).toBe(false);
+		expect(existsSync(previous.filePath)).toBe(false);
+		expect(runner.session?.isPersisted).toBe(false);
+		expect(existsSync(runner.session?.filePath as string)).toBe(false);
+		expect(runner.capturedOutput()).toContain("▪ new session");
+		expect(runner.capturedOutput()).not.toContain("saved");
+		expect(runner.capturedOutput()).not.toContain("imp -r");
+	});
+
 	it("swaps to a fresh store, empties history, keeps the old file on disk, prints the banner", async () => {
 		const { baseDir, cwd } = await setup();
 		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);
@@ -378,6 +443,8 @@ describe("Runner.newSession", () => {
 			`▪ new session ${newId8} — previous ${oldId8} saved (imp -r ${oldId8})\n`,
 		);
 		expect(runner.history).toHaveLength(0);
+		expect(runner.session?.isPersisted).toBe(false);
+		expect(existsSync(runner.session?.filePath as string)).toBe(false);
 		// old file untouched on disk (append-only)
 		const lines = readFileSync(oldPath as string, "utf8")
 			.trim()

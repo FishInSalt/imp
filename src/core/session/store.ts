@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { firstLine } from "../../format.js";
 import { type AgentMessage, contentText, type Usage } from "../messages.js";
 
@@ -200,6 +200,8 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 export class SessionStore {
 	readonly filePath: string;
 	readonly header: SessionHeader;
+	private persisted = false;
+	private initializationFailed = false;
 	private entries: SessionEntry[] = [];
 	private byId = new Map<string, SessionEntry>();
 	/** Current leaf = id of the last appended entry (tree position). */
@@ -228,6 +230,12 @@ export class SessionStore {
 		this.leafId = entry.id;
 	}
 
+	/** Whether this store was successfully written or opened; not a durability guarantee. */
+	get isPersisted(): boolean {
+		return this.persisted;
+	}
+
+	/** Allocate a session identity; the file is created on its first entry. */
 	static create(filePath: string, cwd: string, id = randomUUID(), parent?: string): SessionStore {
 		const header: SessionHeader = {
 			type: "session",
@@ -237,7 +245,6 @@ export class SessionStore {
 			cwd,
 		};
 		if (parent !== undefined) header.parent = parent;
-		writeFileSync(filePath, `${JSON.stringify(header)}\n`, { encoding: "utf8" });
 		return new SessionStore(filePath, header, []);
 	}
 
@@ -290,6 +297,7 @@ export class SessionStore {
 			}
 		}
 		const store = new SessionStore(filePath, header, entries);
+		store.persisted = true;
 		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
 		// position implies its own leaf; otherwise the position records where
 		// /fork or /tree moved the write head. An id that no longer resolves
@@ -302,7 +310,38 @@ export class SessionStore {
 	}
 
 	private append(entry: SessionEntry): void {
-		appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
+		if (this.initializationFailed) {
+			throw new SessionError(
+				`session initialization previously failed: ${this.filePath} — start a new session`,
+			);
+		}
+		const line = `${JSON.stringify(entry)}\n`;
+		if (this.persisted) {
+			appendFileSync(this.filePath, line, { encoding: "utf8" });
+		} else {
+			const initial = `${JSON.stringify(this.header)}\n${line}`;
+			// Exclusive creation must never adopt or overwrite a competing file.
+			// An open failure is retryable; after opening, a failed write/close may
+			// leave partial bytes. Preserve that artifact and fail closed on retry.
+			const fd = openSync(this.filePath, "wx");
+			let closeAttempted = false;
+			try {
+				writeFileSync(fd, initial, { encoding: "utf8" });
+				closeAttempted = true;
+				closeSync(fd);
+			} catch (error) {
+				this.initializationFailed = true;
+				if (!closeAttempted) {
+					try {
+						closeSync(fd);
+					} catch {
+						// Preserve the original write error; never retry an uncertain close.
+					}
+				}
+				throw error;
+			}
+			this.persisted = true;
+		}
 		this.indexEntry(entry);
 	}
 
@@ -554,6 +593,8 @@ export class SessionStore {
 	/** Append the file-level position marker (#10 review P1-2). Best-effort:
 	 *  an unwritable file keeps the move in memory for this session. */
 	private persistPosition(): void {
+		// Moving a pristine session to null is a no-op, not a first record.
+		if (!this.persisted) return;
 		try {
 			appendFileSync(this.filePath, `${JSON.stringify({ type: "position", leafId: this.leafId })}\n`, {
 				encoding: "utf8",

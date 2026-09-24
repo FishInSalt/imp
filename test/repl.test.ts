@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -683,14 +683,16 @@ describe("runRepl", () => {
 		await ticks();
 	});
 
-	it("Ctrl+C at an empty prompt: hint first, then graceful 130 + resume line", async () => {
+	it("Ctrl+C at a pristine prompt: hint first, then graceful 130 without a saved hint", async () => {
 		const env = await startRepl({ scripts: [reply("ok")] });
 		env.fake.interrupt();
 		await waitUntil(() => env.output().includes("(press Ctrl+C again to quit — /exit or Ctrl+D also work)"));
 		env.fake.interrupt();
 		expect(await env.repl).toBe(130);
-		const id8 = env.runner.session?.header.id.slice(0, 8);
-		expect(env.output()).toContain(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
+		expect(env.runner.session?.isPersisted).toBe(false);
+		expect(existsSync(env.runner.session?.filePath as string)).toBe(false);
+		expect(env.output()).toContain("▪ bye");
+		expect(env.output()).not.toContain("saved — resume with");
 	});
 
 	it("Ctrl+C with a typed buffer clears it and keeps the REPL alive", async () => {
@@ -706,6 +708,40 @@ describe("runRepl", () => {
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
+
+	it("Ctrl+D on a pristine session exits without creating a file or advertising resume", async () => {
+		const env = await startRepl({});
+		env.fake.send("\x04");
+		expect(await env.repl).toBe(0);
+		expect(env.runner.session?.isPersisted).toBe(false);
+		expect(existsSync(env.runner.session?.filePath as string)).toBe(false);
+		expect(env.output()).toContain("▪ bye");
+		expect(env.output()).not.toContain("saved — resume with");
+	});
+
+	it.each(["metadata-only", "empty current branch"])(
+		"Ctrl+D preserves the saved hint for persisted state: %s",
+		async (state) => {
+			const env = await startRepl({});
+			const store = env.runner.session;
+			if (!store) throw new Error("expected session");
+			if (state === "metadata-only") {
+				store.appendSessionName("planning");
+			} else {
+				store.appendMessage({ role: "user", content: "earlier work" });
+				store.branchTo(null);
+			}
+			expect(store.buildContext().messages).toEqual([]);
+			expect(env.runner.history).toEqual([]);
+			env.fake.send("\x04");
+			expect(await env.repl).toBe(0);
+			expect(store.isPersisted).toBe(true);
+			expect(existsSync(store.filePath)).toBe(true);
+			const id8 = store.header.id.slice(0, 8);
+			expect(env.output()).toContain(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
+			expect(env.output()).not.toContain("▪ bye");
+		},
+	);
 
 	it("Ctrl+D → graceful 0 + resume line; --no-session → ▪ bye", async () => {
 		const env = await startRepl({ scripts: [reply("ok")] });

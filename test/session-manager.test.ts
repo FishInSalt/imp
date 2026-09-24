@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +31,12 @@ function seed(baseDir: string, cwd: string, messages: AgentMessage[]): SessionSt
 	const store = createSession(cwd, baseDir);
 	for (const message of messages) store.appendMessage(message);
 	return store;
+}
+
+/** Materialize the header-only format written by older versions. */
+function persistLegacyHeader(store: SessionStore): void {
+	mkdirSync(path.dirname(store.filePath), { recursive: true });
+	writeFileSync(store.filePath, `${JSON.stringify(store.header)}\n`);
 }
 
 describe("session manager", () => {
@@ -70,9 +77,13 @@ describe("session manager", () => {
 		expect(list[0]?.turnCount).toBe(1);
 	});
 
-	it("hides fresh and metadata-only sessions, with an explicit opt-in to list them", async () => {
+	it("never lists fresh lazy sessions, but can opt in to legacy empty and metadata-only sessions", async () => {
 		const { baseDir, cwd } = await setup();
+		const fresh = seed(baseDir, cwd, []);
 		const empty = seed(baseDir, cwd, []);
+		persistLegacyHeader(empty);
+		expect(fresh.isPersisted).toBe(false);
+		expect(existsSync(fresh.filePath)).toBe(false);
 		const named = seed(baseDir, cwd, []);
 		named.appendSessionName("planned work");
 		const thinking = seed(baseDir, cwd, []);
@@ -91,7 +102,7 @@ describe("session manager", () => {
 		const { baseDir, cwd } = await setup();
 		const saved = seed(baseDir, cwd, [user("pending question")]);
 		await utimes(saved.filePath, new Date(1000), new Date(1000));
-		seed(baseDir, cwd, []);
+		persistLegacyHeader(seed(baseDir, cwd, []));
 		const metadata = seed(baseDir, cwd, []);
 		metadata.appendSessionName("unused");
 
@@ -115,9 +126,10 @@ describe("session manager", () => {
 		expect(resolveSession(cwd, { continueRecent: true, baseDir })?.header.id).toBe(store.header.id);
 	});
 
-	it("explicit resume still matches empty sessions by id, prefix, and filename", async () => {
+	it("explicit resume still matches legacy header-only sessions by id, prefix, and filename", async () => {
 		const { baseDir, cwd } = await setup();
 		const store = seed(baseDir, cwd, []);
+		persistLegacyHeader(store);
 		const fileName = path.basename(store.filePath);
 		for (const resume of [
 			store.header.id,
@@ -125,7 +137,10 @@ describe("session manager", () => {
 			fileName,
 			fileName.replace(/\.jsonl$/, ""),
 		]) {
-			expect(resolveSession(cwd, { resume, baseDir })?.header.id).toBe(store.header.id);
+			const resumed = resolveSession(cwd, { resume, baseDir });
+			expect(resumed?.header.id).toBe(store.header.id);
+			expect(resumed?.isPersisted).toBe(true);
+			expect(resumed?.buildContext().messages).toEqual([]);
 		}
 	});
 
@@ -155,11 +170,9 @@ describe("session manager", () => {
 	it("ambiguous prefix across two sessions throws with candidates listed", async () => {
 		const { baseDir, cwd } = await setup();
 		const dir = sessionsDirFor(cwd, baseDir);
-		const { mkdirSync } = await import("node:fs");
-		mkdirSync(dir, { recursive: true });
-		// two sessions whose ids share the first 8 chars
-		SessionStore.create(path.join(dir, "a.jsonl"), cwd, "deadbeef-0001-0000-0000-0000");
-		SessionStore.create(path.join(dir, "b.jsonl"), cwd, "deadbeef-0002-0000-0000-0000");
+		// Two legacy header-only sessions whose ids share the first 8 chars.
+		persistLegacyHeader(SessionStore.create(path.join(dir, "a.jsonl"), cwd, "deadbeef-0001-0000-0000-0000"));
+		persistLegacyHeader(SessionStore.create(path.join(dir, "b.jsonl"), cwd, "deadbeef-0002-0000-0000-0000"));
 		expect(() => resolveSession(cwd, { resume: "deadbeef", baseDir })).toThrow(/matches 2 sessions/);
 		// a longer prefix disambiguates
 		const resumed = resolveSession(cwd, { resume: "deadbeef-0001-0000-0000-0000", baseDir });

@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { detectBinary } from "./bin-detect.js";
 import { clampInt, runSearch } from "./grep.js";
+import { findPresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const DEFAULT_LIMIT = 200;
@@ -24,6 +25,7 @@ export function createFindTool(options: FindToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "find",
+		presentation: findPresentation,
 		promptSnippet: "find files by name glob (respects .gitignore) — prefer over bash find.",
 		description:
 			"Find files and directories by name (backed by fd; respects .gitignore, includes hidden files). " +

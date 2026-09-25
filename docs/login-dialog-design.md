@@ -1,6 +1,7 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: proposed
+Status: rev2 (post adversarial review — P0 mutual-exclusion fix, teardown
+contract completed, Ctrl+C mapping, re-entrancy defined, citations re-anchored)
 
 ## 0. Problem
 
@@ -87,22 +88,70 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
 `TuiShell` learns `openLoginDialog(build: (dialog) => Promise<void>)`:
 
 - Registers the dialog as the live **selector**
-  (`this.selector = { teardown, filterKey }` — shell.ts:811): SIGINT/close
-  tears it down (finish-as-cancel), hint row hides, a second picker cannot
-  open on top (pendingSelects FIFO), and the machine's interrupt key
-  router already yields Ctrl+C/Esc to a live selector (shell.ts:313).
+  (`this.selector = { teardown, filterKey }`, shell.ts:822 — same field
+  select() uses): SIGINT (shell.ts:430) and stdin-end (shell.ts:439) and
+  close() (shell.ts:920) tear it down (finish-as-cancel), hint row hides,
+  and the machine's interrupt key router already yields Ctrl+C to a live
+  selector (shell.ts:323-328) and swallows Ctrl+D (shell.ts:325).
 - The dialog is added to `askContainer`; focus moves to it
   (`tui.setFocus(dialog)`). The main editor stays mounted (so the layout
   doesn't jump) but has no focus; typed keys land in the dialog's Input.
-- Teardown (cancel or completion): remove from container, `selector=null`,
-  `setFocus(editor)`, `updatePlaceholder()` — the exact `finish()` sequence
-  of select() (shell.ts:748-769).
+- **Teardown is select()'s FULL finish() sequence** (shell.ts:752-776),
+  not a subset: `selector=null` → `updatePlaceholder()` → removeChild →
+  `setFocus(editor)` → requestRender → **re-show pendingAsks[0] if no
+  askLine is live** (shell.ts:762-765) → **`pendingSelects.shift()` and
+  run it** (shell.ts:770-773). The last two are load-bearing: a select()
+  or ask() arriving while the dialog is open is held (select queues at
+  shell.ts:725-729; ask holds while selector ≠ null at shell.ts:657), and
+  WITHOUT the drain steps a guardian confirm queued mid-dialog hangs
+  forever (review P1 #2).
+- **Re-entrancy** (review P1 #4): `openLoginDialog` while
+  `this.selector !== null` (a picker or another dialog is live) queues
+  like select() does — pushes a `pendingSelects` entry that re-runs it
+  after the current selector finishes. It never clobbers the live
+  selector. Return value `"unavailable"` fires only when `tui === null
+  || closed` (shell in shutdown) — the command then falls back to the
+  legacy path.
+- **Ctrl+C as a keypress** (review P1 #3): raw-mode Ctrl+C is data, not
+  SIGINT; shell.ts:323-324 passes it to the focused component and pi-tui
+  `Input` has no \x03 binding. The dialog's `handleInput` maps Ctrl+C to
+  `cancel()` itself — the same affordance as Esc.
 - **Deleted from the machine** (the payoff): the `login` guard special-case
-  in runCommand (repl.ts:505), `longOpLabel "waiting for login…"`
-  (repl.ts:514), and `onLongOpAbort`'s login supersede comment block —
-  a second `/login` while a dialog is open is **impossible to type**
-  (editor has no focus), so the supersede path dies with the guard.
-  `/compact` and `/tree` keep the guarded state unchanged.
+  in runCommand (repl.ts:505), the `name === "login"` arm of longOpLabel
+  (repl.ts:514), and `onLongOpAbort`'s login wiring (commands.ts:847/870).
+  A second `/login` while a dialog is open cannot be typed (editor has no
+  focus). `longOpLabel` itself SURVIVES for /compact and /tree (repl.ts
+  1126-1139, :1313; commands.ts:1190/1211/1247/1267/1804/1811) — only the
+  login arm dies. `/compact` and `/tree` keep the guarded state unchanged.
+
+### 2.2.1 Machine-level mutual exclusion (review P0 #1)
+
+Owning the keys is NOT machine exclusion. The guard state did more than
+presentation — it was the machine's mutex (repl.ts:497-504 comment):
+"typed lines queue, /new refuses". Under a naive dialog the state is
+idle while `dispatchCommand` is still awaited, so an extension/skill
+`submitPrompt` (repl.ts:1286) would start a concurrent model turn beside
+a live OAuth poll; a queued-line flush from a preceding run interleaves
+the same way.
+
+Fix: the machine gains a **`dialogOpen` boolean**, set around the
+awaited dialog dispatch in `runCommand` (set before, cleared in the same
+finally that today clears longOpAbort). Three turn-start paths check it:
+- `submitTurn` and `enqueuePrompt`: refuse with the renderer note
+  `▪ /login is open — finish or cancel it first (esc)` — same refusal
+  shape as /new-during-compaction.
+- `CommandContext.isActive()` (commands.ts:50): becomes
+  `running || compacting || dialogOpen`, so every
+  `allowedDuringRun: false` command is refused mid-dialog by the
+  existing dispatch guard (commands.ts:1850) — teaching-error shape,
+  no per-command edits.
+
+Editor lines cannot queue (editor owns no keys), so the queue is not a
+path. SIGINT still tears the dialog down first (selector precedence at
+shell.ts:430), so the mutex is escapable exactly one way. Deliberately
+NOT reusing state = "compacting" for this: compacting carries spinner
+and queue semantics this batch is removing; `dialogOpen` is a separate
+boolean touched only by the three turn-start paths and runCommand.
 
 ### 2.3 Command layer: `ctx.loginDialog` seam
 
@@ -110,7 +159,8 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
 
 ```ts
 /** Opens an exclusive login dialog (TUI). Absent on shells without one —
- *  commands fall back to select()/secret() (pick-then-prompt) or text. */
+ *  commands fall back to select()/secret() (pick-then-prompt) or text.
+ *  "unavailable" only when the shell is in shutdown (tui null/closed). */
 openLoginDialog?: (options: LoginDialogOptions) => Promise<"done" | "cancelled" | "unavailable">;
 ```
 
@@ -126,6 +176,10 @@ propagates as `"cancelled"` (silent, pi parity); other errors surface as
   one prompt state; oauth = deviceCode + waiting + the poll). Else →
   current select()/secret() path (readline shell, hermetic dispatch
   tests) — unchanged behavior, tests keep passing.
+  **Piped-mode note** (review P2 #6): `imp < file` resolves the readline
+  shell which HAS secret() — a scripted `/login zai` consumes the NEXT
+  script line as the key (input.ts settleAsk). Pre-existing behavior,
+  unchanged here, now documented.
 - `loginNeedsGuard` shrinks to `() => false`-equivalent: **deleted**; the
   guard branch in runCommand goes with it. Its unit test moves to assert
   the new invariant instead ("no /login line takes the guarded state").
@@ -155,12 +209,30 @@ New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
 4. Esc during the oauth poll: silent cancel ("Login cancelled" not
    printed), no credential written, editor restored, and a follow-up
    `/login` works (state is truly idle — no guard residue).
-5. SIGINT mid-poll: same as Esc (selector teardown path).
+5. SIGINT mid-poll: same as Esc (selector teardown path). PLUS
+   **Ctrl+C as a keypress** (\x03 data, not signal): cancels the dialog
+   (review P1 #3).
 6. Second `/login` while a dialog is open: keystrokes land in the
-   dialog's input; no machine command dispatch; after the dialog closes
-   the queued editor draft is intact.
+   dialog's input; no machine command dispatch. Editor draft (not queue
+   — nothing can queue while the editor owns no keys; review P3 #10) is
+   intact after teardown.
 7. `/compact` and `/tree` still take the guarded state (regression pins
    for the deleted branch).
+8. **Extension/skill `submitPrompt` during an open dialog** (review P0):
+   refused with the ▪ note, no turn starts, dialog unaffected.
+9. **A select()/ask() arriving mid-dialog** (guardian confirm): held;
+   after dialog teardown it renders and resolves (hang-refusal pin).
+10. **close() during the dialog** (shell.ts:920 path) and **stdin-end
+    mid-poll**: dialog settles (cancelled), no unhandled rejection,
+    process teardown clean.
+11. Footer after login: refreshFooter ran (model family hint segment
+    correct after a same-family login).
+12. Focused-forwarding unit assertion: dialog.focused=false →
+    input.focused=false (IME cursor edge).
+13. `dialogOpen` refusal pins: a bare prompt line typed… cannot happen
+    (editor has no focus) — instead assert via `enqueuePrompt` and an
+    `allowedDuringRun:false` command dispatched mid-dialog (the two
+    reachable paths).
 
 Updated: the 3 existing TUI login tests (secret-prompt render/store/Esc)
 rewrite to the dialog path; dispatch-level login tests keep the fallback

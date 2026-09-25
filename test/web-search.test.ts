@@ -155,7 +155,7 @@ describe("web_search direct extension contract", () => {
 		"[::1]",
 		"localhost",
 		"-bad.example",
-		"a".repeat(64) + ".com",
+		`${"a".repeat(64)}.com`,
 		"a..com",
 		42,
 	])("rejects non-hostname domain %j", async (domain) => {
@@ -207,7 +207,7 @@ describe("web_search direct extension contract", () => {
 				source({ url: "/relative" }),
 				source({ url: "javascript:alert(1)" }),
 				source({ url: "https://u:p@example.com" }),
-				source({ url: "https://example.com/" + "x".repeat(2048) }),
+				source({ url: `https://example.com/${"x".repeat(2048)}` }),
 				source({ title: null }),
 				source(),
 				source({ url: "http://example.org/" }),
@@ -223,7 +223,7 @@ describe("web_search direct extension contract", () => {
 	});
 
 	it("bounds Unicode fields and total output without cutting URLs or surrogate pairs", async () => {
-		const url = "https://example.com/" + "u".repeat(2000);
+		const url = `https://example.com/${"u".repeat(2000)}`;
 		fetchMock.mockResolvedValueOnce(
 			response(
 				Array.from({ length: 10 }, () =>
@@ -434,7 +434,7 @@ describe("url_read direct extension contract", () => {
 		"ftp://example.com/a",
 		"file:///tmp/a",
 		"https://user:password@example.com",
-		"https://example.com/" + "a".repeat(2048),
+		`https://example.com/${"a".repeat(2048)}`,
 	])("rejects invalid or credential-bearing URL %s", async (url) => {
 		expect((await page(url)).isError).toBe(true);
 		expect(fetchMock).not.toHaveBeenCalled();
@@ -514,10 +514,10 @@ describe("url_read direct extension contract", () => {
 		`<${" ".repeat(299_998)}>`,
 		`<${"\t".repeat(299_998)}>`,
 		"<".repeat(300_000),
-		"<!--" + "<".repeat(299_996),
-		"<script>" + "<".repeat(299_992),
-		"<style>" + "x".repeat(299_993),
-		"<noscript>" + "x".repeat(299_990),
+		`<!--${"<".repeat(299_996)}`,
+		`<script>${"<".repeat(299_992)}`,
+		`<style>${"x".repeat(299_993)}`,
+		`<noscript>${"x".repeat(299_990)}`,
 		"<p>\n".repeat(60_000),
 	])("processes malformed or repetitive bounded HTML without repeated suffix scans (%#)", async (html) => {
 		fetchMock.mockResolvedValueOnce(new Response(html, { headers: { "content-type": "text/html" } }));
@@ -540,7 +540,7 @@ describe("url_read direct extension contract", () => {
 		expect(output).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
 	});
 	it("cancels at the download cap even when HTML extraction leaves a short output", async () => {
-		const html = "<!--" + "x".repeat(299_980) + "-->Visible" + " ".repeat(100);
+		const html = `<!--${"x".repeat(299_980)}-->Visible${" ".repeat(100)}`;
 		const { res, cancel } = streamed(new TextEncoder().encode(html), { "content-type": "text/html" });
 		fetchMock.mockResolvedValueOnce(res);
 		const { output } = await page();

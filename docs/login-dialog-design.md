@@ -1,7 +1,8 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev6 (rev5 rejected: pseudo-flow still called dialog.message for
-the success tail — fixed; deletion mechanism named; pi citations re-anchored)
+Status: rev7 (independent final-gate review: two P2 spec-accuracy fixes —
+LineInput capability seam named, pi-tui Ctrl+C claim corrected, oauth
+test timing pinned; P3 notes folded)
 
 ## 0. Problem
 
@@ -71,7 +72,10 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   `input.handleInput(data)` (Enter/Escape also flow from Input's own
   onSubmit/onEscape).
 - States imp needs (subset of pi's):
-  - `showPrompt(message, placeholder?)` → Promise<string> — api-key entry
+  - `showPrompt(message, placeholder?)` → Promise<string> — api-key entry.
+    Enter with NO pending resolver is a no-op (pi null-checks
+    inputResolver; rev7 P3): the always-present Input cannot misfire
+    during deviceCode/waiting states.
   - `showDeviceCode({verificationUri, userCode})` — URL as OSC-8 hyperlink
     + `Cmd+click to open` hint + code line. **No auto openBrowser** (pi
     opens it; imp decision D1 — no external side effects from a view).
@@ -131,10 +135,14 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   silent no-op — NOT a fallback trigger** (falling back to the legacy
   path mid-shutdown would print the picker-less error during teardown;
   review P2-5): the command treats unavailable-after-drain as done.
-- **Ctrl+C as a keypress** (review P1 #3): raw-mode Ctrl+C is data, not
-  SIGINT; shell.ts:323-324 passes it to the focused component and pi-tui
-  `Input` has no \x03 binding. The dialog's `handleInput` maps Ctrl+C to
-  `cancel()` itself — the same affordance as Esc.
+- **Ctrl+C as a keypress** (review P1 #3, corrected rev7): raw-mode
+  Ctrl+C is data, not SIGINT; shell.ts:323-324 passes it to the focused
+  component. pi-tui's DEFAULT KEYBINDINGS already bind ctrl+c to
+  `tui.select.cancel` (keybindings.js:78-81) and `Input.handleInput`
+  matches it → `onEscape` — so Ctrl+C reaching the Input cancels via the
+  dialog's onEscape wiring. The dialog's own Ctrl+C→cancel() mapping is
+  kept as an explicit, idempotent duplicate (settled guard) — belt for
+  the keybinding-table path in case focus forwarding ever misses.
 - **Deletion scope is shell-conditional** (rev3 P0-9): the machine pieces
   die only on shells that HAVE the dialog. `loginNeedsGuard(line)` keeps
   existing but becomes shell-aware: `loginNeedsGuard(line, shell)` →
@@ -224,6 +232,15 @@ finish sequence (idempotent via the settled guard). The command body
 only drives dialog states through LoginDialogView; it never finishes.
 Test 1/3/4 assert teardown in all three cases.
 
+**Visible chrome while the dialog owns keys** (rev7 P3): the main
+editor stays mounted WITH its draft — a half-typed line renders below
+the dialog (same as every picker today; Editor.render does not gate
+content on focus, editor.js:416-419 — only the cursor marker is
+focused-gated). The hint row clears (updatePlaceholder's selector≠null
+branch). Viewport overflow follows pi-tui's doRender scrolling
+(extractCursorPosition reads the bottom `height` lines) — no special
+handling, same as a long picker.
+
 ### 2.2.2 No-arg /login and the command-body rewrite (rev3 P2-11/12)
 
 **No-arg /login**: still opens the existing select() provider picker
@@ -276,6 +293,21 @@ The legacy loginToTarget (spinner note + ctx.secret + renderer.status)
 stays verbatim for the fallback path.
 
 ### 2.3 Command layer: `ctx.loginDialog` seam
+
+**The machine-side capability seam** (rev7 P2): `LineInput`
+(line-input.ts) gains the optional method
+`openLoginDialog?(options: LoginDialogOptions): Promise<"done" | "cancelled" | "unavailable">` —
+the same optional-method pattern as select/secret/treeSelect
+(line-input.ts:107+). Every reader derives from it:
+- `runCommand`'s predicate: `loginUsesDialog(line) =
+  this.input.openLoginDialog !== undefined && (no-arg || known target)`
+  — threaded at repl.ts:505 as a boolean; `loginNeedsGuard(line,
+  hasDialog)` keeps its pure-predicate form for testability.
+- The ctx binding (repl.ts:1320-1328 pattern):
+  `const openLoginDialog = this.input.openLoginDialog?.bind(this.input);
+  if (openLoginDialog !== undefined) ctx.openLoginDialog = openLoginDialog;`
+- TuiShell implements it; ReadlineShell does not — the fallback falls
+  out of the same seam, no flags anywhere.
 
 `CommandContext` gains:
 
@@ -381,6 +413,12 @@ path (they never had a dialog). `loginNeedsGuard` test replaced per §2.3.
 
 Gates: full vitest, typecheck (src+test), biome, build.
 
+**Timing conventions** (rev7 P2): codex-auth's poll floor is 1000 ms
+(codex-auth.ts:261 `Math.max(intervalSeconds, 1) * 1000` — even the
+fake server's `interval: 0` waits 1 s before the first poll). Every
+oauth test (3, 4, 5, 10) must use `frameContains` with an explicit
+≥ 5000 ms budget, not the 2 s default (the M15 CI-flake lesson).
+
 ## 4. Risks
 
 - **Focus contract**: imp's TUI focus is editor-or-pickers today; the
@@ -396,6 +434,11 @@ Gates: full vitest, typecheck (src+test), biome, build.
   exactly the four states in §2.1 and stops.
 
 ## 5. Ledger plan
+
+Size accounting (rev7 P3): ~300 source lines (component ~180,
+openLoginDialog wrapper ~60, command body + ctx/LineInput types ~60,
+tui.ts re-exports ~5) and ~400-600 test lines for the 16-item plan;
+net against ~80-100 machine-special-case lines that die on the TUI path.
 
 PROJECT_PLAN.md entry `#login-dialog` after merge, including the process
 note from this batch's audit: when two candidate plans differ by an order

@@ -238,11 +238,11 @@ describe("M13 read tool image path", () => {
 		expect(result.output).toContain("Current model does not support images");
 	});
 
-	it("text files: byte-identical output, no content blocks", async () => {
+	it("text files: logical line contents, no content blocks", async () => {
 		const file = await tmpFixture("notes.txt", Buffer.from("line1\nline2\n", "utf8"));
 		const result = await createReadTool({}).execute({ path: file }, new AbortController().signal);
 		expect(result.content).toBeUndefined();
-		expect(result.output).toBe("line1\nline2\n");
+		expect(result.output).toBe("line1\nline2");
 	});
 });
 

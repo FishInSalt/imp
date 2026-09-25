@@ -31,7 +31,9 @@ export function createFindTool(options: FindToolOptions = {}): Tool {
 			"narrow with path/pattern instead of raising the limit. This is the right tool for 'where is the X file'.",
 		parameters: findSchema,
 		async execute(args, signal) {
-			if (!(await detectBinary("fd"))) {
+			const available = await detectBinary("fd");
+			if (signal.aborted) return { output: "Error: search aborted by user.", isError: true };
+			if (!available) {
 				return {
 					output: "Error: fd is not installed. Install it first: brew install fd (or apt install fd-find).",
 					isError: true,

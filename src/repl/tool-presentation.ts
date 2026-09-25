@@ -163,24 +163,42 @@ function notice(name: string, line: string): boolean {
 		return (
 			/^\[Showing lines \d+-\d+ of \d+ \((?:\d+KB|\d+ line) limit\)\. Use offset=\d+ to continue\.\]$/.test(
 				line,
-			) || /^\[\d+ more lines in file\. Use offset=\d+ to continue\.\]$/.test(line)
+			) ||
+			/^\[Line \d+ is \d+(?:\.\d+)?(?:KB|MB), exceeds the 50KB limit\. Use bash: sed -n '\d+p' .+ \| head -c 51200\]$/.test(
+				line,
+			) ||
+			/^\[\d+ more lines in file\. Use offset=\d+ to continue\.\]$/.test(line)
 		);
 	if (name === "grep" || name === "find")
-		return /^\[Truncated: (?:showing first \d+ of \d+\+? lines(?:, 50KB limit)?|50KB limit|)\. Narrow the search \(subdirectory path, glob, or more specific pattern\) instead of raising the limit\.\]$/.test(
-			line,
+		return (
+			line === "[stderr truncated: showing first 2000 bytes or fewer.]" ||
+			/^\[Truncated: (?:showing first \d+ lines; at least \d+ complete lines observed; total unknown; 1048576-byte collection limit(?:, 50KB limit)?|showing first \d+ of \d+\+? lines(?:, 50KB limit)?|50KB limit|)\. Narrow the search \(subdirectory path, glob, or more specific pattern\) instead of raising the limit\.\]$/.test(
+				line,
+			)
 		);
 	if (name === "ls")
-		return /^\[(?:\d+ entries limit reached\. (?:Narrow the path — \d+ is the maximum|Use limit=\d+ for more)(?:\. 50KB limit reached)?|50KB limit reached)\]$/.test(
-			line,
+		return (
+			/^\[Directory type unavailable for \d+ displayed entries; names shown without a directory suffix\.\]$/.test(
+				line,
+			) ||
+			/^\[(?:\d+ entries limit reached\. (?:Narrow the path — \d+ is the maximum|Use limit=\d+ for more)(?:\. 50KB limit reached)?|50KB limit reached)\]$/.test(
+				line,
+			)
 		);
 	if (name === "bash")
 		return (
-			/^\[output truncated: only the tail is shown above\. Full output saved to .+ — read it with the read tool if you need more \(tip: pipe through head\/tail or narrow the grep to keep output small\)\]$/.test(
+			/^\[output truncated: only the tail is shown above\. (?:Full output saved to .+|Partial output saved to .+ \((?:artifact prefix capped; per-stream limit 10485760 bytes|command interrupted; all observed bytes retained|command interrupted; artifact prefix capped; per-stream limit 10485760 bytes)\)) — read it with the read tool if you need more \(tip: pipe through head\/tail or narrow the grep to keep output small\)\]$/.test(
 				line,
 			) ||
 			line ===
 				"[output truncated: only the tail is shown; saving the full output failed (tip: pipe through head/tail or narrow the grep to keep output small)]" ||
-			line === "[full output itself capped at 10MB]"
+			line === "[full output itself capped at 10MB]" ||
+			line ===
+				"[output truncated: only the tail is shown; saving the output artifact failed (tip: pipe through head/tail or narrow the grep to keep output small)]" ||
+			/^\[(?:stdout|stderr) preview starts within a line\.\]$/.test(line) ||
+			/^\[(?:stdout|stderr) artifact incomplete: retained first \d+ of \d+ observed bytes \(10485760-byte per-stream limit\)\.\]$/.test(
+				line,
+			)
 		);
 	if (name === "task")
 		return /^\[task\] result truncated to its last 50KB \(dropped \d+ bytes\)\. For large output, have the subagent write a file and report its path instead\.$/.test(
@@ -211,6 +229,13 @@ export function outputBlock(result: ToolResult, replay = false): ToolBlock {
 	if (result.isError) metadata.push(diagnostic ?? "Tool failed");
 	for (const line of `${shown}\n${persisted}`.split("\n")) {
 		if (notice(result.toolName, line)) metadata.push(line);
+		if (
+			(result.toolName === "grep" || result.toolName === "find") &&
+			/^Error: (?:rg|fd) (?:terminated by signal [A-Z0-9]+|ended without an exit status)\.$/.test(line)
+		) {
+			status = "failed";
+			metadata.push(line);
+		}
 		if (result.toolName === "task") {
 			if (/^\[task\] child failed after \d+ turns: .*; partial result above\.$/.test(line)) {
 				status = "partial";
@@ -241,7 +266,7 @@ export function outputBlock(result: ToolResult, replay = false): ToolBlock {
 				metadata.push(line);
 			}
 			if (
-				/^Error: command (?:timed out after \d+s and was killed|aborted by user)\. Partial output:$/.test(
+				/^Error: command (?:timed out after \d+(?:\.\d+)?s and was killed|aborted by user|terminated by signal [A-Z0-9]+|ended without an exit status)\. Partial output:$/.test(
 					line,
 				)
 			) {

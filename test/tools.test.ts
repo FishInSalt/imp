@@ -149,7 +149,7 @@ describe("read single-line-over-limit fallback (prompt-audit P9)", () => {
 		const result = await tool.execute({ path: file }, noSignal);
 		expect(result.isError).toBeFalsy();
 		expect(result.output).toContain("[Line 1 is 60KB, exceeds the 50KB limit.");
-		expect(result.output).toContain(`sed -n '1p' ${file} | head -c`);
+		expect(result.output).toContain(`sed -n '1p' '${file}' | head -c`);
 		expect(result.output).not.toContain("xxxx");
 	});
 });

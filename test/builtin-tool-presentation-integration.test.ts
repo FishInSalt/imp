@@ -108,7 +108,7 @@ describe("actual builtin presentation integration", () => {
 				{ toolCallId: String(i), toolName: tools[i]!.name, content: "raw result", isError: false },
 				true,
 			);
-		expect(blocks.filter((_, i) => i % 2 === 0).map((b) => b.id)).toEqual(["5", "4", "3", "2", "1", "0"]);
+		expect(blocks.map((b) => b.id)).toEqual(["0", "1", "2", "3", "4", "5", "5", "4", "3", "2", "1", "0"]);
 		for (const block of blocks) {
 			const fold = new ToolBlockFold(block);
 			for (const width of [1, 20, 80, 120]) {
@@ -122,7 +122,7 @@ describe("actual builtin presentation integration", () => {
 			}
 		}
 		for (const hook of hooks) expect(hook).toHaveBeenCalledTimes(1);
-		const fold = new ToolBlockFold(blocks[10]!);
+		const fold = new ToolBlockFold(blocks[0]!);
 		fold.setExpanded(true);
 		let rendered = sanitizeDisplay(fold.render(120).join("\n"));
 		expect(rendered).toContain('const x = "\\n";');

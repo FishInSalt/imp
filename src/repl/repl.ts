@@ -321,6 +321,7 @@ class ReplMachine {
 	private activeRun: object | null = null;
 	private activityTools = new Map<string, ActivityToolLine>();
 	private activityAgents = new Map<string, ActivityAgentLine>();
+	private activityParents = new Map<string, ActivityAgentLine>();
 	/** M17 queue drain modes for the ACTIVE run (design §3): snapshotted once
 	 *  per run in submitTurn from the merged settings view — /settings writes
 	 *  take effect next run, like the panel's "(next session)" teaching. */
@@ -1016,9 +1017,7 @@ class ReplMachine {
 			const source = info.sourceId;
 			// Missing source identity must never be replaced by display labels.
 			if (!source) {
-				const parent = info.taskToolCallId
-					? this.activityAgents.get(`task:${info.taskToolCallId}`)
-					: undefined;
+				const parent = info.taskToolCallId ? this.activityParents.get(info.taskToolCallId) : undefined;
 				if (parent && event.type === "tool_start") {
 					parent.lastTool = `${event.name} ${inputBlock(event.toolCallId, event.name, event.args).lines.join("\n")}`;
 					parent.toolCount++;
@@ -1035,12 +1034,10 @@ class ReplMachine {
 			const key = `source:${source}`;
 			let row = this.activityAgents.get(key);
 			if (!row) {
-				const parent = info.taskToolCallId
-					? this.activityAgents.get(`task:${info.taskToolCallId}`)
-					: undefined;
+				const parent = info.taskToolCallId ? this.activityParents.get(info.taskToolCallId) : undefined;
 				row = {
 					sourceId: source,
-					agent: info.agent ?? "task",
+					agent: parent?.agent ?? info.agent ?? "task",
 					task: parent?.task ?? "",
 					taskToolId: info.taskToolCallId ?? "",
 					cwd: info.cwd ?? null,
@@ -1086,15 +1083,18 @@ class ReplMachine {
 					args && typeof args === "object" && !Array.isArray(args) && typeof args.agent === "string"
 						? args.agent
 						: "task";
-				this.activityAgents.set(`task:${event.toolCallId}`, {
+				if (this.activityParents.has(event.toolCallId) || this.closedParents.has(event.toolCallId)) return;
+				const parent: ActivityAgentLine = {
 					agent,
-					task: !block.semantic && typeof args?.prompt === "string" ? args.prompt : label,
+					task: typeof args?.prompt === "string" ? args.prompt : label,
 					taskToolId: event.toolCallId,
 					cwd: null,
 					lastTool: null,
 					toolCount: 0,
 					startedAtMs: Date.now(),
-				});
+				};
+				this.activityParents.set(event.toolCallId, parent);
+				this.activityAgents.set(`task:${event.toolCallId}`, parent);
 			} else
 				this.activityTools.set(event.toolCallId, {
 					id: event.toolCallId,
@@ -1152,6 +1152,7 @@ class ReplMachine {
 		this.closedParents.clear();
 		this.activityTools.clear();
 		this.activityAgents.clear();
+		this.activityParents.clear();
 		// Phase is parked at idle explicitly: callers run this at the END of a
 		// turn, when this.state may not have flipped back yet — pushActivity()
 		// would then report "thinking" and the row (and its ticker) would live on.

@@ -18,7 +18,7 @@ import {
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
-import { ToolActivity } from "./components/tool-block.js";
+import { activityCount, activityText, ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
 import type {
@@ -203,6 +203,7 @@ export class TuiShell implements LineInput {
 	private activityFrame = 0;
 	/** Cache only active rows, never historical payloads. */
 	private activityRows = new Map<string, ToolActivity>();
+	private taskOrdinals = new Map<string, { ordinal: number; sources: Map<string, number> }>();
 	/** Buffered setQueue text — pushes may arrive before start() and must not
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
@@ -561,6 +562,7 @@ export class TuiShell implements LineInput {
 		this.activityContainer.clear();
 		if (this.activity.phase === "idle") {
 			this.activityRows.clear();
+			this.taskOrdinals.clear();
 			this.tui?.requestRender();
 			return;
 		}
@@ -596,17 +598,31 @@ export class TuiShell implements LineInput {
 			);
 		}
 		for (const agent of this.activity.agents) {
-			const parts = [agent.agent, agent.task].filter((part) => part !== "");
-			const tools = agent.toolCount > 0 ? `${agent.toolCount} tools` : null;
-			const last = agent.lastTool !== null ? `last: ${agent.lastTool}` : null;
-			const tail = [tools, last].filter((part) => part !== null).join(" · ");
-			const row = tail === "" ? parts.join(" · ") : `${tail} · ${parts.join(" · ")}`;
-			add(
-				`agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`,
-				`└─ running${elapsed(agent.startedAtMs)}`,
-				row,
-			);
+			const parentKey = agent.taskToolId || agent.sourceId || "";
+			let identity = this.taskOrdinals.get(parentKey);
+			if (!identity) {
+				identity = { ordinal: this.taskOrdinals.size + 1, sources: new Map() };
+				this.taskOrdinals.set(parentKey, identity);
+			}
+			if (agent.sourceId && !identity.sources.has(agent.sourceId))
+				identity.sources.set(agent.sourceId, identity.sources.size + 1);
+			const source = agent.sourceId ? identity.sources.get(agent.sourceId) : undefined;
+			const discriminator = `#${identity.ordinal}${source ? `.${source}` : ""}`;
+			const id = `agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`;
+			const row = this.activityRows.get(id) ?? new ToolActivity("", "");
+			row.setTaskRows([
+				`└─ pending ${discriminator} ${activityText(agent.agent)} ${activityCount((now - agent.startedAtMs) / 1000)}s`,
+				activityText(agent.task),
+				...(agent.toolCount > 0 || agent.lastTool !== null
+					? [
+							`${activityCount(agent.toolCount)} tool starts${agent.lastTool === null ? "" : ` · last: ${activityText(agent.lastTool)}`}`,
+						]
+					: []),
+			]);
+			active.set(id, row);
+			this.activityContainer.addChild(row);
 		}
+
 		this.activityRows = active;
 		this.tui?.requestRender();
 	}

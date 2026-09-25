@@ -43,6 +43,7 @@ import type { NavigateTreeSuccess, Runner } from "../runner.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import { buildTreeRows, TREE_FILTER_MODES } from "./components/tree-selector.js";
 import type { SelectOptions, TreeSelectRequest } from "./line-input.js";
+import type { LoginDialogOptions } from "./login-dialog.js";
 
 export interface CommandContext {
 	runner: Runner;
@@ -111,6 +112,11 @@ export interface CommandContext {
 	onLongOpLabel?: (label: string | null) => void;
 	/** /worktrees resolves the repo here — hermetic tests inject a temp repo. */
 	worktreeCwd?: string;
+	/** #login-dialog: open the exclusive login dialog (design §2.3). Absent
+	 *  on shells without one — the command falls back to select()/secret().
+	 *  "unavailable" only when the shell is in shutdown (a queued entry
+	 *  drained by close()) — a silent no-op, never a fallback trigger. */
+	openLoginDialog?: (options: LoginDialogOptions) => Promise<"done" | "cancelled" | "unavailable">;
 }
 
 export type CommandOutcome = "handled" | "exit-requested";
@@ -828,16 +834,36 @@ export function loginTargetFor(ref: string): LoginTarget | undefined {
 
 /** Whether a /login line needs the machine's guarded long-op state (the
  *  codex OAuth poll runs up to 15 minutes): no-arg /login (the picker may
- *  land on codex) or a ref that resolves to the oauth target. */
-export function loginNeedsGuard(line: string): boolean {
+ *  land on codex) or a ref that resolves to the oauth target.
+ *  #login-dialog: shell-aware (design §2.2) — suppressed on dialog shells,
+ *  where the dialog + dialogOpen own the flow; the fallback (readline/
+ *  piped) keeps the guarded state verbatim. */
+export function loginNeedsGuard(line: string, hasDialogShell = false): boolean {
+	if (hasDialogShell) return false;
 	const parsed = parseCommand(line);
 	if (parsed === null || parsed.name !== "login") return false;
 	if (parsed.args.trim() === "") return true; // picker — codex is pickable
 	return loginTargetFor(parsed.args)?.method === "oauth";
 }
 
-/** /login's body, shared by the picker's pick and "/login <family>". */
+/** #login-dialog: whether a /login line runs through the exclusive dialog
+ *  (design §2.2.1) — every /login line on a dialog shell (no-arg included:
+ *  the picker drains, then the dialog opens). Mirrors loginNeedsGuard's
+ *  shape for runCommand's predicate slot. */
+export function loginUsesDialog(line: string, hasDialogShell: boolean): boolean {
+	if (!hasDialogShell) return false;
+	const parsed = parseCommand(line);
+	return parsed !== null && parsed.name === "login";
+}
+
+/** /login's body, shared by the picker's pick and "/login <family>".
+ *  #login-dialog: dialog shells route through the exclusive dialog
+ *  (design §2.2.2) before the legacy flow below. */
 async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<void> {
+	if (ctx.openLoginDialog !== undefined) {
+		await loginViaDialog(ctx, target);
+		return;
+	}
 	if (target.method === "oauth") {
 		// pi's LoginDialog: the URL + user code render, the poll runs in the
 		// background, Esc/Ctrl+C cancels ("Login cancelled" stays silent).
@@ -894,9 +920,58 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	}
 }
 
-/** Shared post-navigation rendering for the /tree family (batch C D6): clear
- *  + replay, editorText backfill, the tail note. Both the picker path (inside
- *  its reopen loop) and the numbered path land here. */
+/** #login-dialog: the dialog-path body (design §2.2.2). The success tail
+ *  renders AFTER the dialog resolves (pi's restore-then-status ordering);
+ *  dialog.message is in-flow progress only. "unavailable" (a queued entry
+ *  drained by close()) is a silent no-op. */
+async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise<void> {
+	try {
+		const outcome = await ctx.openLoginDialog?.({
+			title: `Login to ${target.name}`,
+			run: async (dialog) => {
+				if (target.method === "oauth") {
+					await loginCodex({
+						authPath: ctx.authStorePath,
+						authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.IMP_CODEX_AUTH_BASE,
+						signal: dialog.signal, // the dialog's own AbortController
+						onDeviceCode: (p) => {
+							dialog.deviceCode({ verificationUri: p.verificationUri, userCode: p.userCode });
+							// pi's notifyAuthDialog runs showWaiting right after
+							// showDeviceCode (interactive-mode.ts:5912-5913) — and it
+							// APPENDS: the URL + code stay visible (parity table).
+							dialog.waiting("Waiting for authentication...");
+						},
+					});
+				} else if (target.family !== "openai-codex") {
+					// Null only for a submitted EMPTY line — cancel REJECTS with
+					// "Login cancelled" (the unified channel, design rev5 P3-D).
+					const key = await dialog.prompt(`Enter ${target.name} API key`);
+					if (key === null || key.trim() === "") throw new Error("Login cancelled");
+					saveApiKey(target.family, key, ctx.authStorePath);
+				}
+			},
+		});
+		if (outcome === "unavailable") return; // shutdown drain — silent no-op
+		if (outcome === "cancelled") return; // pi parity: silent cancel
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (message === "Login cancelled") return; // silent
+		ctx.renderer.error(`imp: ${target.name} login failed — ${message}`);
+		return;
+	}
+	// Success tail — restore-then-status ordering (pi 5837→5838): the
+	// dialog is gone; the status/note land on the restored surface.
+	if (target.method === "oauth") {
+		ctx.renderer.status(`Logged in to ${target.name}`); // pi's wording
+	} else {
+		ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
+	}
+	const current = ctx.runner.modelReference();
+	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
+	if (currentFamily !== target.family) {
+		ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
+	}
+}
 function renderNavigateSuccess(
 	ctx: CommandContext,
 	session: SessionStore,

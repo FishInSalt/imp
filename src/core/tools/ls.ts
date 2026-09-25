@@ -59,6 +59,7 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 			names.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
 			const formatted: string[] = [];
+			const unknown = new Set<string>();
 			let entryLimitReached = false;
 			for (const name of names) {
 				if (signal?.aborted) return { output: "Error: aborted", isError: true };
@@ -70,7 +71,7 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 				try {
 					isDir = (await fsStat(`${dirPath}/${name}`)).isDirectory();
 				} catch {
-					continue; // unstattable entries are skipped (pi parity)
+					unknown.add(name);
 				}
 				formatted.push(isDir ? `${name}/` : name);
 			}
@@ -91,6 +92,7 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 			}
 			let output = "";
 			let bytes = 0;
+			let displayedUnknown = 0;
 			for (const line of formatted) {
 				const size = Buffer.byteLength(`${line}\n`);
 				if (bytes + size > MAX_BYTES) {
@@ -98,11 +100,14 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 					break;
 				}
 				output += `${line}\n`;
+				if (unknown.has(line)) displayedUnknown++;
 				bytes += size;
 			}
 			if (notices.length > 0) {
 				output += `\n[${notices.join(". ")}]`;
 			}
+			if (displayedUnknown > 0)
+				output += `\n[Directory type unavailable for ${displayedUnknown} displayed entries; names shown without a directory suffix.]`;
 			return { output };
 		},
 	};

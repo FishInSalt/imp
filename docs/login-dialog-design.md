@@ -1,8 +1,8 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev4 (rev3 rejected: guard deletion stripped the fallback OAuth
-path's mutex — P0-9; teardown ownership for success/error unspecified —
-P1-10; command-body rewrite and no-arg flow specified — P2-11/12)
+Status: rev5 (rev4 rejected: §2.3's deletion bullet still said global —
+contradicted §2.2's shell-conditional fix; pi-parity status ordering;
+prompt-cancel channel unified)
 
 ## 0. Problem
 
@@ -116,7 +116,7 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   and run it** (shell.ts:769-773). The last two are load-bearing: a
   select() or ask() arriving while the dialog is open is held (select
   queues at shell.ts:729-731; ask holds while selector ≠ null at
-  shell.ts:658/661), and WITHOUT the drain steps a guardian confirm
+  shell.ts:657, secret at shell.ts:668), and WITHOUT the drain steps a guardian confirm
   queued mid-dialog hangs forever.
 - **Re-entrancy** (review P1 #4): `openLoginDialog` while
   `this.selector !== null` (a picker or another dialog is live) queues
@@ -172,10 +172,14 @@ runCommand recognizes a dialog-capable `/login` line before awaiting
 no-arg or a login target; on the TUI that is every /login line): if so,
 set `this.dialogOpen = true` **immediately before the try that wraps
 dispatchCommand** (rev3 P3-16: after warmup — a warmup throw returns at
-repl.ts:483 before the try and must never leave the flag set), clear it
+repl.ts:488-490 before the try and must never leave the flag set), clear it
 in an **unconditional** arm of the same finally (rev2 pinned it inside
 the `stateful`-gated block, which rev3 deletes — for /login that block
 never runs and the flag would stick true forever; review P1-3).
+  Residual window (rev4 P3-C): between the flag set and the wrapper
+  registering the selector, a SIGINT takes the machine's idle interrupt
+  path (a note, no abort target) — accepted as benign; the window is
+  synchronous code up to the first await.
 
 **The dispatch must not reject itself** (rev2 P0-1): `dialogOpen=true`
 would make the widened `isActive()` refuse `/login` — its own entry
@@ -243,7 +247,7 @@ const outcome = await ctx.openLoginDialog({
       // switch hint if family differs — was renderer.note
     } else {
       const key = await dialog.prompt(`Enter ${target.name} API key`);
-      if (key === null) throw new Error("Login cancelled");
+      if (key === null) throw new Error("Login cancelled"); // unified channel: prompt() REJECTS on Esc (see below)
       saveApiKey(target.family, key, ctx.authStorePath);
       dialog.message(`Saved API key for ${target.name}`);
       // switch hint if family differs
@@ -253,6 +257,16 @@ const outcome = await ctx.openLoginDialog({
 // "cancelled" (Login cancelled) → silent; other throws → renderer.error
 // with imp's teaching prefix; "done" → footer refresh via runCommand's
 // existing finally refreshFooter
+// Status ordering (rev4 P2-B, pi parity): the saved/switch-hint lines
+// render via renderer.status/note AFTER openLoginDialog resolves (pi
+// restores the editor FIRST, then shows status — interactive-mode.ts
+// 5813-5840); dialog.message is NOT used for the success tail. The
+// message() state stays in the interface for in-flow progress only.
+// Prompt-cancel channel (rev4 P3-D, unified): Esc during prompt REJECTS
+// prompt() with Error("Login cancelled") — the same channel as every
+// other cancel — so run()'s catch surfaces it as "cancelled"; prompt()
+// never resolves null on cancel (null only for a submitted EMPTY line,
+// which the caller treats as cancel the same way the legacy path does).
 ```
 
 The legacy loginToTarget (spinner note + ctx.secret + renderer.status)
@@ -285,9 +299,13 @@ propagates as `"cancelled"` (silent, pi parity); other errors surface as
   shell which HAS secret() — a scripted `/login zai` consumes the NEXT
   script line as the key (input.ts settleAsk). Pre-existing behavior,
   unchanged here, now documented.
-- `loginNeedsGuard` shrinks to `() => false`-equivalent: **deleted**; the
-  guard branch in runCommand goes with it. Its unit test moves to assert
-  the new invariant instead ("no /login line takes the guarded state").
+- `loginNeedsGuard(line, shell)` replaces the current argument-less
+  form (rev4 P0-A): the function KEEPS existing, shell-aware — `false`
+  on dialog shells (the dialog + dialogOpen own the flow), exactly the
+  current predicate elsewhere. Its unit test re-pins BOTH arms: dialog
+  shell → always false; fallback shell → the current truth table
+  (picker/codex true, zai/Z.AI false). The runCommand guard arm
+  (repl.ts:505) is untouched — it simply never fires on dialog shells.
 - `/logout`: unchanged (pi's logout is a selector too).
 
 ### 2.4 What the machine keeps doing during a dialog
@@ -305,8 +323,10 @@ first (shell.ts:430). A running OAuth poll aborted at teardown resolves
 New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
 
 1. api-key flow: `/login zai` → dialog renders (border, title, prompt,
-   input, hints) → type + Enter → saved line, dialog gone, editor focus
-   back; the typed key never enters input history.
+   input, hints) → type + Enter → dialog tears down, THEN
+   renderer.status("Saved API key for Z.AI") lands in the transcript
+   (post-restore ordering, rev4 P2-B) — pin both the transcript line and
+   the dialog-gone frame; the typed key never enters input history.
 2. Esc during prompt: resolves cancelled, nothing stored, editor restored.
 3. oauth flow with the local fake device-code server (reuse
    repl-commands.test.ts:93's fixture): device code + URL + waiting
@@ -321,8 +341,9 @@ New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
    dialog's input; no machine command dispatch. Editor draft (not queue
    — nothing can queue while the editor owns no keys; review P3 #10) is
    intact after teardown.
-7. `/compact` and `/tree` still take the guarded state (regression pins
-   for the deleted branch).
+7. `/compact` and `/tree` still take the guarded state, and a
+    fallback-shell `/login openai-codex` does too (regression pins for
+    the shell-conditional guard; see test 15).
 8. **Extension/skill `submitPrompt` during an open dialog** (review P0):
    refused with the ▪ note, no turn starts, dialog unaffected.
 9. **A select()/ask() arriving mid-dialog** (guardian confirm): held;

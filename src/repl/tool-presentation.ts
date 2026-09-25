@@ -618,16 +618,23 @@ export function outputBlock(result: ToolResult, replay = false): ToolBlock {
 	};
 }
 
-export function createToolSink(append: (block: ToolBlock) => void): ToolPresentationSink {
-	const pending = new Map<string, PreparedToolCall>();
+/** Updates are optional for append-only consumers; interruption styling requires them. */
+export function createToolSink(
+	append: (block: ToolBlock) => void,
+	update?: (previous: ToolBlock, next: ToolBlock) => void,
+): ToolPresentationSink {
+	const entries = new Map<string, { record?: PreparedToolCall; input?: ToolBlock; terminal: boolean }>();
 	let resolver: ToolPresentationResolver | undefined;
+	let finalizing = false;
 	const prepare = (id: string, name: string, args: unknown): PreparedToolCall => {
-		let record = pending.get(id);
-		if (!record) {
-			record = prepareCall(id, name, args, resolver);
-			pending.set(id, record);
+		let entry = entries.get(id);
+		if (!entry) {
+			entry = { record: prepareCall(id, name, args, resolver), terminal: false };
+			entries.set(id, entry);
 		}
-		return record;
+		// An orphan result is terminal; never resolve a late call hook.
+		entry.record ??= prepareCall(id, name, null, undefined);
+		return entry.record;
 	};
 	return {
 		prepare,
@@ -636,28 +643,55 @@ export function createToolSink(append: (block: ToolBlock) => void): ToolPresenta
 		},
 		start: (id, name, args) => {
 			prepare(id, name, args);
+			const entry = entries.get(id)!;
+			if (entry.terminal || entry.input) return;
+			entry.input = preparedInputBlock(entry.record!);
+			append(entry.input);
 		},
 		end: (result, replay = false) => {
-			const record = pending.get(result.toolCallId);
-			const input = record
-				? preparedInputBlock(record)
-				: {
-						...inputBlock(result.toolCallId, result.toolName, null),
-						lines: ["Arguments unavailable"],
-						metadata: ["Arguments unavailable"],
-						sections: [],
-					};
-			pending.delete(result.toolCallId);
-			append(input);
-			append({ ...outputBlock(result, replay), semantic: prepareResult(record, result, replay, resolver) });
+			let entry = entries.get(result.toolCallId);
+			if (entry?.terminal) return;
+			if (!entry) {
+				entry = { terminal: false };
+				entries.set(result.toolCallId, entry);
+			}
+			entry.terminal = true;
+			if (!entry.input) {
+				entry.input = entry.record
+					? preparedInputBlock(entry.record)
+					: {
+							...inputBlock(result.toolCallId, result.toolName, null),
+							lines: ["Arguments unavailable"],
+							metadata: ["Arguments unavailable"],
+							sections: [],
+						};
+				append(entry.input);
+			}
+			append({
+				...outputBlock(result, replay),
+				semantic: prepareResult(entry.record, result, replay, resolver),
+			});
 		},
 		finalize: () => {
-			for (const record of pending.values()) {
-				const input = preparedInputBlock(record);
-				append({ ...input, title: `${input.title} · interrupted (no result)`, error: true });
+			if (finalizing) return;
+			finalizing = true;
+			const pending = [...entries.values()].filter((entry) => !entry.terminal && entry.input);
+			// Keep terminal identities through update callbacks, including reentrant finalize.
+			for (const entry of entries.values()) entry.terminal = true;
+			try {
+				for (const entry of pending) {
+					const input = entry.input!;
+					update?.(input, {
+						...input,
+						title: `${input.title} · interrupted (no result)`,
+						error: true,
+					});
+				}
+			} finally {
+				entries.clear();
+				finalizing = false;
 			}
-			pending.clear();
 		},
-		clear: () => pending.clear(),
+		clear: () => entries.clear(),
 	};
 }

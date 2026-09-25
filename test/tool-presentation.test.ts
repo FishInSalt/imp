@@ -299,7 +299,7 @@ describe("semantic tool presentation", () => {
 		);
 		expect(task.metadata).toContain("Transcript: /tmp/child.jsonl");
 	});
-	it("pairs by id in received completion order, flushes text, finalizes once and clears", () => {
+	it("emits inputs at start and results in completion order, finalizes in place and clears", () => {
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
 			write: transcript.feed,
@@ -317,16 +317,16 @@ describe("semantic tool presentation", () => {
 		renderer.endRun();
 		renderer.endRun();
 		expect(transcript.toolFolds.map((f) => f.block.id)).toEqual([
-			"b",
-			"b",
 			"a",
-			"a",
-			"orphan",
-			"orphan",
+			"b",
 			"c",
+			"b",
+			"a",
+			"orphan",
+			"orphan",
 		]);
-		expect(transcript.toolFolds[4]?.block.lines).toEqual(["Arguments unavailable"]);
-		expect(transcript.toolFolds[6]?.block.title).toContain("interrupted");
+		expect(transcript.toolFolds[5]?.block.lines).toEqual(["Arguments unavailable"]);
+		expect(transcript.toolFolds[2]?.block.title).toContain("interrupted");
 		const text = sanitizeDisplay(transcript.render(80).join("\n"));
 		expect(text.indexOf("before")).toBeLessThan(text.indexOf("● bash"));
 		expect(text).toContain("●");
@@ -355,7 +355,7 @@ describe("semantic tool presentation", () => {
 		} as unknown as SessionStore);
 		expect(messages).toEqual(before);
 		expect(transcript.toolFolds).toHaveLength(3);
-		expect(transcript.toolFolds[1]?.block.metadata).toContain("Diff unavailable in saved history");
+		expect(transcript.toolFolds[2]?.block.metadata).toContain("Diff unavailable in saved history");
 		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("●");
 	});
 });

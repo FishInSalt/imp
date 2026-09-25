@@ -1484,10 +1484,13 @@ describe("runRepl with shell:tui", () => {
 		second.resolve();
 		await waitUntil(() => finished.length === 1);
 		expect(finished).toEqual(["b"]);
-		expect(env.transcript.toolFolds).toHaveLength(0);
+		expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
+			["a", "input"],
+			["b", "input"],
+		]);
 		first.resolve();
 		await frameContains(env, "parallel done");
-		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "a", "b", "b"]);
+		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "a", "b"]);
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
 		env.transcript.toolSink.start("c", "read", { path: "new" });
@@ -1504,7 +1507,7 @@ describe("runRepl with shell:tui", () => {
 			{ write: env.transcript.feed, ansi: true, markdown: true, toolSink: env.transcript.toolSink },
 			session,
 		);
-		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "a", "b", "b"]);
+		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "a", "b"]);
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
 		env.terminal.data("/new\r");
@@ -1806,7 +1809,12 @@ describe("runRepl with shell:tui", () => {
 		vi.spyOn(env.runner, "runTurn").mockImplementation(async (options) => {
 			const emit = options.onEvent!;
 			for (const id of ["parent-a", "parent-b"])
-				emit({ type: "tool_start", toolCallId: id, name: "task", args: { agent: "same", prompt: id } });
+				emit({
+					type: "tool_start",
+					toolCallId: id,
+					name: "task",
+					args: { agent: "same", prompt: "shared prompt" },
+				});
 			const a = { sourceId: "source-a", taskToolCallId: "parent-a", agent: "same", cwd: "/same" };
 			const b = { ...a, sourceId: "source-b", taskToolCallId: "parent-b" };
 			const start = (value: string) => ({
@@ -1817,7 +1825,16 @@ describe("runRepl with shell:tui", () => {
 			});
 			emit(start("a"), a);
 			emit(start("b"), b);
+			const a2 = { ...a, sourceId: "source-a2" };
+			emit(start("a2"), a2);
+			let mark = env.terminal.writes.length;
+			env.terminal.resize(100);
 			await settle();
+			const frame = env.terminal.frameSince(mark);
+			expect(frame).toContain("pending #1.1 same");
+			expect(frame).toContain("pending #1.2 same");
+			expect(frame).toContain("pending #2.1 same");
+			expect(frame.split("shared prompt").length - 1).toBeGreaterThanOrEqual(3);
 			expect(env.terminal.frameSince(0)).toContain("child-a");
 			expect(env.terminal.frameSince(0)).toContain("child-b");
 			const end = {
@@ -1832,7 +1849,15 @@ describe("runRepl with shell:tui", () => {
 				result: { toolCallId: "parent-a", toolName: "task", content: "done", isError: false },
 			});
 			emit(start("stale-parent"), a);
-			expect(call).toHaveBeenCalledTimes(2);
+			expect(call).toHaveBeenCalledTimes(3);
+			mark = env.terminal.writes.length;
+			env.terminal.resize(90);
+			await settle();
+			const remaining = env.terminal.frameSince(mark);
+			expect(remaining).toContain("pending #2.1 same");
+			expect(remaining).not.toContain("pending #1");
+			expect(remaining).toContain("last: child_tool child-b");
+			expect(remaining).not.toContain("child-a");
 			emit({
 				type: "tool_end",
 				result: { toolCallId: "parent-b", toolName: "task", content: "done", isError: false },
@@ -1845,11 +1870,54 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.transcript.completedLines().join().includes("finished"));
 		await settle();
 		late?.();
-		expect(call).toHaveBeenCalledTimes(2);
+		expect(call).toHaveBeenCalledTimes(3);
 		expect(env.transcript.toolFolds.every((f) => f.block.name === "task")).toBe(true);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+	it("cancels emitted calls in place and rejects abandoned run events after clear and id reuse", async () => {
+		const env = await startTuiRepl([reply("next epoch")]);
+		const original = env.runner.runTurn.bind(env.runner);
+		let late: (() => void) | undefined;
+		const spy = vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			emit({ type: "tool_start", toolCallId: "reuse", name: "task", args: { prompt: "cancel this" } });
+			late = () =>
+				emit({
+					type: "tool_end",
+					result: { toolCallId: "reuse", toolName: "task", content: "stale result", isError: false },
+				});
+			await new Promise<void>((resolve) =>
+				options.signal?.addEventListener("abort", () => resolve(), { once: true }),
+			);
+			throw new Error("interrupted test run");
+		});
+		env.terminal.data("go\r");
+		await waitUntil(() => env.transcript.toolFolds.length === 1);
+		const fold = env.transcript.toolFolds[0]!;
+		env.terminal.data("\x0f");
+		await waitUntil(() => fold.isExpanded());
+		env.terminal.data("\x1bo");
+		await settle();
+		env.terminal.data("\x03");
+		await waitUntil(() => fold.block.title.includes("interrupted"));
+		expect(env.transcript.toolFolds).toEqual([fold]);
+		expect(fold.isExpanded()).toBe(true);
+		expect(stripAnsi(fold.render(80).join("\n"))).toContain("interrupted (no result)");
+		env.transcript.clear();
+		env.transcript.toolSink.start("reuse", "task", { prompt: "new epoch" });
+		late?.();
+		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input"]);
+		expect(env.transcript.toolFolds[0]!.block.title).not.toContain("interrupted");
+		spy.mockImplementation(original);
+		env.terminal.data("next\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("next epoch"));
+		late?.();
+		expect(env.transcript.toolFolds).toHaveLength(1);
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
 	it("resolves hooks before initial saved-history replay", async () => {
 		const call = vi.fn(() => ({ summary: "historical call" }));
 		const result = vi.fn(() => ({ summary: "historical result" }));
@@ -1925,7 +1993,8 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("gated"));
 		const pending = env.terminal.frameSince(0);
 		expect(pending).toContain("gated"); // the live activity row
-		expect(pending).not.toContain("●"); // no byte-stream pending line in TUI mode
+		expect(pending).toContain("●"); // immediate inspectable input fold
+		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input"]);
 		const mark = env.terminal.writes.length;
 		g.resolve();
 		// M11: success results fold — the ⎿ preview is replaced by a ▸ fold title
@@ -1974,6 +2043,94 @@ describe("runRepl with shell:tui", () => {
 		expect(iText).toBeGreaterThan(iFold); // …and the following text UNDER the fold
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("real task shows generic pending input after unknown scout, before child completion", async () => {
+		const home = await mkdtemp(path.join(tmpdir(), "imp-task-live-"));
+		const hold = gate();
+		let entered = false;
+		const fake: Tool = {
+			name: "bash_like",
+			description: "offline label only",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				entered = true;
+				await hold.promise;
+				return { output: "child output" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "bad",
+							name: "task",
+							arguments: { agent: "scout", prompt: "old request" },
+						},
+					],
+					"tool_use",
+				),
+				assistant(
+					[{ type: "toolCall", id: "good", name: "task", arguments: { prompt: "inspect current request" } }],
+					"tool_use",
+				),
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "child",
+							name: "bash_like",
+							arguments: { command: "long child command ".repeat(100) },
+						},
+					],
+					"tool_use",
+				),
+				reply("child complete"),
+				reply("parent continuation"),
+			],
+			{ agentsHomeDir: home, tools: [fake] },
+		);
+		try {
+			env.terminal.data("go\r");
+			await waitUntil(() => entered, 8000);
+			expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
+				["bad", "input"],
+				["bad", "output"],
+				["good", "input"],
+			]);
+			const input = env.transcript.toolFolds[2]!;
+			expect(env.transcript.toolFolds[1]!.block.error).toBe(true);
+			env.terminal.data("\x0f");
+			await waitUntil(() => input.isExpanded());
+			expect(stripAnsi(input.render(80).join("\n"))).toContain("inspect current request");
+			const mark = env.terminal.writes.length;
+			env.terminal.resize(100); // forced full fresh frame, not historical activity
+			await settle();
+			const frame = env.terminal.frameSince(mark);
+			expect(frame).toMatch(/pending #2\.1 task/);
+			expect(frame).toContain("inspect current request");
+			expect(frame).toContain("1 tool starts · last: bash_like");
+			expect(frame).not.toMatch(/pending .*scout/);
+			hold.resolve();
+			await waitUntil(() => env.transcript.completedLines().join().includes("parent continuation"), 8000);
+			expect(env.transcript.toolFolds[2]).toBe(input);
+			expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
+				["bad", "input"],
+				["bad", "output"],
+				["good", "input"],
+				["good", "output"],
+			]);
+			const endMark = env.terminal.writes.length;
+			env.terminal.resize(80);
+			await settle();
+			expect(env.terminal.frameSince(endMark)).not.toContain("pending #");
+		} finally {
+			hold.resolve();
+			env.terminal.data("/exit\r");
+			await env.repl;
+		}
 	});
 
 	it("a subagent paints a tree row held on screen; it leaves with the task", async () => {
@@ -3367,6 +3524,45 @@ describe("TuiShell activity region (M10 B)", () => {
 		}
 	});
 
+	it("task snapshots retain ordinal epochs without transcript allocation or hook calls", async () => {
+		const { shell, terminal, transcript } = makeShell();
+		const hook = vi.fn(() => ({ summary: "must not run" }));
+		transcript.toolSink.setResolver(() => ({ call: hook }));
+		shell.start();
+		const agent = {
+			agent: "same",
+			task: "independent prompt",
+			taskToolId: "parent",
+			cwd: null,
+			lastTool: null,
+			toolCount: 0,
+			startedAtMs: Date.now(),
+		};
+		shell.setActivity({ phase: "working", tools: [], agents: [agent] });
+		shell.setActivity({
+			phase: "working",
+			tools: [],
+			agents: [
+				{ ...agent, sourceId: "one" },
+				{ ...agent, sourceId: "two" },
+			],
+		});
+		await settle(150);
+		let mark = terminal.writes.length;
+		shell.forceRender();
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("pending #1.2 same");
+		shell.setActivity({ phase: "idle", tools: [], agents: [] });
+		shell.setActivity({ phase: "working", tools: [], agents: [{ ...agent, taskToolId: "new-parent" }] });
+		mark = terminal.writes.length;
+		terminal.resize(100);
+		await settle();
+		expect(terminal.frameSince(mark)).toContain("pending #1 same");
+		expect(transcript.toolFolds).toEqual([]);
+		expect(hook).not.toHaveBeenCalled();
+		shell.close();
+	});
+
 	it("working rows render pending tools and subagent tree lines", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
@@ -3389,7 +3585,9 @@ describe("TuiShell activity region (M10 B)", () => {
 		await settle(30);
 		const frame = terminal.frameSince(0);
 		expect(frame).toContain("bash echo hi");
-		expect(frame).toContain("3 tools · last: bash echo deep · scout · explore the tree");
+		expect(frame).toContain("pending #1 scout");
+		expect(frame).toContain("explore the tree");
+		expect(frame).toContain("3 tool starts · last: bash echo deep");
 		shell.close();
 	});
 });

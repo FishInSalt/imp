@@ -86,7 +86,11 @@ export class ToolBlockFold implements Component {
 	private expanded = false;
 	private raw = false;
 	private cache?: { width: number; expanded: boolean; raw: boolean; rows: string[] };
-	constructor(readonly block: ToolBlock) {}
+	constructor(public block: ToolBlock) {}
+	updateBlock(block: ToolBlock): void {
+		this.block = block;
+		this.invalidate();
+	}
 	hasStructuredArguments(): boolean {
 		return this.block.kind === "input" && this.block.readableArguments !== undefined;
 	}
@@ -413,7 +417,6 @@ export class ToolBlockFold implements Component {
 		for (const meta of block.metadata.filter((meta) => {
 			if (
 				this.expanded &&
-				block.name === "bash" &&
 				block.promotedEvidence &&
 				meta === sanitizeDisplay(block.promotedEvidence.raw) &&
 				evidenceVisible(block.promotedEvidence.raw, block.promotedEvidence.sources)
@@ -604,6 +607,10 @@ export class ToolBlockFold implements Component {
 
 /** Strict three-row total. Status/elapsed goes first, omission replaces row 3. */
 export class ToolActivity implements Component {
+	private taskRows?: string[];
+	setTaskRows(rows: string[]): void {
+		this.taskRows = rows;
+	}
 	private sanitized?: string;
 	private preview?: { width: number; rows: string[] };
 	constructor(
@@ -623,6 +630,8 @@ export class ToolActivity implements Component {
 	}
 	render(width: number): string[] {
 		const w = Math.max(1, width);
+		if (this.taskRows)
+			return this.taskRows.slice(0, 3).map((row) => `${DIM}${ellipsize(activityText(row), w)}${RESET}`);
 		const rows = [truncateToWidth(sanitizeDisplay(this.status).replaceAll("\n", " "), w, "…")];
 		if (this.preview?.width !== w) {
 			this.sanitized ??= sanitizeDisplay(this.label);
@@ -639,4 +648,16 @@ export class ToolActivity implements Component {
 		rows.push(...this.preview.rows);
 		return rows.map((r) => `\x1b[2m${r}${RESET}`);
 	}
+}
+
+/** Bound untrusted fields before sanitizer and layout, without cutting surrogate pairs. */
+export function activityText(text: string): string {
+	const cap = (value: string, size: number): string => {
+		const end = value.length > size && /[\uD800-\uDBFF]/u.test(value[size - 1]!) ? size - 1 : size;
+		return value.slice(0, end);
+	};
+	return cap(sanitizeDisplay(cap(text, 2048)).replace(/[\n\r\u2028\u2029]/gu, " "), 4096);
+}
+export function activityCount(value: number): string {
+	return !Number.isFinite(value) || value < 0 ? "0" : value > 9999 ? "9999+" : String(Math.floor(value));
 }

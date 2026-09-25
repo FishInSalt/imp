@@ -31,9 +31,9 @@ describe("presentation integration", () => {
 		sink.end(result("a"));
 		expect(call).toHaveBeenCalledTimes(2);
 		expect(finish).toHaveBeenCalledTimes(2);
-		expect(blocks.map((b) => b.id)).toEqual(["b", "b", "a", "a"]);
+		expect(blocks.map((b) => b.id)).toEqual(["a", "b", "b", "a"]);
 		expect(record.callSemantic?.summary).toBe("query first");
-		const fold = new ToolBlockFold(blocks[1]!);
+		const fold = new ToolBlockFold(blocks[2]!);
 		expect(sanitizeDisplay(fold.render(80).join("\n"))).toContain("result second");
 		fold.setExpanded(true);
 		const expanded = sanitizeDisplay(fold.render(80).join("\n"));
@@ -75,7 +75,7 @@ describe("presentation integration", () => {
 		sink.start("pending", "x", {});
 		sink.clear();
 		sink.finalize();
-		expect(blocks).toHaveLength(2);
+		expect(blocks.map((b) => b.kind)).toEqual(["input", "output", "input"]);
 	});
 	it("allocates raw rows before optional detail, counts sections independently and caches layout", () => {
 		const blocks: ToolBlock[] = [];

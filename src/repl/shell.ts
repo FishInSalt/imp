@@ -852,10 +852,18 @@ export class TuiShell implements LineInput {
 		const dialog = new LoginDialog(tui, options.title);
 		return new Promise((resolve, reject) => {
 			let settled = false; // five racing finish sources (design rev3 P1-2)
-			const finish = (): void => {
-				if (settled) return;
-				settled = true;
-				this.selector = null;
+		const finish = (): void => {
+			if (settled) return;
+			settled = true;
+			// Finish-as-cancel (design §2.2, review P0): the flow must settle
+			// on EVERY teardown path — SIGINT/stdin-end/close arrive while
+			// run() is pending; without cancelling, dialogOpen stays true and
+			// the machine refuses everything (15-min poll) or bricks (a
+			// pending prompt can never settle once the Input lost focus).
+			// Idempotent with the Esc/Ctrl+C path (the settled guard runs
+			// first; cancel() is itself a no-op after the first call).
+			dialog.teardownNow();
+			this.selector = null;
 				this.updatePlaceholder();
 				this.askContainer.removeChild(dialog);
 				// Null-guard: teardown may fire after close() began detaching

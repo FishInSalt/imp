@@ -98,14 +98,20 @@ export class LoginDialog extends Container implements Focusable, LoginDialogView
 		return this.abort.signal;
 	}
 
-	/** pi cancel() (login-dialog.ts:81-90): one channel for Esc and the
-	 *  dialog's Ctrl+C mapping (kept as an explicit idempotent duplicate
-	 *  of pi-tui's ctrl+c→tui.select.cancel binding — rev7 G). */
-	private cancel(reason: string): void {
+	/** pi cancel() (login-dialog.ts:81-90): one channel for Esc, the
+	 *  dialog's Ctrl+C mapping, and selector teardown (SIGINT/stdin-end/
+	 *  close — design §2.2 "finish-as-cancel"; review P0: without this,
+	 *  teardown-first leaves run() pending and dialogOpen wedged). */
+	cancel(reason: string): void {
 		this.abort.abort();
 		const pending = this.pendingPrompt;
 		this.pendingPrompt = null;
 		if (pending !== null) pending.reject(new Error(reason));
+	}
+
+	/** The selector-teardown channel: cancel the flow, then the UI. */
+	teardownNow(): void {
+		this.cancel("Login cancelled");
 	}
 
 	prompt(message: string, placeholder?: string): Promise<string> {

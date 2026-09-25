@@ -2,6 +2,10 @@
 // (extracted from repl-tui.test.ts verbatim; import-only, no test cases).
 import { StdinBuffer, type Terminal } from "../src/tui.js";
 
+// 12 shells × a process-exit listener each crosses the default 10 — raise
+// the cap once for this suite (review P3).
+process.setMaxListeners(30);
+
 export async function settle(extraMs = 30): Promise<void> {
 	await new Promise<void>((resolve) => setTimeout(resolve, extraMs));
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));

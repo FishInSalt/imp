@@ -13,10 +13,11 @@ import { loadCodexCredential } from "../src/provider/codex-auth.js";
 import { Renderer } from "../src/render.js";
 import { LoginDialog } from "../src/repl/login-dialog.js";
 import { runRepl } from "../src/repl/repl.js";
+import { TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { scriptedProvider } from "./helpers/fakes.js";
-import { FakeTerminal, settle, stripAnsi } from "./login-dialog.helpers.js";
+import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 const OAUTH_BUDGET = 6000; // 1s poll floor ×2 polls + render + CI slack
 
@@ -312,21 +313,103 @@ describe("login dialog (#login-dialog)", () => {
 		expect(env.transcript.completedLines().join("\n")).toContain("hello-mid-dialog");
 	});
 
-	it("14. a held ask arriving mid-dialog renders after teardown", async () => {
+	it("14. a held ask arriving mid-dialog renders and settles after teardown (real hold/drain)", async () => {
+		// Shell-level (the machine harness cannot reach shell.ask): open the
+		// dialog via openLoginDialog directly, then ask() mid-dialog — it
+		// must be HELD (unanswerable under the dialog), render after the
+		// dialog tears down, and settle when answered.
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink();
+		const events: string[] = [];
+		const shell = new TuiShell({
+			transcript,
+			terminal,
+			onLine: (l: string) => events.push(`line:${l}`),
+			onInterrupt: () => events.push("interrupt"),
+			onEof: () => events.push("eof"),
+			onDequeue: () => events.push("dequeue"),
+			onCycleThinking: () => events.push("cycle-thinking"),
+			onToggleThinking: () => events.push("toggle-thinking"),
+		});
+		shell.start();
+		await settle(0);
+		const release: { fn: (() => void) | null } = { fn: null };
+		const dialogPromise = shell.openLoginDialog({
+			title: "Login to Z.AI",
+			run: async (dialog) => {
+				await new Promise<void>((resolve) => {
+					release.fn = resolve;
+				});
+				void dialog;
+			},
+		});
+		await settle();
+		expect(terminal.frameSince(0)).toContain("Login to Z.AI");
+		// the ask arrives mid-dialog → held (not rendered yet)
+		const asked = shell.ask("proceed?");
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("proceed?");
+		// resolve the flow → wrapper tears the dialog down → the held ask
+		// renders (the finish() re-show block — the load-bearing drain)
+		release.fn?.();
+		await dialogPromise;
+		await settle();
+		expect(terminal.frameSince(0)).toContain("proceed?");
+		// it settles when answered (typed line answers it, never dispatches)
+		terminal.data("y\r");
+		await expect(asked).resolves.toBe(true);
+		expect(events).toEqual([]);
+		shell.close();
+	});
+
+	it("10. SIGINT/teardown first: a pending prompt settles cancelled — dialogOpen unwedged", async () => {
+		// The review-P0 regression pin: selector teardown (SIGINT path)
+		// must cancel the flow, not just remove the UI.
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink();
+		const events: string[] = [];
+		const shell = new TuiShell({
+			transcript,
+			terminal,
+			onLine: (l: string) => events.push(`line:${l}`),
+			onInterrupt: () => events.push("interrupt"),
+			onEof: () => events.push("eof"),
+			onDequeue: () => events.push("dequeue"),
+			onCycleThinking: () => events.push("cycle-thinking"),
+			onToggleThinking: () => events.push("toggle-thinking"),
+		});
+		shell.start();
+		await settle(0);
+		const outcome = shell.openLoginDialog({
+			title: "Login to Z.AI",
+			run: async (dialog) => {
+				// A prompt that stays pending until torn down
+				await dialog.prompt("Enter Z.AI API key");
+			},
+		});
+		await settle();
+		expect(terminal.frameSince(0)).toContain("Enter Z.AI API key");
+		// The selector-teardown path (SIGINT/stdin-end/close all funnel
+		// here) — while the prompt is pending. Review P0: this must
+		// cancel the flow, not strand the pending prompt forever.
+		const closeMark = terminal.writes.length;
+		shell.close();
+		await expect(outcome).resolves.toBe("cancelled"); // NOT a hang
+		await settle();
+		expect(terminal.frameSince(closeMark)).not.toContain("Enter Z.AI API key"); // dialog gone
+	});
+
+	it("11. footer after login: refreshFooter ran (model segment intact)", async () => {
 		const env = await fresh();
 		env.terminal.data("/login zai\r");
 		await settle();
-		// ask() is held while the selector owns keys; on cancel it re-shows.
-		// Drive via a second /login queued behind the dialog? The dialog
-		// queues as pendingSelects; here: cancel and confirm the shell is
-		// usable for a subsequent picker (/login picker on a second run).
-		env.terminal.data("\x1b");
+		env.terminal.data("sk-footer\r");
 		await settle();
-		env.terminal.data("/login\r"); // no-arg → picker
-		await settle();
-		expect(env.terminal.frameSince(0)).toContain("sign in to a provider");
-		env.terminal.data("\x1b");
-		await settle();
+		expect(loadApiKey("zai", env.authPath)).toBe("sk-footer");
+		// runCommand's finally refreshes the footer — the model segment
+		// still renders post-login (the same-session footer line)
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("test-model ·");
 	});
 
 	it("7/15. /compact still takes the guarded state; fallback /login does too (no-dialog predicate)", async () => {
@@ -404,8 +487,3 @@ async function frameEventually(env: Env, text: string, budgetMs: number): Promis
 		await settle(15);
 	}
 }
-
-// FakeTerminal copied from repl-tui.test.ts (single-file hermetic use):
-class FakeTerminalImpl extends FakeTerminal {}
-void FakeTerminalImpl;
-void stripAnsi;

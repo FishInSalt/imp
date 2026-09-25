@@ -1,8 +1,9 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev7 (independent final-gate review: two P2 spec-accuracy fixes —
-LineInput capability seam named, pi-tui Ctrl+C claim corrected, oauth
-test timing pinned; P3 notes folded)
+Status: rev8 (self-audit after the "did you under-think again" question:
+waiting-APPENDS corrected — the rev6 replaces claim was invented, not
+observed; hint row itself gets OSC-8; pi behavior parity table anchors
+every claim to pi source; paste path pinned to a test, not an assumption)
 
 ## 0. Problem
 
@@ -77,23 +78,75 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
     inputResolver; rev7 P3): the always-present Input cannot misfire
     during deviceCode/waiting states.
   - `showDeviceCode({verificationUri, userCode})` — URL as OSC-8 hyperlink
-    + `Cmd+click to open` hint + code line. **No auto openBrowser** (pi
-    opens it; imp decision D1 — no external side effects from a view).
+    + `Cmd+click to open` hint + code line. The HINT ROW is itself an
+    OSC-8 hyperlink wrapping the same URL (pi login-dialog.ts:126-127:
+    `hyperlink = OSC8(url){clickHint}OSC8`) — terminals decide clickability
+    by an OSC-8 sequence under the cursor, not by URL text on screen;
+    a bare-text hint would be a lying affordance (rev8 fix 2). **No auto
+    openBrowser** (pi opens it; imp decision D1 — no external side
+    effects from a view).
   - `showWaiting(message)` — dim line + `(esc to cancel)` hint (the OAuth
     poll replaces the spinner's "something is happening" role).
-  - `showMessage(line)` — one-off status lines (saved/switch-hint tail).
-  State transitions **replace** the content area (pi clears
-  contentContainer between states; review P3-6): deviceCode renders
-  URL+code, waiting replaces it once rendered — no append-stacking.
-  imp's api-key flow = prompt only; oauth = deviceCode + waiting; no
-  imp state needs both URL and input, so the always-present-Input with
-  changing content is sound for imp's subset.
+    **APPENDS, never replaces** (rev8 fix 1): pi's showWaiting does not
+    clear the content area (login-dialog.ts:206-211 addChild) and the
+    caller runs `showDeviceCode(...); showWaiting("Waiting...")` back to
+    back (interactive-mode.ts:5912-5913) — the URL and user code MUST
+    stay on screen for the whole 15-minute poll: that is what the user
+    is copying into the browser. The rev6 "waiting replaces it" claim
+    was invented, not observed; it would erase exactly what the user
+    needs at the moment they need it.
+  - `showMessage(line)` — one-off status lines (in-flow progress only;
+    never the success tail — §2.2.2).
+  **State-clearing contract, corrected rev8**: ONLY `showDeviceCode`
+  clears the content area (pi login-dialog.ts:118-120 contentContainer
+  .clear() at its head); `showWaiting` and the prompt state APPEND after
+  it (pi's showPrompt/showManualInput do not clear either — the manual-
+  code flows keep their URL visible above the input; exactly the
+  same rationale as deviceCode). imp's flows: api-key = prompt (cleared
+  state, nothing prior to keep); oauth = deviceCode-then-append-waiting.
+  The Input rides BELOW the content area and stays present in every
+  state (pi's layout), so appending never collides with it.
 - Imp's tui.ts boundary gains: `Input`, `Focusable` re-exports
   (DynamicBorder is imp-local: 6 lines over `Text(dim("─"))`).
 - Secrets note: pi renders the key unmasked in the Input and replaces it
   with `> value` after submit; imp keeps exactly that (typed key visible
   while typing — dogfood reports never flagged it as a problem; the file
   write is 0600).
+
+### 2.1.1 pi behavior parity table (rev8 — the anchor for every parity claim)
+
+Method: the design's state semantics are anchored to pi's ACTUAL call
+sequences, not to this document's own prior claims. Every "pi parity"
+assertion below cites the pi source line that establishes it.
+
+| imp state | pi counterpart | pi call site | content-area effect |
+|---|---|---|---|
+| prompt(api key) | showPrompt | interactive-mode.ts:5836 loginProvider → packages/ai auth prompt callback | **no clear** (login-dialog.ts:148-181 addChild) |
+| deviceCode | showDeviceCode | interactive-mode.ts:5912 notifyAuthDialog | **clear() then build** (login-dialog.ts:118-120) |
+| waiting | showWaiting | interactive-mode.ts:5913, immediately after showDeviceCode | **append** (login-dialog.ts:206-211 addChild) — URL+code stay visible |
+| message (progress) | showProgress | notifyAuthDialog default arm | append (login-dialog.ts:217-220) |
+| success tail | — (not in the dialog) | restoreEditor() FIRST (interactive-mode.ts:5837), then completeProviderAuthentication emits status (5838, 5732-5734) | renders outside the dialog, post-teardown |
+| cancel (Esc/Ctrl+C) | cancel() | login-dialog.ts:81-90 | abort + reject pending + onComplete(false) — the dialog itself, no clear |
+
+RULE for future edits: any change to §2.1's semantics must update this
+table with a fresh pi source citation; a parity claim without a row is
+not a claim, it is an assumption (the rev6 "waiting replaces" line sat
+uncontradicted through seven review rounds because it cited nothing).
+
+### 2.1.2 Paste path (rev8 fix 3 — verified-at-implementation, not assumed)
+
+Users paste API keys from password managers. pi-tui's `Input` ships its
+own paste handling (`isInPaste`/`handlePaste`, input.d.ts) — imp has NOT
+verified its interaction with imp's `StdinBuffer` key splitting and the
+shell's bracketed-paste unwrap (shell.ts's filterKey regex handles
+picker queries; the Input path is separate). This is the same error
+mode that produced fix 1 (assuming component behavior instead of
+reading it): instead of a doc claim, the FIRST dialog test (test 1)
+must feed a bracketed-paste sequence
+`\x1b[200~sk-pasted-key\x1b[201~` through FakeTerminal and assert the
+Input receives the full key as one value. If paste misbehaves, the fix
+lands in the same batch — the seam is imp-local (the pre-focus
+listener), not inside pi-tui.
 
 ### 2.2 Shell integration: the dialog rides the **selector contract**
 
@@ -358,10 +411,17 @@ first (shell.ts:430). A running OAuth poll aborted at teardown resolves
 New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
 
 1. api-key flow: `/login zai` → dialog renders (border, title, prompt,
-   input, hints) → type + Enter → dialog tears down, THEN
-   renderer.status("Saved API key for Z.AI") lands in the transcript
-   (post-restore ordering, rev4 P2-B) — pin both the transcript line and
-   the dialog-gone frame; the typed key never enters input history.
+   input, hints) → **bracketed-paste a key first**
+   (`\x1b[200~sk-pasted\x1b[201~` — rev8 §2.1.2: assert the Input holds
+   the full value; paste is verified, not assumed) → Enter → dialog tears
+   down, THEN renderer.status("Saved API key for Z.AI") lands in the
+   transcript (post-restore ordering, rev4 P2-B) — pin both the
+   transcript line and the dialog-gone frame; the typed key never enters
+   input history.
+1b. oauth waiting layout: after deviceCode fires, the frame shows URL +
+   user code + the waiting line BELOW them (rev8 fix 1: append, not
+   replace) — pin the coexistence mid-poll; also pin the hint row
+   carries an OSC-8 hyperlink (fix 2).
 2. Esc during prompt: resolves cancelled, nothing stored, editor restored.
 3. oauth flow with the local fake device-code server (reuse
    repl-commands.test.ts:93's fixture): device code + URL + waiting

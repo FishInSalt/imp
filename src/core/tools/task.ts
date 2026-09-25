@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Type } from "typebox";
 import { parseModelRef } from "../../provider/resolve.js";
@@ -93,7 +94,10 @@ export interface TaskToolOptions {
 	) => Promise<ToolCallDecision | void | undefined> | ToolCallDecision | void | undefined;
 	/** Observes the child's tool events (tool_start/tool_end) with the same
 	 * agent and cwd context as onToolCall (M6a audit path). */
-	onEvent?: (event: AgentEvent, info: { agent?: string; cwd?: string }) => void;
+	onEvent?: (
+		event: AgentEvent,
+		info: { agent?: string; cwd?: string; sourceId: string; taskToolCallId?: string },
+	) => void;
 	/** The parent's working directory — worktree children resolve the repo
 	 * from here (M6b). Defaults to process.cwd() at spawn time. */
 	cwd?: string;
@@ -137,7 +141,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			"Delegate a self-contained task to a fresh subagent with its own context window. The prompt is all the subagent sees — include every path and detail it needs and what to return. Its final message becomes the tool result. Prefer this for multi-step exploration (searches, file reads, research) that would otherwise bloat this conversation; keep one-shot questions here. Several task calls in one turn run concurrently — delegate only INDEPENDENT subtasks; jobs that modify the same files must be delegated one at a time. Named agents are listed in the system prompt's <advertised_agents> block.",
 		parameters: taskSchema,
 
-		async execute(args, signal): Promise<ToolExecuteResult> {
+		async execute(args, signal, context): Promise<ToolExecuteResult> {
+			// One observer namespace per invocation, independent of labels and sessions.
+			const sourceId = randomUUID();
+			const taskToolCallId = context?.toolCallId;
 			// Resolve the named agent (if any) before any side effects.
 			const wanted = typeof args.agent === "string" && args.agent !== "" ? args.agent : undefined;
 			const agent = wanted === undefined ? undefined : agentsByName.get(wanted);
@@ -274,7 +281,13 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd })
 						: undefined,
 					onEvent: options.onEvent
-						? (event) => options.onEvent?.(event, { agent: agent?.name, cwd: childCwd })
+						? (event) =>
+								options.onEvent?.(event, {
+									agent: agent?.name,
+									cwd: childCwd,
+									sourceId,
+									...(taskToolCallId === undefined ? {} : { taskToolCallId }),
+								})
 						: undefined,
 				});
 			} finally {

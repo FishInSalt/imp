@@ -16,7 +16,9 @@ import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { Fold } from "../src/repl/components/fold.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
+import { replaySession } from "../src/repl/replay.js";
 import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
+import * as toolPresentation from "../src/repl/tool-presentation.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { type AutocompleteSlashCommand, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
@@ -434,6 +436,41 @@ describe("TuiShell", () => {
 		await expect(esc).resolves.toBeNull();
 		// and the machine never saw a single line from any of it
 		expect(events).toEqual([]);
+		shell.close();
+	});
+
+	it("Alt+O leaves selector, ask and bracketed paste input ownership unchanged", async () => {
+		const { terminal, transcript, shell } = makeShell();
+		transcript.toolSink.setResolver(() => ({
+			call: () => ({
+				summary: "query",
+				argumentFields: [{ label: "Query", value: "readable", consumes: ["query"] }],
+			}),
+		}));
+		transcript.toolSink.start("id", "custom", { query: "original" });
+		transcript.toolSink.end({ toolCallId: "id", toolName: "custom", content: "done", isError: false });
+		const fold = transcript.toolFolds[0]!;
+		fold.setExpanded(true);
+		shell.start();
+		await settle(0);
+		const question = shell.ask("proceed?");
+		terminal.data("\x1bo");
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Query: readable");
+		terminal.data("\x03");
+		await expect(question).resolves.toBe(false);
+		const selected = shell.select({ items: [{ label: "choice" }] });
+		terminal.data("\x1bo");
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Query: readable");
+		terminal.data("\x1b");
+		await expect(selected).resolves.toBeNull();
+		terminal.data("\x1b[200~\x1bo\x1b[201~");
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Query: readable");
+		terminal.data("\x1bo");
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Raw arguments");
 		shell.close();
 	});
 
@@ -1373,12 +1410,108 @@ describe("runRepl with shell:tui", () => {
 		]);
 		await writeFile(path.join(env.baseDir, "fold.txt"), "hello\n", "utf-8");
 		env.terminal.data("edit it\r");
-		await frameContains(env, "▸ Edited fold.txt (1 edit applied) (+1/-1)");
+		await frameContains(env, "⎿ Edited");
 		env.terminal.data("\x0f"); // Ctrl+O — expand the newest fold
 		await frameContains(env, "+ goodbye");
 		env.terminal.data("/exit\r");
 		const code = await env.repl;
 		expect(code).toBe(0);
+	});
+
+	it("Alt+O toggles structured calls without expanding and respects key releases", async () => {
+		const env = await startTuiRepl([reply("ok")]);
+		const hook = vi.fn(() => ({
+			summary: "query",
+			argumentFields: [{ label: "Query", value: "readable", consumes: ["query"] }],
+		}));
+		env.transcript.toolSink.setResolver(() => ({ call: hook }));
+		env.transcript.toolSink.start("raw", "custom", { query: " original " });
+		env.transcript.toolSink.end({ toolCallId: "raw", toolName: "custom", content: "done", isError: false });
+		const fold = env.transcript.toolFolds[0]!;
+		env.terminal.data("\x1bo");
+		await settle();
+		expect(fold.isExpanded()).toBe(false);
+		env.terminal.data("\x0f");
+		await frameContains(env, "Raw arguments");
+		expect(fold.isExpanded()).toBe(true);
+		env.terminal.data("\x1b[111;3:3u"); // Kitty Alt+O release
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Raw arguments");
+		env.terminal.data("\x1b[111;3u"); // Kitty Alt+O press
+		await settle();
+		expect(fold.render(200).join(" ")).toContain("Query: readable");
+		expect(fold.isExpanded()).toBe(true);
+		expect(hook).toHaveBeenCalledTimes(1);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("semantic tools: reverse execution completion retains call order live and on replay", async () => {
+		const first = gate();
+		const second = gate();
+		const started: string[] = [];
+		const finished: string[] = [];
+		const tool: Tool = {
+			name: "parallel_test",
+			description: "gated fake tool",
+			concurrencySafe: true,
+			parameters: Type.Object({ id: Type.String() }),
+			async execute(args) {
+				const id = String(args.id);
+				started.push(id);
+				await (id === "a" ? first.promise : second.promise);
+				finished.push(id);
+				return { output: `${id} result` };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					["a", "b"].map((id) => ({
+						type: "toolCall" as const,
+						id,
+						name: "parallel_test",
+						arguments: { id },
+					})),
+					"tool_use",
+				),
+				reply("parallel done"),
+			],
+			{ tools: [tool] },
+		);
+		env.terminal.data("run parallel\r");
+		await waitUntil(() => started.length === 2);
+		second.resolve();
+		await waitUntil(() => finished.length === 1);
+		expect(finished).toEqual(["b"]);
+		expect(env.transcript.toolFolds).toHaveLength(0);
+		first.resolve();
+		await frameContains(env, "parallel done");
+		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "a", "b", "b"]);
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
+		env.transcript.toolSink.start("c", "read", { path: "new" });
+		env.transcript.toolSink.end({ toolCallId: "c", toolName: "read", content: "new", isError: false });
+		expect(env.transcript.toolFolds.at(-1)?.isExpanded()).toBe(false);
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.transcript.toolFolds.every((f) => !f.isExpanded()));
+		const session = env.runner.session;
+		if (!session) throw new Error("missing test session");
+		env.transcript.clear();
+		replaySession(
+			{ write: env.transcript.feed, ansi: true, markdown: true, toolSink: env.transcript.toolSink },
+			session,
+		);
+		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "a", "b", "b"]);
+		env.terminal.data("\x0f");
+		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
+		env.terminal.data("/new\r");
+		await frameContains(env, "new session");
+		expect(env.transcript.toolFolds).toHaveLength(0);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
 	});
 
 	it("autocomplete is live in production wiring: imp's COMMANDS feed the panel, Enter completes and runs /help", async () => {
@@ -1533,7 +1666,7 @@ describe("runRepl with shell:tui", () => {
 		expect(request2.some((m) => m.role === "user" && m.content === "queued B")).toBe(true);
 		// wait for a REAL post-drain repaint first (the tool's ✓ row) so the
 		// region-clear check below cannot pass on an empty window vacuously
-		await waitUntil(() => env.terminal.frameSince(mark).includes("✓"));
+		await waitUntil(() => env.terminal.frameSince(mark).includes("⎿ done"));
 		expect(env.terminal.frameSince(mark)).not.toContain("steer:"); // region cleared
 		g2.resolve(); // both answers land; boundary polls find nothing → run completes
 		await settle();
@@ -1609,6 +1742,124 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("isolates identical child labels and ids, releases parent state and ignores late events", async () => {
+		const call = vi.fn((ctx) => ({ summary: `child-${(ctx.args as { value: string }).value}` }));
+		const resultHook = vi.fn((ctx) => ({ summary: String((ctx.args as { value: string }).value) }));
+		const child: Tool = {
+			name: "child_tool",
+			description: "test",
+			parameters: Type.Object({}),
+			execute: async () => ({ output: "unused" }),
+			presentation: { call, result: resultHook },
+		};
+		const env = await startTuiRepl([reply("finished")], { tools: [child] });
+		const original = env.runner.runTurn.bind(env.runner);
+		let late: (() => void) | undefined;
+		vi.spyOn(env.runner, "runTurn").mockImplementation(async (options) => {
+			const emit = options.onEvent!;
+			for (const id of ["parent-a", "parent-b"])
+				emit({ type: "tool_start", toolCallId: id, name: "task", args: { agent: "same", prompt: id } });
+			const a = { sourceId: "source-a", taskToolCallId: "parent-a", agent: "same", cwd: "/same" };
+			const b = { ...a, sourceId: "source-b", taskToolCallId: "parent-b" };
+			const start = (value: string) => ({
+				type: "tool_start" as const,
+				toolCallId: "identical",
+				name: "child_tool",
+				args: { value },
+			});
+			emit(start("a"), a);
+			emit(start("b"), b);
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("child-a");
+			expect(env.terminal.frameSince(0)).toContain("child-b");
+			const end = {
+				type: "tool_end" as const,
+				result: { toolCallId: "identical", toolName: "child_tool", content: "raw child", isError: false },
+			};
+			emit(end, b);
+			emit(end, a);
+			expect(resultHook.mock.calls.map(([ctx]) => (ctx.args as { value: string }).value)).toEqual(["b", "a"]);
+			emit({
+				type: "tool_end",
+				result: { toolCallId: "parent-a", toolName: "task", content: "done", isError: false },
+			});
+			emit(start("stale-parent"), a);
+			expect(call).toHaveBeenCalledTimes(2);
+			emit({
+				type: "tool_end",
+				result: { toolCallId: "parent-b", toolName: "task", content: "done", isError: false },
+			});
+			late = () => emit(start("late-run"), b);
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("finished"));
+		await settle();
+		late?.();
+		expect(call).toHaveBeenCalledTimes(2);
+		expect(env.transcript.toolFolds.every((f) => f.block.name === "task")).toBe(true);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+	it("resolves hooks before initial saved-history replay", async () => {
+		const call = vi.fn(() => ({ summary: "historical call" }));
+		const result = vi.fn(() => ({ summary: "historical result" }));
+		const tool = gatedTool(gate());
+		tool.presentation = { call, result };
+		const env = await startTuiRepl([], {
+			tools: [tool],
+			seed: [
+				assistant(
+					[{ type: "toolCall", id: "old", name: "gated", arguments: { message: "saved" } }],
+					"tool_use",
+				),
+				{
+					role: "toolResult",
+					results: [{ toolCallId: "old", toolName: "gated", content: "saved raw", isError: false }],
+				},
+			],
+		});
+		await waitUntil(() => env.transcript.toolFolds.length === 2);
+		expect(call).toHaveBeenCalledTimes(1);
+		expect(result).toHaveBeenCalledTimes(1);
+		expect(env.transcript.toolFolds[1]?.block.semantic?.summary).toBe("historical result");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+	it("shares hook invocation between activity and transcript, never ticks or resize", async () => {
+		const g = gate();
+		const tool = gatedTool(g);
+		const call = vi.fn(() => ({ summary: "semantic activity" }));
+		const result = vi.fn(() => ({ summary: "semantic result" }));
+		tool.presentation = { call, result };
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "gated", arguments: { message: "original" } }],
+					"tool_use",
+				),
+				reply("finished"),
+			],
+			{ tools: [tool] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("semantic activity"));
+		env.terminal.resize(60);
+		await settle();
+		expect(call).toHaveBeenCalledTimes(1);
+		g.resolve();
+		await waitUntil(() => env.transcript.toolFolds.length === 2);
+		env.terminal.data("\x0f");
+		env.terminal.resize(80);
+		await settle();
+		expect(call).toHaveBeenCalledTimes(1);
+		expect(result).toHaveBeenCalledTimes(1);
+		expect(env.transcript.toolFolds[1]?.block.sections?.[0]?.lines).toEqual(["gated: original"]);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
 	it("a pending tool paints a live row; the ✓/⎿ completion stays in the transcript", async () => {
 		const g = gate();
 		const env = await startTuiRepl(
@@ -1630,7 +1881,9 @@ describe("runRepl with shell:tui", () => {
 		const mark = env.terminal.writes.length;
 		g.resolve();
 		// M11: success results fold — the ⎿ preview is replaced by a ▸ fold title
-		await waitUntil(() => env.transcript.completedLines().join("\n").includes("✓"));
+		await waitUntil(() =>
+			env.transcript.toolFolds.some((f) => f.block.name === "gated" && f.block.kind === "output"),
+		);
 		await settle();
 		// the pending row is gone — spinner+name only ever appeared in the
 		// activity region (the completion line uses ●, not a spinner frame)
@@ -1638,9 +1891,9 @@ describe("runRepl with shell:tui", () => {
 			/[\u280b\u2819\u28b9\u28b8\u287c\u2834\u2826\u2867\u2807\u283f] gated/,
 		);
 		const stream = env.transcript.completedLines().join("\n");
-		expect(stream).toContain("✓"); // the completion line (Renderer, unchanged)
+		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
 		expect(stream).not.toContain("⎿"); // M11: folded — the preview moved to the fold title
-		expect(env.terminal.frameSince(0)).toContain("▸"); // the fold itself
+		expect(env.terminal.frameSince(0)).toContain("⎿"); // the fold itself
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -1661,12 +1914,12 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("go\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("gated"), 8000); // live row up
 		g.resolve(); // let the tool finish
-		await waitUntil(() => env.terminal.frameSince(0).includes("✓"), 8000);
+		await waitUntil(() => env.terminal.frameSince(0).includes("⎿ gated: slow"), 8000);
 		await waitUntil(() => env.terminal.frameSince(0).includes("after-the-tool"), 8000);
 		await settle();
 		const frame = env.terminal.frameSince(0);
 		const iTool = frame.indexOf("● gated"); // the completion line (● marks it; live rows are gone)
-		const iFold = frame.indexOf("▸"); // the result fold (collapsed title)
+		const iFold = frame.indexOf("⎿ gated: slow"); // the result fold (collapsed title)
 		const iText = frame.indexOf("after-the-tool");
 		expect(iTool).toBeGreaterThanOrEqual(0);
 		expect(iFold).toBeGreaterThan(iTool); // fold UNDER its tool line…
@@ -1708,15 +1961,15 @@ describe("runRepl with shell:tui", () => {
 		);
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => env.terminal.frameSince(0).includes("└─ scout"), 8000);
-		expect(env.terminal.frameSince(0)).toContain("└─ scout · explore the tree"); // agent + task label
+		await waitUntil(() => env.terminal.frameSince(0).includes("scout · explore the tree"), 8000);
+		expect(env.terminal.frameSince(0)).toContain("scout · explore the tree"); // agent + task label
 		const mark = env.terminal.writes.length;
 		childHold.resolve();
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("└─ scout"); // row left with the task call
+		expect(env.terminal.frameSince(mark)).not.toContain("└─ running"); // row left with the task call
 		// M11: the task result folds — the report is the fold body/title now
-		expect(env.terminal.frameSince(0)).toContain("▸");
+		expect(env.terminal.frameSince(0)).toContain("⎿");
 		expect(env.terminal.frameSince(0)).toContain("scout done");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
@@ -1771,7 +2024,7 @@ describe("runRepl with shell:tui", () => {
 		expect(stream).not.toContain("✓ edit");
 		// and no fold from the child's edit (top-level-only fold rule): the one
 		// ▸ is the task result's, never "edit alpha.txt"
-		expect(env.terminal.frameSince(0)).toContain("▸");
+		expect(env.terminal.frameSince(0)).toContain("⎿");
 		expect(env.terminal.frameSince(0)).not.toContain("▸ edit alpha.txt");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
@@ -1801,7 +2054,7 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("run it\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
 		// the preview shows the first OUTPUT line (not "stdout:") and folds
-		expect(env.terminal.frameSince(0)).toContain("▸ line-one (+2 lines)");
+		expect(env.terminal.frameSince(0)).toContain("⎿ stdout:");
 		const stream = env.transcript.completedLines().join("\n");
 		expect(stream).not.toContain("⎿");
 		expect(stream).not.toContain("stdout:");
@@ -2070,9 +2323,9 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("run it\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
 		const frame = env.terminal.frameSince(0);
-		expect(frame).toContain("● bash $ sleep 99 ✗"); // the salient failure line stays
-		expect(frame).not.toContain("⎿"); // the red ⎿ preview is gone — folded instead
-		expect(frame).toContain("▸ Error: command timed out"); // the error fold's collapsed title
+		expect(frame).toContain("⎿ failed"); // explicit failure status
+		expect(frame).toContain("⎿"); // the red ⎿ preview is gone — folded instead
+		expect(frame).toContain("Error: command timed out"); // the error fold's collapsed title
 		// expand-all reveals the partial output
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.terminal.frameSince(0).includes("line one"), 8000);
@@ -2274,7 +2527,7 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		env.terminal.data("go\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
-		expect(env.terminal.frameSince(0)).toContain("▸ plain output without the colon contract"); // preview not lost
+		expect(env.terminal.frameSince(0)).toContain("⎿ plain output without the colon contract"); // preview not lost
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -3042,6 +3295,30 @@ describe("TuiShell activity region (M10 B)", () => {
 		expect(terminal.frameSince(mark)).not.toContain("compacting context…");
 	});
 
+	it("elapsed ticks reuse active payload previews and idle clears them", async () => {
+		const { shell } = makeShell();
+		const scan = vi.spyOn(toolPresentation, "sanitizeDisplay");
+		const label = "payload".repeat(10000);
+		const snapshot = {
+			phase: "working" as const,
+			tools: [{ id: "cached", name: "bash", label, startedAtMs: Date.now() }],
+			agents: [],
+		};
+		try {
+			shell.start();
+			shell.setActivity(snapshot);
+			await settle(300);
+			expect(scan.mock.calls.filter(([text]) => text === `bash ${label}`)).toHaveLength(1);
+			shell.setActivity({ phase: "idle", tools: [], agents: [] });
+			shell.setActivity(snapshot);
+			await settle(30);
+			expect(scan.mock.calls.filter(([text]) => text === `bash ${label}`)).toHaveLength(2);
+		} finally {
+			shell.close();
+			scan.mockRestore();
+		}
+	});
+
 	it("working rows render pending tools and subagent tree lines", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
@@ -3064,7 +3341,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		await settle(30);
 		const frame = terminal.frameSince(0);
 		expect(frame).toContain("bash echo hi");
-		expect(frame).toContain("└─ scout · explore the tree · 3 tools · last: bash echo deep");
+		expect(frame).toContain("3 tools · last: bash echo deep · scout · explore the tree");
 		shell.close();
 	});
 });

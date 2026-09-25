@@ -1,6 +1,60 @@
 import type { TSchema } from "typebox";
 import type { ContentBlock } from "../messages.js";
 
+export type ToolPresentationValue =
+	| null
+	| boolean
+	| number
+	| string
+	| readonly ToolPresentationValue[]
+	| { readonly [key: string]: ToolPresentationValue };
+
+export interface ToolCallPresentationContext {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly args: ToolPresentationValue;
+	readonly argsAvailable: boolean;
+}
+
+export interface ToolResultPresentationContext extends ToolCallPresentationContext {
+	readonly result: {
+		readonly text: string;
+		readonly display?: string;
+		readonly isError: boolean;
+		readonly images: readonly {
+			readonly mimeType: string;
+			readonly encodedLength: number;
+		}[];
+	};
+	readonly replay: boolean;
+}
+
+export interface ToolArgumentPresentationField {
+	readonly label: string;
+	readonly value: string;
+	readonly consumes: readonly string[];
+	readonly default?: true;
+}
+
+export interface ToolSourcePresentation {
+	readonly title: string;
+	readonly url: string;
+}
+
+export interface ToolSemanticPresentation {
+	readonly sources?: readonly ToolSourcePresentation[];
+	readonly argumentFields?: readonly ToolArgumentPresentationField[];
+	readonly summary: string;
+	readonly preview?: readonly string[];
+	readonly detail?: readonly string[];
+}
+
+/** Pure, bounded synchronous display functions; no filesystem or network work. */
+export interface ToolPresentationHooks {
+	readonly call?: (context: ToolCallPresentationContext) => ToolSemanticPresentation | undefined;
+	readonly result?: (context: ToolResultPresentationContext) => ToolSemanticPresentation | undefined;
+}
+
 export interface ToolExecuteResult {
 	/** Text fed back to the model as the tool result. */
 	output: string;
@@ -46,5 +100,11 @@ export interface Tool {
 	 */
 	concurrencySafe?: boolean;
 	parameters: TSchema;
-	execute(args: Record<string, unknown>, signal: AbortSignal): Promise<ToolExecuteResult>;
+	presentation?: ToolPresentationHooks;
+	/** Ephemeral invocation identity; never part of model arguments or history. */
+	execute(
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+		context?: { toolCallId: string },
+	): Promise<ToolExecuteResult>;
 }

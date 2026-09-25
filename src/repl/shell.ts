@@ -18,6 +18,7 @@ import {
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
+import { ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
 import type {
@@ -129,7 +130,7 @@ export function tuiEditorTheme(): EditorTheme {
  *    and accumulating across turns). The producer is the machine's
  *    tool_end tap: every successful edit result ("<summary>:\n<diff>")
  *    becomes one fold, so Ctrl+O is live in real sessions; Ctrl+O
- *    toggles the most recently added fold only; with no fold present
+ *    expands all if any are collapsed, otherwise collapses all; with no fold present
  *    the key falls through to the editor, which has no Ctrl+O binding
  *    (a no-op).
  *  - Multi-line editor submits arrive as ONE line event with embedded
@@ -200,6 +201,8 @@ export class TuiShell implements LineInput {
 	private activity: ActivitySnapshot = { phase: "idle", tools: [], agents: [] };
 	private activityTimer: ReturnType<typeof setInterval> | null = null;
 	private activityFrame = 0;
+	/** Cache only active rows, never historical payloads. */
+	private activityRows = new Map<string, ToolActivity>();
 	/** Buffered setQueue text — pushes may arrive before start() and must not
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
@@ -405,10 +408,16 @@ export class TuiShell implements LineInput {
 			// any-collapsed → expand all; all-expanded → collapse all. With
 			// none present the key passes through to the editor — which has
 			// no Ctrl+O binding, so effectively a no-op.
+			if (matchesKey(data, "alt+o") && this.selector === null && this.pendingAsks.length === 0) {
+				if (!this.options.transcript.toggleRawToolArguments()) return undefined;
+				tui.requestRender();
+				return { consume: true };
+			}
 			if (matchesKey(data, "ctrl+o")) {
-				if (this.folds.length === 0) return undefined;
-				const expand = this.folds.some((f) => !f.isExpanded());
-				for (const fold of this.folds) fold.setExpanded(expand);
+				const folds = [...this.folds, ...this.options.transcript.toolFolds];
+				if (folds.length === 0) return undefined;
+				const expand = folds.some((f) => !f.isExpanded());
+				for (const fold of folds) fold.setExpanded(expand);
 				this.tui?.requestRender();
 				return { consume: true };
 			}
@@ -551,6 +560,7 @@ export class TuiShell implements LineInput {
 	private renderActivity(): void {
 		this.activityContainer.clear();
 		if (this.activity.phase === "idle") {
+			this.activityRows.clear();
 			this.tui?.requestRender();
 			return;
 		}
@@ -570,10 +580,19 @@ export class TuiShell implements LineInput {
 			const label = this.activity.compactingLabel ?? "compacting context…";
 			this.activityContainer.addChild(new Text(dim(`${frame} ${label}`, true), 0, 0));
 		}
+		const active = new Map<string, ToolActivity>();
+		const add = (id: string, status: string, label: string): void => {
+			const row = this.activityRows.get(id) ?? new ToolActivity(status, label);
+			row.update(status, label);
+			active.set(id, row);
+			this.activityContainer.addChild(row);
+		};
 		for (const tool of this.activity.tools) {
 			const label = tool.label === "" ? "" : ` ${tool.label}`;
-			this.activityContainer.addChild(
-				new Text(dim(`${frame} ${tool.name}${label}${elapsed(tool.startedAtMs)}`, true), 0, 0),
+			add(
+				`tool:${tool.id}:${tool.startedAtMs}`,
+				`${frame} running${elapsed(tool.startedAtMs)}`,
+				`${tool.name}${label}`,
 			);
 		}
 		for (const agent of this.activity.agents) {
@@ -581,9 +600,14 @@ export class TuiShell implements LineInput {
 			const tools = agent.toolCount > 0 ? `${agent.toolCount} tools` : null;
 			const last = agent.lastTool !== null ? `last: ${agent.lastTool}` : null;
 			const tail = [tools, last].filter((part) => part !== null).join(" · ");
-			const row = tail === "" ? parts.join(" · ") : `${parts.join(" · ")} · ${tail}`;
-			this.activityContainer.addChild(new Text(dim(`└─ ${row}${elapsed(agent.startedAtMs)}`, true), 0, 0));
+			const row = tail === "" ? parts.join(" · ") : `${tail} · ${parts.join(" · ")}`;
+			add(
+				`agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`,
+				`└─ running${elapsed(agent.startedAtMs)}`,
+				row,
+			);
 		}
+		this.activityRows = active;
 		this.tui?.requestRender();
 	}
 

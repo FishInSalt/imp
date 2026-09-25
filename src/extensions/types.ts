@@ -13,6 +13,16 @@ import type { AssistantMessage, Usage } from "../core/messages.js";
 import type { Tool } from "../core/tools/types.js";
 import type { SlashCommand } from "../repl/commands.js";
 
+export type {
+	Tool,
+	ToolArgumentPresentationField,
+	ToolCallPresentationContext,
+	ToolPresentationHooks,
+	ToolPresentationValue,
+	ToolResultPresentationContext,
+	ToolSemanticPresentation,
+	ToolSourcePresentation,
+} from "../core/tools/types.js";
 export type { ToolCallDecision };
 
 /** Where an extension was discovered (M4 design §3.1). */

@@ -58,7 +58,7 @@ describe("refined source contract", () => {
 		[{ ...source, [Symbol()]: 1 }],
 		[Object.create(source)],
 		[{ ...source, title: "x".repeat(4097) }],
-		[{ ...source, url: "https://example.com/" + "x".repeat(2048) }],
+		[{ ...source, url: `https://example.com/${"x".repeat(2048)}` }],
 		[{ ...source, url: "https://example.com" }],
 		[{ ...source, url: "https://a:b@example.com/" }],
 		[{ ...source, url: "https://example.com/%1b" }],
@@ -96,7 +96,7 @@ describe("refined source contract", () => {
 		expect(
 			validate({
 				summary: "",
-				sources: [{ title: "x".repeat(4096), url: "https://example.com/" + "x".repeat(2028) }],
+				sources: [{ title: "x".repeat(4096), url: `https://example.com/${"x".repeat(2028)}` }],
 			}),
 		).toBeDefined();
 	});
@@ -244,9 +244,9 @@ describe("URL reading and deterministic formatter fixtures", () => {
 			hooks.urlReadPresentation.call({ argsAvailable: true, args: { url: "https://example.com" } }).summary,
 		).toBe("https://example.com");
 		expect(
-			hooks.urlReadPresentation.result(ctx(prefix + "body", { url: "https://example.com" })),
+			hooks.urlReadPresentation.result(ctx(`${prefix}body`, { url: "https://example.com" })),
 		).toBeDefined();
-		expect(hooks.urlReadPresentation.result(ctx(prefix + "body", null))).toBeDefined();
+		expect(hooks.urlReadPresentation.result(ctx(`${prefix}body`, null))).toBeDefined();
 	});
 	it.each([
 		"junk",

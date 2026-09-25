@@ -271,7 +271,7 @@ describe("semantic tool presentation", () => {
 		const input = new ToolBlockFold(inputBlock("a", "bash", { command: "x".repeat(20000) }));
 		const output = new ToolBlockFold(outputBlock(result("x\n".repeat(10))));
 		const diff = new ToolBlockFold(
-			outputBlock(result("ok", "edit", { display: "Edited:\n@@ line 1 @@\n" + "+ x\n".repeat(20) })),
+			outputBlock(result("ok", "edit", { display: `Edited:\n@@ line 1 @@\n${"+ x\n".repeat(20)}` })),
 		);
 		expect(input.render(40).filter((r) => r.includes("xxx"))).toHaveLength(3);
 		expect(output.render(40).filter((r) => / {4}x|⎿ x/.test(sanitizeDisplay(r)))).toHaveLength(3);

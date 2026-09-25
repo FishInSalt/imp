@@ -6,6 +6,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { MAX_BYTES } from "../constants.js";
 import { logicalLines, tailStart } from "./output-text.js";
+import { bashPresentation } from "./presentation.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 const MAX_LINES = 500;
@@ -85,6 +86,7 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "bash",
+		presentation: bashPresentation,
 		promptSnippet:
 			"run shell commands — builds, tests, git; anything without a dedicated tool. Never interactive.",
 		description: `Execute a bash command in the working directory (${cwd}) and return stdout/stderr. Output is truncated per stream to the last ${MAX_LINES} lines or ${MAX_BYTES / 1024}KB (whichever hits first). Set a timeout in seconds for long-running commands. Avoid interactive commands (they hang until timeout).`,

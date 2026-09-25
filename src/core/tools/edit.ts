@@ -10,6 +10,7 @@ import {
 	stripBom,
 } from "./edit-diff.js";
 import { withFileLock } from "./file-lock.js";
+import { editPresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const replaceEditSchema = Type.Object({
@@ -37,6 +38,7 @@ export function createEditTool(options: EditToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "edit",
+		presentation: editPresentation,
 		promptSnippet: "precise in-place edits; each oldText must match exactly and be unique.",
 		description:
 			"Edit a file with exact text replacement. Each edits[].oldText must match a unique, non-overlapping " +

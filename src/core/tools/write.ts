@@ -2,6 +2,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { withFileLock } from "./file-lock.js";
+import { writePresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const writeSchema = Type.Object({
@@ -17,6 +18,7 @@ export function createWriteTool(options: WriteToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "write",
+		presentation: writePresentation,
 		promptSnippet: "create or overwrite whole files — never for small changes.",
 		description:
 			"Write full content to a file. Creates the file (and parent directories) if missing, overwrites if present. " +

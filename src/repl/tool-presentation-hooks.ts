@@ -1,5 +1,6 @@
 import { types } from "node:util";
 import { contentText, type ToolResult } from "../core/messages.js";
+import { builtinCallName } from "../core/tools/presentation.js";
 import type {
 	ToolArgumentPresentationField,
 	ToolCallPresentationContext,
@@ -15,6 +16,7 @@ export const UNAVAILABLE_ARGUMENTS_TEXT = "[Arguments unavailable: could not be 
 
 export interface PreparedToolCall extends ToolCallPresentationContext {
 	readonly callSemantic: ToolSemanticPresentation | undefined;
+	readonly builtinName?: string;
 	readonly resultHook: ToolPresentationHooks["result"];
 	/** Safe detached raw data, independent of semantic limits. Never use event args as fallback. */
 	readonly rawArgs: ToolPresentationValue;
@@ -301,6 +303,7 @@ export function prepareCall(
 		rawArgsText,
 		serializationStatus,
 		resultHook: argsAvailable ? hooks.result : undefined,
+		builtinName: builtinCallName(hooks.call),
 		callSemantic: argsAvailable ? invoke(hooks.call, context, "call", context.args) : undefined,
 	});
 }

@@ -5,6 +5,7 @@ import type { ContentBlock } from "../messages.js";
 import { detectSupportedImageMimeType } from "./image-sniff.js";
 import { logicalLines, wholeLinePrefix } from "./output-text.js";
 import { resolveReadPath } from "./path-resolve.js";
+import { readPresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const MAX_LINES = 2000;
@@ -48,6 +49,7 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "read",
+		presentation: readPresentation,
 		promptSnippet: "read files (text or images); truncation notes tell you how to continue reading.",
 		description:
 			"Read the contents of a text file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. " +

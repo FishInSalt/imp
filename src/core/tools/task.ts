@@ -21,6 +21,7 @@ import {
 	resolveRepoState,
 	worktreeChangeStat,
 } from "../worktree.js";
+import { taskPresentation } from "./presentation.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
 
 /**
@@ -132,6 +133,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 	const agentsByName = new Map(agents.map((a) => [a.name, a] as const));
 	return {
 		name: "task",
+		presentation: taskPresentation,
 		concurrencySafe: true,
 		promptSnippet: "delegate a self-contained multi-step job to a fresh subagent.",
 		// prompt-audit P8: the roster moved to the <advertised_agents> system

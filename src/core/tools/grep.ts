@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import { detectBinary } from "./bin-detect.js";
 import { decodePrefix, logicalLines, renderedHead, wholeLinePrefix } from "./output-text.js";
+import { grepPresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const DEFAULT_LIMIT = 100;
@@ -35,6 +36,7 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "grep",
+		presentation: grepPresentation,
 		promptSnippet: "find where code is defined or used (respects .gitignore) — prefer over bash grep.",
 		description:
 			"Search file contents for a pattern (backed by ripgrep; respects .gitignore, skips binary files). " +

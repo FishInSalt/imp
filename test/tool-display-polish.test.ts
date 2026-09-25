@@ -135,7 +135,8 @@ describe("tool display polish", () => {
 		expect(text(fold).match(/error/g)).toHaveLength(1);
 		expect(text(fold)).toContain("detail");
 		fold.setExpanded(true);
-		expect(text(fold)).toContain("Result text\n    error\n    detail");
+		expect(text(fold)).toContain("    error\n    detail");
+		expect(text(fold)).not.toContain("Result text");
 		expect(block.sections?.[0]?.lines).toEqual(["error", "detail"]);
 
 		for (const diagnostic of ["error", "\x1b[31merror"]) {
@@ -160,7 +161,7 @@ describe("tool display polish", () => {
 		const fold = new ToolBlockFold(block);
 		expect(text(fold)).toContain("… more · Ctrl+O");
 		fold.setExpanded(true);
-		expect(text(fold).match(/Result text/g)).toHaveLength(2);
+		expect(text(fold).match(/Result text/g)).toHaveLength(1);
 	});
 	it.each([3, 4])("omits narrow result decoration consistently at width %i", (width) => {
 		const fold = new ToolBlockFold(outputBlock({ ...result, content: "abcde\nz", isError: false }));

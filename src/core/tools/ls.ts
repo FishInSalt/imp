@@ -12,6 +12,7 @@
 import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { Type } from "typebox";
 import { resolveReadPath } from "./path-resolve.js";
+import { lsPresentation } from "./presentation.js";
 import type { Tool } from "./types.js";
 
 const DEFAULT_LIMIT = 500;
@@ -33,6 +34,7 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "ls",
+		presentation: lsPresentation,
 		promptSnippet: "list one directory's entries (dotfiles included).",
 		description:
 			`List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. ` +

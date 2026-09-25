@@ -6,6 +6,7 @@ export interface SelectItemOption {
 
 import type { TreeNode } from "../core/session/store.js";
 import type { TreeFilterMode } from "./components/tree-selector.js";
+import type { LoginDialogOptions } from "./login-dialog.js";
 
 /** #tree: what treeSelect renders — the session tree (store.getTree()'s
  * shape) plus the current position. */
@@ -107,6 +108,10 @@ export interface LineInput {
 	 *  ID, cancel resolves null. Follows select()'s lifecycle contract
 	 *  (queued behind an open picker, torn down on close/SIGINT). */
 	treeSelect?(options: TreeSelectRequest): Promise<string | null>;
+	/** #login-dialog: the exclusive login dialog (TUI only — design §2.3).
+	 *  THE capability seam: runCommand's loginUsesDialog predicate, the
+	 *  ctx binding, and the fallback all derive from its presence. */
+	openLoginDialog?(options: LoginDialogOptions): Promise<"done" | "cancelled" | "unavailable">;
 	/** Queue visual (TUI only): one dim row per queued entry ("  steer: <preview>"
 	 *  style) under a "N queued" head and a dequeue hint — the whole region
 	 *  collapses to zero rows when empty. The readline shell has no such line

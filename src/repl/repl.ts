@@ -16,7 +16,14 @@ import { imageSuffix, type Renderer } from "../render.js";
 import type { AgentEventInfo, Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
 import { copyToClipboard } from "./clipboard-write.js";
-import { COMMANDS, type CommandContext, dispatchCommand, loginNeedsGuard, parseCommand } from "./commands.js";
+import {
+	COMMANDS,
+	type CommandContext,
+	dispatchCommand,
+	loginNeedsGuard,
+	loginUsesDialog,
+	parseCommand,
+} from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
@@ -409,6 +416,13 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		const trimmed = text.trim();
 		if (trimmed === "") return;
+		// #login-dialog: the dialog owns the machine while open — an
+		// extension/skill prompt would start a concurrent turn beside a
+		// live OAuth poll (design §2.2.1, the rev1 P0 counterexample).
+		if (this.dialogOpen) {
+			this.renderer.note("▪ /login is open — finish or cancel it first (esc)");
+			return;
+		}
 		if (this.state === "idle") {
 			void this.submitTurn(trimmed, display);
 			return;
@@ -501,8 +515,19 @@ class ReplMachine {
 			((name === "compact" || name === "tree") && this.state === "idle" && this.runner.session !== null) ||
 			// #login-repl batch B: the codex OAuth poll runs up to 15 minutes —
 			// it needs the guarded state (Ctrl+C cancels, typed lines queue,
-			// /new refuses) exactly like a compaction
-			(name === "login" && this.state === "idle" && loginNeedsGuard(line));
+			// /new refuses) exactly like a compaction. #login-dialog: on dialog
+			// shells the predicate is suppressed — the dialog + dialogOpen own
+			// the flow instead (design §2.2, shell-conditional).
+			(name === "login" && this.state === "idle" && loginNeedsGuard(line, this.hasDialogShell()));
+		// #login-dialog: the dialog's machine mutex (design §2.2.1). Set
+		// immediately before the try (after warmup — a warmup throw returns
+		// above and must never leave the flag set); cleared in the
+		// UNCONDITIONAL finally arm below (the stateful-gated arm never runs
+		// for /login on dialog shells — the flag would stick true forever,
+		// rev2 P1-3).
+		const authorizedDialog =
+			name === "login" && this.state === "idle" && loginUsesDialog(line, this.hasDialogShell());
+		if (authorizedDialog) this.dialogOpen = true;
 		if (stateful) {
 			this.state = "compacting";
 			this.input.setActive(true);
@@ -515,12 +540,12 @@ class ReplMachine {
 			this.pushActivity();
 		}
 		try {
-			// authorizedCompact: this dispatch IS the authorized compact — the
-			// state was pre-set to "compacting" for Ctrl+C hints and /new refusal,
-			// which must not make dispatchCommand's isActive() guard reject it.
-			// Any OTHER line arriving while compacting still sees isActive() true.
+			// authorizedCompact/authorizedDialog: this dispatch IS the authorized
+			// long-op — the pre-set state/flag must not make dispatchCommand's
+			// isActive() guard reject it (the authorizedStateful pattern, rev2
+			// P0-1). Any OTHER line arriving while it runs sees isActive() true.
 			// Extension commands ride the same path with identical semantics (M4b).
-			await dispatchCommand(line, this.commandContext(stateful), this.commands);
+			await dispatchCommand(line, this.commandContext(stateful, authorizedDialog), this.commands);
 		} catch (err) {
 			this.reportError(err);
 		} finally {
@@ -532,6 +557,9 @@ class ReplMachine {
 				this.longOpAbort = null;
 				this.longOpLabel = null;
 			}
+			// #login-dialog: unconditional — the dialog flag cannot outlive its
+			// dispatch (design §2.2.1).
+			this.dialogOpen = false;
 			if (stateful && this.state === "compacting") {
 				this.interruptCount = 0;
 				await this.flushQueue(); // queued lines drain as after a run (§5.2)
@@ -542,6 +570,12 @@ class ReplMachine {
 
 	private async submitTurn(line: string, display?: string): Promise<void> {
 		if (this.state === "exited") return;
+		// #login-dialog: same refusal as enqueuePrompt (design §2.2.1) — all
+		// turn-start paths funnel through these two.
+		if (this.dialogOpen) {
+			this.renderer.note("▪ /login is open — finish or cancel it first (esc)");
+			return;
+		}
 		this.state = "running";
 		// M18: run boundary START — flush any tools that connected while idle
 		// plus mid-run completions parked by the manager, and retry startup-
@@ -1124,6 +1158,11 @@ class ReplMachine {
 	 *  command that armed the guard — "compacting context…" is a lie during
 	 *  a 15-minute /login OAuth poll. */
 	private longOpLabel: string | null = null;
+	/** #login-dialog: the dialog's machine mutex (design §2.2.1). True
+	 *  while a login dialog dispatch is awaited — submitTurn/enqueuePrompt
+	 *  refuse, the widened isActive() refuses allowedDuringRun:false
+	 *  commands; the opening dispatch itself is exempt (authorizedDialog). */
+	private dialogOpen = false;
 
 	private pushActivity(): void {
 		if (this.input.setActivity === undefined) return;
@@ -1274,11 +1313,16 @@ class ReplMachine {
 		this.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	private commandContext(authorizedStateful = false): CommandContext {
+	private commandContext(authorizedStateful = false, authorizedDialog = false): CommandContext {
 		const ctx: CommandContext = {
 			runner: this.runner,
 			renderer: this.renderer,
-			isActive: () => !authorizedStateful && (this.state === "running" || this.state === "compacting"),
+			// #login-dialog: dialogOpen widens the block (rev2 P0-1: the
+			// opening /login dispatch exempts itself via authorizedDialog).
+			isActive: () =>
+				!authorizedStateful &&
+				!authorizedDialog &&
+				(this.state === "running" || this.state === "compacting" || this.dialogOpen),
 			replay: this.replay,
 			requestExit: (code: number) => this.requestExit(code),
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
@@ -1329,7 +1373,17 @@ class ReplMachine {
 		if (getEditorText !== undefined) ctx.getEditorText = getEditorText;
 		const setEditorText = this.input.setText?.bind(this.input);
 		if (setEditorText !== undefined) ctx.setEditorText = setEditorText;
+		// #login-dialog: THE capability binding (design §2.3) — the same
+		// optional-method pattern as select/secret/treeSelect above.
+		const openLoginDialog = this.input.openLoginDialog?.bind(this.input);
+		if (openLoginDialog !== undefined) ctx.openLoginDialog = openLoginDialog;
 		return ctx;
+	}
+
+	/** #login-dialog: whether this shell provides the login dialog (the
+	 *  LineInput seam — design rev7 P2-D). */
+	private hasDialogShell(): boolean {
+		return this.input.openLoginDialog !== undefined;
 	}
 }
 

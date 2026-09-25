@@ -29,6 +29,7 @@ import type {
 	SelectOptions,
 	TreeSelectRequest,
 } from "./line-input.js";
+import { LoginDialog, type LoginDialogOptions } from "./login-dialog.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Autocomplete wiring for the editor (M10): slash commands at line start
@@ -829,6 +830,71 @@ export class TuiShell implements LineInput {
 			this.askContainer.addChild(box);
 			tui.setFocus(list);
 			tui.requestRender();
+		});
+	}
+
+	/** #login-dialog: the exclusive login dialog — select()'s full
+	 *  lifecycle contract (design §2.2), driven by the command's flow.
+	 *  "unavailable" only when the shell is in shutdown; a queued entry
+	 *  drained by close()'s drain re-invokes and resolves unavailable —
+	 *  the command treats that as a silent no-op, never a fallback
+	 *  trigger (design rev3 P2-5). */
+	openLoginDialog(options: LoginDialogOptions): Promise<"done" | "cancelled" | "unavailable"> {
+		const tui = this.tui;
+		if (tui === null || this.closed) return Promise.resolve("unavailable");
+		if (this.selector !== null) {
+			// Same FIFO semantic as select()/treeSelect (design rev3 P1 #4):
+			// queue behind the live selector; never clobber.
+			return new Promise((resolve) => {
+				this.pendingSelects.push(() => resolve(this.openLoginDialog(options)));
+			});
+		}
+		const dialog = new LoginDialog(tui, options.title);
+		return new Promise((resolve, reject) => {
+			let settled = false; // five racing finish sources (design rev3 P1-2)
+			const finish = (): void => {
+				if (settled) return;
+				settled = true;
+				this.selector = null;
+				this.updatePlaceholder();
+				this.askContainer.removeChild(dialog);
+				// Null-guard: teardown may fire after close() began detaching
+				// (design rev3 P2-4).
+				if (this.editor !== null) tui.setFocus(this.editor);
+				tui.requestRender();
+				if (this.askLine === null) {
+					const next = this.pendingAsks[0];
+					if (next !== undefined) this.showAsk(next.question);
+				}
+				const queued = this.pendingSelects.shift();
+				if (queued !== undefined) queued();
+			};
+			this.selector = { teardown: () => finish() };
+			this.updatePlaceholder();
+			this.askContainer.addChild(dialog);
+			tui.setFocus(dialog);
+			tui.requestRender();
+			// The wrapper owns teardown on ALL settle paths (design rev3
+			// P1-10): success, error, and dialog-initiated cancel. The dialog's
+			// cancel aborts the flow's controller; run()'s rejection funnels
+			// here; finish is idempotent for the race between them.
+			void options.run(dialog).then(
+				() => {
+					finish();
+					resolve("done");
+				},
+				(err: unknown) => {
+					finish();
+					const message = err instanceof Error ? err.message : String(err);
+					if (message === "Login cancelled") {
+						resolve("cancelled"); // silent — pi parity
+						return;
+					}
+					// Other errors propagate to the command body, which
+					// renders them with the teaching prefix (§2.2.2).
+					reject(err);
+				},
+			);
 		});
 	}
 

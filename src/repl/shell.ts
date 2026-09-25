@@ -572,8 +572,12 @@ export class TuiShell implements LineInput {
 			const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1000));
 			return seconds === 0 ? "" : ` ${seconds}s`;
 		};
+		// The live status row. Label "working…" (pi's WorkingStatusIndicator
+		// wording): the model is active — streaming, thinking, or between
+		// tools — not literally only thinking. The phase value itself keeps
+		// the "thinking" name (snapshot contract; rename would churn tests).
 		if (this.activity.phase === "thinking") {
-			this.activityContainer.addChild(new Text(dim(`${frame} thinking…`, true), 0, 0));
+			this.activityContainer.addChild(new Text(dim(`${frame} working…`, true), 0, 0));
 		}
 		if (this.activity.phase === "compacting") {
 			// #compaction-ux F2: same Loader semantics as thinking — the state

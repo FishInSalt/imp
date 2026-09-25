@@ -331,7 +331,7 @@ it("Ctrl+T repaints a long physical screen during live thinking, including hidde
 			const text = lines.join("\n");
 			expect(text.match(/FOLD retained detail/g)).toHaveLength(1);
 			expect(text.match(/draft survives/g)).toHaveLength(1);
-			expect(text).toContain("thinking");
+			expect(text).toContain("working…"); // the live activity row (label: #activity-working-label)
 			expect(text).not.toContain("history-0\n");
 			expect(fold.isExpanded()).toBe(true);
 		};

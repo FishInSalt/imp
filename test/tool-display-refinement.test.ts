@@ -209,7 +209,8 @@ describe("quiet reachable hints", () => {
 		const fold = new ToolBlockFold(preparedInputBlock(record));
 		expect(text(fold, 200)).toContain("Ctrl+O");
 		fold.setRawArguments(true);
-		expect(text(fold, 1).replaceAll("\n", "")).not.toContain("Ctrl+O");
+		// The raw view can reveal additional occurrences of the unknown padding value.
+		expect(text(fold, 1).replaceAll("\n", "")).toContain("Ctrl+O");
 		const block = outputBlock(result("secret"));
 		block.sections![0]!.caption = "caption".repeat(200);
 		block.semantic = { summary: "shown", sources: [{ ...source, title: "missing raw title" }] };

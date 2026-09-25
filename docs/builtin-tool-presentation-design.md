@@ -1,6 +1,8 @@
 # Builtin tool presentation — first batch
 
-Status: APPROVED — independent fresh-context adversarial design review closed. Implementation requires verification and independent code review.
+Status: COMPLETE — independent design and implementation reviews closed; recorded verification and final acceptance are summarized below.
+
+Closeout context: this document retains its original design-stage observations, branch references, requirements and planned verification as historical records. Closeout is on the existing `integration/builtin-display-final` branch. Later reviewed designs supersede earlier requirements where explicitly noted. This documentation-only closeout changes no runtime behavior or policy and does not rerun or newly claim the recorded implementation tests. Final manual acceptance is recorded in `builtin-display-diagnostics-design.md`.
 
 Workspace: `/Users/z/Z/Agent_demo/imp-builtin-display`.
 Branch: existing dedicated `feat/builtin-tool-presentation`, based on main `f9eb33b` (`Merge branch 'integration/tool-display-output'`). This design task does not change branches, commit, merge, or edit main.
@@ -128,8 +130,12 @@ Required coverage:
 
 Planned commands: `npm run typecheck`, targeted `npx vitest run test/builtin-tool-presentation.test.ts test/builtin-tool-presentation-integration.test.ts test/tool-presentation-hooks.test.ts test/tool-presentation-integration.test.ts test/tool-presentation.test.ts test/output-integrity.test.ts test/task-tool.test.ts`, then `npm test`, `npm run build`, and lint of changed TypeScript files. Report exact test counts and any skipped fixtures or unavailable prerequisites, not assumed success.
 
-## 8. Review and implementation gate
+## 8. Historical review and implementation gate
 
-The parent must arrange a fresh-context adversarial review of this document before implementation. Review focus: call-only result policy, large-field fallback versus readable-content expectations, ownership/default correctness, effective numeric values, runtime-dependent task settings, output-integrity evidence and isolated test setup. Record findings and resolutions before marking APPROVED.
+The planned gate required independent fresh-context adversarial design review before implementation, followed by implementation verification and independent code review. Review focus was call-only result policy, large-field fallback, ownership/default correctness, numeric values, task settings, output integrity and isolated fixtures. These gates are closed; they are not outstanding implementation instructions.
 
-After approval, implement pure helpers and six attachments in one bounded batch; execute the verification plan. Independent code review is warranted because ownership mistakes can hide arguments and summaries can imply false execution outcomes. No changes to hook types, renderer budgets or raw result parsing are authorized as incidental fixes; stop for design revision if those become necessary.
+## 9. Completed review and closeout
+
+- First batch implemented in `8a029b6`; independent design and implementation reviews completed.
+- Recorded verification: **1790 tests passed across 93 test files**.
+- Later polish superseded absent-default and duplicate-path presentation choices. Layout subsequently superseded path placement for read/write/edit/ls; diagnostics refined evidence-based diagnostic suppression and scalar field coverage. The preceding requirements remain the historical first-batch contract, not instructions to revert those reviewed follow-ups.

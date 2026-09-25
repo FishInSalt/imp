@@ -184,13 +184,13 @@ describe("semantic tool presentation", () => {
 		const fold = new ToolBlockFold(outputBlock(result("x".repeat(n * 10))));
 		fold.setExpanded(true);
 		const rows = fold.render(14);
-		expect(rows.filter((r) => r.includes("xxxxxxxxxx"))).toHaveLength(Math.min(n, 998));
+		expect(rows.filter((r) => r.includes("xxxxxxxxxx"))).toHaveLength(Math.min(n, 1000));
 		expect(
 			rows
 				.map((r) => sanitizeDisplay(r).trimStart())
 				.join("")
 				.includes("wrapped rows omitted"),
-		).toBe(n > 998);
+		).toBe(n > 1000);
 	});
 	it("promotes narrow diagnostics beyond retention and from hidden persisted content", () => {
 		const path = `/tmp/${"long/".repeat(30)}`;
@@ -285,7 +285,7 @@ describe("semantic tool presentation", () => {
 				.split("\n")
 				.map((line) => line.trimStart())
 				.join(""),
-		).toContain("1506 wrapped rows omitted from this view");
+		).toContain("1504 wrapped rows omitted from this view");
 	});
 	it("sanitizes known paths and preserves task recovery artifacts", () => {
 		const b = inputBlock("a", "read", { path: "a\x1b[2J\tb\r\nnext" });

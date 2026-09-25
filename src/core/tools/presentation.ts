@@ -40,25 +40,42 @@ function numeric(
 		},
 	};
 }
-const timeout = numeric("timeout", "Timeout (seconds)", "30", 1, 600);
+const timeout = numeric("timeout", "Timeout (s)", "30", 1, 600);
 
 /** Inspect only a bounded prefix; never split a surrogate pair or emit controls in chrome. */
-function excerpt(value: string, limit = 160): string {
+export function builtinExcerpt(
+	value: string,
+	limit = 160,
+	literalLF = false,
+): {
+	text: string;
+	spans: { start: number; end: number; sourceStart: number; sourceEnd: number }[];
+} {
 	let text = "";
+	const spans: { start: number; end: number; sourceStart: number; sourceEnd: number }[] = [];
+	let sourceStart = 0;
 	let count = 0;
 	for (const point of value) {
-		if (count++ === limit) return `${text}…`;
+		if (count++ === limit) return { text: `${text}…`, spans };
+		const start = text.length;
 		text += /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(point)
 			? point === "\n"
-				? "\\n"
+				? literalLF
+					? "\n"
+					: "\\n"
 				: point === "\r"
 					? "\\r"
 					: point === "\t"
 						? "\\t"
 						: `\\u{${point.codePointAt(0)?.toString(16)}}`
 			: point;
+		spans.push({ start, end: text.length, sourceStart, sourceEnd: sourceStart + point.length });
+		sourceStart += point.length;
 	}
-	return text;
+	return { text, spans };
+}
+function excerpt(value: string, limit = 160, literalLF = false): string {
+	return builtinExcerpt(value, limit, literalLF).text;
 }
 
 /** Full fields are checked before summaries count or traverse payload text. */
@@ -81,6 +98,7 @@ function presentation(rules: readonly Rule[], summary: (args: Args) => string): 
 				if (supplied && (!rule.accept(value) || (typeof value === "string" && value.length > 16384)))
 					return undefined;
 				if (!supplied && rule.fallback === undefined) return undefined;
+				if (!supplied && rule.fallback !== undefined && rule.key !== "path") continue;
 				const text = supplied
 					? rule.format
 						? rule.format(value)
@@ -111,7 +129,7 @@ export const writePresentation = presentation(
 		let lines = content === "" ? 0 : 1;
 		for (const c of content) if (c === "\n") lines++;
 		if (content.endsWith("\n")) lines--;
-		return `${excerpt(a.path as string)} · ${lines} lines · ${Buffer.byteLength(content)} bytes`;
+		return `${lines} lines · ${Buffer.byteLength(content)} bytes`;
 	},
 );
 export const readPresentation = presentation(
@@ -120,13 +138,18 @@ export const readPresentation = presentation(
 		{ key: "offset", label: "Start line", accept: positive, fallback: "1" },
 		{
 			key: "limit",
-			label: "Requested line limit (hard cap 2000 lines / 50KB)",
+			label: "Line limit",
 			accept: positive,
 			fallback: "not specified; hard cap 2000 lines / 50KB",
 		},
 	],
 	(a) =>
-		`${excerpt(a.path as string)} · from line ${a.offset ?? 1}${Object.hasOwn(a, "limit") ? ` · up to ${a.limit} requested` : ""}`,
+		[
+			Object.hasOwn(a, "offset") ? `from line ${a.offset}` : "",
+			Object.hasOwn(a, "limit") ? `up to ${a.limit} requested` : "",
+		]
+			.filter(Boolean)
+			.join(" · "),
 );
 export const grepPresentation = presentation(
 	[
@@ -134,7 +157,7 @@ export const grepPresentation = presentation(
 		path,
 		{
 			key: "glob",
-			label: "File glob",
+			label: "Glob",
 			accept: string,
 			fallback: "none",
 			format: (v) => (v === "" ? '"" (no filter)' : String(v)),
@@ -142,27 +165,24 @@ export const grepPresentation = presentation(
 		{ key: "ignoreCase", label: "Ignore case", accept: boolean, fallback: "false" },
 		{ key: "literal", label: "Literal", accept: boolean, fallback: "false" },
 		numeric("context", "Context lines", "0", 0, 10),
-		numeric("limit", "Output line limit", "100", 1, 1000),
+		numeric("limit", "Line limit", "100", 1, 1000),
 		timeout,
 	],
-	(a) =>
-		`${excerpt(a.pattern as string)} · path ${excerpt((a.path as string) || ".")}${a.glob ? ` · glob ${excerpt(a.glob as string)}` : ""}`,
+	(a) => `${excerpt(a.pattern as string)}${a.glob ? ` · glob ${excerpt(a.glob as string)}` : ""}`,
 );
 export const findPresentation = presentation(
 	[
-		{ key: "pattern", label: "Name glob", accept: string },
+		{ key: "pattern", label: "Pattern", accept: string },
 		path,
 		{ key: "type", label: "Type", accept: (v) => v === "file" || v === "directory", fallback: "both" },
-		numeric("limit", "Output line limit", "200", 1, 1000),
+		numeric("limit", "Line limit", "200", 1, 1000),
 		timeout,
 	],
-	(a) =>
-		`${excerpt(a.pattern as string)} · path ${excerpt((a.path as string) || ".")} · type ${a.type ?? "both"}`,
+	(a) => `${excerpt(a.pattern as string)}${a.type ? ` · type ${a.type}` : ""}`,
 );
 export const lsPresentation = presentation(
 	[path, numeric("limit", "Entry limit", "500", 1, 5000, true)],
-	(a) =>
-		`${excerpt((a.path as string) || ".")} · up to ${effective(a.limit ?? 500, 1, 5000, true)} entries requested`,
+	(a) => (Object.hasOwn(a, "limit") ? `up to ${effective(a.limit!, 1, 5000, true)} entries requested` : ""),
 );
 export const taskPresentation = presentation(
 	[
@@ -183,3 +203,66 @@ export const taskPresentation = presentation(
 	],
 	(a) => `${excerpt((a.agent as string) ?? "generic subagent")} · ${excerpt(a.prompt as string, 120)}`,
 );
+
+export const bashPresentation = presentation(
+	[
+		{ key: "command", label: "Command", accept: string },
+		{ key: "timeout", label: "Timeout (s)", accept: (v) => finite(v) && (v as number) > 0, fallback: "" },
+	],
+	(a) => excerpt(a.command as string, 160, true),
+);
+
+function replacements(value: ToolPresentationValue): string {
+	return (value as readonly Args[])
+		.map((edit, index) => {
+			const payload = (label: string, text: string) =>
+				text === ""
+					? `${label}: (empty string)`
+					: `${label}:\n${text
+							.split("\n")
+							.map((line) => `  ${line}`)
+							.join("\n")}`;
+			return `Replacement ${index + 1}\n${payload("oldText", edit.oldText as string)}\n${payload("newText", edit.newText as string)}`;
+		})
+		.join("\n");
+}
+export const editPresentation = presentation(
+	[
+		requiredPath,
+		{
+			key: "edits",
+			label: "Replacements",
+			accept: (v) =>
+				Array.isArray(v) &&
+				v.length > 0 &&
+				v.every(
+					(e) =>
+						e !== null &&
+						typeof e === "object" &&
+						!Array.isArray(e) &&
+						Object.keys(e).length === 2 &&
+						Object.hasOwn(e, "oldText") &&
+						Object.hasOwn(e, "newText") &&
+						typeof e.oldText === "string" &&
+						typeof e.newText === "string",
+				),
+			format: replacements,
+		},
+	],
+	(a) =>
+		`${(a.edits as readonly Args[]).length} replacement${(a.edits as readonly Args[]).length === 1 ? "" : "s"}`,
+);
+
+/** Private host association: captured function identity, never a tool-name heuristic. */
+export function builtinCallName(call: ToolPresentationHooks["call"]): string | undefined {
+	return Object.entries({
+		read: readPresentation,
+		write: writePresentation,
+		edit: editPresentation,
+		ls: lsPresentation,
+		bash: bashPresentation,
+		grep: grepPresentation,
+		find: findPresentation,
+		task: taskPresentation,
+	}).find(([, hooks]) => hooks.call === call)?.[0];
+}

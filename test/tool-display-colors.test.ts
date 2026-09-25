@@ -34,8 +34,8 @@ describe("minimal tool display colors", () => {
 		expect(plain(inline)).toEqual(["● bash  echo ok"]);
 		expect(inline).toEqual([`${dim}●${reset} ${bold}bash${reset}  echo ok${reset}`]);
 		const wrapped = new ToolBlockFold(call()).render(12);
-		expect(plain(wrapped)).toEqual(["● bash  echo", "         ok"]);
-		expect(wrapped[1]).toBe(`         ok${reset}`);
+		expect(plain(wrapped)).toEqual(["● bash  echo", "     ok"]);
+		expect(wrapped[1]).toBe(`     ok${reset}`);
 		const normal = new ToolBlockFold(result("one\ntwo")).render(40);
 		expect(plain(normal)).toEqual(["  ⎿ one", "    two"]);
 		expect(normal[0]).toBe(`  ${dim}⎿${reset} one${reset}`);

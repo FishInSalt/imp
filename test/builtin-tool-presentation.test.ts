@@ -69,7 +69,7 @@ describe("builtin call presentations", () => {
 			"2000.8 (effective: 1000)",
 			"0 (effective: 1)",
 		]);
-		expect(semantic.summary).toBe("a\\nb · path .");
+		expect(semantic.summary).toBe("a\\nb");
 		expect(semantic.argumentFields?.flatMap((f) => f.consumes)).toEqual(Object.keys(args));
 		expect(call(findPresentation, { pattern: "*", type: "both" }).callSemantic).toBeUndefined();
 		expect(
@@ -82,12 +82,7 @@ describe("builtin call presentations", () => {
 	it("describes inheritance and read requests, not resolved configuration or returned ranges", () => {
 		expect(
 			call(taskPresentation, { prompt: 'a\n"b"\\c' }).callSemantic?.argumentFields?.map((f) => f.value),
-		).toEqual([
-			'a\n"b"\\c',
-			"generic subagent",
-			"inherited from agent/host",
-			"inherited from agent; otherwise false",
-		]);
+		).toEqual(['a\n"b"\\c']);
 		expect(
 			call(taskPresentation, {
 				prompt: "p",
@@ -98,7 +93,7 @@ describe("builtin call presentations", () => {
 			}).callSemantic?.argumentFields?.map((f) => f.value),
 		).toEqual(["p", "review", "1234", "false"]);
 		expect(call(readPresentation, { path: "image.png", offset: 9, limit: 3000 }).callSemantic?.summary).toBe(
-			"image.png · from line 9 · up to 3000 requested",
+			"from line 9 · up to 3000 requested",
 		);
 		for (const key of ["offset", "limit"])
 			for (const v of [0, -1, 1.2, Number.MAX_SAFE_INTEGER + 1, null, "2"])
@@ -117,7 +112,7 @@ describe("builtin call presentations", () => {
 		(content) => {
 			const semantic = call(writePresentation, { path: "f", content }).callSemantic!;
 			const lines = content === "" ? 0 : content.split("\n").length - Number(content.endsWith("\n"));
-			expect(semantic.summary).toBe(`f · ${lines} lines · ${Buffer.byteLength(content)} bytes`);
+			expect(semantic.summary).toBe(`${lines} lines · ${Buffer.byteLength(content)} bytes`);
 			expect(semantic.argumentFields?.[1]?.value).toBe(content);
 		},
 	);
@@ -138,7 +133,7 @@ describe("builtin call presentations", () => {
 			}
 		}
 		const semantic = call(writePresentation, { path: "😀".repeat(161), content: "" }).callSemantic!;
-		expect(semantic.summary).toBe(`${"😀".repeat(160)}… · 0 lines · 0 bytes`);
+		expect(semantic.summary).toBe("0 lines · 0 bytes");
 		expect(
 			call(writePresentation, { path: "\u001b[31m\n\t", content: "" }).callSemantic?.summary,
 		).not.toMatch(/\p{Cc}/u);

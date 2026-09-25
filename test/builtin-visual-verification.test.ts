@@ -347,12 +347,12 @@ const fixtures = [
 	{
 		name: "write",
 		args: { path: "file.txt", content: 'const x = "\\n";\nsecond line\n', extra: "UNKNOWN_RETAINED" },
-		labels: ["Path", "Content", "second line"],
+		labels: ["file.txt", "Content", "second line"],
 	},
 	{
 		name: "read",
 		args: { path: "file.txt", offset: 1, limit: 2, extra: "UNKNOWN_RETAINED" },
-		labels: ["Path", "Start line", "Requested line limit"],
+		labels: ["file.txt", "Start line", "Line limit"],
 	},
 	{
 		name: "grep",
@@ -367,22 +367,18 @@ const fixtures = [
 			timeout: 5,
 			extra: "UNKNOWN_RETAINED",
 		},
-		labels: [
-			"Pattern",
-			"File glob",
-			"Ignore case",
-			"Literal",
-			"Context lines",
-			"Output line limit",
-			"Timeout (seconds)",
-		],
+		labels: ["Pattern", "Glob", "Ignore case", "Literal", "Context lines", "Line limit", "Timeout (s)"],
 	},
 	{
 		name: "find",
 		args: { pattern: "*.txt", path: ".", type: "file", limit: 10, timeout: 5, extra: "UNKNOWN_RETAINED" },
-		labels: ["Name glob", "Type", "Output line limit", "Timeout (seconds)"],
+		labels: ["Pattern", "Type", "Line limit", "Timeout (s)"],
 	},
-	{ name: "ls", args: { path: ".", limit: 10, extra: "UNKNOWN_RETAINED" }, labels: ["Path", "Entry limit"] },
+	{
+		name: "ls",
+		args: { path: ".", limit: 10, extra: "UNKNOWN_RETAINED" },
+		labels: ["● ls  .", "Entry limit"],
+	},
 	{
 		name: "task",
 		args: {
@@ -391,7 +387,7 @@ const fixtures = [
 			worktree: false,
 			extra: "UNKNOWN_RETAINED",
 		},
-		labels: ["Prompt", "Agent", "Timeout (ms)", "Worktree", "Report second line"],
+		labels: ["Prompt", "Timeout (ms)", "Worktree", "Report second line"],
 	},
 ];
 it.each(fixtures)(

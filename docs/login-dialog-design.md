@@ -1,8 +1,7 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev5 (rev4 rejected: §2.3's deletion bullet still said global —
-contradicted §2.2's shell-conditional fix; pi-parity status ordering;
-prompt-cancel channel unified)
+Status: rev6 (rev5 rejected: pseudo-flow still called dialog.message for
+the success tail — fixed; deletion mechanism named; pi citations re-anchored)
 
 ## 0. Problem
 
@@ -37,10 +36,12 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   pending input via `inputResolver`. States: showAuth (URL + Cmd+click),
   showDeviceCode (URL + code), showWaiting, showPrompt (api key),
   showInfo/showDetails/showProgress.
-- pi wiring — `interactive-mode.ts:5773` (ambient), `:5803`
-  (showApiKeyLoginDialog), `:5923` (showLoginDialog oauth): clear
+- pi wiring — `interactive-mode.ts:5776` (ambient), `:5803`
+  (showApiKeyLoginDialog), `:5934` (showLoginDialog oauth): clear
   editorContainer, add dialog, `setFocus(dialog)`; restore editor in both
-  settle and error paths.
+  settle and error paths. Verified parity detail: restore runs BEFORE
+  the status line (`restoreEditor()` at ~5829-5834 precedes
+  `completeProviderAuthentication` at 5838, which emits the status).
 - pi `DynamicBorder` — 25 lines; **not** exported by pi-tui; imp vendors
   its own (no theme dependency — dim border).
 - pi-tui `Input` — **is** exported (`node_modules/@earendil-works/pi-tui/
@@ -145,13 +146,17 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   (commands.ts:846-871 wiring STAYS for the fallback path), typed lines
   still queue. The "fallback unchanged" claim in §2.3 is now literally
   true.
-- **Deleted from the machine (dialog shells only)** (the payoff): the
-  `name === "login"` arm of longOpLabel (repl.ts:514) and the dialog
-  path's onLongOpAbort usage. A second `/login` while a dialog is open
-  cannot be typed (editor has no focus). `longOpLabel` itself SURVIVES
-  for /compact, /tree, and the fallback login (repl.ts:1126-1139, :1313;
-  commands.ts:1190/1211/1247/1267/1804/1811). `/compact` and `/tree`
-  keep the guarded state unchanged.
+- **Deleted from the machine (dialog shells only)** (the payoff) — the
+  mechanism: `loginNeedsGuard(line, shell)` returns false on dialog
+  shells → `stateful` (repl.ts:500-505) is false → the arm at
+  repl.ts:513-514 (`name === "login"`) is unreachable; no code edit to
+  runCommand is needed. Concretely gone on TUI: the login
+  longOpLabel/spinner arm and the dialog path's onLongOpAbort usage.
+  A second `/login` while a dialog is open cannot be typed (editor has
+  no focus). `longOpLabel` itself SURVIVES for /compact, /tree, and the
+  fallback login (repl.ts:1126-1139, :1313; commands.ts:1190/1211/1247/
+  1267/1804/1811). `/compact` and `/tree` keep the guarded state
+  unchanged.
 
 ### 2.2.1 Machine-level mutual exclusion (review P0 #1)
 
@@ -243,25 +248,23 @@ const outcome = await ctx.openLoginDialog({
         signal: dialog.signal,             // dialog's own AbortController
         onDeviceCode: (p) => dialog.deviceCode(p), // was renderer.note
       });
-      dialog.message(`Logged in to ${target.name}`);   // was renderer.status
-      // switch hint if family differs — was renderer.note
+      // success tail renders AFTER openLoginDialog resolves — see below
     } else {
       const key = await dialog.prompt(`Enter ${target.name} API key`);
-      if (key === null) throw new Error("Login cancelled"); // unified channel: prompt() REJECTS on Esc (see below)
+      if (key === null) throw new Error("Login cancelled"); // empty submit; Esc REJECTS (see below)
       saveApiKey(target.family, key, ctx.authStorePath);
-      dialog.message(`Saved API key for ${target.name}`);
-      // switch hint if family differs
+      // success tail renders AFTER openLoginDialog resolves — see below
     }
   },
 });
+// success tail (pi parity: restore-then-status) — rendered HERE, after
+// the dialog has resolved and torn down, via the same renderer calls the
+// legacy path uses: renderer.status(`Saved API key for ${target.name}`)
+// or `Logged in to ${target.name}`) + the family-differs switch hint as
+// renderer.note — dialog.message is in-flow progress ONLY, never the tail.
 // "cancelled" (Login cancelled) → silent; other throws → renderer.error
 // with imp's teaching prefix; "done" → footer refresh via runCommand's
 // existing finally refreshFooter
-// Status ordering (rev4 P2-B, pi parity): the saved/switch-hint lines
-// render via renderer.status/note AFTER openLoginDialog resolves (pi
-// restores the editor FIRST, then shows status — interactive-mode.ts
-// 5813-5840); dialog.message is NOT used for the success tail. The
-// message() state stays in the interface for in-flow progress only.
 // Prompt-cancel channel (rev4 P3-D, unified): Esc during prompt REJECTS
 // prompt() with Error("Login cancelled") — the same channel as every
 // other cancel — so run()'s catch surfaces it as "cancelled"; prompt()

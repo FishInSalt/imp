@@ -1259,7 +1259,7 @@ describe("runRepl with shell:tui", () => {
 		expect(env.terminal.frameSince(0)).toMatch(/test-model · [0-9a-f]{8}/);
 		env.terminal.data("hi\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("thinking"); // activity row while the turn runs
+		expect(env.terminal.frameSince(0)).toContain("working…"); // activity row while the turn runs
 		releaseTurn();
 		await settle();
 		await settle();
@@ -1608,7 +1608,7 @@ describe("runRepl with shell:tui", () => {
 		const mark = env.terminal.writes.length;
 		await settle();
 		const runFrame = env.terminal.frameSince(mark); // the run's own repaint only
-		expect(runFrame).toContain("thinking"); // activity row while gated
+		expect(runFrame).toContain("working…"); // activity row while gated
 		expect(runFrame).toContain("hi"); // the echoed user block rides the same frame
 		expect(runFrame).not.toContain("(/ for commands"); // hidden while running
 		releaseTurn();
@@ -1777,18 +1777,18 @@ describe("runRepl with shell:tui", () => {
 	// ── activity region (M10 B): thinking/tool/subagent rows replace the
 	// byte-stream spinner in TUI mode ──
 
-	it("thinking phase paints a spinner row while the model is gated; it clears on settle", async () => {
+	it("working phase paints a spinner row while the model is gated; it clears on settle", async () => {
 		const g = gate();
 		const env = await startTuiRepl([() => g.promise.then(() => reply("hello"))]);
 		await settle();
 		env.terminal.data("go\r");
 		await settle();
-		expect(env.terminal.frameSince(0)).toContain("thinking"); // the activity row, not a byte-stream spinner
+		expect(env.terminal.frameSince(0)).toContain("working…"); // the activity row, not a byte-stream spinner
 		const mark = env.terminal.writes.length;
 		g.resolve();
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("hello"));
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("thinking"); // row cleared on settle
+		expect(env.terminal.frameSince(mark)).not.toContain("working"); // row cleared on settle
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2781,7 +2781,7 @@ describe("runRepl with shell:tui", () => {
 		});
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => env.terminal.frameSince(0).includes("thinking"));
+		await waitUntil(() => env.terminal.frameSince(0).includes("working…"));
 		env.terminal.data("\x03");
 		// zero-turn aborts skip run stats — the interrupt note plus the restored
 		// placeholder (idle marker repaint) are the settle signal
@@ -2790,7 +2790,7 @@ describe("runRepl with shell:tui", () => {
 		const mark = env.terminal.writes.length;
 		env.terminal.data("x"); // editor change → repaint; the row is gone if cleared
 		await settle(30);
-		expect(env.terminal.frameSince(mark)).not.toContain("thinking");
+		expect(env.terminal.frameSince(mark)).not.toContain("working");
 		env.terminal.data("\x15"); // clear the draft (ctrl+u) before exiting cleanly
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
@@ -3469,22 +3469,22 @@ describe("TuiShell presentation notices", () => {
 });
 
 describe("TuiShell activity region (M10 B)", () => {
-	it("thinking paints a spinner row that ticks, then clears on idle", async () => {
+	it("working paints a spinner row that ticks, then clears on idle", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
 		shell.setActivity({ phase: "thinking", tools: [], agents: [] });
 		await settle(30); // first paint (16ms render interval), before any 120ms tick
 		const first = terminal.frameSince(0);
-		expect(first).toContain("thinking");
+		expect(first).toContain("working…");
 		await settle(300); // ≥2 ticker frames
 		const ticked = terminal.frameSince(0);
-		expect(ticked).toContain("thinking");
+		expect(ticked).toContain("working…");
 		expect(ticked).not.toBe(first); // the spinner frame advanced
 		const mark = terminal.writes.length;
 		shell.setActivity({ phase: "idle", tools: [], agents: [] });
 		await settle(30);
-		expect(terminal.frameSince(mark)).not.toContain("thinking");
+		expect(terminal.frameSince(mark)).not.toContain("working");
 	});
 
 	it("compacting phase paints its own spinner row (#compaction-ux F2)", async () => {

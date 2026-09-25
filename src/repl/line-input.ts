@@ -141,7 +141,9 @@ export interface ActivityToolLine {
 
 /** One running subagent in the TUI activity region (the task tool's child). */
 export interface ActivityAgentLine {
-	/** Agent name — two parallel tasks on the same agent merge into one row (v1). */
+	/** Opaque observer source identity; labels are never identities. */
+	sourceId?: string;
+	/** Agent display name. */
 	agent: string;
 	task: string;
 	/** The task tool_call id that spawned it — its tool_end removes the row. */

@@ -8,7 +8,7 @@ import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
-import { dim, formatTokens, shorten, summarizeArgs, summarizeResult, VERSION } from "../format.js";
+import { dim, formatTokens, shorten, summarizeResult, VERSION } from "../format.js";
 import type { McpManager } from "../mcp/manager.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
@@ -32,6 +32,8 @@ import type {
 } from "./line-input.js";
 import { replaySession } from "./replay.js";
 import { type AutocompleteOptions, TuiShell } from "./shell.js";
+import { inputBlock, preparedInputBlock, type ToolPresentationSink } from "./tool-presentation.js";
+import { type PreparedToolCall, prepareCall, prepareResult } from "./tool-presentation-hooks.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Interactive presentation shell. "legacy" is the pre-M9 readline path. */
@@ -267,6 +269,7 @@ export class TtyConfirm {
 }
 
 interface ReplMachineOptions {
+	toolSink?: ToolPresentationSink;
 	runner: Runner;
 	/** Extension commands (M4b): forwarded to dispatchCommand at the single dispatch site. */
 	commands: readonly RegisteredExtensionCommand[];
@@ -311,6 +314,11 @@ class ReplMachine {
 	/** Live turn activity for the TUI region (M10 B): pending top-level tools
 	 *  and running subagents. Keyed by tool_call id / agent name; pushed as a
 	 *  snapshot after every mutation (see pushActivity). */
+	private toolSink?: ToolPresentationSink;
+	private childCalls = new Map<string, Map<string, PreparedToolCall>>();
+	private childParents = new Map<string, string | undefined>();
+	private closedParents = new Set<string>();
+	private activeRun: object | null = null;
 	private activityTools = new Map<string, ActivityToolLine>();
 	private activityAgents = new Map<string, ActivityAgentLine>();
 	/** M17 queue drain modes for the ACTIVE run (design §3): snapshotted once
@@ -335,6 +343,7 @@ class ReplMachine {
 
 	constructor(options: ReplMachineOptions) {
 		this.runner = options.runner;
+		this.toolSink = options.toolSink;
 		this.commands = options.commands;
 		this.renderer = options.renderer;
 		this.input = options.input;
@@ -557,12 +566,16 @@ class ReplMachine {
 		this.pushActivity(); // TUI activity region: thinking phase from the start
 		const controller = new AbortController();
 		this.controller = controller;
+		const run = {};
+		this.activeRun = run;
 		try {
 			this.runner.warmup(); // deferred init for scripted mode; guarded like the rest
 			const result = await this.runner.runTurn({
 				userMessage: line,
 				signal: controller.signal,
 				onEvent: (event: AgentEvent, info?: AgentEventInfo) => {
+					if (this.activeRun !== run) return;
+					this.trackActivity(event, info);
 					// Top-level events feed the Renderer; subagent-sourced ones
 					// (info set) go to the activity region only — M5's
 					// zero-rendering-visibility rule, enforced at this tap.
@@ -570,7 +583,6 @@ class ReplMachine {
 						this.renderer.event(event);
 						this.showResultFold(event); // TUI: every top-level result folds (M11); child edits could later
 					}
-					this.trackActivity(event, info);
 					// #footer-per-turn: pi refreshes the footer on every assistant
 					// message_end (interactive-mode.ts:3279 — footer.invalidate +
 					// requestRender); usage lands in history per TURN, so the ctx%
@@ -586,9 +598,17 @@ class ReplMachine {
 				getSteeringMessages: () => this.steeringMessages(),
 				getFollowUpMessages: () => this.followUpMessages(),
 			});
+			this.clearActivity();
 			await this.settleSuccess(result);
 		} catch (err) {
+			this.clearActivity();
 			this.settleFailure(err);
+		} finally {
+			if (this.activeRun === run) {
+				this.activeRun = null;
+				this.clearActivity();
+				this.toolSink?.finalize();
+			}
 		}
 	}
 
@@ -601,7 +621,7 @@ class ReplMachine {
 	 *  clearance); the `● ✗` line above keeps the failure salient.
 	 *  Child-sourced results never reach this tap. */
 	private showResultFold(event: AgentEvent): void {
-		if (event.type !== "tool_end") return;
+		if (event.type !== "tool_end" || this.renderer.hasToolSink) return;
 		if (this.input.addFold === undefined) return;
 		const result = event.result;
 		if (!result.isError && result.toolName === "edit") {
@@ -987,57 +1007,113 @@ class ReplMachine {
 		if (body !== "") this.renderer.writeLine(body);
 	}
 
-	/** Activity region (M10 B). tool_start adds a pending row; tool_end removes
-	 *  it (the ✓/⎿ completion lines stay in the transcript — the Renderer is
-	 *  unchanged); the task tool maps to a subagent row that child events
-	 *  (info.agent) keep updating until the task ends. Two parallel tasks on
-	 *  the same agent share one row (v1 — the common case is one per agent). */
+	/** Activity shares prepared root calls with the transcript. Child state is
+	 * isolated by observer source identity and associated with its explicit parent. */
 	private trackActivity(event: AgentEvent, info?: AgentEventInfo): void {
-		if (event.type === "tool_start") {
-			if (info !== undefined) {
-				// Child-sourced (info present — even without an agent name): update
-				// the agent row; never a top-level tool row.
-				const agent = info.agent ?? "task";
-				const row = this.activityAgents.get(agent);
-				if (row !== undefined) {
-					row.lastTool = `${event.name} ${summarizeArgs(event.name, event.args)}`.trimEnd();
-					row.toolCount += 1;
+		const resolver = (name: string) => this.runner.getTool(name)?.presentation;
+		if (info !== undefined) {
+			if (info.taskToolCallId && this.closedParents.has(info.taskToolCallId)) return;
+			const source = info.sourceId;
+			// Missing source identity must never be replaced by display labels.
+			if (!source) {
+				const parent = info.taskToolCallId
+					? this.activityAgents.get(`task:${info.taskToolCallId}`)
+					: undefined;
+				if (parent && event.type === "tool_start") {
+					parent.lastTool = `${event.name} ${inputBlock(event.toolCallId, event.name, event.args).lines.join("\n")}`;
+					parent.toolCount++;
+					this.pushActivity();
 				}
-			} else if (event.name === "task") {
-				const args = (event.args ?? {}) as { agent?: string; prompt?: string };
-				const agent = args.agent ?? "task";
-				this.activityAgents.set(agent, {
+				return;
+			}
+			let calls = this.childCalls.get(source);
+			if (!calls) {
+				calls = new Map();
+				this.childCalls.set(source, calls);
+				this.childParents.set(source, info.taskToolCallId);
+			}
+			const key = `source:${source}`;
+			let row = this.activityAgents.get(key);
+			if (!row) {
+				const parent = info.taskToolCallId
+					? this.activityAgents.get(`task:${info.taskToolCallId}`)
+					: undefined;
+				row = {
+					sourceId: source,
+					agent: info.agent ?? "task",
+					task: parent?.task ?? "",
+					taskToolId: info.taskToolCallId ?? "",
+					cwd: info.cwd ?? null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+				};
+				this.activityAgents.set(key, row);
+				if (info.taskToolCallId) this.activityAgents.delete(`task:${info.taskToolCallId}`);
+			}
+			if (event.type === "tool_start") {
+				let record = calls.get(event.toolCallId);
+				if (!record) {
+					record = prepareCall(
+						event.toolCallId,
+						event.name,
+						event.args,
+						this.toolSink ? resolver : undefined,
+					);
+					calls.set(event.toolCallId, record);
+				}
+				const block = preparedInputBlock(record);
+				row.lastTool = `${event.name} ${block.semantic ? [block.semantic.summary, ...(block.semantic.preview ?? [])].join("\n") : block.lines.join("\n")}`;
+				row.toolCount++;
+			} else if (event.type === "tool_end") {
+				if (this.toolSink) prepareResult(calls.get(event.result.toolCallId), event.result, false, resolver);
+				calls.delete(event.result.toolCallId);
+			}
+			this.pushActivity();
+			return;
+		}
+		if (event.type === "tool_start") {
+			const record = this.toolSink?.prepare(event.toolCallId, event.name, event.args);
+			const block = record
+				? preparedInputBlock(record)
+				: inputBlock(event.toolCallId, event.name, event.args);
+			const label = block.semantic
+				? [block.semantic.summary, ...(block.semantic.preview ?? [])].join("\n")
+				: block.lines.join("\n");
+			if (event.name === "task") {
+				const args = record?.rawArgs as Record<string, unknown> | null | undefined;
+				const agent =
+					args && typeof args === "object" && !Array.isArray(args) && typeof args.agent === "string"
+						? args.agent
+						: "task";
+				this.activityAgents.set(`task:${event.toolCallId}`, {
 					agent,
-					// the prompt IS the label (summarizeArgs has no task entry —
-					// raw JSON as a row label would be noise, not signal)
-					task: typeof args.prompt === "string" ? shorten(args.prompt) : summarizeArgs("task", event.args),
+					task: !block.semantic && typeof args?.prompt === "string" ? args.prompt : label,
 					taskToolId: event.toolCallId,
 					cwd: null,
 					lastTool: null,
 					toolCount: 0,
 					startedAtMs: Date.now(),
 				});
-			} else {
+			} else
 				this.activityTools.set(event.toolCallId, {
 					id: event.toolCallId,
 					name: event.name,
-					label: summarizeArgs(event.name, event.args),
+					label,
 					startedAtMs: Date.now(),
 				});
-			}
 			this.pushActivity();
-			return;
-		}
-		if (event.type === "tool_end") {
-			if (info !== undefined) return; // child ends bump nothing (v1)
+		} else if (event.type === "tool_end") {
+			this.activityTools.delete(event.result.toolCallId);
 			if (event.result.toolName === "task") {
-				// Only the rows this task call created leave; a concurrent second
-				// task's row survives (keyed by taskToolId, not agent name).
-				for (const [key, row] of this.activityAgents) {
+				this.closedParents.add(event.result.toolCallId);
+				for (const [key, row] of this.activityAgents)
 					if (row.taskToolId === event.result.toolCallId) this.activityAgents.delete(key);
-				}
-			} else {
-				this.activityTools.delete(event.result.toolCallId);
+				for (const [source, parent] of this.childParents)
+					if (parent === event.result.toolCallId) {
+						this.childCalls.delete(source);
+						this.childParents.delete(source);
+					}
 			}
 			this.pushActivity();
 		}
@@ -1069,6 +1145,11 @@ class ReplMachine {
 
 	/** Clear live rows (turn end, interrupt, exit) and park the region at idle. */
 	private clearActivity(): void {
+		this.toolSink?.finalize();
+		this.activeRun = null;
+		this.childCalls.clear();
+		this.childParents.clear();
+		this.closedParents.clear();
 		this.activityTools.clear();
 		this.activityAgents.clear();
 		// Phase is parked at idle explicitly: callers run this at the END of a
@@ -1276,6 +1357,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	}
 	// Narrowed once for every later use (guards don't carry into closures).
 	const tuiSink: TranscriptSink | null = useTui && transcript !== undefined ? transcript : null;
+	tuiSink?.toolSink.setResolver((name) => runner.getTool(name)?.presentation);
 	// Autocomplete config for the TUI shell (M10): imp's commands + extension
 	// commands, the process cwd for @ paths, and fd — probed once (cached per
 	// process); a PATH-resolvable name is all the provider's spawn needs.
@@ -1301,6 +1383,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 				statusSink: tuiSink ? (text) => tuiSink.feedStatus(text) : undefined,
 				hideThinking: renderer.hideThinking,
 				thinkingSink: tuiSink?.thinkingSink,
+				toolSink: tuiSink?.toolSink,
 			},
 			session,
 		);
@@ -1317,6 +1400,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		resolveDone(code);
 	};
 
+	if (tuiSink !== null) renderer.setToolSink(tuiSink.toolSink);
 	let machine: ReplMachine;
 	const input: LineInput =
 		tuiSink !== null
@@ -1341,6 +1425,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onEof: () => machine.handleEof(),
 				});
 	machine = new ReplMachine({
+		toolSink: tuiSink?.toolSink,
 		runner,
 		commands: options.commands ?? [],
 		renderer,

@@ -164,6 +164,10 @@ export interface RunTurnOptions {
 export interface AgentEventInfo {
 	agent?: string;
 	cwd?: string;
+	/** Ephemeral child invocation identity, independent of display labels. */
+	sourceId?: string;
+	/** Actual invoking task call id, absent for direct execute callers. */
+	taskToolCallId?: string;
 }
 
 export type CompactOutcome = "compacted" | "nothing-to-compact" | "no-session" | "aborted";

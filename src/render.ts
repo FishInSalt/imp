@@ -1,5 +1,6 @@
 import type { AgentEvent } from "./core/loop.js";
 import { contentText, type ToolResult } from "./core/messages.js";
+import type { ToolPresentationSink } from "./repl/tool-presentation.js";
 import type { ThinkingSection, ThinkingSink } from "./thinking-sink.js";
 
 /** M13 §8: the display note for an image attachment — base64 length back to
@@ -57,6 +58,8 @@ export interface RendererOptions {
 	hideThinking?: boolean;
 	/** Retained TUI thinking sections; absent preserves the byte-only path. */
 	thinkingSink?: ThinkingSink;
+	toolSink?: ToolPresentationSink;
+	replayTools?: boolean;
 	/** TUI mode: successful tool results fold instead of writing the `⎿`
 	 *  summary — the fold title (same preview text) replaces it and Ctrl+O
 	 *  expands the full content. Print keeps the `⎿` line; bytes unchanged. */
@@ -134,6 +137,14 @@ export class Renderer {
 		this.clock = options.clock ?? Date.now;
 		this.markdown = options.markdown === true && options.toolStyle === "one-line";
 		this.hideThinking = options.hideThinking ?? false;
+	}
+
+	setToolSink(sink: ToolPresentationSink): void {
+		this.options.toolSink = sink;
+	}
+
+	get hasToolSink(): boolean {
+		return this.options.toolSink !== undefined;
 	}
 
 	event(event: AgentEvent): void {
@@ -243,6 +254,10 @@ export class Renderer {
 		// next one's bookkeeping.
 		if (!this.options.liveTools) this.pendingTools = [];
 		this.flushMarkdown();
+		if (this.options.toolSink) {
+			this.ensureNewline();
+			this.options.toolSink.finalize();
+		}
 		if (always) {
 			this.write("\n");
 			this.needsNewline = false;
@@ -277,7 +292,7 @@ export class Renderer {
 	 *  thinking spinner after a short grace period — instant flicker on fast
 	 *  responses is worse than nothing. */
 	think(label = "Thinking…"): void {
-		if (!this.options.liveTools) return;
+		if (!this.options.liveTools || this.options.toolSink) return;
 		this.clearThinkTimer();
 		this.thinkTimer = setTimeout(() => {
 			this.thinkTimer = null;
@@ -514,6 +529,13 @@ export class Renderer {
 	}
 
 	private toolStart(id: string, name: string, args: unknown): void {
+		if (this.options.toolSink) {
+			this.flushThinking();
+			this.flushMarkdown();
+			this.ensureNewline();
+			this.options.toolSink.start(id, name, args);
+			return;
+		}
 		this.clearThinkTimer(); // a pending tool supersedes the thinking spinner
 		this.flushMarkdown();
 		if (this.options.toolStyle === "two-line") {
@@ -574,6 +596,13 @@ export class Renderer {
 	}
 
 	private toolEnd(result: ToolResult): void {
+		if (this.options.toolSink) {
+			this.flushThinking();
+			this.flushMarkdown();
+			this.ensureNewline();
+			this.options.toolSink.end(result, this.options.replayTools);
+			return;
+		}
 		this.closeSemanticThinking();
 		if (this.options.toolStyle === "two-line") {
 			const shown = result.display ?? contentText(result.content);

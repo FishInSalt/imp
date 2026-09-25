@@ -39,7 +39,7 @@ export function countOccurrences(haystack: string, needle: string): number {
 /** Teach, don't just fail: errors explain what to do next. */
 function describeFailure(index: number, count: number): string {
 	if (count === 0) {
-		return `edits[${index}].oldText was not found in the file. The match is exact — whitespace, indentation, and line breaks all matter. Read the file again, copy the text exactly (including leading whitespace), and make sure it is unique. If the file uses CRLF line endings, match them or keep oldText to a single line.`;
+		return `edits[${index}].oldText was not found in the file. The match is exact — whitespace, indentation, and line breaks all matter. Read the file again, copy the text exactly (including leading whitespace), and make sure it is unique.`;
 	}
 	return `edits[${index}].oldText matches ${count} times. Include more surrounding lines (comments, blank lines) to make it unique.`;
 }

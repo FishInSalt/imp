@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+/node_modules
 
 # Build output
 dist/
@@ -14,6 +15,7 @@ dist/
 
 # Test coverage
 coverage/
+.vitest-cache/
 
 # Editor & OS
 .DS_Store

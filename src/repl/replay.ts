@@ -5,6 +5,7 @@ import { skillBlockSummary } from "../core/skills.js";
 import { firstLine, summarizeArgs } from "../format.js";
 import { Renderer } from "../render.js";
 import type { ThinkingSink } from "../thinking-sink.js";
+import type { ToolPresentationSink } from "./tool-presentation.js";
 
 export interface ReplayOptions {
 	write: (text: string) => void;
@@ -20,6 +21,7 @@ export interface ReplayOptions {
 	/** pi's hideThinkingBlock: replays render the "Thinking..." label. */
 	hideThinking?: boolean;
 	thinkingSink?: ThinkingSink;
+	toolSink?: ToolPresentationSink;
 }
 
 /** Compaction summary frames start with this marker (see summaryToMessage). */
@@ -44,6 +46,8 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 		statusSink: options.statusSink,
 		hideThinking: options.hideThinking,
 		thinkingSink: options.thinkingSink,
+		toolSink: options.toolSink,
+		replayTools: true,
 	});
 	const { messages } = session.buildContext();
 	if (messages.length === 0) return 0;
@@ -56,7 +60,7 @@ export function replaySession(options: ReplayOptions, session: SessionStore): nu
 	// Session ended mid-run (Ctrl+C / crash / force-quit): the tool line was
 	// never finalized. Show it honestly — the next request self-heals the
 	// context via synthesizeMissingToolResults; this is display only.
-	for (const { name, args } of unmatchedTools.values()) {
+	for (const { name, args } of options.toolSink ? [] : unmatchedTools.values()) {
 		renderer.writeLine(`${renderer.dim(`● ${name} ${summarizeArgs(name, args)}`)} … no result (interrupted)`);
 	}
 	return messages.length;

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import { detectBinary } from "./bin-detect.js";
+import { decodePrefix, logicalLines, renderedHead, wholeLinePrefix } from "./output-text.js";
 import type { Tool } from "./types.js";
 
 const DEFAULT_LIMIT = 100;
@@ -42,7 +43,9 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 			"This is the right tool for 'where is X defined/used'; prefer it over bash grep.",
 		parameters: grepSchema,
 		async execute(args, signal) {
-			if (!(await detectBinary("rg"))) {
+			const available = await detectBinary("rg");
+			if (signal.aborted) return { output: "Error: search aborted by user.", isError: true };
+			if (!available) {
 				return {
 					output:
 						"Error: ripgrep (rg) is not installed. Install it first: brew install ripgrep (or apt install ripgrep).",
@@ -71,7 +74,7 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 /**
  * Shared runner for rg/fd-style search commands: collect lines with a buffer
  * guard, kill on timeout/abort, head-truncate with a teaching note.
- * Exit code 1 means "no matches" for both rg and fd — not an error.
+ * Only rg uses exit code 1 for no matches.
  */
 export async function runSearch(
 	bin: string,
@@ -87,95 +90,91 @@ export async function runSearch(
 ): Promise<{ output: string; isError?: boolean }> {
 	const { limit, timeoutMs, label, signal } = options;
 
+	if (signal.aborted) return { output: "Error: search aborted by user.", isError: true };
 	return new Promise((resolve) => {
 		const child = spawn(bin, argv, { cwd });
-		let lines: string[] = [];
-		let totalBytes = 0;
-		let bufferCapped = false;
-		let timedOut = false;
-		let aborted = false;
-		let stderr = "";
-		let settled = false;
-
+		const stdout = Buffer.alloc(BUFFER_GUARD_BYTES);
+		const stderr = Buffer.alloc(2000);
+		let used = 0,
+			errUsed = 0,
+			observed = 0,
+			errObserved = 0;
+		let timedOut = false,
+			aborted = false,
+			settled = false,
+			stopping = false;
+		let escalation: ReturnType<typeof setTimeout> | undefined;
+		const stop = () => {
+			if (stopping || settled) return;
+			stopping = true;
+			child.kill("SIGTERM");
+			escalation = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+			escalation.unref();
+		};
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGTERM");
-			setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+			stop();
 		}, timeoutMs);
-
 		const onAbort = () => {
 			aborted = true;
-			child.kill("SIGTERM");
-			setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+			stop();
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
-
 		const finish = (result: { output: string; isError?: boolean }) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			clearTimeout(escalation);
 			signal.removeEventListener("abort", onAbort);
 			resolve(result);
 		};
-
-		const readline = (chunk: Buffer) => {
-			const text = chunk.toString("utf8");
-			totalBytes += text.length;
-			if (totalBytes <= BUFFER_GUARD_BYTES) {
-				for (const line of text.split("\n")) if (line !== "") lines.push(line);
-			} else if (!bufferCapped) {
-				bufferCapped = true;
-				child.kill("SIGTERM"); // we have more than enough
-				setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
-			}
-		};
-		child.stdout.on("data", readline);
+		child.stdout.on("data", (chunk: Buffer) => {
+			if (settled) return;
+			observed += chunk.length;
+			used += chunk.copy(stdout, used, 0, Math.min(chunk.length, stdout.length - used));
+			if (observed > BUFFER_GUARD_BYTES) stop();
+		});
 		child.stderr.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf8").slice(0, 2000);
+			if (settled) return;
+			errObserved += chunk.length;
+			errUsed += chunk.copy(stderr, errUsed, 0, Math.min(chunk.length, stderr.length - errUsed));
 		});
-		child.on("error", (err) => {
-			finish({ output: `Error: failed to run ${bin}: ${err.message}`, isError: true });
-		});
-		child.on("close", (code) => {
-			if (aborted) {
-				finish({ output: `Error: search aborted by user.`, isError: true });
-				return;
+		child.on("error", (err) =>
+			finish({ output: `Error: failed to run ${bin}: ${err.message}`, isError: true }),
+		);
+		child.on("close", (code, closeSignal) => {
+			if (settled) return;
+			let diagnostic = renderedHead(decodePrefix(stderr.subarray(0, errUsed), errObserved > errUsed), 2000);
+			if (errObserved > errUsed || Buffer.byteLength(stderr.subarray(0, errUsed).toString("utf8")) > 2000) {
+				diagnostic += "\n[stderr truncated: showing first 2000 bytes or fewer.]";
 			}
-			if (timedOut) {
-				finish({
-					output: `Error: search timed out after ${timeoutMs / 1000}s. Narrow it: set path to a subdirectory, add a glob, or a more specific pattern.`,
-					isError: true,
-				});
-				return;
+			const fail = (header: string) =>
+				finish({ output: header + (diagnostic !== "" ? `\nstderr:\n${diagnostic}` : ""), isError: true });
+			const capped = observed > used;
+			if (aborted) return fail("Error: search aborted by user.");
+			if (timedOut)
+				return fail(
+					`Error: search timed out after ${timeoutMs / 1000}s. Narrow it: set path to a subdirectory, add a glob, or a more specific pattern.`,
+				);
+			if (!capped) {
+				if (closeSignal) return fail(`Error: ${bin} terminated by signal ${closeSignal}.`);
+				if (code === null) return fail(`Error: ${bin} ended without an exit status.`);
+				if (code !== 0 && !(bin === "rg" && code === 1))
+					return fail(`Error: ${bin} exited with code ${code}:`);
 			}
-			if (code !== null && code >= 2) {
-				finish({ output: `Error: ${bin} exited with code ${code}: ${stderr.trim()}`, isError: true });
-				return;
-			}
-
-			if (lines.length === 0) {
-				finish({ output: `No matches for ${label}` });
-				return;
-			}
-
-			const totalLines = lines.length + (bufferCapped ? 1 : 0); // capped ⇒ there was more
-			const truncatedByLines = totalLines > limit;
-			if (truncatedByLines) lines = lines.slice(0, limit);
-			let text = lines.join("\n");
-			let truncatedByBytes = false;
-			if (Buffer.byteLength(text) > MAX_BYTES) {
-				text = Buffer.from(text).subarray(0, MAX_BYTES).toString("utf8");
-				truncatedByBytes = true;
-			}
-			if (truncatedByLines || truncatedByBytes || bufferCapped) {
-				const reasons = [
-					truncatedByLines
-						? `showing first ${lines.length} of ${bufferCapped ? `${totalLines}+` : totalLines} lines`
-						: null,
-					truncatedByBytes ? "50KB limit" : null,
-				].filter(Boolean);
-				text += `\n\n[Truncated: ${reasons.join(", ")}. Narrow the search (subdirectory path, glob, or more specific pattern) instead of raising the limit.]`;
-			}
+			let text = decodePrefix(stdout.subarray(0, used), capped);
+			if (capped) text = text.slice(0, text.lastIndexOf("\n") + 1);
+			const lines = logicalLines(text);
+			const preview = wholeLinePrefix(lines, limit, MAX_BYTES);
+			text = preview.text;
+			if (capped || preview.count < lines.length) {
+				let reason = capped
+					? `showing first ${preview.count} lines; at least ${lines.length} complete lines observed; total unknown; 1048576-byte collection limit`
+					: `showing first ${preview.count} of ${lines.length} lines`;
+				if (preview.byteLimited) reason += ", 50KB limit";
+				text += `\n\n[Truncated: ${reason}. Narrow the search (subdirectory path, glob, or more specific pattern) instead of raising the limit.]`;
+			} else if (observed === 0) text = `No matches for ${label}`;
+			if (diagnostic !== "") text += `\n\nstderr:\n${diagnostic}`;
 			finish({ output: text });
 		});
 	});

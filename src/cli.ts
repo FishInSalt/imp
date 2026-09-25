@@ -472,13 +472,12 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 		userSink: transcript ? (text) => transcript.feedUser(text) : undefined,
 		statusSink: transcript ? (text) => transcript.feedStatus(text) : undefined,
 		thinkingSink: transcript?.thinkingSink,
+		toolSink: transcript?.toolSink,
 		hideThinking: loadSettings().hideThinkingBlock ?? false, // pi's getHideThinkingBlock
 		ansi: process.stdout.isTTY === true,
 		// In-place pending tool lines only on the legacy readline shell. TUI
-		// mode turns them OFF: the live activity region owns pending state
-		// (M10 B) — with liveTools=false the Renderer still writes the ✓/⎿
-		// completion lines, which is exactly the split we want. Pipes never
-		// had them.
+		// mode turns them OFF: activity owns pending state and the semantic
+		// tool sink owns settled Input/Output blocks. Pipes never had them.
 		liveTools: interactive && transcript === undefined,
 		toolStyle: "one-line",
 		markdown: interactive, // streamed markdown-lite; pipes keep verbatim text

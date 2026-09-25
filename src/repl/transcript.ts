@@ -1,5 +1,7 @@
 import type { ThinkingSection, ThinkingSink } from "../thinking-sink.js";
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../tui.js";
+import { ToolBlockFold } from "./components/tool-block.js";
+import { createToolSink } from "./tool-presentation.js";
 
 const USER_BLOCK_BG = "\x1b[48;5;237m";
 const RESET = "\x1b[0m";
@@ -45,7 +47,26 @@ export class TranscriptSink implements Component {
 		},
 	};
 
+	private rawToolArguments = false;
+	toggleRawToolArguments(): boolean {
+		if (!this.toolFolds.some((f) => f.hasStructuredArguments())) return false;
+		this.rawToolArguments = !this.rawToolArguments;
+		for (const fold of this.toolFolds) fold.setRawArguments(this.rawToolArguments);
+		this.onUpdate?.();
+		return true;
+	}
+	readonly toolFolds: ToolBlockFold[] = [];
+	readonly toolSink = createToolSink((block) => {
+		const fold = new ToolBlockFold(block);
+		fold.setRawArguments(this.rawToolArguments);
+		this.toolFolds.push(fold);
+		this.appendChild(fold);
+	});
+
 	clear(): void {
+		this.toolSink.clear();
+		this.rawToolArguments = false;
+		this.toolFolds.length = 0;
 		this.generation++;
 		this.entries = [];
 		this.sections.clear();

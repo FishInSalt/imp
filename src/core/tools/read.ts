@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { processImage } from "../image/image-process.js";
 import type { ContentBlock } from "../messages.js";
 import { detectSupportedImageMimeType } from "./image-sniff.js";
+import { logicalLines, wholeLinePrefix } from "./output-text.js";
 import { resolveReadPath } from "./path-resolve.js";
 import type { Tool } from "./types.js";
 
@@ -17,8 +18,20 @@ const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	offset: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: Number.MAX_SAFE_INTEGER,
+			description: "Line number to start reading from (1-indexed)",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: Number.MAX_SAFE_INTEGER,
+			description: "Maximum number of lines to read",
+		}),
+	),
 });
 
 export interface ReadToolOptions {
@@ -42,6 +55,17 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			`(whichever hits first); the truncation note tells you how to continue reading. Use offset/limit for large files.`,
 		parameters: readSchema,
 		async execute(args, signal) {
+			const offset = args.offset as number | undefined;
+			const limit = args.limit as number | undefined;
+			if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
+				return {
+					output: `Error: offset must be a positive safe integer (1-indexed), got ${offset}`,
+					isError: true,
+				};
+			}
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+				return { output: `Error: limit must be a positive safe integer, got ${limit}`, isError: true };
+			}
 			const requested = String(args.path ?? "");
 			if (requested.trim() === "") {
 				return { output: "Error: no path given", isError: true };
@@ -116,20 +140,11 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 				};
 			}
 
-			const allLines = new TextDecoder().decode(bytes).split("\n");
+			const allLines = logicalLines(new TextDecoder().decode(bytes));
 			const totalFileLines = allLines.length;
 
-			const offset = args.offset as number | undefined;
-			const limit = args.limit as number | undefined;
-			if (offset !== undefined && (!Number.isFinite(offset) || offset < 1)) {
-				return { output: `Error: offset must be a 1-indexed line number, got ${offset}`, isError: true };
-			}
-			if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) {
-				return { output: `Error: limit must be a positive number of lines, got ${limit}`, isError: true };
-			}
-
 			const startIdx = offset !== undefined ? offset - 1 : 0;
-			if (startIdx >= allLines.length) {
+			if (startIdx >= allLines.length && !(startIdx === 0 && allLines.length === 0)) {
 				return {
 					output: `Error: offset ${offset} is beyond the end of the file (${totalFileLines} lines total)`,
 					isError: true,
@@ -137,7 +152,8 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 			}
 
 			const startDisplay = startIdx + 1;
-			const endIdx = limit !== undefined ? Math.min(startIdx + limit, allLines.length) : allLines.length;
+			const endIdx =
+				limit !== undefined ? startIdx + Math.min(limit, allLines.length - startIdx) : allLines.length;
 
 			// Apply hard truncation, then explain exactly how to continue.
 			let lines = allLines.slice(startIdx, endIdx);
@@ -154,19 +170,16 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 					firstLineBytes >= 1024 * 1024
 						? `${(firstLineBytes / (1024 * 1024)).toFixed(1)}MB`
 						: `${Math.ceil(firstLineBytes / 1024)}KB`;
+				const quotedPath = `'${absolute.replaceAll("'", "'\"'\"'")}'`;
 				return {
-					output: `[Line ${startDisplay} is ${size}, exceeds the ${MAX_BYTES / 1024}KB limit. Use bash: sed -n '${startDisplay}p' ${requested} | head -c ${MAX_BYTES}]`,
+					output: `[Line ${startDisplay} is ${size}, exceeds the ${MAX_BYTES / 1024}KB limit. Use bash: sed -n '${startDisplay}p' ${quotedPath} | head -c ${MAX_BYTES}]`,
 					isError: false,
 				};
 			}
-			let selected = lines.join("\n");
-			let truncatedByBytes = false;
-			if (Buffer.byteLength(selected) > MAX_BYTES) {
-				selected = Buffer.from(selected).subarray(0, MAX_BYTES).toString("utf8");
-				truncatedByBytes = true;
-			}
-
-			const shownLines = selected.split("\n").length;
+			const preview = wholeLinePrefix(lines, MAX_LINES, MAX_BYTES);
+			const selected = preview.text;
+			const truncatedByBytes = preview.byteLimited;
+			const shownLines = preview.count;
 			const endDisplay = startDisplay + shownLines - 1;
 			const notes: string[] = [];
 			if (shownLines < endIdx - startIdx) {

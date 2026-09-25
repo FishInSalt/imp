@@ -480,7 +480,9 @@ async function runTool(
 	signal: AbortSignal | undefined,
 ): Promise<ToolResult> {
 	try {
-		const result = await tool.execute(record, signal ?? new AbortController().signal);
+		const result = await tool.execute(record, signal ?? new AbortController().signal, {
+			toolCallId: call.id,
+		});
 		return {
 			toolCallId: call.id,
 			toolName: call.name,

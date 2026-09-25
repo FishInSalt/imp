@@ -163,6 +163,32 @@ private-network approval policy. Use only approved destinations. All returned we
 content is untrusted evidence, not instructions; warnings are not an injection
 security boundary. Successful source text may contain arbitrary remote content.
 
+## Terminal presentation
+
+When supported by the terminal UI, `web_search` shows the normalized query and
+requested filters, followed by title/hostname previews from recognizable result text.
+These synchronous display hooks do not read credentials, fetch URLs, or change
+requests, cached output, model content, or saved history. `url_read` shows the URL and first nonblank body lines from an exact recognized
+envelope; the warning and redirect metadata remain in expanded Result text.
+
+Result previews are deliberately count-free: source text can imitate the output
+format, so parsing cannot establish an authoritative source count. Errors and image responses use the generic view. Unknown historical formats,
+unsafe URLs, and detectable delimiter ambiguity show the neutral `Source preview unavailable`
+summary without inferred source facts. Empty results are described as reported by the text; omission
+markers are quoted as reports, not inferred counts. Expanded presentation retains
+the original text subject to the host's normal display limits. Full content is
+already bounded by the tool, not a claim of complete page content. Live display
+overrides are not used for parsing; replay interprets the same saved result text.
+
+Expanded calls show labeled effective arguments, marking absent options as defaults;
+unknown keys remain visible under Other arguments. Alt+O switches all eligible
+expanded calls between readable fields and retained original JSON without changing
+Ctrl+O expansion. Collapsed calls remain compact. Alt+O requires a single terminal
+alt sequence (ESC+o); separately dispatched Escape retains its cancel action.
+Raw display is sanitized and capped, not unlimited transport bytes. Conversation
+clear resets readable mode. Original URLs, warnings and snippets remain available
+in expanded Result text.
+
 ## Troubleshooting
 
 - Missing key: configure the environment or private file using the rules above.

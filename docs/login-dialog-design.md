@@ -1,8 +1,8 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev3 (rev2 rejected: dialogOpen self-blocked the dispatch —
-fixed with the authorizedStateful exemption pattern; settled once-guard,
-unconditional cleanup, closing-shell edges folded)
+Status: rev4 (rev3 rejected: guard deletion stripped the fallback OAuth
+path's mutex — P0-9; teardown ownership for success/error unspecified —
+P1-10; command-body rewrite and no-arg flow specified — P2-11/12)
 
 ## 0. Problem
 
@@ -12,7 +12,7 @@ unrelated surfaces (activity spinner + ask line + editor), which interact
 badly:
 
 - **P1**: no-arg `/login` always enters the guarded long-op state
-  (`loginNeedsGuard`, commands.ts:830), so the 15-minute-semantics spinner
+  (`loginNeedsGuard`, commands.ts:832), so the 15-minute-semantics spinner
   `⠋ waiting for login…` spins over a picker and then over the api-key
   secret prompt — while the user is just typing a key for seconds.
 - **P2**: the secret prompt renders as a bare ask line above the queue/hint
@@ -134,13 +134,24 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   SIGINT; shell.ts:323-324 passes it to the focused component and pi-tui
   `Input` has no \x03 binding. The dialog's `handleInput` maps Ctrl+C to
   `cancel()` itself — the same affordance as Esc.
-- **Deleted from the machine** (the payoff): the `login` guard special-case
-  in runCommand (repl.ts:505), the `name === "login"` arm of longOpLabel
-  (repl.ts:514), and `onLongOpAbort`'s login wiring (commands.ts:847/870).
-  A second `/login` while a dialog is open cannot be typed (editor has no
-  focus). `longOpLabel` itself SURVIVES for /compact and /tree (repl.ts
-  1126-1139, :1313; commands.ts:1190/1211/1247/1267/1804/1811) — only the
-  login arm dies. `/compact` and `/tree` keep the guarded state unchanged.
+- **Deletion scope is shell-conditional** (rev3 P0-9): the machine pieces
+  die only on shells that HAVE the dialog. `loginNeedsGuard(line)` keeps
+  existing but becomes shell-aware: `loginNeedsGuard(line, shell)` →
+  `!hasDialog(shell) && (picker-may-land-on-codex || oauth-target)` —
+  i.e. exactly the current predicate, suppressed on dialog shells. On
+  the TUI the guard arm never fires (dialogOpen + exemption instead);
+  on the readline/piped shell NOTHING changes: the 15-minute OAuth poll
+  still takes the guarded state, Ctrl+C still aborts via onLongOpAbort
+  (commands.ts:846-871 wiring STAYS for the fallback path), typed lines
+  still queue. The "fallback unchanged" claim in §2.3 is now literally
+  true.
+- **Deleted from the machine (dialog shells only)** (the payoff): the
+  `name === "login"` arm of longOpLabel (repl.ts:514) and the dialog
+  path's onLongOpAbort usage. A second `/login` while a dialog is open
+  cannot be typed (editor has no focus). `longOpLabel` itself SURVIVES
+  for /compact, /tree, and the fallback login (repl.ts:1126-1139, :1313;
+  commands.ts:1190/1211/1247/1267/1804/1811). `/compact` and `/tree`
+  keep the guarded state unchanged.
 
 ### 2.2.1 Machine-level mutual exclusion (review P0 #1)
 
@@ -157,11 +168,14 @@ Fix: the machine gains a **`dialogOpen` boolean**. Wiring:
 **Set/clear around the dispatch, with the authorized exemption.**
 runCommand recognizes a dialog-capable `/login` line before awaiting
 (the same shape as today's `loginNeedsGuard(line)` predicate, renamed
-`loginUsesDialog`): if the shell will open a dialog, set
-`this.dialogOpen = true` before `dispatchCommand`, clear it in an
-**unconditional** arm of the same finally (rev2 pinned it inside the
-`stateful`-gated block, which rev3 deletes — for /login that block never
-runs and the flag would stick true forever; review P1-3).
+`loginUsesDialog` — true when the shell has a dialog AND the line is
+no-arg or a login target; on the TUI that is every /login line): if so,
+set `this.dialogOpen = true` **immediately before the try that wraps
+dispatchCommand** (rev3 P3-16: after warmup — a warmup throw returns at
+repl.ts:483 before the try and must never leave the flag set), clear it
+in an **unconditional** arm of the same finally (rev2 pinned it inside
+the `stateful`-gated block, which rev3 deletes — for /login that block
+never runs and the flag would stick true forever; review P1-3).
 
 **The dispatch must not reject itself** (rev2 P0-1): `dialogOpen=true`
 would make the widened `isActive()` refuse `/login` — its own entry
@@ -183,7 +197,7 @@ Turn-start paths check it:
   /logout — refuse via the existing dispatch guard (commands.ts:1850)
   through the same widened isActive. runBangCommand is not checked but
   unreachable mid-dialog (needs a typed `!` line; editor owns no keys;
-  alt+enter is gated on selector === null, shell.ts:332) — noted as a
+  alt+enter is gated on selector === null, shell.ts:338) — noted as a
   residual for any future non-editor input path.
 
 Editor lines cannot queue (editor owns no keys), so the queue is not a
@@ -191,7 +205,58 @@ path. SIGINT still tears the dialog down first (selector precedence at
 shell.ts:430), so the mutex is escapable exactly one way. Deliberately
 NOT reusing state = "compacting" for this: compacting carries spinner
 and queue semantics this batch is removing; `dialogOpen` is a separate
-boolean touched only by the three turn-start paths and runCommand.
+boolean touched only by the turn-start paths and runCommand.
+
+The dialog's teardown is owned by the **openLoginDialog wrapper**, never
+the command body (rev3 P1-10): when `build` resolves (success), when
+`build` rejects (error — after the command maps it to renderer.error or
+silent cancel), or on dialog-initiated cancel — the wrapper runs the
+finish sequence (idempotent via the settled guard). The command body
+only drives dialog states through LoginDialogView; it never finishes.
+Test 1/3/4 assert teardown in all three cases.
+
+### 2.2.2 No-arg /login and the command-body rewrite (rev3 P2-11/12)
+
+**No-arg /login**: still opens the existing select() provider picker
+first; the pick lands on a target, THEN the dialog opens for that
+target (two sequential selectors — mechanically sound: the picker's
+finish drains pendingSelects, a dialog queued behind it opens then).
+`loginUsesDialog` returns true for no-arg (the pick can land on codex),
+so `dialogOpen=true` spans the picker too — harmless: the picker
+already owns keys, and refusing turns during the pick is correct
+anyway.
+
+**Dialog-path command body** (replaces loginToTarget's TUI arm):
+
+```
+const outcome = await ctx.openLoginDialog({
+  title: `Login to ${target.name}`,
+  run: async (dialog) => {
+    if (target.method === "oauth") {
+      await loginCodex({
+        authPath: ctx.authStorePath,
+        authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.IMP_CODEX_AUTH_BASE,
+        signal: dialog.signal,             // dialog's own AbortController
+        onDeviceCode: (p) => dialog.deviceCode(p), // was renderer.note
+      });
+      dialog.message(`Logged in to ${target.name}`);   // was renderer.status
+      // switch hint if family differs — was renderer.note
+    } else {
+      const key = await dialog.prompt(`Enter ${target.name} API key`);
+      if (key === null) throw new Error("Login cancelled");
+      saveApiKey(target.family, key, ctx.authStorePath);
+      dialog.message(`Saved API key for ${target.name}`);
+      // switch hint if family differs
+    }
+  },
+});
+// "cancelled" (Login cancelled) → silent; other throws → renderer.error
+// with imp's teaching prefix; "done" → footer refresh via runCommand's
+// existing finally refreshFooter
+```
+
+The legacy loginToTarget (spinner note + ctx.secret + renderer.status)
+stays verbatim for the fallback path.
 
 ### 2.3 Command layer: `ctx.loginDialog` seam
 
@@ -211,11 +276,11 @@ where `LoginDialogView` is the narrow interface the command sees:
 propagates as `"cancelled"` (silent, pi parity); other errors surface as
 `renderer.error` by the command.
 
-- `/login` flow: if `openLoginDialog` exists → dialog path for **both**
-  api-key and oauth targets (title `Login to <name>`; api-key =
-  one prompt state; oauth = deviceCode + waiting + the poll). Else →
+- `/login` flow: if `openLoginDialog` exists → dialog path per §2.2.2
+  (both api-key and oauth targets; no-arg = picker then dialog). Else →
   current select()/secret() path (readline shell, hermetic dispatch
-  tests) — unchanged behavior, tests keep passing.
+  tests) — unchanged behavior INCLUDING the guarded OAuth state
+  (§2.2's shell-conditional deletion), tests keep passing.
   **Piped-mode note** (review P2 #6): `imp < file` resolves the readline
   shell which HAS secret() — a scripted `/login zai` consumes the NEXT
   script line as the key (input.ts settleAsk). Pre-existing behavior,
@@ -279,6 +344,12 @@ New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
 14. A **live askLine + dialog coexisting** in askContainer (render-order
     pin: dialog below the ask; the ask stays unanswerable until teardown
     re-shows it — review P3-7).
+15. **Fallback OAuth mutex pin** (rev3 P0-9): dispatch-level — a
+    no-dialog ctx running `/login openai-codex` still takes the guarded
+    state (isActive refuses a concurrent command; onLongOpAbort wired).
+16. **Queued dialog re-run** (rev3 P3-14): a second openLoginDialog
+    queued behind a live selector re-runs after teardown (not drained
+    by close, not clobbered).
 
 Updated: the 3 existing TUI login tests (secret-prompt render/store/Esc)
 rewrite to the dialog path; dispatch-level login tests keep the fallback

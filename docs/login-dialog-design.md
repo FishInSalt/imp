@@ -1,7 +1,8 @@
 # /login Exclusive Dialog Design (feature/login-dialog)
 
-Status: rev2 (post adversarial review — P0 mutual-exclusion fix, teardown
-contract completed, Ctrl+C mapping, re-entrancy defined, citations re-anchored)
+Status: rev3 (rev2 rejected: dialogOpen self-blocked the dispatch —
+fixed with the authorizedStateful exemption pattern; settled once-guard,
+unconditional cleanup, closing-shell edges folded)
 
 ## 0. Problem
 
@@ -76,6 +77,12 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   - `showWaiting(message)` — dim line + `(esc to cancel)` hint (the OAuth
     poll replaces the spinner's "something is happening" role).
   - `showMessage(line)` — one-off status lines (saved/switch-hint tail).
+  State transitions **replace** the content area (pi clears
+  contentContainer between states; review P3-6): deviceCode renders
+  URL+code, waiting replaces it once rendered — no append-stacking.
+  imp's api-key flow = prompt only; oauth = deviceCode + waiting; no
+  imp state needs both URL and input, so the always-present-Input with
+  changing content is sound for imp's subset.
 - Imp's tui.ts boundary gains: `Input`, `Focusable` re-exports
   (DynamicBorder is imp-local: 6 lines over `Text(dim("─"))`).
 - Secrets note: pi renders the key unmasked in the Input and replaces it
@@ -97,21 +104,32 @@ align with pi's dialog directly (plan B) rather than patch the spinner.
   (`tui.setFocus(dialog)`). The main editor stays mounted (so the layout
   doesn't jump) but has no focus; typed keys land in the dialog's Input.
 - **Teardown is select()'s FULL finish() sequence** (shell.ts:752-776),
-  not a subset: `selector=null` → `updatePlaceholder()` → removeChild →
-  `setFocus(editor)` → requestRender → **re-show pendingAsks[0] if no
-  askLine is live** (shell.ts:762-765) → **`pendingSelects.shift()` and
-  run it** (shell.ts:770-773). The last two are load-bearing: a select()
-  or ask() arriving while the dialog is open is held (select queues at
-  shell.ts:725-729; ask holds while selector ≠ null at shell.ts:657), and
-  WITHOUT the drain steps a guardian confirm queued mid-dialog hangs
-  forever (review P1 #2).
+  **including its `settled` once-guard** (shell.ts:753 — teardown is
+  reachable from five racing sources for a dialog: SIGINT 430, stdin-end
+  439, close() 920, the dialog's own Esc, and its Ctrl+C→cancel mapping;
+  a double-finish would double-run the pendingSelects drain and steal a
+  second queued entry; review P1-2): `settled` gate → `selector=null` →
+  `updatePlaceholder()` → removeChild → `setFocus(editor)` (null-guard:
+  teardown may fire after close() began detaching — skip when editor is
+  null; review P2-4) → requestRender → **re-show pendingAsks[0] if no
+  askLine is live** (shell.ts:761-765) → resolve → **`pendingSelects.shift()`
+  and run it** (shell.ts:769-773). The last two are load-bearing: a
+  select() or ask() arriving while the dialog is open is held (select
+  queues at shell.ts:729-731; ask holds while selector ≠ null at
+  shell.ts:658/661), and WITHOUT the drain steps a guardian confirm
+  queued mid-dialog hangs forever.
 - **Re-entrancy** (review P1 #4): `openLoginDialog` while
   `this.selector !== null` (a picker or another dialog is live) queues
-  like select() does — pushes a `pendingSelects` entry that re-runs it
-  after the current selector finishes. It never clobbers the live
-  selector. Return value `"unavailable"` fires only when `tui === null
-  || closed` (shell in shutdown) — the command then falls back to the
-  legacy path.
+  like select() does — pushes a `pendingSelects` entry (closure
+  re-invocation, same as treeSelect's queue at shell.ts:846; the first
+  call's promise stays pending until the queued run finishes) that
+  re-runs it after the current selector finishes. It never clobbers the
+  live selector. Return value `"unavailable"` fires only when `tui ===
+  null || closed` (shell in shutdown). **A queued entry drained by
+  close()'s drain (shell.ts:923-926) resolving "unavailable" is a
+  silent no-op — NOT a fallback trigger** (falling back to the legacy
+  path mid-shutdown would print the picker-less error during teardown;
+  review P2-5): the command treats unavailable-after-drain as done.
 - **Ctrl+C as a keypress** (review P1 #3): raw-mode Ctrl+C is data, not
   SIGINT; shell.ts:323-324 passes it to the focused component and pi-tui
   `Input` has no \x03 binding. The dialog's `handleInput` maps Ctrl+C to
@@ -134,17 +152,39 @@ idle while `dispatchCommand` is still awaited, so an extension/skill
 a live OAuth poll; a queued-line flush from a preceding run interleaves
 the same way.
 
-Fix: the machine gains a **`dialogOpen` boolean**, set around the
-awaited dialog dispatch in `runCommand` (set before, cleared in the same
-finally that today clears longOpAbort). Three turn-start paths check it:
+Fix: the machine gains a **`dialogOpen` boolean**. Wiring:
+
+**Set/clear around the dispatch, with the authorized exemption.**
+runCommand recognizes a dialog-capable `/login` line before awaiting
+(the same shape as today's `loginNeedsGuard(line)` predicate, renamed
+`loginUsesDialog`): if the shell will open a dialog, set
+`this.dialogOpen = true` before `dispatchCommand`, clear it in an
+**unconditional** arm of the same finally (rev2 pinned it inside the
+`stateful`-gated block, which rev3 deletes — for /login that block never
+runs and the flag would stick true forever; review P1-3).
+
+**The dispatch must not reject itself** (rev2 P0-1): `dialogOpen=true`
+would make the widened `isActive()` refuse `/login` — its own entry
+point. The existing code solves exactly this trap with
+`authorizedStateful` (repl.ts:1281: `isActive: () => !authorizedStateful
+&& (running || compacting)`; comment repl.ts:519-521). The dialog arm
+reuses it: `authorized = loginUsesDialog(line)`, and
+`isActive: () => !authorized && (running || compacting || dialogOpen)`.
+The flag is set only when authorized — the opening dispatch is exempt,
+every later command sees the block.
+
+Turn-start paths check it:
 - `submitTurn` and `enqueuePrompt`: refuse with the renderer note
   `▪ /login is open — finish or cancel it first (esc)` — same refusal
-  shape as /new-during-compaction.
-- `CommandContext.isActive()` (commands.ts:50): becomes
-  `running || compacting || dialogOpen`, so every
-  `allowedDuringRun: false` command is refused mid-dialog by the
-  existing dispatch guard (commands.ts:1850) — teaching-error shape,
-  no per-command edits.
+  shape as /new-during-compaction. All other turn-start paths funnel
+  through these two (flushQueue, bang re-flush, submitPrompt wiring
+  delegate; mcp.onRunStart and warmup fire only inside submitTurn).
+- `allowedDuringRun: false` commands — /new /fork /resume /tree /sessions
+  /logout — refuse via the existing dispatch guard (commands.ts:1850)
+  through the same widened isActive. runBangCommand is not checked but
+  unreachable mid-dialog (needs a typed `!` line; editor owns no keys;
+  alt+enter is gated on selector === null, shell.ts:332) — noted as a
+  residual for any future non-editor input path.
 
 Editor lines cannot queue (editor owns no keys), so the queue is not a
 path. SIGINT still tears the dialog down first (selector precedence at
@@ -191,7 +231,7 @@ Nothing. That is the point: the state stays `idle` (no compacting state,
 no spinner, no queue semantics interplay). Codex poll cancellation is the
 dialog's own AbortController via Esc/SIGINT — not the machine's
 double-Ctrl+C path. `/exit` and Ctrl+D: the selector-open key routing
-already swallows Ctrl+D (shell.ts:316) and SIGINT tears the selector down
+already swallows Ctrl+D (shell.ts:325) and SIGINT tears the selector down
 first (shell.ts:430). A running OAuth poll aborted at teardown resolves
 "Login cancelled" → silent.
 
@@ -224,7 +264,9 @@ New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
    after dialog teardown it renders and resolves (hang-refusal pin).
 10. **close() during the dialog** (shell.ts:920 path) and **stdin-end
     mid-poll**: dialog settles (cancelled), no unhandled rejection,
-    process teardown clean.
+    process teardown clean. PLUS: a **queued dialog entry drained by
+    close()** resolves unavailable and is a silent no-op (no error text
+    during teardown; review P2-5).
 11. Footer after login: refreshFooter ran (model family hint segment
     correct after a same-family login).
 12. Focused-forwarding unit assertion: dialog.focused=false →
@@ -232,7 +274,11 @@ New `test/login-dialog.test.ts` (TUI-level, FakeTerminal):
 13. `dialogOpen` refusal pins: a bare prompt line typed… cannot happen
     (editor has no focus) — instead assert via `enqueuePrompt` and an
     `allowedDuringRun:false` command dispatched mid-dialog (the two
-    reachable paths).
+    reachable paths). PLUS: the **authorized exemption** — the /login
+    dispatch itself passes its own guard (rev2's P0-1 regression pin).
+14. A **live askLine + dialog coexisting** in askContainer (render-order
+    pin: dialog below the ask; the ask stays unanswerable until teardown
+    re-shows it — review P3-7).
 
 Updated: the 3 existing TUI login tests (secret-prompt render/store/Esc)
 rewrite to the dialog path; dispatch-level login tests keep the fallback

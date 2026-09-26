@@ -46,9 +46,17 @@ beforeAll(async () => {
 			captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>);
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			res.write(sse({ choices: [{ delta: { role: "assistant" } }] }));
-			res.write(sse({ choices: [{ delta: { reasoning_content: "pondering" } }] }));
+			// DeepSeek live shape (2026-09-26): usage is PRESENT but null on
+			// interim chunks — a null-blind consumer crashes here
+			res.write(sse({ choices: [{ delta: { reasoning_content: "pondering" } }], usage: null }));
 			res.write(sse({ choices: [{ delta: { content: "ok" } }] }));
 			res.write(sse({ choices: [{ delta: {}, finish_reason: "stop" }] }));
+			res.write(
+				sse({
+					choices: [],
+					usage: { prompt_tokens: 100, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 30 } },
+				}),
+			);
 			res.write("data: [DONE]\n\n");
 			res.end();
 		});
@@ -274,12 +282,20 @@ describe("deepseek provider (#deepseek-provider)", () => {
 		expect(zaiAssistant?.reasoning_content).toBeUndefined(); // replay is deepseek-only
 	});
 
-	it("3d. reasoning_content deltas stream as thinking events (parity #9 regression pin)", async () => {
+	it("3d. reasoning deltas stream as thinking events; null interim usage doesn't crash; cache math holds (parity #9 + live shape)", async () => {
 		setEnv("DEEPSEEK_BASE_URL", baseUrl);
 		setEnv("DEEPSEEK_API_KEY", "sk-ds");
 		const events = await collect(createDeepSeekProvider().stream(REQ("deepseek-v4-pro")));
 		expect(events.some((e) => e.type === "thinking_delta" && e.text === "pondering")).toBe(true);
 		expect(events.some((e) => e.type === "text_delta")).toBe(true);
+		// the null interim chunk was skipped; the final usage applied with
+		// the cache-hit subtraction (anthropic inputTokens convention)
+		const end = events.at(-1);
+		expect(end?.type).toBe("message_end");
+		if (end?.type !== "message_end") return;
+		expect(end.message.usage.inputTokens).toBe(70); // 100 - 30 cached
+		expect(end.message.usage.cacheReadTokens).toBe(30);
+		expect(end.message.usage.outputTokens).toBe(7);
 	});
 
 	it("4. thinking ladders: v4-pro [off,high,max]; flash floor [off,low,high,max]; catalog compat absent ≠ false (parity #6)", () => {

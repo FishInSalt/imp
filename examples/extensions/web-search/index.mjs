@@ -9,6 +9,7 @@ const TRUNCATED = "\n[truncated]";
 const OMITTED = "\n[truncated: additional sources omitted]";
 const TTL = 600_000;
 const CACHE_LIMIT = 64;
+const KEYLESS = Symbol("keyless");
 
 function error(output) { return { output, isError: true }; }
 function shorten(text, limit) {
@@ -22,12 +23,21 @@ function webUrl(value) {
 		return url.href.length <= 2048 ? url.href : null;
 	} catch { return null; }
 }
-function httpError(tool, status) {
-	const hint = status === 401 || status === 403 ? "authentication failed — check TAVILY_API_KEY or web-search config.json"
-		: status === 429 ? "rate limited — wait before retrying"
-		: status === 432 || status === 433 ? "quota exceeded — check your Tavily account usage"
-		: status >= 500 ? "service unavailable — retry later"
-		: "request rejected";
+function httpError(tool, status, keyless) {
+	let hint;
+	if (keyless && [401, 403, 429, 432, 433].includes(status)) {
+		hint = "keyless access was rejected or limited; wait before retrying or set TAVILY_API_KEY for higher limits";
+	} else if (status === 401 || status === 403) {
+		hint = "authentication failed — check TAVILY_API_KEY or web-search config.json";
+	} else if (status === 429) {
+		hint = "rate limited — wait before retrying";
+	} else if (status === 432 || status === 433) {
+		hint = "quota exceeded — check your Tavily account usage";
+	} else if (status >= 500) {
+		hint = "service unavailable — retry later";
+	} else {
+		hint = "request rejected";
+	}
 	return error(`${tool} HTTP ${status}: ${hint}`);
 }
 function requestError(tool, failure, caller, timeout) {
@@ -63,9 +73,9 @@ function formatResults(data, options) {
 /** @param {import("../../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
 	const cache = new Map();
-	let credential = null;
+	let credential;
 	let generation = 0;
-	function invalidate() { credential = null; generation++; cache.clear(); }
+	function invalidate() { credential = undefined; generation++; cache.clear(); }
 
 	api.registerTool({
 		name: "web_search",
@@ -91,8 +101,8 @@ export default function (api) {
 			let key;
 			try { key = resolveApiKey(); }
 			catch (failure) { invalidate(); return error(failure.message); }
-			if (!key) { invalidate(); return error("web_search needs a Tavily API key — set TAVILY_API_KEY or configure ~/.imp/web-search/config.json; see the extension README.md"); }
-			if (key !== credential) { invalidate(); credential = key; }
+			const identity = key === null ? KEYLESS : key;
+			if (identity !== credential) { invalidate(); credential = identity; }
 			if (signal.aborted) return error("web_search aborted");
 			const requestGeneration = generation;
 			const now = Date.now();
@@ -108,12 +118,15 @@ export default function (api) {
 			const timeout = AbortSignal.timeout(15_000);
 			let raw;
 			try {
+				const headers = { "content-type": "application/json" };
+				if (key === null) headers["x-tavily-access-mode"] = "keyless";
+				else headers.authorization = `Bearer ${key}`;
 				const res = await fetch("https://api.tavily.com/search", {
 					method: "POST", redirect: "error",
-					headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+					headers,
 					body: JSON.stringify(body), signal: AbortSignal.any([signal, timeout]),
 				});
-				if (!res.ok) { await cancelBody(res); return httpError("web_search", res.status); }
+				if (!res.ok) { await cancelBody(res); return httpError("web_search", res.status, key === null); }
 				raw = (await readBounded(res, 1_048_576)).text;
 			} catch (failure) { return requestError("web_search", failure, signal, timeout); }
 			let data;

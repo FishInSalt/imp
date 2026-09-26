@@ -201,8 +201,17 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 });
 
 describe("web-search (Tavily search + page reader, fetch stubbed)", () => {
-	it("no key → local missing-key error without fetching", async () => {
-		const fetchMock = vi.fn();
+	it("no key → keyless search without an authorization header reaches the model", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					results: [
+						{ title: "Keyless source", url: "https://example.com/keyless", content: "the K1 snippet" },
+					],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		const env = await startRepl({
 			scripts: [toolCall("t1", "web_search", { query: "imp agent" }), reply("got it")],
@@ -212,9 +221,13 @@ describe("web-search (Tavily search + page reader, fetch stubbed)", () => {
 		expect(env.output()).toContain("▪ extension web-search [project] — 2 tools");
 		env.send("search something\n");
 		await waitUntil(() => env.output().includes("got it"));
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(env.sessionText()).toContain("needs a Tavily API key");
-		expect(env.sessionText()).toContain("set TAVILY_API_KEY");
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.tavily.com/search");
+		const headers = init.headers as Record<string, string>;
+		expect(headers["x-tavily-access-mode"]).toBe("keyless");
+		expect(headers.authorization).toBeUndefined();
+		expect(env.sessionText()).toContain("[1] Keyless source");
+		expect(env.sessionText()).toContain("https://example.com/keyless");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -241,6 +254,7 @@ describe("web-search (Tavily search + page reader, fetch stubbed)", () => {
 		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 		expect(url).toBe("https://api.tavily.com/search");
 		expect((init.headers as Record<string, string>).authorization).toBe("Bearer test-key");
+		expect((init.headers as Record<string, string>)["x-tavily-access-mode"]).toBeUndefined();
 		const body = JSON.parse(String(init.body)) as { query: string; max_results: number };
 		expect(body).toEqual({
 			query: "what is imp",

@@ -7,7 +7,7 @@ All notable changes to imp are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-26
+## [0.1.0] - 2026-09-27
 
 Initial public release: imp is a small coding agent that runs in your
 terminal.

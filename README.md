@@ -51,9 +51,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 Working from a source checkout instead:
 
 ```bash
-npm install
-npm run build
-npm start
+npm install   # installs dependencies and builds (prepare script)
+npm start     # launches the interactive REPL
 ```
 
 ### Signing in (/login)

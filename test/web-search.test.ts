@@ -303,10 +303,12 @@ describe("web_search direct extension contract", () => {
 			const result = await search();
 			expect(result).toMatchObject({
 				isError: true,
-				output: expect.stringContaining("keyless access was rejected or limited"),
+				output: expect.stringContaining(
+					"keyless access was rejected or limited; wait before retrying or set TAVILY_API_KEY for higher limits",
+				),
 			});
-			expect(result.output).toContain("TAVILY_API_KEY");
 			expect(result.output).not.toContain("authentication failed");
+			expect(result.output).not.toContain("config file");
 			expect(result.output).not.toContain("account usage");
 			expect(result.output).not.toContain(secret);
 		},
@@ -323,6 +325,7 @@ describe("web_search direct extension contract", () => {
 		expect(result).toMatchObject({ isError: true, output: expect.stringContaining(hint) });
 		expect(result.output).not.toContain("keyless access");
 		expect(result.output).not.toContain("check TAVILY_API_KEY");
+		expect(result.output).not.toContain("config file");
 	});
 
 	it("sanitizes network and JSON failures", async () => {
@@ -431,6 +434,24 @@ describe("search cache", () => {
 					(init!.headers as Record<string, string>).authorization,
 			),
 		).toEqual(["keyless", `Bearer ${secret}`, "keyless"]);
+	});
+
+	it("never reuses a keyless cache entry when the key equals a sentinel-like string", async () => {
+		// Guards the KEYLESS sentinel against being replaced by a string constant
+		// that a configured key could collide with.
+		for (const candidate of ["keyless", "keylessMode", "keyless-mode", "KEYLESS"]) {
+			vi.stubEnv("TAVILY_API_KEY", "");
+			rmSync(config, { force: true }); // start truly keyless for this candidate
+			await search({ query: `sentinel-${candidate}` });
+			writeFileSync(config, JSON.stringify({ apiKey: candidate }), { mode: 0o600 });
+			await search({ query: `sentinel-${candidate}` });
+		}
+		expect(fetchMock).toHaveBeenCalledTimes(8);
+		expect(
+			fetchMock.mock.calls
+				.map(([, init]) => (init!.headers as Record<string, string>).authorization)
+				.filter((value) => value !== undefined),
+		).toEqual(["Bearer keyless", "Bearer keylessMode", "Bearer keyless-mode", "Bearer KEYLESS"]);
 	});
 
 	it("resolves file credentials on every call and rotates authorization", async () => {

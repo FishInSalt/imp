@@ -90,10 +90,11 @@ revision was written; the unit tests cannot live-verify provider policy.
   call, compute identity = resolved key or sentinel; if it differs from the
   stored state, clear the cache and bump the generation counter, then store it.
   A configuration failure also clears the cache and bumps the generation
-  regardless of the prior state, and leaves the state unset. An in-flight
-  response may be cached only when its generation is still current; key removal
-  invalidates the keyed state before the keyless request is sent. Keyless
-  results cache normally, within their own generation.
+  regardless of the prior state; that invalidation, not the specific stored
+  identity afterwards, is the observable contract. An in-flight response may be
+  cached only when its generation is still current; key removal invalidates the
+  keyed state before the keyless request is sent. Keyless results cache
+  normally, within their own generation.
 - Errors: the provider documents keyless limits only as natural-language
   guidance, not as stable status codes, so keyless classification is a
   defensive heuristic, not provider-verified: {401,403,429,432,433} map to one

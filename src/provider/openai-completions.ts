@@ -285,7 +285,10 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			//  - OpenAI: reasoning_effort from the model's level map, and on
 			//    "off" the map's own off value when it names one (gpt-5.1+
 			//    map off→"none"; older models accept omission — pi :638);
-			//  - deepseek-reasoner: reasons by default, no request knob.
+			//  - deepseek (official family): thinking {type} object +
+			//    reasoning_effort when mapped (pi thinkingFormat "deepseek");
+			//  - deepseek-reasoner (via openai-compat): reasons by default,
+			//    no request knob.
 			const meta = thinkingMetaFor(options.name ?? "openai", request.model);
 			const level = request.thinking !== undefined ? clampThinkingLevel(meta, request.thinking) : undefined;
 			if (meta?.style === "glm-openai") {

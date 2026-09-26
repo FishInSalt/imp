@@ -243,19 +243,35 @@ describe("deepseek provider (#deepseek-provider)", () => {
 				]),
 			),
 		);
-		const plain = (captured.at(-1)?.messages as Array<{ role: string; reasoning_content?: string }>).find(
-			(m) => m.role === "assistant",
-		);
+		const lastMessages = captured.at(-1)?.messages as Array<{ role: string; reasoning_content?: string }>;
+		const plain = lastMessages.find((m) => m.role === "assistant");
 		expect(plain?.reasoning_content).toBe("");
-		// other families: the field never appears (byte-identical legacy path)
+		// other families: the field never appears — a REAL cross-family pin
+		// (the zai request carries the same thinking-block history; its
+		// assistant frame must lack reasoning_content entirely)
 		const { createZaiProvider } = await import("../src/provider/zai.js");
 		setEnv("ZAI_BASE_URL", baseUrl);
 		setEnv("ZAI_API_KEY", "sk-zai");
-		await collect(createZaiProvider().stream(REQ("glm-5.3", "low")));
-		const zaiMessages = (captured.at(-1)?.messages as Array<{ role: string }>).filter(
-			(m) => m.role === "assistant",
+		await collect(
+			createZaiProvider().stream(
+				REQ("glm-5.3", "low", [
+					{ role: "user", content: "first" },
+					assistantWithThinking(),
+					{
+						role: "toolResult",
+						results: [{ toolCallId: "tc1", toolName: "read", content: "out", isError: false }],
+					},
+					{ role: "user", content: "continue" },
+				]),
+			),
 		);
-		expect(zaiMessages.length).toBe(0); // glm path has no assistant history here
+		const zaiMessages = captured.at(-1)?.messages as Array<{
+			role: string;
+			reasoning_content?: string;
+		}>;
+		const zaiAssistant = zaiMessages.find((m) => m.role === "assistant");
+		expect(zaiAssistant).toBeDefined();
+		expect(zaiAssistant?.reasoning_content).toBeUndefined(); // replay is deepseek-only
 	});
 
 	it("3d. reasoning_content deltas stream as thinking events (parity #9 regression pin)", async () => {

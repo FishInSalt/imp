@@ -1733,7 +1733,7 @@ describe("/think (#thinking-levels)", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/login foo", env.ctx);
 		expect(env.output()).toContain('unknown provider "/login foo"');
-		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex");
+		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex, deepseek");
 		// oauth family (batch B): URL + code render, no secret prompt at all
 		const codex = await makeEnv();
 		codex.ctx.secret = async () => {

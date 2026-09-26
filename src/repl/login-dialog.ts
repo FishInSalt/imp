@@ -89,8 +89,11 @@ export class LoginDialog extends Container implements Focusable, LoginDialogView
 		// channel: prompt() rejects with "Login cancelled" (design rev5 P3-D).
 		this.input.onEscape = () => this.cancel("Login cancelled");
 		this.input.focused = false;
-		this.addChild(this.input);
-		this.addChild(new Text(dim("(esc to cancel, enter to submit)", true), 1, 0));
+		// pi parity (login-dialog.js:33-54): the input AND its cancel hint
+		// are NOT added here — they join the tree only when a prompt opens
+		// (inside content). Root-level copies rendered the input TWICE (the
+		// "two > rows" dogfood report) and put the hint under states that have
+		// nothing to submit (deviceCode/waiting).
 		this.addChild(new DialogBorder());
 	}
 
@@ -119,7 +122,11 @@ export class LoginDialog extends Container implements Focusable, LoginDialogView
 		this.content.addChild(new Spacer(1));
 		this.content.addChild(new Text(message, 1, 0));
 		if (placeholder !== undefined) this.content.addChild(new Text(dim(`e.g., ${placeholder}`, true), 1, 0));
+		// The cancel hint travels WITH the input (pi showApiKeyPrompt :112 —
+		// a root-level static hint would sit above every state, even
+		// deviceCode/waiting where there is nothing to submit).
 		this.content.addChild(this.input);
+		this.content.addChild(new Text(dim("(esc to cancel, enter to submit)", true), 1, 0));
 		this.tui.requestRender();
 		return new Promise<string>((resolve, reject) => {
 			this.pendingPrompt = { resolve, reject };
@@ -159,7 +166,13 @@ export class LoginDialog extends Container implements Focusable, LoginDialogView
 	 *  (unmasked — pi parity; the auth file is 0600) with a "> " prefix. */
 	private replaceInputWithSubmittedText(value: string): void {
 		const index = this.content.children.indexOf(this.input);
-		if (index >= 0) this.content.children[index] = new Text(`> ${value}`, 1, 0);
+		if (index === -1) return;
+		this.content.children[index] = new Text(`> ${value}`, 1, 0);
+		// The trailing cancel hint rode with the input (prompt appends both);
+		// once submitted there is nothing to cancel — pi's submitted view is
+		// just the echoed value.
+		const next = this.content.children[index + 1];
+		if (next instanceof Text) this.content.children.splice(index + 1, 1);
 	}
 
 	/** Focusable: the TUI routes key data here while the dialog is focused.

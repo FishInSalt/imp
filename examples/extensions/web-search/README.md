@@ -31,19 +31,22 @@ as installing into `~/.imp/` or editing shell configuration.
 
 ## Credentials
 
-Get an API key from your Tavily account: https://app.tavily.com/ . Search requests
-may consume credits. The extension does not automatically retry or switch providers.
-Page reading does not require a Tavily key.
+Get an API key from your Tavily account: https://app.tavily.com/ . A keyed search
+uses your account quota; requests may consume credits. The extension does not
+automatically retry or switch providers. Page reading does not require a Tavily key.
 
 Resolution order:
 
 1. Nonblank `TAVILY_API_KEY` environment variable.
 2. `apiKey` in `~/.imp/web-search/config.json`.
+3. Otherwise searches use Tavily's keyless access mode (`X-Tavily-Access-Mode:
+   keyless`): free but rate-limited, no account required, same response schema
+   as keyed access.
 
-Only `TAVILY_API_KEY` is recognized. Rename older environment variable settings;
-there is no old-variable compatibility or unauthenticated search fallback. Do not
-paste a real key into an agent conversation, tool arguments, source code, or a
-checked-in project configuration.
+Only `TAVILY_API_KEY` is recognized; older variable names are not read. A
+present-but-invalid config file is a local error, never a silent keyless
+downgrade. Do not paste a real key into an agent conversation, tool arguments,
+source code, or a checked-in project configuration.
 
 For a single shell session, enter it without echoing it or placing it in shell
 history (Bash):
@@ -101,23 +104,24 @@ symlink replacement: parent directories must be trusted and user-controlled.
 ## Local verification and migration
 
 Before restarting an existing installation, set the new environment variable or
-create the private file. No credentials are migrated automatically. A missing key
-now produces a local setup error without sending a request to Tavily.
+create the private file for account quota. No credentials are migrated
+automatically; without a credential, searches run in free keyless mode after a
+restart.
 
 To verify resolution without printing the key or calling the API:
 
 ```sh
 node --input-type=module -e '
 import { resolveApiKey } from "/absolute/path/to/web-search/_lib/config.mjs";
-try { console.log(resolveApiKey() ? "Tavily credential configured" : "Not configured"); }
+try { console.log(resolveApiKey() ? "Tavily credential configured" : "No credential configured — keyless search mode"); }
 catch (error) { console.error(error.message); process.exitCode = 1; }
 '
 ```
 
 The usual imp startup extension diagnostic should list both tools. Local resolution
 checks presence and format, **not validity with Tavily**. A live search is the next
-step only with explicit approval to consume API credits. Do not run live searches
-in an unattended setup script.
+step only with explicit approval (keyed searches consume credits; keyless searches
+are rate-limited). Do not run live searches in an unattended setup script.
 
 ## Tool behavior
 
@@ -144,11 +148,18 @@ results are a normal response; wholly malformed nonempty results are an error.
 Source URLs are never shortened; oversized URLs are skipped. Warnings, metadata
 and truncation markers count toward the 40,000-character total limit.
 
+With no credential configured, requests carry `X-Tavily-Access-Mode: keyless` and
+no authorization header; keyed requests never send the access-mode header.
+Keyless 401/403/429/432/433 report one sanitized hint pointing at `TAVILY_API_KEY`
+for higher limits; other statuses keep mode-neutral wording. A configuration
+error is still a local error even without an environment key.
+
 Search responses have a 1 MiB decoded-body byte cap and a 15-second timeout.
 The 10-minute in-memory cache holds at most 64 queries, is shared across `/new`
-within one extension instance, and clears on observed credential changes or
-configuration errors. Failed requests are not cached; there is no disk cache or
-parallel-request deduplication. Authentication is checked before cache lookup.
+within one extension instance, and clears on observed credential changes
+(including key <-> keyless transitions) or configuration errors. Failed requests
+are not cached; there is no disk cache or parallel-request deduplication.
+Authentication is checked before cache lookup.
 
 `url_read` accepts HTTP(S) URLs without embedded credentials, at most 2048
 characters. HTML script/style blocks and tags are stripped; plain text, JSON and
@@ -191,11 +202,14 @@ in expanded Result text.
 
 ## Troubleshooting
 
-- Missing key: configure the environment or private file using the rules above.
-- Config error: fix JSON/permissions/path; errors do not print file contents.
-- HTTP 401/403: check the effective credential source; environment wins over file.
-- HTTP 429: wait before trying again.
-- HTTP 432/433: check account quota and billing limits.
+- No credential: searches run in free keyless mode with provider-side rate
+  limits; set the environment variable or private file for higher limits.
+- Config error: fix JSON/permissions/path; errors do not print file contents;
+  a present-but-invalid config never falls back to keyless.
+- Keyless limit (HTTP 401/403/429/432/433): wait before retrying, or configure a key.
+- HTTP 401/403 (keyed): check the effective credential source; environment wins over file.
+- HTTP 429 (keyed): wait before trying again.
+- HTTP 432/433 (keyed): check account quota and billing limits.
 - HTTP 5xx: provider service failure; try later rather than repeatedly in a loop.
 - Timeout/aborted: reported separately; a failed response can still be billable.
 - Invalid/oversized response: provider output did not match the bounded contract.

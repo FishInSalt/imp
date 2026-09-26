@@ -87,6 +87,7 @@ describe("web_search direct extension contract", () => {
 			redirect: "error",
 			headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
 		});
+		expect(init!.headers).not.toHaveProperty("x-tavily-access-mode");
 		expect(JSON.parse(init!.body as string)).toEqual({
 			query: "evidence",
 			max_results: 3,
@@ -102,6 +103,27 @@ describe("web_search direct extension contract", () => {
 		expect(result.output).toContain("Query: evidence");
 		expect(result.output).toContain("<content>\nRaw evidence\n</content>");
 		expect(result.output).not.toContain("GENERATED ANSWER");
+	});
+
+	it("searches keyless without authorization when no credential is configured", async () => {
+		vi.stubEnv("TAVILY_API_KEY", "");
+		const result = await search({ query: "keyless query", max_results: 2 });
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://api.tavily.com/search");
+		expect(init).toMatchObject({
+			method: "POST",
+			redirect: "error",
+			headers: { "content-type": "application/json", "x-tavily-access-mode": "keyless" },
+		});
+		expect(init!.headers).not.toHaveProperty("authorization");
+		expect(JSON.parse(init!.body as string)).toEqual({
+			query: "keyless query",
+			max_results: 2,
+			search_depth: "basic",
+			include_answer: false,
+		});
+		expect(result.isError).toBeUndefined();
+		expect(result.output).toContain("[1] Example title");
 	});
 
 	it("omits optional request fields and raw content by default", async () => {
@@ -273,6 +295,36 @@ describe("web_search direct extension contract", () => {
 		},
 	);
 
+	it.each([401, 403, 429, 432, 433])(
+		"maps keyless HTTP %i to the single keyless hint without keyed wording",
+		async (status) => {
+			vi.stubEnv("TAVILY_API_KEY", "");
+			fetchMock.mockResolvedValueOnce(new Response(null, { status, statusText: secret }));
+			const result = await search();
+			expect(result).toMatchObject({
+				isError: true,
+				output: expect.stringContaining("keyless access was rejected or limited"),
+			});
+			expect(result.output).toContain("TAVILY_API_KEY");
+			expect(result.output).not.toContain("authentication failed");
+			expect(result.output).not.toContain("account usage");
+			expect(result.output).not.toContain(secret);
+		},
+	);
+
+	it.each([
+		[400, "request rejected"],
+		[404, "request rejected"],
+		[503, "service unavailable"],
+	] as const)("keeps mode-neutral keyless wording for HTTP %i", async (status, hint) => {
+		vi.stubEnv("TAVILY_API_KEY", "");
+		fetchMock.mockResolvedValueOnce(new Response(null, { status }));
+		const result = await search();
+		expect(result).toMatchObject({ isError: true, output: expect.stringContaining(hint) });
+		expect(result.output).not.toContain("keyless access");
+		expect(result.output).not.toContain("check TAVILY_API_KEY");
+	});
+
 	it("sanitizes network and JSON failures", async () => {
 		fetchMock.mockRejectedValueOnce(new Error(secret)).mockResolvedValueOnce(new Response(secret));
 		expect(await search()).toEqual({
@@ -341,12 +393,18 @@ describe("search cache", () => {
 				if (mode === "invalid") writeFileSync(config, secret, { mode: 0o600 });
 			}
 			const gate = await search({ query: "cached" });
-			if (mode !== "rotation") {
+			if (mode === "invalid") {
 				expect(gate.isError).toBe(true);
+				expect(gate.output).toContain("Web search configuration");
 				expect(gate.output).not.toContain(secret);
-				expect(fetchMock).toHaveBeenCalledTimes(2);
+				expect(fetchMock).toHaveBeenCalledTimes(2); // config error fails locally, no request
 				vi.stubEnv("TAVILY_API_KEY", secret);
 				await search({ query: "cached" });
+			} else if (mode === "missing") {
+				expect(gate.isError).toBeUndefined(); // keyless fallback, not an error
+				const headers = fetchMock.mock.calls[2]![1]!.headers as Record<string, string>;
+				expect(headers["x-tavily-access-mode"]).toBe("keyless");
+				expect(headers.authorization).toBeUndefined();
 			}
 			expect(fetchMock).toHaveBeenCalledTimes(3);
 			pending.resolve(response([source({ content: "OLD IN FLIGHT" })]));
@@ -357,6 +415,23 @@ describe("search cache", () => {
 			expect(fetchMock).toHaveBeenCalledTimes(4);
 		},
 	);
+
+	it("clears the cache on keyless-to-keyed and keyed-to-keyless transitions", async () => {
+		vi.stubEnv("TAVILY_API_KEY", "");
+		await search({ query: "mode" });
+		vi.stubEnv("TAVILY_API_KEY", secret);
+		await search({ query: "mode" });
+		vi.stubEnv("TAVILY_API_KEY", "");
+		await search({ query: "mode" });
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(
+			fetchMock.mock.calls.map(
+				([, init]) =>
+					(init!.headers as Record<string, string>)["x-tavily-access-mode"] ??
+					(init!.headers as Record<string, string>).authorization,
+			),
+		).toEqual(["keyless", `Bearer ${secret}`, "keyless"]);
+	});
 
 	it("resolves file credentials on every call and rotates authorization", async () => {
 		vi.stubEnv("TAVILY_API_KEY", "");

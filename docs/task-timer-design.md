@@ -19,20 +19,22 @@ pi's extension API. pi mechanisms cited below with paths under
 The pi extension needs four capabilities: a run-start event (`before_agent_start`),
 a run-settled event (`agent_settled`), a footer status channel
 (`ctx.ui.setStatus(key, text)`), and a mode query (`ctx.mode`/`ctx.hasUI`). imp has
-only the middle one's rough analog (`run_end`) and nothing else.
+only the second one's rough analog (`run_end`) and nothing else.
 
 Two M4 normative constraints gate this work; this document is the discharge of both:
 
-- **"The four-event set is normative; additions require a named consumer (M5+)"**
-  (`docs/m4-extensions-design.md` §17 risk 7, echoed at `src/extensions/types.ts:135`).
-  The named consumer is the task-timer extension above — a real user request, ported
-  from a real pi extension in daily use.
+- **"The four-event set is normative here; additions require a named consumer (M5+)"**
+  (`docs/m4-extensions-design.md` §17 risk 7, echoed at `src/extensions/types.ts:135` —
+  whose own in-code cross-reference says "§16 risk 7"; that stale pointer is fixed in
+  this batch, §8 item 1). The named consumer is the task-timer extension above — a
+  real user request, ported from a real pi extension in daily use.
 - **UI contribution was deferred** (`m4-extensions-design.md` §16) with the rationale
   "imp has no TUI; `Renderer` is a line printer." That premise is stale: the TUI
   landed in M9 with a footer, an activity region, and a capability-gated `LineInput`
-  seam. The deferral's own escape hatch — "adding `ctx.ui` after the TUI decision,
-  without pre-committing to a widget set" — is what this batch exercises, reduced to
-  the single widget the consumer needs (one status line).
+  seam. The deferral anticipated revisiting UI contribution once a TUI decision
+  existed, following pi's mode-agnostic pattern without pre-committing to a widget
+  set — this batch is that revisit, reduced to the single widget the consumer needs
+  (one status line). The stale §16 table row is amended to point here (§8 item 12).
 
 ## 2. Goals / non-goals
 
@@ -60,7 +62,7 @@ Non-goals (each returns in §6 Alternatives):
 
 - All extension-facing emissions live in `src/runner.ts`; `src/core/loop.ts` emits
   none — it exposes typed hooks the runner wraps.
-- `run_end` fires at `runner.ts:1106-1112`, after `runAgentLoop` returns, with
+- `run_end` fires at `runner.ts:1106-1111`, after `runAgentLoop` returns, with
   `stopReason: "completed" | "max_iterations" | "aborted"`. The site comment is
   explicit: a provider throw **skips** the emit ("run_end means a run that ended —
   including an aborted one — not one that crashed"). Ctrl+C is a normal `"aborted"`
@@ -81,10 +83,12 @@ Non-goals (each returns in §6 Alternatives):
   and reported as one diagnostic line (`registry.ts:340-353`, `fireObservers`).
 - Event registration surface: `on()` overloads at `types.ts:61-64`,
   `ExtensionEventName` at `types.ts:136`, `ExtensionEventHandlerMap` at
-  `types.ts:140-144`, `KNOWN_EVENTS` at `registry.ts:30`, one `emit*` method per
-  event at `registry.ts:326-336`.
+  `types.ts:139`, `KNOWN_EVENTS` at `registry.ts:30`; dispatch lives in
+  `emitToolCall` (the one awaited gate, `registry.ts:311`) and the three observer
+  emits (`registry.ts:326/330/334`) over `fireObservers` (`:340-352`), with
+  per-handler error reporting in `reportHandlerError` (`:354-357`).
 - The `ExtensionApi` object is assembled once per extension in
-  `extensionApi()` (`loader.ts:186-224`) and passed to the factory
+  `extensionApi()` (`loader.ts:186-219`) and passed to the factory
   (`loader.ts:257-269`). Registration methods are guarded by `whileLoading`;
   `confirm` is a runtime method with no window guard — the precedent `setStatus`
   follows.
@@ -93,7 +97,7 @@ Non-goals (each returns in §6 Alternatives):
 
 - The TUI footer is one dim `Text` below the editor, created at
   `src/repl/shell.ts:307-309`. Its whole content is computed by the private
-  `ReplMachine.refreshFooter()` (`src/repl/repl.ts:802-895`) from runner state
+  `ReplMachine.refreshFooter()` (`src/repl/repl.ts:802-896`) from runner state
   (model · think level · session id · usage · cost · context fill) and pushed via
   `this.input.setFooter(parts.join(" · "))` (`repl.ts:894`).
 - `setFooter` is an optional `LineInput` method (`src/repl/line-input.ts:89-91`);
@@ -102,8 +106,8 @@ Non-goals (each returns in §6 Alternatives):
   (`shell.ts:486-495`) buffers the text (pre-start pushes must not be dropped —
   the `footerText` field, `shell.ts:225-228`), applies host-side `dim(...)`, and
   calls `tui.requestRender()`.
-- Empty `Text` renders zero rows (`shell.ts:489` comment) — an absent status costs
-  no layout.
+- Empty `Text` renders zero rows (the `setFooter` JSDoc, `shell.ts:486-488`) — an
+  absent status costs no layout.
 - pi-tui's renderer **throws on component lines wider than the terminal**
   (`src/tui.ts` export-block comment). `truncateToWidth` and `visibleWidth` are
   re-exported through the same boundary.
@@ -131,8 +135,9 @@ covers aborts **and** provider failures. imp's `run_end` deliberately does not f
 on a provider crash (§3.1). A timer built on `run_start` + `run_end` must therefore
 tolerate an unpaired `run_start`. `notify.mjs` already ships with the same
 asymmetry ("runs that die before any assistant message never notify"), so this is
-consistent with the ecosystem's existing taste — see §5.3 for the extension-side
-handling.
+consistent with the ecosystem's existing taste (notify.mjs's header: "runs that
+die before any assistant message … never notify") — see §5.3 for the
+extension-side handling.
 
 ## 4. Design
 
@@ -152,11 +157,15 @@ delegation at `:954`. This is the only site that is (a) reached by both shells,
 (c) symmetric with `run_end`'s top-level-only coverage (subagents emit neither).
 
 **Dispatch kind** — observer, fire-and-forget, via `fireObservers` (same class as
-`run_end`; never awaited, per-handler isolation). A `run_start` handler must not
-be able to delay or block the run.
+`run_end`: handlers are invoked synchronously in load order and never awaited,
+with per-handler error isolation). Synchronous dispatch means a slow handler runs
+on the critical path to the first token — accepted, not redesigned: extension
+code is already in-process and same-trust-class (m4 §17 risk 1), and the contract
+wording below says so instead of overclaiming.
 
 **Contract wording** (goes into `types.ts` JSDoc): "`run_start` fires once when a
-top-level run begins. Its pair is `run_end`, which does NOT fire if the run
+top-level run begins. Handlers run synchronously on the run's critical path and
+must return promptly. Its pair is `run_end`, which does NOT fire if the run
 crashes (provider throw) — consumers must tolerate an unpaired `run_start`
 (e.g. reset state on the next one). Subagent runs emit neither event."
 
@@ -185,11 +194,22 @@ one. It also fits the consumer better: task-timer calls `setStatus` from its own
 by capturing a ctx and guarding it with stale-ctx invalidation machinery — an
 api member needs none of that.
 
-**Key namespacing** — the registry prefixes keys with the extension's source name
-(`source:key` in storage: `Map<string source, Map<string key, string text>>`).
-Two extensions picking the same key cannot clobber each other — an improvement
-over pi's single flat namespace, at zero cost to the extension author (the api
-closure knows its source, exactly like `subscribe` does, `loader.ts:217-219`).
+**Key namespacing** — the registry buckets statuses per extension
+(`Map<string bucket, Map<string key, string text>>`), so two extensions picking
+the same key cannot clobber each other — an improvement over pi's single flat
+namespace. The bucket name must come from a **closure capture**, not from the
+registry's open-section state: `registry.subscribe` reads `this.section.name`
+(`registry.ts:259-264`), but the open section exists only while the factory
+runs — and `setStatus` is a runtime method (the whole point: calls from
+`setInterval`, where no load context exists). The `setStatus` member in
+`extensionApi()` therefore closes over `facts.name` and `facts.origin`
+(`loader.ts:186-219`, the same facts object that already carries both into the
+factory call), and the bucket key is `${origin}:${name}`. Residual collision:
+two same-named extensions from the same origin (e.g. two `-e` files sharing a
+basename) still share one bucket — realpath dedup (`loader.ts:133-158`) already
+removes same-file duplicates across tiers, and same-origin same-name duplicates
+are pathological; the guarantee wording is scoped accordingly ("extensions with
+distinct name+origin cannot clobber each other").
 
 **Validation & bounds** (in the registry, at write time):
 
@@ -204,27 +224,36 @@ closure knows its source, exactly like `subscribe` does, `loader.ts:217-219`).
   remains faithful for future non-TUI consumers.
 
 **Storage & notification** — the registry owns the map plus a single optional
-*status sink* (one process renders at most one shell):
+*status sink* (one process binds at most one sink-binding REPL shell; the
+one-shot trust-prompt `TuiShell` at `src/repl/trust-ask.ts:43` never binds a
+sink, and extensions load only after trust resolution):
 
 ```ts
 // ExtensionRegistry additions (shell-facing, not part of ExtensionApi):
-setExtensionStatus(source: string, key: string, text: string | undefined): void;
-getExtensionStatusEntries(): readonly { source: string; key: string; text: string }[]; // sorted by source:key
-setStatusSink(sink: ((line: string) => void) | null): void;
+setExtensionStatus(bucket: string, key: string, text: string | undefined): void;
+getExtensionStatusEntries(): readonly { bucket: string; key: string; text: string }[]; // sorted by bucket:key
+setStatusSink(sink: (line: string) => void): void;
 ```
 
 `setExtensionStatus` updates the map, then — if a sink is bound — recomposes the
 line and pushes it. No sink (print mode, tests): storage only, zero side effects.
-Recomposition joins entries as `text` values sorted by `source:key`, space-joined
-(pi parity: one line, alphabetical). The shell owns sanitize/dim/truncate (§4.3);
-the registry's composed line is raw text joined with spaces.
+Recomposition joins entries as `text` values sorted by `bucket:key`, space-joined
+(pi-shaped: one line, sorted entries; pi sorts bare keys with `localeCompare`,
+imp sorts its namespaced bucket keys). The shell owns sanitize/dim/truncate
+(§4.3); the registry's composed line is raw text joined with spaces. There is no
+unbind call: the machine lives as long as the process's single REPL, so the
+signature takes a sink, not a nullable one.
 
-**Sink binding path** — follows the `mcp` precedent (an optional capability
-threaded from `cli.ts` through `runRepl` into the machine):
+**Sink binding path** — threaded from `cli.ts` through `runRepl` into the
+machine, the same route `mcp` takes (precedent-qualified: `mcp` is a *required*
+key in `ReplMachineOptions` so forgetting it is a type error; `extensions` is
+made optional instead, to avoid touching every test-side `ReplMachine`
+construction — the capability gate handles its absence):
 
 1. `ReplOptions` and `ReplMachineOptions` gain `extensions?: ExtensionRegistry`.
    `runInteractive` already holds the registry from `loadExtensionSetup`
-   (`cli.ts:571`) and passes it to the runner — it now also passes it to `runRepl`.
+   (`cli.ts:538`), passes it to `createRunner` (`cli.ts:581`), and calls
+   `runRepl` at `cli.ts:596` — it now also passes it to `runRepl`.
 2. `ReplMachine` constructor: if `options.extensions` exists **and**
    `this.input.setExtensionStatus !== undefined` (capability gate — the legacy
    shell has none), it renders the current entries, pushes the initial line
@@ -248,17 +277,37 @@ the same slot.)
 ### 4.3 `TuiShell` rendering
 
 - A second `Text` component, `extensionFooter`, added to the layout **below** the
-  existing footer (`shell.ts:307-309` area). Buffered in an
+  existing footer (`shell.ts:307-309` area; the layout ASCII comment at
+  `shell.ts:95-107` is updated in the same diff). Buffered in an
   `extensionFooterText` field for pre-start pushes — the `footerText`
-  pattern (`shell.ts:225-228`) verbatim. Empty string renders zero rows.
+  pattern (`shell.ts:225-228`), including its raw/dim boundary: the buffer stores
+  the sanitized+truncated but **undimmed** text, and `dim(...)` is applied at
+  each application point (`start()` seed and `setText`), exactly as `footerText`
+  does at `shell.ts:307` and `:493`. Empty string renders zero rows.
 - `setExtensionStatus(text)` pipeline per push:
   1. `sanitizeDisplay(text)` — strip CSI/OSC/C1, escape controls
      (tool-presentation.ts:14; the task-live-display "untrusted input" rule);
-  2. collapse any surviving `\r\n\t` to single spaces (the line must stay one
-     line; `sanitizeDisplay` preserves `\n`, so this is a deliberate second step);
-  3. `truncateToWidth(text, terminal.columns - 1, dim ellipsis)` — the pi-tui
-     width-throw guard, mirroring pi's footer treatment;
-  4. wrap in host `dim(...)`, store to the buffer, `setText`, `requestRender()`.
+  2. replace surviving `\n` with a space (the line must stay one line; this is a
+     deliberate second step because `sanitizeDisplay` preserves `\n`, while `\t`
+     has already become spaces and `\r` a literal escape-text sequence —
+     tool-presentation.ts:64-69);
+  3. `truncateToWidth(text, terminal.columns - 1, dim ellipsis)` — the width
+     guard. Framing: pi-tui's `Text` *wraps* breakable over-width text into
+     multiple rows (`pi-tui/src/components/text.ts:67-70`), and the renderer
+     throws only when a rendered line still exceeds width (an unbreakable
+     segment — a long URL in a status is the realistic case,
+     `pi-tui/src/tui-main-screen.ts:536`). Truncation keeps the line to one row
+     and removes the throw surface;
+  4. store raw to the buffer, apply host `dim(...)`, `setText`,
+     `requestRender()`. After `close()`, pushes are dropped (a torn-down
+     component must not be touched — possible only via a leaked extension timer,
+     which §4.5's `unref` rule makes benign anyway).
+- Resize behavior (accepted limitation, stated): truncation happens at push time.
+  On terminal resize-narrow, an already-pushed line re-wraps into multiple rows
+  until the next push re-truncates; pi re-truncates per render, imp's existing
+  footer has no width management at all — matching that parity is a conscious
+  choice, not an oversight (task-timer pushes every second while running, so the
+  window is small in practice for the shipped consumer).
 - Colors: the host dims the whole line. Extensions cannot color segments (no theme
   API — non-goal; pi's pre-colorized ANSI would not survive step 1 anyway).
 - Render cost: one `setText` + one `requestRender` per push; pi-tui coalesces and
@@ -268,13 +317,14 @@ the same slot.)
 ### 4.4 Print mode and the legacy shell
 
 - Print mode loads extensions (`cli.ts:827`) but never constructs a `ReplMachine`,
-  so no sink is ever bound: `setStatus` writes storage and returns. `run_start` /
-  `run_end` fire normally (they already do for `notify.mjs`).
+  so no sink is ever bound: `setStatus` writes storage and returns. `run_end`
+  already fires in print mode (that is `notify.mjs`'s whole trigger); `run_start`
+  is new and fires on the same path.
 - The legacy shell constructs a `ReplMachine` whose `input` lacks
   `setExtensionStatus`; the capability gate in §4.2 step 2 skips binding. Same
   no-op outcome. Extensions therefore need no mode query — the channel itself is
   mode-agnostic, matching pi's "no-op context in headless modes"
-  (`core/extensions/runner.ts:237-271`).
+  (`core/extensions/runner.ts:236-267`).
 
 ### 4.5 The shipped consumer: `examples/extensions/task-timer.mjs`
 
@@ -284,6 +334,15 @@ Behavior, ported from pi's extension with imp's event semantics:
   crashed run — §3.3), discard it. Record `Date.now()`, clear any old interval,
   paint immediately, then `setInterval(1000)` repainting
   `setStatus("task-timer", "running " + fmt(elapsed))`.
+- **The interval handle is `unref`'d** (`tick.unref?.()`, the activity spinner's
+  precedent at `shell.ts:556`). This is a hard requirement, not hygiene: on the
+  crash path (§3.3) no `run_end` ever arrives to clear the interval, and a ref'd
+  handle would keep the Node event loop alive — print mode would hang after the
+  run fails, and `/exit` after a crash would hang the REPL process
+  (`runInteractive` sets `process.exitCode` without `process.exit`,
+  `cli.ts:616-621`). With `unref`, a leaked interval is a harmless display
+  residue, not a liveness bug. (pi never faces this because its `agent_settled`
+  fires in a `finally` and always clears the timer.)
 - `run_end`: clear the interval; `setStatus("task-timer", "done in " + fmt(elapsed))`;
   the line persists until the next `run_start`.
 - `fmt` matches pi's `formatDuration`: `M:SS` under an hour, `H:MM:SS` above.
@@ -292,8 +351,8 @@ Behavior, ported from pi's extension with imp's event semantics:
   summary, and the known-limitation list:
   - a crashed run (provider throw) leaves `running …` on screen until the next
     run starts — `run_end` never arrives by design (§3.3);
-  - after `/new` or `/resume`, a stale `done in …` persists until the next run
-    (imp has no session-lifecycle events yet — non-goal §2).
+  - after `/new`, `/resume`, `/tree`, or `/fork`, a stale `done in …` persists
+    until the next run (imp has no session-lifecycle events yet — non-goal §2).
 
 ### 4.6 Tests
 
@@ -327,7 +386,20 @@ Extension test (new, e.g. `test/task-timer-extension.test.ts`):
 
 - drive `examples/extensions/task-timer.mjs` with a fake api + fake timers:
   start → tick text (`running 0:03`), end → `done in 0:03`, hour rollover format,
-  unpaired-`run_start` reset, interval cleared on `run_end`.
+  unpaired-`run_start` reset, interval cleared on `run_end`;
+- assert the interval handle is `unref`'d (the §4.5 liveness requirement — fake
+  timers alone cannot observe process liveness, so the test inspects the
+  handle). Actual exit-liveness after a crash is covered by the §11 dogfood item
+  (forced provider error in both print and REPL), not by a fragile automated
+  process-exit test.
+
+Load-path test (real `loadExtensions` + registry + a binding stub):
+
+- an extension that calls `api.setStatus` from its factory during load lands in
+  storage, and a sink bound afterwards receives the initial push (this is the
+  path a clock-style extension actually takes; the registry-level "statuses set
+  before machine construction appear after it" test alone would miss the
+  load-time wiring).
 
 Existing suite must pass unchanged (no edits expected; assertions on the
 four-event KNOWN_EVENTS list get the new member added).
@@ -335,11 +407,21 @@ four-event KNOWN_EVENTS list get the new member added).
 ### 4.7 Documentation
 
 - This file.
-- `types.ts` JSDoc for the new API (contract wording in §4.1/§4.2).
+- `types.ts` JSDoc for the new API (contract wording in §4.1/§4.2), including the
+  stale in-code cross-reference fix (`types.ts:135`: "§16 risk 7" → "§17 risk 7").
 - `task-timer.mjs` header comment (install + limitations).
-- `examples/extensions/README` or top-level README extension section: one row
-  added to the example list, if such a list exists (check at implementation time;
-  keep the diff doc-minimal otherwise).
+- `README.md` extension section (`README.md:406-433`): the documented api
+  surface gains `setStatus`, and the inline event enumeration
+  (`on("tool_call" | "tool_end" | "message_end" | "run_end")`, `README.md:423-424`)
+  gains `run_start`. The shipped-examples list (`README.md:444-448`) is updated
+  for task-timer — and repaired in passing: it currently names only `notes.mjs`
+  and `guardian.mjs` while `notify.mjs` and `web-search/` also ship. One line in
+  that section also states the extension-author rule from §4.5: timers an
+  extension creates must be `unref`'d.
+- `m4-extensions-design.md` §16 deferral table: the "UI contribution" row's
+  stale premise ("imp has no TUI") is amended to point at this design.
+- `shell.ts`: the layout ASCII comment (`shell.ts:95-107`) gains the
+  `extensionFooter` row.
 
 ## 5. Semantics decisions (the short list a reviewer should attack)
 
@@ -356,8 +438,8 @@ included — to reason about a new stop reason).
 
 Subagents emit neither `run_start` nor `run_end`, preserving today's symmetry. A
 child-aware timer would need the child `run_end` question answered first (the
-child's overflow retry double-launches its loop — `subagent.ts:286,395` — so even
-the emission site is non-obvious). The activity region already shows live subagent
+child's overflow retry double-launches its loop — `src/core/subagent.ts:339,395` —
+so even the emission site is non-obvious). The activity region already shows live subagent
 progress; footer timing of children is a future named-consumer decision.
 
 ### 5.3 Crash residue in the consumer
@@ -370,10 +452,13 @@ hook — which imp deliberately does not add in this batch (non-goal §2).
 ## 6. Alternatives considered
 
 1. **Per-call handler `ctx` with `ctx.ui.setStatus` (pi's pattern).** Rejected:
-   M4 §6.2's deferral was resolved in practice by `api.confirm` (M10) — api members
-   are imp's established shape; and the consumer calls `setStatus` from a
-   `setInterval`, where no per-call ctx exists. pi solves that with captured-ctx
-   staleness guards (`assertActive`); an api member needs no such machinery.
+   M4 §6.2 deferred a second handler parameter until a real consumer appears —
+   and when one did (interactive gating, M10), imp shipped `api.confirm` instead.
+   Api members are therefore imp's established shape for exactly this class of
+   need (§6.2's conclusion — no per-call ctx — stands; its predicted mechanism
+   never materialized). The consumer also calls `setStatus` from a `setInterval`,
+   where no per-call ctx exists; pi supports that with captured-ctx staleness
+   guards (`assertActive`), and an api member needs no such machinery.
 2. **Synthesize `run_end` on crash (new stop reason or `finally` emit).**
    Rejected: rewrites a documented contract (`runner.ts:1103-1105`) and perturbs
    shipped observers for one consumer's edge case; the consumer tolerates the
@@ -397,8 +482,13 @@ hook — which imp deliberately does not add in this batch (non-goal §2).
 
 ## 7. Risks & mitigations
 
-1. **Width overflow crashing pi-tui.** Mitigation: `truncateToWidth` on every
-   push (§4.3 step 3) + a shell test with a narrow fake terminal.
+1. **Width overflow crashing pi-tui.** The renderer throws only on a rendered
+   line that still exceeds width (breakable text wraps first,
+   `pi-tui/src/components/text.ts:67-70`; the throw is
+   `pi-tui/src/tui-main-screen.ts:536`) — the real surface is an unbreakable
+   over-width segment. Mitigation: `truncateToWidth` on every push (§4.3 step 3)
+   + a shell test with a narrow fake terminal. Resize-narrow between pushes is an
+   accepted limitation (§4.3), matching the existing footer's exposure.
 2. **Control-sequence injection from extension text.** Mitigation:
    `sanitizeDisplay` + newline collapse at render time (§4.3); stored values stay
    raw but only the TUI pipeline renders them.
@@ -416,25 +506,40 @@ hook — which imp deliberately does not add in this batch (non-goal §2).
    spinner already uses); dogfood watch item.
 8. **Scope creep toward pi's full `ctx.ui`.** Mitigation: this batch adds exactly
    one channel for one consumer; the non-goals in §2 are written down.
+9. **Extension-owned timer handles blocking process exit.** Any extension (not
+   just task-timer) can `setInterval`; a ref'd handle survives a crashed run and
+   prevents Node from exiting (print mode) or delays `/exit` (REPL) — the design
+   can see this coming only for its own consumer. Mitigation: `unref` is specced
+   for task-timer (§4.5, locked by its test), and the README extension section
+   states the rule for future authors (§4.7).
 
 ## 8. Implementation checklist
 
 1. `src/extensions/types.ts`: `RunStartEvent`; `on("run_start")` overload;
    `ExtensionEventName`; `ExtensionEventHandlerMap`; `ExtensionApi.setStatus`
-   signature + JSDoc (contract wording §4.1/§4.2).
+   signature + JSDoc (contract wording §4.1/§4.2); stale "§16 risk 7" →
+   "§17 risk 7" cross-reference fix at `types.ts:135`.
 2. `src/extensions/registry.ts`: `KNOWN_EVENTS += "run_start"`; `emitRunStart`;
    status map + validation + `setExtensionStatus`/`getExtensionStatusEntries`/
-   `setStatusSink`; composition helper (sorted `source:key` join).
+   `setStatusSink`; composition helper (sorted `bucket:key` join).
 3. `src/extensions/loader.ts`: `setStatus` member in `extensionApi()` closing
-   over the extension's source name (runtime method — no `whileLoading`).
+   over `facts.name` + `facts.origin` (runtime method — no `whileLoading`, and
+   deliberately NOT the open-section mechanism, which is load-time-only, §4.2).
 4. `src/runner.ts`: `emitRunStart` at `runTurn` entry.
 5. `src/repl/line-input.ts`: optional `setExtensionStatus`.
 6. `src/repl/shell.ts`: `extensionFooter` component + buffer + pipeline
-   (sanitize → collapse → truncate → dim → render).
+   (sanitize → `\n`-collapse → truncate → store raw → dim at application point →
+   render), post-`close()` push guard, layout ASCII comment update.
 7. `src/repl/repl.ts`: `ReplOptions`/`ReplMachineOptions.extensions`; machine
    binding (initial push + `setStatusSink`).
 8. `src/cli.ts`: pass the registry into `runRepl`.
-9. `examples/extensions/task-timer.mjs`.
-10. Tests per §4.6; run the full suite.
-11. Dogfood: install into `~/.imp/extensions/`, run a few real tasks (including a
-    Ctrl+C abort and, if feasible, a forced provider error) and record findings.
+9. `examples/extensions/task-timer.mjs` (with the `unref` requirement, §4.5).
+10. Tests per §4.6 (including the unref assertion and the load-path test); run
+    the full suite.
+11. Dogfood: install into `~/.imp/extensions/`, run a few real tasks —
+    deliberately including a Ctrl+C abort and a forced provider error in BOTH
+    print and REPL modes (verifies crash-residue display AND process-exit
+    liveness, §4.5) — and record findings.
+12. Docs per §4.7: README api surface + event enumeration + examples-list
+    repair + the extension-timer `unref` rule; `m4-extensions-design.md` §16
+    "UI contribution" row amendment pointing at this design.

@@ -86,6 +86,21 @@ Note: `/login anthropic` stores a key that overrides `ANTHROPIC_AUTH_TOKEN`
 (and sends `x-api-key` style instead of `Bearer`) — on a compat endpoint,
 prefer the env pair above.
 
+## Platform support
+
+- **macOS** — the development platform; features are exercised here first.
+- **Linux** — supported: CI runs the full gate (typecheck, lint, build,
+  tests) on `ubuntu-latest` with Node 20 and 24.
+- **Windows** — not supported yet. Native Windows has known blockers (the
+  `bash` tool spawns `/bin/bash`, and MCP servers spawn without `.cmd` /
+  shell resolution) and no CI coverage. WSL does work — inside it imp is
+  plain Linux.
+
+External tools are optional and platform-dependent: `rg` / `fd` back the
+`grep` / `find` tools (missing binaries are reported with install hints; the
+rest of imp works without them), and clipboard image paste uses `osascript`
+on macOS and `wl-paste` / `xclip` on Linux.
+
 ## Usage
 
 ```bash

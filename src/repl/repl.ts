@@ -376,12 +376,7 @@ class ReplMachine {
 		// extension set before the machine existed (load-time calls).
 		if (options.extensions !== undefined && this.input.setExtensionStatus !== undefined) {
 			const registry = options.extensions;
-			this.input.setExtensionStatus(
-				registry
-					.getExtensionStatusEntries()
-					.map((entry) => entry.text)
-					.join(" "),
-			);
+			this.input.setExtensionStatus(registry.composeStatusLine());
 			registry.setStatusSink((line) => this.input.setExtensionStatus?.(line));
 		}
 		this.refreshFooter(); // eager warmup already knows model + session

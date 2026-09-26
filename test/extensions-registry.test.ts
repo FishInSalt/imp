@@ -385,9 +385,11 @@ describe("extension status channel (task-timer design §4.2)", () => {
 		registry.setExtensionStatus("cli:a-ext", "timer", "running 0:02");
 		registry.setExtensionStatus("global:b-ext", "other", "x");
 		// Same key in two buckets: both kept (namespacing).
-		expect(
-			registry.getExtensionStatusEntries().map((e) => `${e.bucket}:${e.key}=${e.text}`),
-		).toEqual(["cli:a-ext:timer=running 0:02", "global:b-ext:other=x", "global:b-ext:timer=running 0:01"]);
+		expect(registry.getExtensionStatusEntries().map((e) => `${e.bucket}:${e.key}=${e.text}`)).toEqual([
+			"cli:a-ext:timer=running 0:02",
+			"global:b-ext:other=x",
+			"global:b-ext:timer=running 0:01",
+		]);
 		registry.setExtensionStatus("global:b-ext", "other", undefined);
 		registry.setExtensionStatus("global:b-ext", "timer", "running 0:03"); // overwrite
 		expect(registry.getExtensionStatusEntries().map((e) => `${e.bucket}:${e.key}=${e.text}`)).toEqual([
@@ -416,10 +418,15 @@ describe("extension status channel (task-timer design §4.2)", () => {
 		]);
 	});
 
-	it("stored text is capped at 500 UTF-16 code units (silently truncated)", () => {
+	it("stored text is capped at 500 code points (silently truncated, never splits a surrogate pair)", () => {
 		const registry = new ExtensionRegistry();
 		registry.setExtensionStatus("cli:x", "k", "a".repeat(600));
 		expect(registry.getExtensionStatusEntries()[0]?.text.length).toBe(500);
+		// Astral characters count once and are never split into lone surrogates.
+		registry.setExtensionStatus("cli:x", "e", "😀".repeat(600)); // 600 code points
+		const stored = registry.getExtensionStatusEntries().find((entry) => entry.key === "e")?.text ?? "";
+		expect([...stored]).toHaveLength(500);
+		expect(stored).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
 	});
 
 	it("the sink receives the recomposed line on every write; unbound means storage only", () => {
@@ -429,8 +436,9 @@ describe("extension status channel (task-timer design §4.2)", () => {
 		registry.setStatusSink((line) => pushes.push(line));
 		registry.setExtensionStatus("cli:x", "k", "after bind");
 		registry.setExtensionStatus("global:y", "k2", "second");
+		registry.setExtensionStatus("global:y", "absent", undefined); // unknown key in a LIVE bucket: no-op, no push
 		registry.setExtensionStatus("cli:x", "k", undefined); // clear → empty line
-		registry.setExtensionStatus("cli:x", "never-set", undefined); // no-op: no push
+		registry.setExtensionStatus("cli:x", "never-set", undefined); // unknown bucket: no-op, no push
 		expect(pushes).toEqual(["after bind", "after bind second", "second"]);
 	});
 });

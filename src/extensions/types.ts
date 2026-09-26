@@ -69,8 +69,8 @@ export interface ExtensionApi {
 	 *  command callbacks — unlike the register/on methods above it is NOT
 	 *  gated to load time. The host owns styling; control sequences in text
 	 *  are stripped. No-op when nothing renders statuses (print mode, legacy
-	 *  shell). Keys are namespaced per extension (origin:name), so distinct
-	 *  extensions cannot clobber each other. */
+	 *  shell). Keys are namespaced per extension (origin:name), so extensions
+	 *  with a distinct name+origin cannot clobber each other. */
 	setStatus(key: string, text: string | undefined): void;
 
 	/** Ask the human a yes/no question (the interactive host renders a [y/N]

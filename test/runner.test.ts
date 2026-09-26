@@ -499,8 +499,7 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 			name: "overflow-then-ok",
 			async *stream() {
 				call++;
-				if (call === 1)
-					throw new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}');
+				if (call === 1) throw new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}');
 				if (call === 2) {
 					// the compaction summary call — internal, emits no extension events
 					yield { type: "text_delta", text: "SUMMARY-OF-OLD" };
@@ -581,6 +580,7 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 		const events: string[] = [];
 		const provider: LLMProvider = {
 			name: "always-fails",
+			// biome-ignore lint/correctness/useYield: the contract is an async generator; this fake must throw before any event
 			async *stream() {
 				throw new Error("provider exploded");
 			},

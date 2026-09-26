@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { firstLine, VERSION } from "../format.js";
-import { ExtensionRegistry } from "./registry.js";
+import { compareCodePoints, ExtensionRegistry } from "./registry.js";
 import type {
 	ConfirmOptions,
 	ExtensionApi,
@@ -63,19 +63,9 @@ function errorDetail(err: unknown): string {
 	return err instanceof Error ? (err.stack ?? err.message) : String(err);
 }
 
-/** Code-point order (not UTF-16 code-unit order) — design §3.2, risk 3. */
-function compareCodePoints(a: string, b: string): number {
-	if (a === b) return 0;
-	const pa = [...a].map((ch) => ch.codePointAt(0) ?? 0);
-	const pb = [...b].map((ch) => ch.codePointAt(0) ?? 0);
-	const shared = Math.min(pa.length, pb.length);
-	for (let i = 0; i < shared; i++) {
-		const left = pa[i] ?? 0;
-		const right = pb[i] ?? 0;
-		if (left !== right) return left < right ? -1 : 1;
-	}
-	return pa.length - pb.length;
-}
+// compareCodePoints (design §3.2, risk 3) lives in registry.ts — loader →
+// registry is the existing dependency direction, so the helper is shared
+// from there rather than duplicated.
 
 function isDirectory(target: string): boolean {
 	try {

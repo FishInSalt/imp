@@ -36,9 +36,26 @@ const KNOWN_EVENTS: readonly ExtensionEventName[] = [
 	"run_end",
 ];
 
-/** Defensive cap on a stored status text (UTF-16 code units). The shell does
- *  the real width truncation at render time (task-timer design §4.2). */
+/** Defensive cap on a stored status text (code points — slicing by code
+ *  point never splits a surrogate pair). The shell does the real width
+ *  truncation at render time (task-timer design §4.2). */
 const STATUS_TEXT_CAP = 500;
+
+/** Code-point order (not UTF-16 code-unit order) — design §3.2, risk 3.
+ *  Shared with the loader's discovery sort (which imports it from here:
+ *  loader → registry is the existing dependency direction). */
+export function compareCodePoints(a: string, b: string): number {
+	if (a === b) return 0;
+	const pa = [...a].map((ch) => ch.codePointAt(0) ?? 0);
+	const pb = [...b].map((ch) => ch.codePointAt(0) ?? 0);
+	const shared = Math.min(pa.length, pb.length);
+	for (let i = 0; i < shared; i++) {
+		const left = pa[i] ?? 0;
+		const right = pb[i] ?? 0;
+		if (left !== right) return left < right ? -1 : 1;
+	}
+	return pa.length - pb.length;
+}
 
 type AnyHandler = ExtensionEventHandlerMap[ExtensionEventName];
 
@@ -371,7 +388,9 @@ export class ExtensionRegistry {
 		}
 		if (text === undefined) {
 			const existing = this.statuses.get(bucket);
-			if (existing === undefined) return; // nothing stored — no repaint owed
+			// No stored entry — no state change, no repaint owed. (Covers BOTH
+			// no-op shapes: unknown bucket and unknown key in a known bucket.)
+			if (existing === undefined || !existing.has(key)) return;
 			existing.delete(key);
 			if (existing.size === 0) this.statuses.delete(bucket);
 		} else {
@@ -380,7 +399,8 @@ export class ExtensionRegistry {
 				bucketMap = new Map();
 				this.statuses.set(bucket, bucketMap);
 			}
-			bucketMap.set(key, text.length > STATUS_TEXT_CAP ? text.slice(0, STATUS_TEXT_CAP) : text);
+			const clipped = [...text].slice(0, STATUS_TEXT_CAP).join(""); // by code point — never splits a surrogate pair
+			bucketMap.set(key, clipped);
 		}
 		this.pushStatus();
 	}
@@ -392,12 +412,17 @@ export class ExtensionRegistry {
 		for (const [bucket, map] of this.statuses) {
 			for (const [key, text] of map) entries.push({ bucket, key, text });
 		}
-		entries.sort((a, b) => {
-			const left = `${a.bucket}:${a.key}`;
-			const right = `${b.bucket}:${b.key}`;
-			return left < right ? -1 : left > right ? 1 : 0;
-		});
+		entries.sort((a, b) => compareCodePoints(`${a.bucket}:${a.key}`, `${b.bucket}:${b.key}`));
 		return entries;
+	}
+
+	/** The composed footer line for the current entries — ONE definition, used
+	 *  by both push paths (runtime writes and the machine's bind-time replay),
+	 *  so the two can never diverge. */
+	composeStatusLine(): string {
+		return this.getExtensionStatusEntries()
+			.map((entry) => entry.text)
+			.join(" ");
 	}
 
 	/** Bind the shell's status-line renderer (one per process — the REPL
@@ -410,11 +435,14 @@ export class ExtensionRegistry {
 
 	private pushStatus(): void {
 		if (this.statusSink === null) return;
-		this.statusSink(
-			this.getExtensionStatusEntries()
-				.map((entry) => entry.text)
-				.join(" "),
-		);
+		// The sink is shell code, but it is invoked from inside an extension's
+		// call context (a handler, a timer) — a throwing sink must not become
+		// an uncaught exception there (fireObservers' isolation, mirrored).
+		try {
+			this.statusSink(this.composeStatusLine());
+		} catch (err) {
+			this.report(`imp: extension status sink error — ${firstLine(errorText(err), 160)}`);
+		}
 	}
 
 	private fireObservers(eventName: ExtensionEventName, event: unknown): void {

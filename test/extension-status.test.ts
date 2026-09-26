@@ -312,7 +312,9 @@ describe("ReplMachine status-sink binding", () => {
 		await ticks(2);
 		expect(sinkSpy).not.toHaveBeenCalled();
 		registry.setExtensionStatus("cli:x", "k", "stored only"); // no throw, no render
-		expect(registry.getExtensionStatusEntries()).toEqual([{ bucket: "cli:x", key: "k", text: "stored only" }]);
+		expect(registry.getExtensionStatusEntries()).toEqual([
+			{ bucket: "cli:x", key: "k", text: "stored only" },
+		]);
 		input.end(); // EOF exits the REPL
 		await repl;
 	});

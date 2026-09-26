@@ -96,14 +96,14 @@ Non-goals (each returns in §6 Alternatives):
 ### 3.2 Footer and UI plumbing
 
 - The TUI footer is one dim `Text` below the editor, created at
-  `src/repl/shell.ts:307-309`. Its whole content is computed by the private
+  `src/repl/shell.ts:316-318`. Its whole content is computed by the private
   `ReplMachine.refreshFooter()` (`src/repl/repl.ts:802-896`) from runner state
   (model · think level · session id · usage · cost · context fill) and pushed via
   `this.input.setFooter(parts.join(" · "))` (`repl.ts:894`).
 - `setFooter` is an optional `LineInput` method (`src/repl/line-input.ts:89-91`);
   the legacy readline shell does not implement it, and callers capability-gate on
   `this.input.setFooter !== undefined`. `TuiShell.setFooter`
-  (`shell.ts:486-495`) buffers the text (pre-start pushes must not be dropped —
+  (`shell.ts:498-506`) buffers the text (pre-start pushes must not be dropped —
   the `footerText` field, `shell.ts:225-228`), applies host-side `dim(...)`, and
   calls `tui.requestRender()`.
 - Empty `Text` renders zero rows (the `setFooter` JSDoc, `shell.ts:486-488`) — an
@@ -215,7 +215,8 @@ distinct name+origin cannot clobber each other").
 - `key`: must be a non-empty string after trim; invalid key → one teaching-style
   diagnostic line via the existing `report()` channel, write dropped.
 - `text`: non-string (other than `undefined`) → same treatment. Strings are stored
-  verbatim up to a defensive cap of 500 UTF-16 code units (silently truncated);
+  verbatim up to a defensive cap of 500 code points (silently truncated —
+  slicing by code point never splits a surrogate pair);
   `undefined` deletes the entry.
 - Styling stays with the host (tool-display-polish-design.md: "styled by the host,
   never trusted metadata or terminal escape sequences from the extension").
@@ -280,9 +281,13 @@ slot.)
   `shell.ts:95-107` is updated in the same diff). Buffered in an
   `extensionFooterText` field for pre-start pushes — the `footerText`
   pattern (`shell.ts:225-228`), including its raw/dim boundary: the buffer stores
-  the sanitized+truncated but **undimmed** text, and `dim(...)` is applied at
-  each application point (`start()` seed and `setText`), exactly as `footerText`
-  does at `shell.ts:307` and `:493`. Empty string renders zero rows.
+  the sanitized+folded but **undimmed** text, and both truncation and
+  `dim(...)` happen at each application point (`start()` seed and `setText`),
+  exactly as `footerText` dims at `shell.ts:316` and `:505`. (Implementation
+  note: truncating at the application point — not at write time — lets
+  pre-start pushes truncate against the REAL terminal width at `start()`,
+  which is strictly better than this section's original write-time plan.)
+  Empty string renders zero rows.
 - `setExtensionStatus(text)` pipeline per push:
   1. `sanitizeDisplay(text)` — strip CSI/OSC/C1, escape controls
      (tool-presentation.ts:14; the task-live-display "untrusted input" rule);
@@ -317,7 +322,7 @@ slot.)
 
 ### 4.4 Print mode and the legacy shell
 
-- Print mode loads extensions (`cli.ts:827`) but never constructs a `ReplMachine`,
+- Print mode loads extensions (`cli.ts:833`) but never constructs a `ReplMachine`,
   so no sink is ever bound: `setStatus` writes storage and returns. `run_end`
   already fires in print mode (that is `notify.mjs`'s whole trigger); `run_start`
   is new and fires on the same path.
@@ -336,7 +341,7 @@ Behavior, ported from pi's extension with imp's event semantics:
   paint immediately, then `setInterval(1000)` repainting
   `setStatus("task-timer", "running " + fmt(elapsed))`.
 - **The interval handle is `unref`'d** (`tick.unref?.()`, the activity spinner's
-  precedent at `shell.ts:556`). This is a hard requirement, not hygiene: on the
+  precedent at `shell.ts:593`). This is a hard requirement, not hygiene: on the
   crash path (§3.3) no `run_end` ever arrives to clear the interval, and a ref'd
   handle would keep the Node event loop alive — print mode would hang after the
   run fails, and `/exit` after a crash would hang the REPL process
@@ -529,8 +534,8 @@ hook — which imp deliberately does not add in this batch (non-goal §2).
 4. `src/runner.ts`: `emitRunStart` at `runTurn` entry.
 5. `src/repl/line-input.ts`: optional `setExtensionStatus`.
 6. `src/repl/shell.ts`: `extensionFooter` component + buffer + pipeline
-   (sanitize → `\n`-collapse → truncate → store raw → dim at application point →
-   render), post-`close()` push guard, layout ASCII comment update.
+   (write: sanitize → `\n`-collapse → store raw; application point: truncate →
+   dim → render), post-`close()` push guard, layout ASCII comment update.
 7. `src/repl/repl.ts`: `ReplOptions`/`ReplMachineOptions.extensions`; machine
    binding (initial push + `setStatusSink`).
 8. `src/cli.ts`: pass the registry into `runRepl`.

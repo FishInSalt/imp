@@ -1,0 +1,139 @@
+# Release — tag-driven npm publishing with provenance.
+# Design: docs/publishing-design.md (approved 2026-09-26); process: RELEASING.md.
+#
+# Bootstrap note: npm trusted publishing can only be configured once the
+# package exists on npmjs.com, so v0.1.0 is published manually (see
+# RELEASING.md). Real publishes are additionally gated by the repo variable
+# NPM_PUBLISH_ENABLED == 'true': without it, a tag push runs the gates and
+# prints a warning instead of publishing. workflow_dispatch can only dry-run.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "npm publish --dry-run only (no registry write)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    # The same five gates as ci.yml, plus the packaging smoke — the tag push
+    # is the last line of defense: nothing publishes without a green gate.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: packaging smoke
+        run: |
+          mkdir -p "$RUNNER_TEMP"
+          rm -f imp-agent-*.tgz
+          npm pack
+          tar -tzf imp-agent-*.tgz > "$RUNNER_TEMP/pack-list.txt"
+          grep -q "^package/dist/cli.js$" "$RUNNER_TEMP/pack-list.txt"
+          grep -q "^package/bin/imp.js$" "$RUNNER_TEMP/pack-list.txt"
+          if grep -qE "^package/(src|test|docs)/" "$RUNNER_TEMP/pack-list.txt"; then
+            echo "tarball contains src/, test/, or docs/ — check the files field" >&2
+            exit 1
+          fi
+          npm install -g --prefix "$RUNNER_TEMP/imp-smoke" ./imp-agent-*.tgz
+          "$RUNNER_TEMP/imp-smoke/bin/imp" --help > /dev/null
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: tag must be on main
+        run: |
+          git fetch origin main
+          TAG_SHA="$(git rev-parse "$GITHUB_REF^{commit}")"
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "ref $GITHUB_REF ($TAG_SHA) is not an ancestor of origin/main" >&2
+            exit 1
+          fi
+
+      - name: tag must match package.json
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "not a tag ref ($GITHUB_REF) — version check skipped"
+            exit 0
+          fi
+          VERSION="$(node -p 'require("./package.json").version')"
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "tag $TAG does not match package.json version $VERSION" >&2
+            exit 1
+          fi
+          echo "tag $TAG matches package.json version $VERSION"
+
+      - name: npm CLI must support trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          npm --version
+          node -e 'const [a,b]=process.argv[1].split(".").map(Number); if (a<11 || (a===11 && b<5)) { console.error("npm " + process.argv[1] + " is too old for trusted publishing (need >= 11.5.1)"); process.exit(1); }' "$(npm --version)"
+
+      - run: npm ci
+
+      - name: npm publish (dry run)
+        if: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
+        run: npm publish --dry-run --access public
+
+      - name: npm publish (real)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED == 'true' && inputs.dry_run != true }}
+        run: npm publish --provenance --access public
+
+      - name: registry visibility check
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED == 'true' && inputs.dry_run != true }}
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          for attempt in 1 2 3 4 5 6; do
+            if npm view "imp-agent@$VERSION" version > /dev/null 2>&1; then
+              echo "imp-agent@$VERSION is visible on the registry"
+              npm view "imp-agent@$VERSION" version dist.tarball
+              echo "Provenance: https://www.npmjs.com/package/imp-agent/v/$VERSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "imp-agent@$VERSION not visible after 60s — check the registry" >&2
+          exit 1
+
+      - name: publish skipped notice
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED != 'true' && inputs.dry_run != true }}
+        run: |
+          echo "::warning::publish skipped (NPM_PUBLISH_ENABLED != true) — see RELEASING.md"
+          {
+            echo "### publish skipped"
+            echo ""
+            echo "Tag \`${GITHUB_REF#refs/tags/}\` passed the gates, but the repo variable"
+            echo "\`NPM_PUBLISH_ENABLED\` is not \`true\`, so nothing was published."
+            echo "Set it once the trusted publisher is configured (see RELEASING.md)."
+          } >> "$GITHUB_STEP_SUMMARY"

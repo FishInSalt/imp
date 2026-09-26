@@ -239,6 +239,7 @@ const MODEL_CANDIDATES: readonly string[] = [
 	"zai/glm-4.7",
 	"openai-codex/gpt-5.5",
 	"openai/gpt-5.2",
+	"deepseek/deepseek-v4-pro",
 ];
 
 function modelCandidates(current: string): string[] {
@@ -274,12 +275,15 @@ const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 		"zai/glm-5-turbo",
 		"zai/glm-4.7",
 	],
+	// pi.dev's live deepseek catalog (2026-09)
+	deepseek: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
 };
 
 /** Row descriptions identify the family — a bare id cannot (P2-5 lesson). */
 function familyLabel(id: string): string {
 	if (id.startsWith("openai-codex/")) return "ChatGPT plan (Codex)";
 	if (id.startsWith("zai/")) return "Z.ai GLM coding plan";
+	if (id.startsWith("deepseek/")) return "DeepSeek";
 	if (id.startsWith("openai/")) return "OpenAI-compatible endpoint";
 	return "anthropic-compatible endpoint";
 }
@@ -631,12 +635,14 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 
 export interface ModelListDeps {
 	/** Families that currently hold a credential. */
-	configured: (family: "anthropic" | "openai" | "openai-codex" | "zai") => boolean;
+	configured: (family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek") => boolean;
 	/** Endpoint listing, null when unreachable — injectable for tests. */
-	discover: (family: "anthropic" | "openai" | "openai-codex" | "zai") => Promise<string[] | null>;
+	discover: (
+		family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek",
+	) => Promise<string[] | null>;
 	/** M14: pi.dev overlay ids for the family, null when the catalog has
 	 *  nothing — injectable for tests. */
-	catalogIds?: (family: "anthropic" | "openai" | "openai-codex" | "zai") => string[] | null;
+	catalogIds?: (family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek") => string[] | null;
 }
 
 /**
@@ -654,7 +660,7 @@ export async function buildModelList(
 	rows: Array<{ label: string; description?: string }>;
 	fallbackNotes: string[];
 }> {
-	const families = ["anthropic", "openai", "openai-codex", "zai"] as const;
+	const families = ["anthropic", "openai", "openai-codex", "zai", "deepseek"] as const;
 	const fallbackNotes: string[] = [];
 	let ids: string[] = [];
 	const configuredFamilies = families.filter((f) => deps.configured(f));
@@ -675,6 +681,7 @@ export async function buildModelList(
 				(family === "anthropic" && process.env.ANTHROPIC_BASE_URL === undefined) ||
 				(family === "openai" && process.env.OPENAI_BASE_URL === undefined) ||
 				(family === "zai" && process.env.ZAI_BASE_URL === undefined) ||
+				(family === "deepseek" && process.env.DEEPSEEK_BASE_URL === undefined) ||
 				family === "openai-codex";
 			// M14: the pi.dev disk cache stands between live discovery and the
 			// static floor — offline picker lists the real family catalog. The
@@ -811,6 +818,13 @@ const LOGIN_TARGETS: readonly LoginTarget[] = [
 		envVar: "none — OAuth",
 		method: "oauth",
 		switchHint: "openai-codex/gpt-5.5",
+	},
+	{
+		family: "deepseek",
+		name: "DeepSeek",
+		envVar: "DEEPSEEK_API_KEY",
+		method: "api_key",
+		switchHint: "deepseek/deepseek-v4-pro",
 	},
 ];
 

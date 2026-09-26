@@ -23,7 +23,7 @@ import path from "node:path";
  */
 
 /** Families that take a plain api key via /login. Codex is OAuth-only. */
-export type ApiKeyFamily = "anthropic" | "openai" | "zai";
+export type ApiKeyFamily = "anthropic" | "openai" | "zai" | "deepseek";
 
 interface AuthFile {
 	version?: 1;

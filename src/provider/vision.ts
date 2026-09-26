@@ -22,6 +22,9 @@ export interface VisionRule {
 }
 
 const VISION_RULES: ReadonlyArray<VisionRule> = [
+	// deepseek official: V4.1 Flash takes images (pi.dev 2026-09-25; the
+	// rest of the line is text-only — no rule → false)
+	{ provider: "deepseek", prefix: "deepseek-flash", vision: true },
 	// zai: exact vision-capable families first (5.3-flash covers -flashx),
 	// then the blanket text-only rule for the rest of the glm line.
 	{ provider: "zai", prefix: "glm-5.3-flash", vision: true },

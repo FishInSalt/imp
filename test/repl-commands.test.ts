@@ -405,6 +405,7 @@ describe("slash commands", () => {
 			"zai/glm-4.7",
 			"openai-codex/gpt-5.5",
 			"openai/gpt-5.2",
+			"deepseek/deepseek-v4-pro",
 		]); // v1 candidates — GLM is zai-canonical (pi parity)
 		expect(calls[0]?.title).toContain("model");
 		expect(env.runner.model).toBe("glm-5.3"); // the family strips the prefix
@@ -1680,7 +1681,13 @@ describe("/think (#thinking-levels)", () => {
 		};
 		await dispatchCommand("/login", env.ctx);
 		// rows: one per family, status-filled (pi's OAuthSelector rows)
-		expect(labels.map((r) => r.label)).toEqual(["Z.AI", "Anthropic", "OpenAI", "OpenAI (ChatGPT plan)"]);
+		expect(labels.map((r) => r.label)).toEqual([
+			"Z.AI",
+			"Anthropic",
+			"OpenAI",
+			"OpenAI (ChatGPT plan)",
+			"DeepSeek",
+		]);
 		expect(labels.find((r) => r.label === "Z.AI")?.description).toBe("not signed in");
 		expect(labels.find((r) => r.label === "OpenAI (ChatGPT plan)")?.description).toBe("not signed in");
 		expect(secretPrompt).toBe("Enter Z.AI API key"); // pi's prompt form
@@ -1726,7 +1733,7 @@ describe("/think (#thinking-levels)", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/login foo", env.ctx);
 		expect(env.output()).toContain('unknown provider "/login foo"');
-		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex");
+		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex, deepseek");
 		// oauth family (batch B): URL + code render, no secret prompt at all
 		const codex = await makeEnv();
 		codex.ctx.secret = async () => {
@@ -1779,7 +1786,7 @@ describe("/think (#thinking-levels)", () => {
 		process.env.OPENAI_API_KEY = "sk-env-o"; // env-configured but NOT stored
 		try {
 			await dispatchCommand("/logout", env.ctx);
-			expect(rows.map((r) => r.label)).toEqual(["OpenAI (ChatGPT plan)", "Z.AI"]); // stored only
+			expect(rows.map((r) => r.label)).toEqual(["OpenAI (ChatGPT plan)", "Z.AI"]); // stored only (deepseek never stored here)
 			expect(env.output()).toContain("Removed stored API key for Z.AI. Environment variables are unchanged.");
 			expect(loadApiKey("zai", env.ctx.authStorePath)).toBeNull();
 			expect(loadCodexCredential(env.ctx.authStorePath)?.accountId).toBe("a"); // untouched

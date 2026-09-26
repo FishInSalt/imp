@@ -160,6 +160,11 @@ Environment:
   prints a sign-in pointer — /login zai — instead of silently connecting
   elsewhere. anthropic/glm-* forces the compat endpoint explicitly.)
 
+  DeepSeek official API:
+    export DEEPSEEK_API_KEY=<your deepseek key>
+    export IMP_MODEL=deepseek/deepseek-v4-pro
+  (or /login deepseek in the REPL — the stored key wins over the env var)
+
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
     imp login
     imp -m openai-codex/gpt-5.5
@@ -167,9 +172,10 @@ Environment:
   OpenAI and OpenAI-compatible providers (model id prefix routes):
     export OPENAI_API_KEY=<key>
     export IMP_MODEL=openai/gpt-5.2
-    # any compatible endpoint (DeepSeek, Kimi, OpenRouter, ...):
-    export OPENAI_BASE_URL=https://api.deepseek.com/v1
-    export IMP_MODEL=openai/deepseek-chat
+    # any compatible endpoint (Kimi, OpenRouter, ...; DeepSeek has its own
+    # family above):
+    export OPENAI_BASE_URL=<your compat endpoint>/v1
+    export IMP_MODEL=openai/<model id>
     # Z.ai via its OpenAI-mode endpoint:
     export OPENAI_API_KEY=<your z.ai key>
     export OPENAI_BASE_URL=https://api.z.ai/api/paas/v4

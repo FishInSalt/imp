@@ -38,6 +38,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	"glm-5.3": 1_000_000,
 	"glm-5.3-flash": 1_000_000,
 	"glm-5.3-highspeed": 1_000_000,
+	// DeepSeek official (pi.dev deepseek catalog, 2026-09-25)
+	"deepseek-flash": 1_000_000,
+	"deepseek-v4-pro": 1_000_000,
 	// OpenAI Codex — ChatGPT subscription models (pi openai-codex.json)
 	"gpt-6-astra": 272_000, // pi.dev catalog 2026-09
 	"gpt-5.3-codex-spark": 128_000,
@@ -85,6 +88,9 @@ const MODEL_COSTS: Record<string, ModelCost> = {
 	"glm-5.3": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
 	"glm-5.3-flash": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
 	"glm-5.3-highspeed": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+	// DeepSeek official API (pi.dev deepseek catalog, 2026-09-25)
+	"deepseek-flash": { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
+	"deepseek-v4-pro": { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
 	// OpenAI Codex — ChatGPT subscription; rates mirror the API list (pi openai-codex.json)
 	"gpt-6-astra": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
 	"gpt-5.3-codex-spark": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0, subscription: true },

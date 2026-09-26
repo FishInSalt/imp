@@ -1,5 +1,6 @@
 import { loadApiKey, resolveApiKey } from "./auth-store.js";
 import { loadCodexCredential } from "./codex-auth.js";
+import { DEEPSEEK_DEFAULT_BASE_URL, DEEPSEEK_SEED_MODELS, deepseekApiKey } from "./deepseek.js";
 import type { ProviderName } from "./resolve.js";
 import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS, zaiApiKey } from "./zai.js";
 
@@ -92,6 +93,8 @@ export function familyConfigured(family: ProviderName): boolean {
 			return loadCodexCredential() !== null;
 		case "zai":
 			return zaiApiKey() !== null;
+		case "deepseek":
+			return deepseekApiKey() !== null;
 		default: {
 			const exhaustive: never = family;
 			throw new Error(`unreachable family: ${JSON.stringify(exhaustive)}`);
@@ -114,6 +117,24 @@ export function familyConfigured(family: ProviderName): boolean {
 export async function discoverModels(family: ProviderName): Promise<string[] | null> {
 	if (!familyConfigured(family)) return null;
 	if (family === "openai-codex") return discoverCodexModels();
+	// deepseek: mirror of the zai branch below (official endpoint serves an
+	// OpenAI-style /models; seeds are the pi.dev offline floor).
+	if (family === "deepseek") {
+		const cacheKey = "deepseek";
+		const hit = cache.get(cacheKey);
+		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
+		const redirected = process.env.DEEPSEEK_BASE_URL !== undefined; // #gateway-truth
+		const base = (process.env.DEEPSEEK_BASE_URL ?? DEEPSEEK_DEFAULT_BASE_URL).replace(/\/+$/, "");
+		const ids = await fetchJson(
+			`${base}/models`,
+			{
+				accept: "application/json",
+				authorization: `Bearer ${String(deepseekApiKey())}`,
+			},
+			cacheKey,
+		).catch(() => null);
+		return redirected ? ids : (ids ?? ([...DEEPSEEK_SEED_MODELS] as string[]));
+	}
 	// zai: the coding endpoint serves an OpenAI-style /models; the pi.dev
 	// live catalog is the offline seed when it 404s or the family is
 	// configured but unreachable.

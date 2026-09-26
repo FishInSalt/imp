@@ -1,6 +1,6 @@
 # 发布设计：npm 首个公开版本与持续发布
 
-状态：待审批（2026-09-26）
+状态：修复待复核（2026-09-26，独立评审 B×1/S×4/N×6 已逐条修复）
 分支：本设计 `docs/publishing-design`；实现批次 `release/ci-publish`
 参考：npm trusted publishers 文档（docs.npmjs.com/trusted-publishers）；npm community
 讨论 #176761（首包引导的循环依赖）；PROJECT_PLAN.md:602（路线图原猜测发 scope
@@ -22,7 +22,7 @@ PROJECT_PLAN.md:99）
 3. tag 与 `package.json` 版本不一致 → workflow 失败，绝不发错版本。
 
 **非目标**：Windows 支持（见 README Platform support）；Homebrew tap；单文件二进制；
-扩展包分发（M4 延后项，另行设计）。
+扩展包分发（M4 延后项，路线图见 PROJECT_PLAN.md:602，另行设计）。
 
 ## 1. 决策记录（已拍板）
 
@@ -44,20 +44,30 @@ trusted publisher 的配置入口在**包设置页**，而包设置页只有在�
 备选（评估后不采用）：granular access token + repo secret（凭据长期存在、90 天轮换、
 泄露面大）；staged publishing（新增人工审批步，当前规模不值；记为将来可选增强）。
 
-### D3 发布触发器 = 版本 tag；版本双源由测试钉住
+### D3 发布触发器 = 版本 tag；版本漂移由三层守卫封死（含手工引导步）
 
-- tag 形如 `v0.1.0`（annotated），只打在 main 上；workflow 校验 tag 指向的 commit
-  是 `origin/main` 祖先，否则失败。
-- workflow 校验 `package.json` 的 version == tag 去 `v` 前缀；不一致即失败。
-  另一处版本源 `src/format.ts` 的 VERSION 已由 `test/package-metadata.test.ts`
-  钉住与 package.json 相等，两处守卫合起来封死版本漂移。
+- tag 形如 `v0.1.0`（annotated），只打在 main 上；workflow 的校验语义**有意取
+  “祖先关系”而非“等于 origin/main tip”**：既挡住“tag 打在没有并入 main 的 commit
+  上”，又允许对一个已发布的旧 tag 重跑 workflow（绑定修正后重试的场景）。校验命令
+  固定为 `git merge-base --is-ancestor "$(git rev-parse "$GITHUB_REF^{commit}")"
+  origin/main`（checkout 取 fetch-depth 0，并先 `git fetch origin main`）。
+  “tag 打在 main 的旧提交上”由 RELEASING.md 的流程纪律禁止（发布一律在 main HEAD
+  打 tag）。
+- 版本一致性三层守卫：①`test/package-metadata.test.ts` 钉 `src/format.ts` VERSION
+  == package.json version（已存在）；②release.yml 校验 tag 去 `v` 前缀 ==
+  package.json version；③手工引导步（v0.1.0 本机发布）**不经 release.yml 的发布
+  路径**，因此在 RELEASING.md 的 checklist 里给出一条显式命令：
+  `test "$(node -p 'require("./package.json").version')" = "${TAG#v}"`。
+  三者合起来覆盖“CI 路径 + 手工路径”——设计初稿只写了①②，被独立评审指出手工
+  首发布恰恰没有守卫（S1）。
 - 版本策略：semver。0.x 期间 minor 可含行为变更；CLI 参数与扩展 API 尚无稳定承诺
   （README/docs 不写兼容保证）。
 
 ### D4 发布闸门：仓库变量 `NPM_PUBLISH_ENABLED`
 
-publish job 仅在仓库变量 `NPM_PUBLISH_ENABLED == 'true'` 时执行；否则打印提示后
-**跳过**（gate 照跑、run 绿）。设定原因：
+publish job 的真实发布步骤仅在仓库变量 `NPM_PUBLISH_ENABLED == 'true'` 时执行；
+否则**跳过但必须显眼**：`echo "::warning::publish skipped (NPM_PUBLISH_ENABLED != true)"`
+并写 job summary，run 保持绿（gate 是 run 的主角）。设定原因：
 
 - v0.1.0 的 tag 在绑定 trusted publisher **之前**就要推（tag 是发布的不可变锚点），
   没有闸门会得到一次注定失败的红 run 或一次未授权发布尝试；
@@ -65,6 +75,8 @@ publish job 仅在仓库变量 `NPM_PUBLISH_ENABLED == 'true'` 时执行；否�
 
 时序：实现 release.yml（开关未被设置）→ 手工发布 v0.1.0 + 推 tag（workflow 跑
 门禁、干净跳过 publish）→ 绑定 trusted publisher → 设变量 `true` → 下一版起 CI 发布。
+“绿而无发布”是刻意接受的引导期行为，但也是误判面：RELEASING.md 的验收要求核对
+warning/job summary，不得只看 run 颜色（独立评审 S2）。变量同时是紧急刹车。
 
 ### D5 release.yml 结构
 
@@ -74,11 +86,22 @@ publish job 仅在仓库变量 `NPM_PUBLISH_ENABLED == 'true'` 时执行；否�
   ci.yml 的打包冒烟步骤补 `name: packaging smoke`（现在 UI 显示首行 `mkdir -p …`）。
 - job `publish`（`needs: gate`）：`ubuntu-latest` × Node 24 单跑（发布只跑一次；
   引擎下限 `>=20` 由 ci.yml 的 20/24 矩阵继续守护）；权限 `id-token: write` +
-  `contents: read`；步骤：checkout（fetch-depth 0）→ npm ci → `npm publish
-  --provenance --access public` → 轮询 `npm view imp-agent@<version> version`
-  确认注册表可见 → 打印 provenance 链接。
-- `workflow_dispatch` 带 `dry_run`：走 `npm publish --dry-run` 全流程、不写注册表。
-  这是绑定 done 之前唯一能真实 exercise workflow 的路径（验收场景之一）。
+  `contents: read`。
+- **npm CLI 版本前置（独立评审 B1）**：trusted publishing 要求 npm CLI ≥ 11.5.1
+  （Node ≥ 22.14，Node 24 已满足后者）。publish job 在 `npm ci` 前先
+  `npm install -g npm@latest` 并断言版本满足下限——setup-node 自带的 npm 若偏旧，
+  OIDC 会静默退回 legacy token 流、报错含糊，必须显式升级。
+- 步骤：checkout（fetch-depth 0）→ `git fetch origin main` → tag-on-main 校验
+  （D3 的命令）→ tag/版本一致性校验 → `npm install -g npm@latest` → `npm ci` →
+  `npm publish --provenance --access public` → 轮询 `npm view imp-agent@<version>
+  version` 确认注册表可见 → 打印 provenance 链接。
+- 发布/干跑的分支条件（独立评审 S4：`workflow_dispatch` 不得成为第二条真发布入口）：
+  - 真发布步：`startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED
+    == 'true' && inputs.dry_run != true`；
+  - 干跑步：`inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v')`，
+    跑 `npm publish --dry-run --access public`（不写注册表，供绑定前探测）；
+  - 跳过通报步：tag 推送且变量非 true 时打 `::warning::`（D4）。
+  于是“在任意分支上手工派发”最坏也只是干跑，真发布只可能发生在 tag 上。
 - 失败语义：任一步失败即停；**不做自动重试**——同 tag 重跑会因版本已存在而失败，
   属预期行为（RELEASING.md 写明：失败后先修因，再决定是删 tag 重来还是发下一版）。
 
@@ -103,21 +126,29 @@ README 与 CHANGELOG 两处并行腐烂——这是 #readme-refresh 的教训）
 
 ## 2. 首版发布流程（RELEASING.md 将落地的步骤）
 
-前置：main == origin/main、CI 绿、npm 账号已登录（2FA）。
+前置：main == origin/main、CI 绿、工作区干净且 `git rev-parse HEAD` == 拟打 tag 的
+commit、npm 账号已登录（2FA）。
 
-1. 在 main HEAD 上打 annotated tag 并推送：`git tag -a v0.1.0 -m "imp-agent v0.1.0"`
-   → `git push origin v0.1.0`；workflow 跑门禁后干净跳过 publish（闸门未开）。
-2. 手工发布：`npm publish --access public`（仓库根；`prepare` 会构建；tarball 与
-   tag 指向同一 commit）。
-3. 验证：`npm view imp-agent version` → `0.1.0`；`npm i -g imp-agent@0.1.0` 冒烟；
-   npm 包页检查 README 渲染、repository 链接、provenance 徽标。
-4. 绑定 trusted publisher：包设置 → Trusted Publisher → GitHub Actions → 填仓库
-   `FishInSalt/imp` 与 workflow `release.yml`（实施时以 npm 当前 UI 为准）。
-5. 设仓库变量 `NPM_PUBLISH_ENABLED=true`。
-6. `gh release create v0.1.0 --verify-tag --generate-notes`。
+1. **tag/版本一致性 checklist 核对**（手工路径的守卫，S1）：
+   `test "$(node -p 'require("./package.json").version')" = "0.1.0"`。
+2. 在 main HEAD 上打 annotated tag 并推送：`git tag -a v0.1.0 -m "imp-agent v0.1.0"`
+   → `git push origin v0.1.0`；workflow 跑门禁后按 D4 打 warning 跳过真发布
+   （闸门未开）。
+3. 手工发布：在**工作区干净且 HEAD 即 tag commit** 的状态下
+   `npm publish --access public`（仓库根；`prepare` 会构建）。
+4. 验证：`npm view imp-agent version` → `0.1.0`（registry 传播有延迟，未见就等
+   30s 重查，同 D5 轮询语义）；`npm i -g imp-agent@0.1.0` 冒烟；npm 包页检查
+   README 渲染、repository 链接、provenance 徽标。
+5. 绑定 trusted publisher：包设置 → Trusted Publisher → GitHub Actions → 仓库
+   `FishInSalt/imp`、workflow **文件名** `release.yml`（表单填文件名，不带
+   `.github/workflows/` 前缀；实施时以 npm 当前 UI 为准）。
+6. 设仓库变量 `NPM_PUBLISH_ENABLED=true`。
+7. GitHub Release：notes 取 CHANGELOG 里该版本的段落（单一事实源，不用
+   `--generate-notes` 的自动 PR 列表）——手工粘贴或用
+   `gh release create v0.1.0 --verify-tag --title "imp-agent v0.1.0" --notes-file <文件>`。
 
-失败尾巴（明示）：tag 已推而手工发布失败 → 修因后原 tag 继续用（闸门仍关，
-不会再触发发布尝试）；手工发布成功而 tag 推送失败 → 补推 tag（tag 与内容仍一致）。
+失败尾巴（明示）：tag 已推而手工发布失败 → 修因后原 tag 继续用（闸门仍关，不会
+再触发发布尝试）；手工发布成功而 tag 推送失败 → 补推 tag（tag 与内容仍一致）。
 
 ## 3. 测试与验证计划
 
@@ -126,7 +157,10 @@ README 与 CHANGELOG 两处并行腐烂——这是 #readme-refresh 的教训）
 - CI 探测（绑定前）：`gh workflow run release.yml -f dry_run=true` 真跑一遍
   gate + dry-run publish，验证语法/权限/变量闸门路径。
 - 发布后（首版验收）：干净环境 `npm i -g imp-agent` 冒烟；npm 页面元数据检查。
-- 常驻钉子：tag/版本一致性校验（release.yml 内）+ `test/package-metadata.test.ts`。
+- 常驻钉子：tag/版本一致性校验 + tag-on-main 校验（release.yml 内）+ publish job
+  内断言 npm CLI ≥ 11.5.1（B1）+ `test/package-metadata.test.ts`。
+- 闸门可辨识性检查：变量未设时推 tag，确认 run 绿、且出现 publish-skipped warning
+  与 job summary（S2）——这是“绿而无发布”误判面的验收。
 
 ## 4. 风险与开放问题
 
@@ -142,6 +176,8 @@ README 与 CHANGELOG 两处并行腐烂——这是 #readme-refresh 的教训）
   公开出现在包页。
 - **Environment 保护**（开放问题 Q2）：是否给 publish job 加 GitHub Environment
   （required reviewers）——默认不加（单人仓库，审批步=自己批自己）；记录为可选。
+  将来若要开放 `workflow_dispatch` 的真发布路径，Environment 审批是首选保护
+  （与 S4 的派发约束同批决策）。
 - **首版 CHANGELOG 措辞**（开放问题 Q3）：随实现批给出草稿，维护者确认。
 
 ## 5. 文件清单与规模
@@ -151,3 +187,5 @@ README 与 CHANGELOG 两处并行腐烂——这是 #readme-refresh 的教训）
 - 修改：`.github/workflows/ci.yml`（打包冒烟步骤补 `name:`，1 行）。
 - 不动：`package.json`（`files` 不带 CHANGELOG/RELEASING——它们不参与运行时，npm
   页面由 README 与元数据呈现）。
+- 流程：实现批经 `release/ci-publish` 分支、独立评审、`--no-ff` 合入 main；合入前
+  更新 PROJECT_PLAN.md 账本（承接 #npm-packaging 的 P3 遗留）。

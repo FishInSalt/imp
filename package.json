@@ -1,16 +1,39 @@
 {
-	"name": "imp",
+	"name": "imp-agent",
 	"version": "0.1.0",
 	"description": "imp — a small coding agent that runs in your terminal",
 	"type": "module",
 	"license": "MIT",
+	"author": "L Z",
 	"bin": {
 		"imp": "bin/imp.js"
 	},
+	"files": [
+		"bin",
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/FishInSalt/imp.git"
+	},
+	"homepage": "https://github.com/FishInSalt/imp#readme",
+	"bugs": {
+		"url": "https://github.com/FishInSalt/imp/issues"
+	},
+	"keywords": [
+		"coding-agent",
+		"cli",
+		"tui",
+		"terminal",
+		"ai"
+	],
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsx src/cli.ts",
 		"start": "npm run build && node bin/imp.js",
+		"prepare": "npm run build",
 		"typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

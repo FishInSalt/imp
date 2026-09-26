@@ -28,12 +28,31 @@ A working coding agent, built milestone by milestone (roadmap and history:
 
 ## Setup
 
-Requires Node 20 or newer.
+Requires Node 20 or newer. Install from npm — this provides the `imp`
+command:
 
 ```bash
-npm install
-npm run build
+npm install -g imp-agent
+imp
+```
+
+Or try it without installing:
+
+```bash
+npx imp-agent
+```
+
+Then sign in with an API key (or `/login` inside a session):
+
+```bash
 export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Working from a source checkout instead:
+
+```bash
+npm install   # installs dependencies and builds (prepare script)
+npm start     # launches the interactive REPL
 ```
 
 ### Signing in (/login)

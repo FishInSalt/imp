@@ -22,26 +22,32 @@ run does not necessarily mean something was published.
 
 ## Bootstrap release (v0.1.0 — one time)
 
-Run from a clean `main` checkout where `HEAD` is the commit to release:
+Preconditions: CI on `main` is green, `main` is in sync with `origin/main`,
+the working tree is clean, `HEAD` is the commit being released, and
+`CHANGELOG.md` carries the date you are publishing on.
 
 ```bash
+set -e
 TAG=v0.1.0
 test "$(node -p 'require("./package.json").version')" = "${TAG#v}"  # version guard
 git tag -a "$TAG" -m "imp-agent $TAG"
 git push origin "$TAG"    # gates run; the publish stays gated off
 npm publish --access public
-npm view imp-agent version  # expect 0.1.0 (allow ~30s to propagate)
+npm view imp-agent version  # expect 0.1.0 (registry propagation can take up to a minute)
 ```
 
 Then:
 
-1. Smoke-test the published package: `npm install -g imp-agent@0.1.0` and
+1. Check the tag-push workflow run: it must be **green and carry the
+   "publish skipped" warning** plus the matching job summary — the gates ran,
+   nothing was published yet. A green run alone does not mean "published".
+2. Smoke-test the published package: `npm install -g imp-agent@0.1.0` and
    `imp --version`.
-2. On npmjs.com: package settings → Trusted Publisher → GitHub Actions →
+3. On npmjs.com: package settings → Trusted Publisher → GitHub Actions →
    repository `FishInSalt/imp`, workflow file name `release.yml`.
-3. In the GitHub repo: Settings → Secrets and variables → Actions →
+4. In the GitHub repo: Settings → Secrets and variables → Actions →
    Variables → set `NPM_PUBLISH_ENABLED` to `true`.
-4. Publish the GitHub Release with the changelog section as the notes:
+5. Publish the GitHub Release with the changelog section as the notes:
 
 ```bash
 gh release create v0.1.0 --verify-tag --title "imp-agent v0.1.0" --notes-file notes.md
@@ -53,7 +59,7 @@ gh release create v0.1.0 --verify-tag --title "imp-agent v0.1.0" --notes-file no
    `src/format.ts` (`VERSION`) — `test/package-metadata.test.ts` fails when
    they disagree.
 2. Move the `[Unreleased]` changelog entries into a
-   `## [x.y.z] - YYYY-MM-DD` section.
+   `## [x.y.z] - YYYY-MM-DD` section, dated on the release day.
 3. Merge to `main` (`--no-ff`) once the CI gates pass.
 4. Tag and push:
 
@@ -78,14 +84,20 @@ gh workflow run release.yml --ref main -f dry_run=true
 ```
 
 Runs the gates plus `npm publish --dry-run` without writing to the registry.
-Dispatch on `main` — the tag-on-main check runs for every ref. A dispatched
-run can never publish: the real publish step requires a `refs/tags/v*` ref.
+Dispatch from a ref whose commits are all on `origin/main` (i.e., `main`) —
+the tag-on-main check runs for every ref and uses ancestry, so an advanced
+`origin/main` still passes while unmerged commits fail. A dispatch from a
+branch ref can never publish; on a tag ref, `-f dry_run=false` combined with
+`NPM_PUBLISH_ENABLED=true` **would** publish, so leave the default for
+probes.
 
 ## Troubleshooting
 
 - **"publish skipped" warning on a tag push** — `NPM_PUBLISH_ENABLED` is not
-  `true` (or was cleared). Nothing was published; set the variable and re-run
-  the workflow.
+  `true` (or was cleared). Nothing was published. Set the variable, then
+  re-run that same tag-push run: the tag ref plus the variable now reach the
+  real publish step. (If a version was already published, the re-run fails
+  with "cannot publish over existing version" — cut a new patch instead.)
 - **Auth / token errors after binding trusted publishing** — check the npm
   version in the publish job log first: trusted publishing needs npm >=
   11.5.1 (the workflow upgrades npm explicitly). Then re-check the

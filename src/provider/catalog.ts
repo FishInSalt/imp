@@ -32,7 +32,13 @@ import type { ProviderName } from "./resolve.js";
 import { parseModelRef } from "./resolve.js";
 import { thinkingMetaFor } from "./thinking.js";
 
-export const CATALOG_FAMILIES: readonly ProviderName[] = ["anthropic", "openai", "openai-codex", "zai"];
+export const CATALOG_FAMILIES: readonly ProviderName[] = [
+	"anthropic",
+	"openai",
+	"openai-codex",
+	"zai",
+	"deepseek",
+];
 
 /** pi's REMOTE_CATALOG_REFRESH_INTERVAL_MS — how long a check stays fresh. */
 export const CATALOG_FRESH_WINDOW_MS = 4 * 60 * 60 * 1000;

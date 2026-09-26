@@ -1,5 +1,5 @@
 import type { AgentMessage, AssistantBlock, ContentBlock, StopReason, Usage } from "../core/messages.js";
-import { resolveApiKey } from "./auth-store.js";
+import { type ApiKeyFamily, resolveApiKey } from "./auth-store.js";
 import {
 	abortSafe,
 	downgradeUnsupportedImages,
@@ -32,6 +32,11 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 export interface OpenAICompletionsProviderOptions {
 	apiKey?: string;
+	/** Family-level key resolution (stored /login key > env var) — replaces
+	 *  the OPENAI_API_KEY fallback for families with their own credential
+	 *  (#deepseek-provider design §2.5: the openai fallback would send the
+	 *  user's OpenAI key to the wrong endpoint). */
+	auth?: { family: ApiKeyFamily; envVar: string };
 	baseUrl?: string;
 	/** The provider name the thinking catalog keys off ("openai" default;
 	 *  the zai family passes "zai"). */
@@ -73,7 +78,17 @@ function toUserParts(content: string | ContentBlock[]): string | WireUserPart[] 
 	return parts;
 }
 
-function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[] {
+/** pi compat.requiresReasoningContentOnAssistantMessages (#deepseek-provider
+ *  §2.4): DeepSeek V4's interleaved thinking requires assistant frames to
+ *  carry reasoning_content on tool-call continuations. The field name is
+ *  HARDCODED to reasoning_content — pi replays under the incoming field's
+ *  name (:1312-1318), but imp reads only that one field (D5), so hardcoding
+ *  is full parity for this family. */
+function toWireMessages(
+	system: string,
+	messages: AgentMessage[],
+	reasoningContentReplay = false,
+): WireMessage[] {
 	const wire: WireMessage[] = [{ role: "system", content: system }];
 	for (const msg of messages) {
 		switch (msg.role) {
@@ -96,10 +111,21 @@ function toWireMessages(system: string, messages: AgentMessage[]): WireMessage[]
 					);
 				// Some providers reject a null content WITH tool_calls and others
 				// reject missing content WITHOUT — null is the documented shape.
+				// thinking blocks are otherwise display-only (never replayed) —
+				// the deepseek family is the one exception (pi :1357-1361: no
+				// thinking → reasoning_content:""; the vendor's guidance for
+				// every other family is to discard them).
+				const reasoning = reasoningContentReplay
+					? msg.blocks
+							.filter((b): b is Extract<AssistantBlock, { type: "thinking" }> => b.type === "thinking")
+							.map((b) => b.thinking)
+							.join("\n")
+					: undefined;
 				wire.push({
 					role: "assistant",
 					content: text === "" && toolCalls.length > 0 ? null : text,
 					...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+					...(reasoningContentReplay ? { reasoning_content: reasoning ?? "" } : {}),
 				});
 				break;
 			}
@@ -201,13 +227,23 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 	// options.apiKey (the zai provider passes its own resolved key) first;
 	// otherwise a stored /login credential wins over OPENAI_API_KEY (pi's
 	// envApiKeyAuth order).
-	const apiKey = options.apiKey ?? resolveApiKey("openai", "OPENAI_API_KEY")?.key;
+	const apiKey =
+		options.apiKey ??
+		(options.auth !== undefined
+			? resolveApiKey(options.auth.family, options.auth.envVar)?.key
+			: resolveApiKey("openai", "OPENAI_API_KEY")?.key);
 	const baseUrl = (options.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
 	return {
 		name: options.name ?? "openai",
 		async *stream(request: LLMRequest): AsyncIterable<LLMEvent> {
 			if (!apiKey) {
+				if (options.auth !== undefined) {
+					throw new Error(
+						`No API key found. Set one of:\n` +
+							`  export ${options.auth.envVar}=<key>  (or /login ${options.auth.family})`,
+					);
+				}
 				throw new Error(
 					"No API key found. Set one of:\n" +
 						"  export OPENAI_API_KEY=sk-...                    (OpenAI platform)\n" +
@@ -217,15 +253,20 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 
 			// M13 §6: strip image blocks before serialization when the model
 			// lacks vision (fail-safe default in vision.ts).
+			const family = options.name ?? "openai";
 			const messages = downgradeUnsupportedImages(
 				request.messages,
-				modelSupportsVision(options.name ?? "openai", request.model),
+				modelSupportsVision(family, request.model),
 			);
+			// reasoning replay rides ONLY the deepseek family, and only for
+			// reasoning models (thinking meta null = no knob = pi
+			// model.reasoning === false, which gates pi's fill too)
+			const reasoningContentReplay = family === "deepseek" && thinkingMetaFor(family, request.model) !== null;
 			const body: Record<string, unknown> = {
 				model: request.model,
 				stream: true,
 				stream_options: { include_usage: true },
-				messages: toWireMessages(request.system, messages),
+				messages: toWireMessages(request.system, messages, reasoningContentReplay),
 				[maxTokensField(request.model)]: request.maxTokens,
 			};
 			if (request.tools.length > 0) {
@@ -254,6 +295,21 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 						: { type: "disabled" };
 				if (level !== undefined && level !== "off" && meta.supportsEffort === true) {
 					body.reasoning_effort = effortFor(meta, level);
+				}
+			} else if (meta?.style === "deepseek") {
+				// pi thinkingFormat "deepseek" (openai-completions.ts:914-926):
+				// an explicit level → thinking enabled (+reasoning_effort when the
+				// model maps it); no level → disabled unless off:null. P1-1: "off"
+				// can arrive raw (compaction/branch-summary pass this.level as-is;
+				// only the main request maps off→undefined) — defend like the glm
+				// branch below, pi normalizes at its sdk layer (:738).
+				if (level !== undefined && level !== "off") {
+					body.thinking = { type: "enabled" };
+					if (meta.supportsEffort !== false) {
+						body.reasoning_effort = effortFor(meta, level);
+					}
+				} else if (meta.levelMap?.off !== null) {
+					body.thinking = { type: "disabled" };
 				}
 			} else if (meta?.style === "openai-effort") {
 				if (level !== undefined && level !== "off") {

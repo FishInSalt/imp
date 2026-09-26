@@ -31,7 +31,8 @@ export type ThinkingStyle =
 	| "openai-effort" // OpenAI Chat Completions: reasoning_effort
 	| "glm-openai" // Z.ai GLM on openai-compat: native thinking object
 	| "codex-effort" // ChatGPT backend Responses: reasoning.effort
-	| "auto"; // deepseek-reasoner: reasons by default, no request knob
+	| "deepseek" // DeepSeek official: thinking {type} + reasoning_effort
+	| "auto"; // deepseek-reasoner via openai-compat: reasons by default, no request knob
 
 /** pi's thinkingLevelMap: level → the wire value; null = the level is
  *  UNAVAILABLE on this model; absent = available under its own name.
@@ -166,6 +167,25 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 		meta: { style: "glm-openai", supportsEffort: true, levelMap: GLM_52_MAP },
 	},
 	{ provider: "openai", prefix: "glm-", meta: { style: "glm-openai" } }, // 4.x / 5-turbo: binary (pi.dev live)
+	// #deepseek-provider offline floor (pi.dev live catalog 2026-09-25;
+	// v4-pro also carries supportsMidConvoSystemMessages — deliberately not
+	// adopted, imp consumes that flag nowhere)
+	{
+		provider: "deepseek",
+		prefix: "deepseek-flash",
+		meta: {
+			style: "deepseek",
+			levelMap: { minimal: null, low: "low", medium: null, high: "high", max: "max" },
+		},
+	},
+	{
+		provider: "deepseek",
+		prefix: "deepseek-",
+		meta: {
+			style: "deepseek",
+			levelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
+		},
+	},
 	{ provider: "openai", prefix: "deepseek-r", meta: { style: "auto" } },
 	// gpt-6 (pi.dev live catalog): off UNAVAILABLE, minimal→low, xhigh/max native
 	{
@@ -375,6 +395,17 @@ function catalogThinkingMeta(provider: string, modelId: string): ModelThinkingMe
 			return {
 				style: "glm-openai",
 				supportsEffort: entry.compat?.supportsReasoningEffort === true,
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+			};
+		case "deepseek":
+			// parity #6: pi's DETECTED default is true (deepseek is not in the
+			// supportsReasoningEffort exclusion list, :1636) and the model compat
+			// `??` falls back to it (:1697-1699) — so absent ≠ false. (zai above
+			// is the opposite: detected false, absent ≠ true.)
+			return {
+				style: "deepseek",
+				supportsEffort: entry.compat?.supportsReasoningEffort !== false,
 				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
 				maxOutputTokens: entry.maxTokens,
 			};

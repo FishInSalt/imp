@@ -40,7 +40,7 @@ function parseModel(value: unknown, context: string): SessionModel {
 	if (
 		typeof model !== "object" ||
 		model === null ||
-		!["anthropic", "openai", "openai-codex", "zai"].includes(model.provider ?? "") ||
+		!["anthropic", "openai", "openai-codex", "zai", "deepseek"].includes(model.provider ?? "") ||
 		typeof model.modelId !== "string" ||
 		model.modelId.trim() === ""
 	) {

@@ -1,6 +1,6 @@
 # Moonshot / Kimi 官方 API 接入（#moonshotai-provider）
 
-状态：rev1（待独立对抗评审）
+状态：rev2（独立对抗评审后修订：1×P1 + 7×P2 + 4×P3 已折入；rev1 见 git 历史）
 分支：feature/moonshotai-provider
 参照系：pi @ /Users/z/Z/Agent_demo/pi（每条 parity 声明锚定源码行）；官方文档 platform.kimi.ai/docs/guide/use-thinking-models（thinking 矩阵）与 Kimi Code FAQ 平台对照表（www.kimi.com/code/docs/en/kimi-code/faq.html，base URL 表）；pi.dev 线上目录实测（两家均 HTTP 200，2026-09-26）
 日期：2026-09-26
@@ -79,7 +79,10 @@ export function moonshotCnApiKey(): string | null { /* 同构 */ }
 
 注意：两家共用 `MOONSHOT_API_KEY` env（pi :11 同款），但**存储 key 按家族
 隔离**（auth-store apiKeys 分区），`/login moonshotai-cn` 不会污染
-`moonshotai`。
+`moonshotai`。⚠ 用户可见后果（评审 P2-7）：设了 `MOONSHOT_API_KEY` 后
+**两家都会显示为 configured**（familyConfigured 同源），picker 出现两行；
+未配的那家 discover 会向默认端点发一次请求——401 按现有语义落 null → 种子
+兜底（不是错误）。测试钉：单 env → 两 familyConfigured 均 true。
 
 #### §2.2.1 pi 行为 parity 表（每条锚定）
 
@@ -98,7 +101,7 @@ export function moonshotCnApiKey(): string | null { /* 同构 */ }
 | 11 | usage 兜底：`choice.usage`（"some providers (e.g., Moonshot)"） | :565-568 | §2.5 |
 | 12 | usage：顶层 `cached_tokens`（"Kimi documents top-level usage.cached_tokens"） | :1511-1523 | §2.5 |
 | 13 | 不发 temperature（官方文档：k2.6/k2.7-code 不可改、不要显式传） | 文档表格 | imp 不发任何 temperature/top_p（grep 零命中）— 零改动 |
-| 14 | reasoning 流入字段 reasoning_content（delta） | :601-626 区域 | imp :376-385 已读 — 零改动 |
+| 14 | reasoning 流入：pi 读三字段（reasoning_content / reasoning / reasoning_text，:601-626 区域） | :601-626 区域 | imp 只读 reasoning_content（:376-385）——既有 D5 记账；三家官方均用该字段 |
 | 15 | 流式 reasoning_content 恒先于 content；reasoning+content 共享 max_tokens（建议 ≥16k） | 官方文档 | 记账（不改请求语义；max_tokens 由现有设置链路提供） |
 
 ### §2.3 thinking 旋钮（三模型分叉）
@@ -127,19 +130,25 @@ case "moonshotai-cn": {
 主请求 off→undefined runner.ts:1042 / compaction 原样传 level 的 P1-1 防御
 沿用）：
 
-| 模型 | compat | 可选级别 | level 选中 → 请求体 | off/undefined → |
-|------|--------|----------|---------------------|-----------------|
+| 模型 | compat | 可选级别 | level 选中 → 请求体 | 显式 off/undefined → |
+|------|--------|----------|---------------------|----------------------|
 | kimi-k2.6 | deepseek, effort:false, 无 map | off/high（无 map 二进制默认 :475-478） | `thinking:{type:"enabled"}`（无 reasoning_effort） | `thinking:{type:"disabled"}`（off 可用） |
 | kimi-k2.7-code(-highspeed) | deepseek, effort:false, map{off:null} | minimal/low/medium/high | `thinking:{type:"enabled"}` | 什么都不发（off:null；模型恒思考） |
 | kimi-k3 | openai, effort:true, 全 map | low/high/max | `reasoning_effort:"low"/"high"/"max"`；**永不发 thinking** | 什么都不发（off:null；服务端默认 max） |
 
-推导出的默认行为（记档）：默认级别 "off"（runner.ts:344）经 clamp
-- k2.6 → off 可用，主请求 undefined → 发 `disabled`（= pi 行为；注意服务端
-  默认是 enabled，被 imp/pi 显式关掉——有意对齐）
-- k2.7-code → off 不可用，clamp 到 minimal → **每请求发 `thinking:{type:"enabled"}`**
-  （文档表格明确 enabled 可传；正文 "should not pass" 见 §6 风险 1）
-- k3 → off 不可用，clamp 到 low → **默认发 `reasoning_effort:"low"`**（不是
-  服务端默认 max；冒烟确认接受度）
+**默认级别链路（评审 P1 修正）**：启动级别 =
+`options.thinking ?? 设置 defaultThinkingLevel ?? "medium"`（runner.ts:387-390，
+pi 的 DEFAULT_THINKING_LEVEL 即 "medium"），再按模型 clamp（thinking.ts:489）：
+- k2.6：clamp（medium）→ **high → `thinking:{type:"enabled"}`**（默认开思考）
+- k2.7-code：clamp（medium）→ medium → `thinking:{type:"enabled"}`（恒思考）
+- k3：clamp（medium）→ **high → `reasoning_effort:"high"`**（服务端默认 max，
+  imp 显式降档到 high）
+
+**显式 off**（`--thinking off` 或用户调到 off；主请求 off→undefined
+（runner.ts:1042），compaction/branch-summary 原样传 "off"）：
+- k2.6 → `thinking:{type:"disabled"}`（undefined 与 raw "off" 同果）
+- k2.7-code → 什么都不发（off:null；模型恒思考）
+- k3 → 什么都不发
 
 **离线地板**（thinking.ts MODEL_RULES:81，frozen 快照 pi.dev 2026-09-26；
 两 provider 各 3 条，共 6 条或抽 helper 注册）：
@@ -173,18 +182,26 @@ pi 的两条独立规则：非空签名回放（:1312-1318）+ 空串填充
 `{ replay: boolean; fillEmpty: boolean } | null`；call site 组装。
 字段名 reasoning_content 硬编码不变（deepseek D5 范围）。
 
-反例钉子（测试）：k2.6 历史 assistant 无 thinking → 请求体**无**
-reasoning_content 键；k3 同输入 → `reasoning_content: ""`。
+反例钉子（测试）：
+- k2.6 历史 assistant 无 thinking → 请求体**无** reasoning_content 键；
+  k3 同输入 → `reasoning_content: ""`
+- k3 **tool-call-only 帧**（content:null + tool_calls + 无 thinking）→ 同样补
+  `reasoning_content: ""`（pi :1357-1361 对所有 assistant 帧生效）；k2.6 同形
+  帧 → 无键
+- **跨家族切换**（评审 P2-4）：回放 gate 只按**当前请求模型**的 compat 判定
+  （pi :1697-1698 同款）；历史含其他家族帧时填充与否随之切换——此行为有意
+  pi-parity（非逐帧判定），用跨切换测试钉住（k3→k2.6 历史帧不补 ""，反向补）
 
 ### §2.5 usage 兜底
 
-- :423 链尾追加 `?? chunk.usage.cached_tokens`（官方文档：Kimi 顶层
-  cached_tokens 在 final usage chunk；pi :1520）
-- 提取点（:419-430 区）改为 `const rawUsage = chunk.usage ?? choice?.usage;`
-  再走现有 `!= null` 守卫（pi :565-568 的 Moonshot 兜底；null/undefined
-  双守卫 = deepseek null 教训不动摇）
-- 类型：wire usage 形状补顶层 `cached_tokens?: number`（:220-222 区）与
-  choice 侧 usage（StreamChunk.choices 元素类型），三态声明诚实
+- 提取点（:419-430 区）：整块以 `const rawUsage = chunk.usage ?? choice?.usage;`
+  开头、守卫改 `rawUsage != null`，**块内所有 `chunk.usage.` 引用全部替换为
+  `rawUsage.`**（评审 P2-2：只追加链尾会留 null 解引用），链尾再追加
+  `?? rawUsage.cached_tokens`（官方文档：Kimi 顶层 cached_tokens 在 final
+  usage chunk；pi :1520）。null/undefined 双守卫 = deepseek null 教训不动摇
+- （评审 P2-3）类型：抽具名 `StreamUsage`（现有 :220-222 区字面量），
+  `chunk.usage?: StreamUsage | null`、choices 元素新增 `usage?: StreamUsage | null`
+  （pi 用 `as any` 读；imp 声明诚实、不用 any）；顶层补 `cached_tokens?: number`
 - reasoning 计费 token 不消费（现状，记账）
 
 ### §2.6 发现与目录
@@ -232,18 +249,24 @@ reasoning_content 键；k3 同输入 → `reasoning_content: ""`。
    createProviderFor/resolveModel。
 2. **key 解析**：familyConfigured 随 env 与存储 key；stored > env；两家存储
    隔离（登录 cn 不影响 ai）；**交叉污染钉**：设 OPENAI_API_KEY、不设
-   moonshot → 报错点名 MOONSHOT_API_KEY（`not.toContain("OPENAI_API_KEY")`）。
+   moonshot → 报错点名 MOONSHOT_API_KEY（`not.toContain("OPENAI_API_KEY")`）；
+   **单 env 双家族钉**（P2-7）：设 MOONSHOT_API_KEY → 两家 configured，
+   未配家族 discover 401 → null → 种子。
 3. **wire（本地 http 服务器，zai/deepseek.test.ts 模板）**：
    a. k2.6 level high → `thinking:{type:"enabled"}`、无 reasoning_effort、
       max_tokens 字段、无 store/developer、Bearer。
-   b. k2.6 level off（主请求会传 undefined）→ `thinking:{type:"disabled"}`；
-      **compaction 原样传 "off"** → 同样 disabled（P1-1 防御钉）。
+   b. k2.6 显式 off（直接传 "off" 与主路径 undefined 两形）→
+      `thinking:{type:"disabled"}`（P1-1 防御钉）；**默认链路钉**：
+      clamp("medium") → high → enabled（P1 修正后的默认推导）。
    c. k2.7-code level high → `thinking:{type:"enabled"}`；直接传 "off" /
       undefined（off:null 负面）→ 请求体既无 thinking 也无 reasoning_effort。
    d. k3 level low/high/max → reasoning_effort 映射值；**任何情况无 thinking
-      键**（文档硬约束钉）；off/undefined → 两个都不发。
+      键**（文档硬约束钉）；显式 off/undefined → 两个都不发；**默认链路钉**：
+      clamp("medium") → reasoning_effort:"high"。
    e. 回放：k3 无 thinking 的 assistant 帧 → `reasoning_content: ""`；有块 →
-      拼接文本；k2.6/k2.7 无块 → **键不存在**；deepseek 行为不变钉。
+      拼接文本；**k3 tool-call-only 帧（content:null + tool_calls）→ 同样补 ""**；
+      k2.6/k2.7 无块（含同形 tool-only 帧）→ **键不存在**；**跨切换**（k3→k2.6
+      与反向）按当前请求模型判定；deepseek 行为不变钉。
    f. usage：顶层 cached_tokens → cacheRead 计入且 input 扣除；choice.usage
       兜底（chunk.usage 缺省/null）；中间块 usage:null 守卫回归。
    g. reasoning_content delta → thinking 事件（既有路径回归钉）。
@@ -255,22 +278,30 @@ reasoning_content 键；k3 同输入 → `reasoning_content: ""`。
    false（`=== true` 锚）。
 5. **发现**：/models 成功列表；不可达 → 种子；env override + 不可达 → null
    （#gateway-truth）。
-6. **目录**：CATALOG_FAMILIES 含两键；refresh 假 fetcher 写盘后
-   contextWindowInfoFor 走 catalog 源。
+6. **目录**：CATALOG_FAMILIES 含两键——精确钉
+   `arrayContaining(["moonshotai","moonshotai-cn"])` + `toHaveLength(7)`
+   （P3-10：不用弱 toContain）；refresh 假 fetcher 写盘后 contextWindowInfoFor
+   走 catalog 源。
 7. **静态地板**：离线 contextWindowInfoFor("moonshotai/kimi-k3") → 1048576；
    costFor 命中新费率。
 8. **vision**：kimi-k3/kimi-k2.6/kimi-k2.7-code 两 provider 均 true；
-   未知旧 id（如 kimi-k2-0711-preview）→ false（无规则）。
+   未知旧 id（如 kimi-k2-0711-preview）→ false（无规则）；**离线断言前先
+   resetCatalogForTest**（P3-11，避免目录命中掩盖规则）。
 9. **会话**：setModel("moonshotai-cn/kimi-k3") 持久化 + modelReference 带前缀；
    parseModel 白名单接受。
 10. **/login**：loginTargetFor 两键命中；unknown-provider 消息含新家族；
     picker 行 +2；switchHint 串。
 11. **buildModelList**：configured → 发现行带前缀；不可达 → FAMILY_FALLBACKS
     行。
-12. **既有钉子更新**：全量 grep 家族列表字面量（已知 test/deepseek.test.ts、
-    images.test.ts、model-discovery.test.ts、repl-commands.test.ts、
-    thinking.test.ts 含列表/断言），逐一对齐；消息串类钉子（login picker、
-    settings panel）重新校准。
+12. **既有钉子更新**：全量 grep 家族字面量（P3-9 校准为 7 个文件：
+    test/deepseek.test.ts、images.test.ts、model-discovery.test.ts、
+    repl-commands.test.ts、thinking.test.ts、auth-store.test.ts、
+    model-catalog.test.ts），逐一对齐；**精确串基线**：
+    test/repl-commands.test.ts:1736 的 unknown-provider 消息
+    `"known: zai, anthropic, openai, openai-codex, deepseek"` 追加两家族后重校；
+    **hermetic 环境擦洗**（P2-6）：test/repl-commands.test.ts:241-248 及
+    model-discovery/auth-store 相关 setup 增擦 `MOONSHOT_API_KEY`、
+    `MOONSHOT_BASE_URL`、`MOONSHOT_CN_BASE_URL`。
 
 ### §3.x 真机冒烟（实施评审之前，PROJECT_PLAN 2026-09-26 教训）
 
@@ -278,13 +309,20 @@ reasoning_content 键；k3 同输入 → `reasoning_content: ""`。
 `~/.imp/auth.json`，冒烟读同一存储、不打印明文）。
 
 1. `GET /v1/models`（stored key）→ 四个模型在列
-2. k2.6 流式：默认路径（off → disabled）与显式启用路径各一次；工具调用一轮
-   → 续传帧接受；第 2 次调用确认 usage 顶层 cached_tokens 出现且解析正确
+2. k2.6 流式：默认路径（thinking enabled）与显式 off（disabled）各一次；
+   工具调用一轮 → 续传帧接受；第 2 次调用确认 usage 顶层 cached_tokens 出现
+   且解析正确
 3. k2.7-code：imp 实际行为（`thinking:{type:"enabled"}`）→ 服务端接受；
-   对照完全省略 thinking 的一次请求
-4. k3：`reasoning_effort:"low"` 接受；工具续传对照（带/不带
-   `reasoning_content`）→ 验证强制程度，裁决 §2.4 空填充的充分性
+   对照省略 thinking 的一次请求。**判定规则（P2-8）**：enabled 被 400 →
+   触发 §6 风险 1 降级（off:null 且 effort:false 时不发 thinking）并更新设计
+4. k3：`reasoning_effort:"high"`（默认）与 "low" 接受；工具续传对照（带/
+   不带 `reasoning_content`）。**判定规则**：任一形式被拒 → 上修回放策略
+   （fillEmpty 扩到 k2.6/k2.7，以证据为准）；两形都接受 → 维持 pi parity
 5. 坏 key → 401 文案点名 MOONSHOT_API_KEY
+6. `/model` picker：/login moonshotai-cn 后出现带前缀的两家族行；switchHint
+   提示串出现
+7. 连通性：`GET https://api.moonshot.cn/v1/models`（stored key）可达、四模型
+   在列；api.moonshot.ai 同测（无 key 时至少测 401 形状与可达性）
 产出记录进本文件附录或 PROJECT_PLAN。
 
 ## §4 决策点
@@ -306,10 +344,11 @@ reasoning 计费 token 不消费；zai 的 401 文案不动；动态工具加载
 ## §5 规模核算
 
 - src：moonshotai.ts ~55 + thinking.ts（case + 6 条地板 + meta 字段）~50 +
-  openai-completions.ts（回放拆分 + usage 兜底 + 401 文案）~40 +
+  openai-completions.ts（回放拆分 + usage 兜底重构 + 类型 + 401 文案）~50 +
   discover.ts ~45 + resolve/auth-store/catalog/store/vision ~20 +
-  commands.ts ~40 + models.ts ~20 + cli.ts ~10 ≈ **+280 行**，删除 0。
-- test：moonshotai.test.ts ~350-450 + 既有钉子更新 ~30。
+  commands.ts ~40 + models.ts ~20 + cli.ts ~10 ≈ **+290 行**，删除 0。
+- test：moonshotai.test.ts ~400-480（含 P2-4/P2-5 帧形状与跨切换钉）+
+  既有钉子更新 ~30。
 - 门禁预期：全量 vitest（1961 → ~2050+）、typecheck×2、biome、build。
 
 ## §6 风险
@@ -324,5 +363,6 @@ reasoning 计费 token 不消费；zai 的 401 文案不动；动态工具加载
 4. **目录漂移**：M14 机制（4h 窗口、在线纠正、离线地板）。
 5. **钉子散落**：合并前全量 grep 家族字面量（已知 5 个测试文件）；上一批
    教训（枚举类钉子要精确匹配）。
-6. **默认级别交互**（k2.6 默认 disabled / k3 默认 effort low）：与用户直觉
-   的差异写入帮助/README 一句话说明。
+6. **默认级别交互**（P1 修正后）：默认 medium → k2.6 默认**在思考**（high）、
+   k3 默认 `reasoning_effort:"high"`（服务端默认 max，imp 显式降档）、
+   k2.7-code 恒思考；`/think` 可调，帮助/README 补一句说明。

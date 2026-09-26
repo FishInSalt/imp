@@ -80,7 +80,7 @@ Non-goals (each returns in §6 Alternatives):
   top-level-only.
 - Observer events (`tool_end`, `message_end`, `run_end`) are fire-and-forget:
   invoked synchronously in load order, never awaited, errors isolated per handler
-  and reported as one diagnostic line (`registry.ts:340-353`, `fireObservers`).
+  and reported as one diagnostic line (`registry.ts:340-352`, `fireObservers`).
 - Event registration surface: `on()` overloads at `types.ts:61-64`,
   `ExtensionEventName` at `types.ts:136`, `ExtensionEventHandlerMap` at
   `types.ts:139`, `KNOWN_EVENTS` at `registry.ts:30`; dispatch lives in
@@ -134,10 +134,9 @@ pi's `agent_settled` fires in a `finally` (`core/agent-session.ts:1108-1113`) �
 covers aborts **and** provider failures. imp's `run_end` deliberately does not fire
 on a provider crash (§3.1). A timer built on `run_start` + `run_end` must therefore
 tolerate an unpaired `run_start`. `notify.mjs` already ships with the same
-asymmetry ("runs that die before any assistant message never notify"), so this is
-consistent with the ecosystem's existing taste (notify.mjs's header: "runs that
-die before any assistant message … never notify") — see §5.3 for the
-extension-side handling.
+asymmetry — its header: "runs that die before any assistant message … never
+notify" — so this is consistent with the ecosystem's existing taste; see §5.3
+for the extension-side handling.
 
 ## 4. Design
 
@@ -270,9 +269,9 @@ construction — the capability gate handles its absence):
 setExtensionStatus?(text: string): void;
 ```
 
-There is no unbind path: the machine lives as long as the process's single REPL;
-`/exit` tears down the process. (If a future reload exists, rebinding overwrites
-the same slot.)
+`/exit` tears the machine down with the process, so no unbind path exists
+beyond the §4.2 note. (If a future reload exists, rebinding overwrites the same
+slot.)
 
 ### 4.3 `TuiShell` rendering
 
@@ -304,10 +303,12 @@ the same slot.)
      which §4.5's `unref` rule makes benign anyway).
 - Resize behavior (accepted limitation, stated): truncation happens at push time.
   On terminal resize-narrow, an already-pushed line re-wraps into multiple rows
-  until the next push re-truncates; pi re-truncates per render, imp's existing
-  footer has no width management at all — matching that parity is a conscious
-  choice, not an oversight (task-timer pushes every second while running, so the
-  window is small in practice for the shipped consumer).
+  (or, for an unbreakable segment exceeding the new width, hits the step-3 throw
+  surface) until the next push re-truncates; pi re-truncates per render, imp's
+  existing footer has no width management at all — matching that parity is a
+  conscious choice, not an oversight (task-timer's `running M:SS` is always
+  breakable and pushes every second while running, so the practical window is
+  nil for the shipped consumer).
 - Colors: the host dims the whole line. Extensions cannot color segments (no theme
   API — non-goal; pi's pre-colorized ANSI would not survive step 1 anyway).
 - Render cost: one `setText` + one `requestRender` per push; pi-tui coalesces and
@@ -360,9 +361,9 @@ Registry unit tests (`test/extensions-registry.test.ts` or its successor layout)
 
 - `run_start` accepted by `subscribe` (KNOWN_EVENTS), unknown events still
   rejected with the teaching diagnostic;
-- `setExtensionStatus`: store/clear/overwrite; source-namespacing (two sources,
+- `setExtensionStatus`: store/clear/overwrite; bucket-namespacing (two buckets,
   same key, both kept); invalid key/text diagnostics; 500-unit cap; composed line
-  ordering sorted by `source:key`; sink push on write, none when unbound.
+  ordering sorted by `bucket:key`; sink push on write, none when unbound.
 
 Runner tests (`test/runner*.test.ts`):
 
@@ -389,9 +390,9 @@ Extension test (new, e.g. `test/task-timer-extension.test.ts`):
   unpaired-`run_start` reset, interval cleared on `run_end`;
 - assert the interval handle is `unref`'d (the §4.5 liveness requirement — fake
   timers alone cannot observe process liveness, so the test inspects the
-  handle). Actual exit-liveness after a crash is covered by the §11 dogfood item
-  (forced provider error in both print and REPL), not by a fragile automated
-  process-exit test.
+  handle). Actual exit-liveness after a crash is covered by the §8 item 11
+  dogfood item (forced provider error in both print and REPL), not by a fragile
+  automated process-exit test.
 
 Load-path test (real `loadExtensions` + registry + a binding stub):
 
@@ -412,7 +413,7 @@ four-event KNOWN_EVENTS list get the new member added).
 - `task-timer.mjs` header comment (install + limitations).
 - `README.md` extension section (`README.md:406-433`): the documented api
   surface gains `setStatus`, and the inline event enumeration
-  (`on("tool_call" | "tool_end" | "message_end" | "run_end")`, `README.md:423-424`)
+  (`on("tool_call" | "tool_end" | "message_end" | "run_end")`, `README.md:428-429`)
   gains `run_start`. The shipped-examples list (`README.md:444-448`) is updated
   for task-timer — and repaired in passing: it currently names only `notes.mjs`
   and `guardian.mjs` while `notify.mjs` and `web-search/` also ship. One line in
@@ -464,7 +465,7 @@ hook — which imp deliberately does not add in this batch (non-goal §2).
    shipped observers for one consumer's edge case; the consumer tolerates the
    asymmetry cheaply (§5.3). `notify.mjs` already lives with the same gap.
 3. **Append the status to the existing footer line instead of a second line.**
-   Rejected: that line is already dense (7 segments, `repl.ts:805-880`), has no
+   Rejected: that line is already dense (7 segments, `repl.ts:805-881`), has no
    width management today, and pi-tui throws on overflow; a second `Text` is zero
    rows when empty and gets an independent width budget.
 4. **`run_start` payload carrying `model`, `prompt`, etc.** Rejected for now

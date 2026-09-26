@@ -5,7 +5,9 @@
 Deliver a documented extension-owned Tavily integration without adding Tavily to
 imp's model providers, login commands, credential store, or extension API.
 This batch implements configuration, packaging, search validation, bounded I/O,
-and basic page-reader error handling. Public/private network authorization and
+basic page-reader error handling, and a keyless search fallback (no credential
+configured) restoring the behavior of commit 6cf8677 that was removed in the
+repackage. Public/private network authorization and
 DNS-pinned redirect handling are a separate follow-up design: this batch does not
 claim SSRF isolation. No paid API requests or user configuration changes occur.
 
@@ -30,15 +32,20 @@ claim SSRF isolation. No paid API requests or user configuration changes occur.
 
 ## Configuration contract
 
-- Only `TAVILY_API_KEY` is supported; remove `IMP_TAVILY_KEY` and keyless request
-  behavior from implementation and active documentation/tests. Historical project
-  notes remain history but point readers to the new instructions.
+- One environment variable: `TAVILY_API_KEY`; `IMP_TAVILY_KEY` stays removed.
+  When no credential is configured, searches use Tavily's documented keyless
+  access mode instead of failing locally. This reverses the earlier "no
+  unauthenticated search fallback" decision; see the Keyless fallback section.
+  Historical project notes remain history but point readers to the new
+  instructions.
 - Key precedence: nonblank `TAVILY_API_KEY`, then `apiKey` in the extension's
-  user-level file `~/.imp/web-search/config.json`. No project configuration.
+  user-level file `~/.imp/web-search/config.json`; otherwise keyless. No project
+  configuration.
 - `IMP_WEB_SEARCH_CONFIG` optionally selects an absolute config file for explicit
   user override and hermetic tests. It does not accept shell commands or expansion.
 - Resolve on each search so changes take effect without restart. An environment
-  key bypasses reading the file. Absent file means unconfigured. Invalid JSON,
+  key bypasses reading the file. An absent file with no environment key selects
+  keyless mode. Invalid JSON,
   non-object content, unknown fields, non-string/blank key, non-regular file, or
   a group/other-accessible file on POSIX is a configuration error, not a silent
   fallback. Reject symlink config files. File checks use an opened descriptor
@@ -55,7 +62,41 @@ claim SSRF isolation. No paid API requests or user configuration changes occur.
   source, examples, or project settings.
 - Errors expose neither parsed contents nor underlying exceptions, response
   bodies, secrets, or untrusted HTTP status text. Report actionable categories.
-  Missing key fails locally before any network request.
+  A present-but-invalid credential fails locally before any network request and
+  never silently degrades to keyless.
+
+## Keyless fallback
+
+Contract per the provider's keyless documentation
+(https://docs.tavily.com/documentation/keyless), which was current when this
+revision was written; the unit tests cannot live-verify provider policy.
+
+- Trigger: no nonblank `TAVILY_API_KEY` and no config file at the selected path.
+  A present-but-invalid configuration remains a hard local error (fail closed);
+  keyless is a first-run default, not an error-recovery path.
+- Request: when a key resolves, send `Authorization: Bearer <key>` and no
+  access-mode header. When none resolves, send `X-Tavily-Access-Mode: keyless`
+  and no authorization header. Never both. Endpoint, payload schema and all
+  search parameters are unchanged; keyless `/search` is documented to support
+  all parameters and to return the same response schema as keyed access.
+- Mode identity: the resolved key or an explicit module-level keyless sentinel
+  (never a string derived from input, config or provider output) is the
+  credential identity. Transitions in either direction (key added, removed or
+  rotated) invalidate the cache and bump the generation counter. Keyless
+  results cache normally and only within their own generation.
+- Errors: in keyless mode, 401/403/429/432/433 map to one sanitized actionable
+  hint: keyless access was rejected or limited — wait before retrying, or set
+  `TAVILY_API_KEY` for higher limits. Do not infer finer provider categories:
+  keyless limit responses are documented only as natural-language guidance,
+  not as stable status codes. Keyed-mode hints, 5xx and 400 handling stay as
+  they are. No retries and no automatic mode switching within a request.
+- Posture: an installation with the extension but no credential now performs
+  unauthenticated requests to the same fixed Tavily endpoint; there is no new
+  data recipient and no request is sent when configuration is present but
+  invalid. No disable switch: installing the extension is the opt-in.
+- Failure UX: a keyless request failure surfaces as a normal tool error. The
+  old local missing-key setup error and its teaching text are removed from
+  behavior, tests and active documentation.
 
 ## Search contract
 
@@ -89,8 +130,10 @@ claim SSRF isolation. No paid API requests or user configuration changes occur.
   and may contain arbitrary source text. No claim that delimiters prevent injection.
 - Distinguish user cancellation, timeout, network failure, auth failure (401/403),
   rate limiting (429), quota (432/433), service failure (5xx), malformed response
-  and oversized response. No automatic retries or provider fallback: requests may
-  be billed even when a response is lost. Do not reflect raw error messages.
+  and oversized response. Keyless mode collapses 401/403/429/432/433 into one
+  hint (see Keyless fallback). No automatic retries or provider fallback:
+  requests may be billed even when a response is lost. Do not reflect raw error
+  messages.
 - Fixed HTTPS Tavily endpoint; redirects rejected. No custom search endpoints.
 
 ## Cache
@@ -98,8 +141,9 @@ claim SSRF isolation. No paid API requests or user configuration changes occur.
 10-minute in-memory LRU-style cache, maximum 64 entries, lazy expiry sweep on each
 call. Cache normalized query/options. Resolve credentials before cache lookup;
 clear the cache on credential change or configuration failure, without putting
-keys in cache IDs/output. Track a generation counter on key changes or config
-failure; an in-flight response can be cached only in its original generation.
+keys in cache IDs/output. Track a generation counter on credential-identity
+changes (including key <-> keyless transitions) or config failure; an in-flight
+response can be cached only in its original generation.
 Test rotation/failure while requests are pending. The cache is per extension
 instance and may outlive
 /new; no disk cache, failed-result cache, or parallel-request deduplication.
@@ -120,7 +164,12 @@ private/local URLs remain accessible: full network policy is not implemented her
 
 - Mock fetch and config paths; no real credentials, real DNS, or paid API calls.
 - Test env/file precedence, blank/missing/invalid config, unknown keys, file
-  permissions/symlinks/size bounds, runtime key rotation and missing-key cache gate.
+  permissions/symlinks/size bounds, runtime key rotation, key <-> keyless
+  transitions and the credential-change cache gate.
+- Test both request modes: keyed sends the bearer header and no access-mode
+  header; keyless sends the access-mode header and no authorization header;
+  keyless 401/403/429/432/433 map to the single keyless hint; absent config
+  selects keyless while invalid config still fails locally.
 - Test valid request payload, integer/domain/query validation, output limits,
   malformed entries, empty results, status categories, body-read failures,
   cancellation/timeout, redaction, cache eviction/expiry, bounded stream reads.
@@ -133,4 +182,6 @@ private/local URLs remain accessible: full network policy is not implemented her
 
 Core credential refactoring, OAuth, credential shell helpers, multiple providers,
 search-depth UI, browser automation, persistent search history, existing-user
-credential migration, and private-network isolation are outside this batch.
+credential migration, private-network isolation, a keyless disable switch,
+keyless for other Tavily endpoints, provider failover and request retries are
+outside this batch.

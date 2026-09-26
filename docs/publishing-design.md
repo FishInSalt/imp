@@ -1,6 +1,7 @@
 # 发布设计：npm 首个公开版本与持续发布
 
-状态：修复待复核（2026-09-26，独立评审 B×1/S×4/N×6 已逐条修复）
+状态：已审批（2026-09-26，两轮独立评审：B×1/S×4 修复后经复核逐条闭合；N1/N2/N3/N6
+已落实，N4/N5 复认为无需改动）
 分支：本设计 `docs/publishing-design`；实现批次 `release/ci-publish`
 参考：npm trusted publishers 文档（docs.npmjs.com/trusted-publishers）；npm community
 讨论 #176761（首包引导的循环依赖）；PROJECT_PLAN.md:602（路线图原猜测发 scope
@@ -129,8 +130,9 @@ README 与 CHANGELOG 两处并行腐烂——这是 #readme-refresh 的教训）
 前置：main == origin/main、CI 绿、工作区干净且 `git rev-parse HEAD` == 拟打 tag 的
 commit、npm 账号已登录（2FA）。
 
-1. **tag/版本一致性 checklist 核对**（手工路径的守卫，S1）：
-   `test "$(node -p 'require("./package.json").version')" = "0.1.0"`。
+1. **tag/版本一致性 checklist 核对**（手工路径的守卫，S1）：先 `TAG=v0.1.0`，再
+   `test "$(node -p 'require("./package.json").version')" = "${TAG#v}"`
+   （与 D3 第三层同一写法；后续版本只改 TAG）。
 2. 在 main HEAD 上打 annotated tag 并推送：`git tag -a v0.1.0 -m "imp-agent v0.1.0"`
    → `git push origin v0.1.0`；workflow 跑门禁后按 D4 打 warning 跳过真发布
    （闸门未开）。
@@ -154,8 +156,9 @@ commit、npm 账号已登录（2FA）。
 
 - 本地（实现批内）：`npm publish --dry-run` 全量检查元数据与 tarball 内容（若
   CLI 在该模式下仍要求登录，记录之，不改设计）。
-- CI 探测（绑定前）：`gh workflow run release.yml -f dry_run=true` 真跑一遍
-  gate + dry-run publish，验证语法/权限/变量闸门路径。
+- CI 探测（绑定前）：在 main 上派发（`gh workflow run release.yml
+  -f dry_run=true --ref main`；tag-on-main 守卫对任意 ref 都执行，非 main 分支会先被
+  判失败）真跑一遍 gate + dry-run publish，验证语法/权限/变量闸门路径。
 - 发布后（首版验收）：干净环境 `npm i -g imp-agent` 冒烟；npm 页面元数据检查。
 - 常驻钉子：tag/版本一致性校验 + tag-on-main 校验（release.yml 内）+ publish job
   内断言 npm CLI ≥ 11.5.1（B1）+ `test/package-metadata.test.ts`。

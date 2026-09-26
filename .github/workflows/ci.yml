@@ -37,6 +37,7 @@ jobs:
       # Packaging smoke (node 20 only): the npm tarball must contain dist/ and
       # a runnable bin — guards against "packed without a build" regressions.
       - if: matrix.node == 20
+        name: packaging smoke
         run: |
           mkdir -p "$RUNNER_TEMP"
           rm -f imp-agent-*.tgz

@@ -106,11 +106,10 @@ revision was written; the unit tests cannot live-verify provider policy.
   No retries and no automatic mode switching within a request.
 - Posture: an installation with the extension but no credential now performs
   unauthenticated requests to the same fixed Tavily endpoint; there is no new
-  data recipient and no request is sent while a configured credential source
-  is present but invalid. The privacy delta versus keyed access is attribution:
-  provider-side,
-  unauthenticated requests carry IP/network metadata, not an account identity.
-  No disable switch: installing the extension is the opt-in.
+  data recipient, and a call whose resolution ends in a configuration error
+  sends no request. The privacy delta versus keyed access is attribution:
+  provider-side, unauthenticated requests carry IP/network metadata, not an
+  account identity. No disable switch: installing the extension is the opt-in.
 - Failure UX: a keyless request failure surfaces as a normal tool error. The
   old local missing-key setup error and its teaching text are removed from
   behavior, tests and active documentation, including: the README statement

@@ -38,6 +38,8 @@ export const CATALOG_FAMILIES: readonly ProviderName[] = [
 	"openai-codex",
 	"zai",
 	"deepseek",
+	"moonshotai",
+	"moonshotai-cn",
 ];
 
 /** pi's REMOTE_CATALOG_REFRESH_INTERVAL_MS — how long a check stays fresh. */
@@ -65,6 +67,12 @@ export interface CatalogEntry {
 	compat?: {
 		forceAdaptiveThinking?: boolean;
 		supportsReasoningEffort?: boolean;
+		/** pi compat.thinkingFormat — Moonshot's per-model thinking wire
+		 *  ("deepseek" thinking {type} for k2.x, "openai" effort for k3). */
+		thinkingFormat?: string;
+		/** pi compat (Moonshot k3): assistant frames must carry
+		 *  reasoning_content even when they have no thinking blocks. */
+		requiresReasoningContentOnAssistantMessages?: boolean;
 	};
 }
 
@@ -420,6 +428,13 @@ function sanitizeEntry(entry: CatalogEntry): CatalogEntry {
 		}
 		if (typeof entry.compat.supportsReasoningEffort === "boolean") {
 			compat.supportsReasoningEffort = entry.compat.supportsReasoningEffort;
+		}
+		if (typeof entry.compat.thinkingFormat === "string") {
+			compat.thinkingFormat = entry.compat.thinkingFormat;
+		}
+		if (typeof entry.compat.requiresReasoningContentOnAssistantMessages === "boolean") {
+			compat.requiresReasoningContentOnAssistantMessages =
+				entry.compat.requiresReasoningContentOnAssistantMessages;
 		}
 		if (Object.keys(compat).length > 0) clean.compat = compat;
 	}

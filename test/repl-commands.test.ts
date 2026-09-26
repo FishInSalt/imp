@@ -243,6 +243,9 @@ describe("slash commands", () => {
 			"ANTHROPIC_BASE_URL",
 			"OPENAI_API_KEY",
 			"OPENAI_BASE_URL",
+			"MOONSHOT_API_KEY",
+			"MOONSHOT_BASE_URL",
+			"MOONSHOT_CN_BASE_URL",
 			"IMP_AUTH_PATH",
 		]) {
 			SAVED[key] = process.env[key];
@@ -406,6 +409,8 @@ describe("slash commands", () => {
 			"openai-codex/gpt-5.5",
 			"openai/gpt-5.2",
 			"deepseek/deepseek-v4-pro",
+			"moonshotai/kimi-k3",
+			"moonshotai-cn/kimi-k3",
 		]); // v1 candidates — GLM is zai-canonical (pi parity)
 		expect(calls[0]?.title).toContain("model");
 		expect(env.runner.model).toBe("glm-5.3"); // the family strips the prefix
@@ -1687,6 +1692,8 @@ describe("/think (#thinking-levels)", () => {
 			"OpenAI",
 			"OpenAI (ChatGPT plan)",
 			"DeepSeek",
+			"Moonshot AI",
+			"Moonshot AI CN",
 		]);
 		expect(labels.find((r) => r.label === "Z.AI")?.description).toBe("not signed in");
 		expect(labels.find((r) => r.label === "OpenAI (ChatGPT plan)")?.description).toBe("not signed in");
@@ -1733,7 +1740,9 @@ describe("/think (#thinking-levels)", () => {
 		const env = await makeEnv();
 		await dispatchCommand("/login foo", env.ctx);
 		expect(env.output()).toContain('unknown provider "/login foo"');
-		expect(env.output()).toContain("known: zai, anthropic, openai, openai-codex, deepseek");
+		expect(env.output()).toContain(
+			"known: zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn",
+		);
 		// oauth family (batch B): URL + code render, no secret prompt at all
 		const codex = await makeEnv();
 		codex.ctx.secret = async () => {

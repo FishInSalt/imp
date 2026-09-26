@@ -240,6 +240,8 @@ const MODEL_CANDIDATES: readonly string[] = [
 	"openai-codex/gpt-5.5",
 	"openai/gpt-5.2",
 	"deepseek/deepseek-v4-pro",
+	"moonshotai/kimi-k3",
+	"moonshotai-cn/kimi-k3",
 ];
 
 function modelCandidates(current: string): string[] {
@@ -277,6 +279,9 @@ const FAMILY_FALLBACKS: Record<string, readonly string[]> = {
 	],
 	// pi.dev's live deepseek catalog (2026-09)
 	deepseek: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
+	// pi.dev's live moonshotai catalogs (2026-09-26) — both platforms
+	moonshotai: ["moonshotai/kimi-k3", "moonshotai/kimi-k2.6"],
+	"moonshotai-cn": ["moonshotai-cn/kimi-k3", "moonshotai-cn/kimi-k2.6"],
 };
 
 /** Row descriptions identify the family — a bare id cannot (P2-5 lesson). */
@@ -284,6 +289,8 @@ function familyLabel(id: string): string {
 	if (id.startsWith("openai-codex/")) return "ChatGPT plan (Codex)";
 	if (id.startsWith("zai/")) return "Z.ai GLM coding plan";
 	if (id.startsWith("deepseek/")) return "DeepSeek";
+	if (id.startsWith("moonshotai-cn/")) return "Moonshot AI CN";
+	if (id.startsWith("moonshotai/")) return "Moonshot AI";
 	if (id.startsWith("openai/")) return "OpenAI-compatible endpoint";
 	return "anthropic-compatible endpoint";
 }
@@ -635,14 +642,18 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 
 export interface ModelListDeps {
 	/** Families that currently hold a credential. */
-	configured: (family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek") => boolean;
+	configured: (
+		family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek" | "moonshotai" | "moonshotai-cn",
+	) => boolean;
 	/** Endpoint listing, null when unreachable — injectable for tests. */
 	discover: (
-		family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek",
+		family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek" | "moonshotai" | "moonshotai-cn",
 	) => Promise<string[] | null>;
 	/** M14: pi.dev overlay ids for the family, null when the catalog has
 	 *  nothing — injectable for tests. */
-	catalogIds?: (family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek") => string[] | null;
+	catalogIds?: (
+		family: "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek" | "moonshotai" | "moonshotai-cn",
+	) => string[] | null;
 }
 
 /**
@@ -660,7 +671,15 @@ export async function buildModelList(
 	rows: Array<{ label: string; description?: string }>;
 	fallbackNotes: string[];
 }> {
-	const families = ["anthropic", "openai", "openai-codex", "zai", "deepseek"] as const;
+	const families = [
+		"anthropic",
+		"openai",
+		"openai-codex",
+		"zai",
+		"deepseek",
+		"moonshotai",
+		"moonshotai-cn",
+	] as const;
 	const fallbackNotes: string[] = [];
 	let ids: string[] = [];
 	const configuredFamilies = families.filter((f) => deps.configured(f));
@@ -682,6 +701,8 @@ export async function buildModelList(
 				(family === "openai" && process.env.OPENAI_BASE_URL === undefined) ||
 				(family === "zai" && process.env.ZAI_BASE_URL === undefined) ||
 				(family === "deepseek" && process.env.DEEPSEEK_BASE_URL === undefined) ||
+				(family === "moonshotai" && process.env.MOONSHOT_BASE_URL === undefined) ||
+				(family === "moonshotai-cn" && process.env.MOONSHOT_CN_BASE_URL === undefined) ||
 				family === "openai-codex";
 			// M14: the pi.dev disk cache stands between live discovery and the
 			// static floor — offline picker lists the real family catalog. The
@@ -825,6 +846,20 @@ const LOGIN_TARGETS: readonly LoginTarget[] = [
 		envVar: "DEEPSEEK_API_KEY",
 		method: "api_key",
 		switchHint: "deepseek/deepseek-v4-pro",
+	},
+	{
+		family: "moonshotai",
+		name: "Moonshot AI",
+		envVar: "MOONSHOT_API_KEY",
+		method: "api_key",
+		switchHint: "moonshotai/kimi-k3",
+	},
+	{
+		family: "moonshotai-cn",
+		name: "Moonshot AI CN",
+		envVar: "MOONSHOT_API_KEY",
+		method: "api_key",
+		switchHint: "moonshotai-cn/kimi-k3",
 	},
 ];
 

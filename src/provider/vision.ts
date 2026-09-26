@@ -25,6 +25,15 @@ const VISION_RULES: ReadonlyArray<VisionRule> = [
 	// deepseek official: V4.1 Flash takes images (pi.dev 2026-09-25; the
 	// rest of the line is text-only — no rule → false)
 	{ provider: "deepseek", prefix: "deepseek-flash", vision: true },
+	// moonshotai / moonshotai-cn official: the current catalog's kimi line
+	// (k2.6 / k2.7-code / k3) is uniformly multimodal (pi.dev 2026-09-26);
+	// older text-only ids carry no rule → false (the fail-safe default).
+	{ provider: "moonshotai", prefix: "kimi-k3", vision: true },
+	{ provider: "moonshotai", prefix: "kimi-k2.6", vision: true },
+	{ provider: "moonshotai", prefix: "kimi-k2.7-code", vision: true },
+	{ provider: "moonshotai-cn", prefix: "kimi-k3", vision: true },
+	{ provider: "moonshotai-cn", prefix: "kimi-k2.6", vision: true },
+	{ provider: "moonshotai-cn", prefix: "kimi-k2.7-code", vision: true },
 	// zai: exact vision-capable families first (5.3-flash covers -flashx),
 	// then the blanket text-only rule for the rest of the glm line.
 	{ provider: "zai", prefix: "glm-5.3-flash", vision: true },

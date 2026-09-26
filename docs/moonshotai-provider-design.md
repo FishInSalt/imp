@@ -1,6 +1,7 @@
 # Moonshot / Kimi 官方 API 接入（#moonshotai-provider）
 
-状态：rev2（独立对抗评审后修订：1×P1 + 7×P2 + 4×P3 已折入；rev1 见 git 历史）
+状态：rev2.1（rev2 + 实现期 clamp 语义修正：不可关闭模型的 off 经 clamp
+上行；rev1/rev2 见 git 历史）
 分支：feature/moonshotai-provider
 参照系：pi @ /Users/z/Z/Agent_demo/pi（每条 parity 声明锚定源码行）；官方文档 platform.kimi.ai/docs/guide/use-thinking-models（thinking 矩阵）与 Kimi Code FAQ 平台对照表（www.kimi.com/code/docs/en/kimi-code/faq.html，base URL 表）；pi.dev 线上目录实测（两家均 HTTP 200，2026-09-26）
 日期：2026-09-26
@@ -133,8 +134,8 @@ case "moonshotai-cn": {
 | 模型 | compat | 可选级别 | level 选中 → 请求体 | 显式 off/undefined → |
 |------|--------|----------|---------------------|----------------------|
 | kimi-k2.6 | deepseek, effort:false, 无 map | off/high（无 map 二进制默认 :475-478） | `thinking:{type:"enabled"}`（无 reasoning_effort） | `thinking:{type:"disabled"}`（off 可用） |
-| kimi-k2.7-code(-highspeed) | deepseek, effort:false, map{off:null} | minimal/low/medium/high | `thinking:{type:"enabled"}` | 什么都不发（off:null；模型恒思考） |
-| kimi-k3 | openai, effort:true, 全 map | low/high/max | `reasoning_effort:"low"/"high"/"max"`；**永不发 thinking** | 什么都不发（off:null；服务端默认 max） |
+| kimi-k2.7-code(-highspeed) | deepseek, effort:false, map{off:null} | minimal/low/medium/high | `thinking:{type:"enabled"}` | off 经 clamp→minimal → `enabled`（永不 disabled）；undefined → 什么都不发 |
+| kimi-k3 | openai, effort:true, 全 map | low/high/max | `reasoning_effort:"low"/"high"/"max"`；**永不发 thinking** | off 经 clamp→low → `reasoning_effort:"low"`；undefined → 什么都不发 |
 
 **默认级别链路（评审 P1 修正）**：启动级别 =
 `options.thinking ?? 设置 defaultThinkingLevel ?? "medium"`（runner.ts:387-390，
@@ -144,11 +145,14 @@ pi 的 DEFAULT_THINKING_LEVEL 即 "medium"），再按模型 clamp（thinking.ts
 - k3：clamp（medium）→ **high → `reasoning_effort:"high"`**（服务端默认 max，
   imp 显式降档到 high）
 
-**显式 off**（`--thinking off` 或用户调到 off；主请求 off→undefined
-（runner.ts:1042），compaction/branch-summary 原样传 "off"）：
-- k2.6 → `thinking:{type:"disabled"}`（undefined 与 raw "off" 同果）
-- k2.7-code → 什么都不发（off:null；模型恒思考）
-- k3 → 什么都不发
+**显式 off**（`--thinking off` 或用户调到 off）——**rev2.1 实现期修正**：
+provider 入口先做 clamp（openai-completions 的 level 计算），"off" 对
+不可关闭模型不会原样到达分支；runner 的 off→undefined 映射（:1042）只对
+"off 可用"的模型产生可观察差异：
+- k2.6 → off 可用 → `thinking:{type:"disabled"}`（undefined 同果）
+- k2.7-code → off 不可用，clamp 到 minimal → `thinking:{type:"enabled"}`；
+  仅 level undefined（直接调用的负面空间）什么都不发
+- k3 → off 不可用，clamp 到 low → `reasoning_effort:"low"`；undefined → 什么都不发
 
 **离线地板**（thinking.ts MODEL_RULES:81，frozen 快照 pi.dev 2026-09-26；
 两 provider 各 3 条，共 6 条或抽 helper 注册）：
@@ -258,11 +262,12 @@ pi 的两条独立规则：非空签名回放（:1312-1318）+ 空串填充
    b. k2.6 显式 off（直接传 "off" 与主路径 undefined 两形）→
       `thinking:{type:"disabled"}`（P1-1 防御钉）；**默认链路钉**：
       clamp("medium") → high → enabled（P1 修正后的默认推导）。
-   c. k2.7-code level high → `thinking:{type:"enabled"}`；直接传 "off" /
-      undefined（off:null 负面）→ 请求体既无 thinking 也无 reasoning_effort。
+   c. k2.7-code level high → `thinking:{type:"enabled"}`；传 "off" → clamp 到
+      minimal → enabled（永不 disabled）；undefined（负面空间）→ 既无 thinking
+      也无 reasoning_effort。
    d. k3 level low/high/max → reasoning_effort 映射值；**任何情况无 thinking
-      键**（文档硬约束钉）；显式 off/undefined → 两个都不发；**默认链路钉**：
-      clamp("medium") → reasoning_effort:"high"。
+      键**（文档硬约束钉）；off → clamp 到 low → "low"；undefined → 两个都
+      不发；**默认链路钉**：clamp("medium") → "high"。
    e. 回放：k3 无 thinking 的 assistant 帧 → `reasoning_content: ""`；有块 →
       拼接文本；**k3 tool-call-only 帧（content:null + tool_calls）→ 同样补 ""**；
       k2.6/k2.7 无块（含同形 tool-only 帧）→ **键不存在**；**跨切换**（k3→k2.6

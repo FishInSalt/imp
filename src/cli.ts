@@ -165,6 +165,13 @@ Environment:
     export IMP_MODEL=deepseek/deepseek-v4-pro
   (or /login deepseek in the REPL — the stored key wins over the env var)
 
+  Moonshot / Kimi official API (open platform):
+    export MOONSHOT_API_KEY=<your kimi key>
+    export IMP_MODEL=moonshotai/kimi-k3       # overseas: api.moonshot.ai/v1
+    export IMP_MODEL=moonshotai-cn/kimi-k3    # China: api.moonshot.cn/v1
+  (or /login moonshotai / /login moonshotai-cn in the REPL — a stored key
+  wins; both families read MOONSHOT_API_KEY)
+
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
     imp login
     imp -m openai-codex/gpt-5.5
@@ -172,8 +179,8 @@ Environment:
   OpenAI and OpenAI-compatible providers (model id prefix routes):
     export OPENAI_API_KEY=<key>
     export IMP_MODEL=openai/gpt-5.2
-    # any compatible endpoint (Kimi, OpenRouter, ...; DeepSeek has its own
-    # family above):
+    # any compatible endpoint (OpenRouter, MiniMax, ...; DeepSeek and
+    # Moonshot/Kimi have their own families above):
     export OPENAI_BASE_URL=<your compat endpoint>/v1
     export IMP_MODEL=openai/<model id>
     # Z.ai via its OpenAI-mode endpoint:

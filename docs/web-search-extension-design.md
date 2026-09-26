@@ -71,12 +71,14 @@ Contract per the provider's keyless documentation
 (https://docs.tavily.com/documentation/keyless), which was current when this
 revision was written; the unit tests cannot live-verify provider policy.
 
-- Trigger: the environment key is blank/absent AND the selected config path is
-  absent (ENOENT). Any present-but-unreadable, invalid or unsafe configuration
-  is still a hard local error (fail closed): the keyless branch is reachable
-  only after resolution reports "no credential configured", never after a
-  configuration error. Keyless is a first-run default, not an error-recovery
-  path.
+- Trigger: for a given call, resolution reports "no credential configured"
+  (environment key blank/absent AND the selected config path absent, ENOENT).
+  Any present-but-unreadable, invalid or unsafe configuration is a hard local
+  error for that call (fail closed); the keyless branch is never entered after
+  a configuration error. This concerns per-call selection only: a transition
+  into or out of a broken credential source is a credential-state change
+  handled under Mode identity. Keyless is a first-run default, not an
+  error-recovery path.
 - Request: when a key resolves, send `Authorization: Bearer <key>` and no
   access-mode header. When none resolves, send `X-Tavily-Access-Mode: keyless`
   and no authorization header. Never both. Endpoint, payload schema and all
@@ -104,8 +106,9 @@ revision was written; the unit tests cannot live-verify provider policy.
   No retries and no automatic mode switching within a request.
 - Posture: an installation with the extension but no credential now performs
   unauthenticated requests to the same fixed Tavily endpoint; there is no new
-  data recipient and no request is sent when configuration is present but
-  invalid. The privacy delta versus keyed access is attribution: provider-side,
+  data recipient and no request is sent while a configured credential source
+  is present but invalid. The privacy delta versus keyed access is attribution:
+  provider-side,
   unauthenticated requests carry IP/network metadata, not an account identity.
   No disable switch: installing the extension is the opt-in.
 - Failure UX: a keyless request failure surfaces as a normal tool error. The
@@ -113,7 +116,9 @@ revision was written; the unit tests cannot live-verify provider policy.
   behavior, tests and active documentation, including: the README statement
   that no unauthenticated fallback exists, the README migration note that a
   missing key produces a local setup error, the README troubleshooting bullet,
-  and the wording of the local credential-verification snippet.
+  and the local credential-verification snippet, whose keyless-state output
+  must say "no credential configured — keyless search mode" instead of the
+  bare "Not configured".
 
 ## Search contract
 
@@ -183,8 +188,9 @@ private/local URLs remain accessible: full network policy is not implemented her
 - Test env/file precedence, blank/missing/invalid config, unknown keys, file
   permissions/symlinks/size bounds, runtime key rotation, key <-> keyless
   transitions and the credential-change cache gate.
-- Test both request modes: keyed sends the bearer header and no access-mode
-  header; keyless sends the access-mode header and no authorization header;
+- Test both request modes in `test/web-search.test.ts`: keyed sends the bearer
+  header and no access-mode header; keyless sends the access-mode header and no
+  authorization header;
   keyless 401/403/429/432/433 map to the single keyless hint while other
   non-2xx keep mode-neutral wording; absent config selects keyless while a
   present-but-invalid config still fails locally with no request, even when no

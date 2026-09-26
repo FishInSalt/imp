@@ -1,6 +1,7 @@
 import { createAnthropicProvider } from "./anthropic.js";
 import { createCodexResponsesProvider } from "./codex-responses.js";
 import { createDeepSeekProvider } from "./deepseek.js";
+import { createMoonshotCnProvider, createMoonshotProvider } from "./moonshotai.js";
 import { createOpenAICompletionsProvider } from "./openai-completions.js";
 import type { LLMProvider } from "./types.js";
 import { createZaiProvider } from "./zai.js";
@@ -15,6 +16,8 @@ import { createZaiProvider } from "./zai.js";
  *   openai/gpt-5.2            → OpenAI Chat Completions (OPENAI_API_KEY)
  *   openai/deepseek-chat      → any OpenAI-compatible endpoint via OPENAI_BASE_URL
  *   deepseek/deepseek-v4-pro → DeepSeek's official endpoint (DEEPSEEK_API_KEY)
+ *   moonshotai/kimi-k3        → Moonshot AI official (MOONSHOT_API_KEY)
+ *   moonshotai-cn/kimi-k3     → Moonshot AI China official (MOONSHOT_API_KEY)
  *   anthropic/glm-4.6         → explicit anthropic-messages routing (equivalent to glm-4.6)
  *   openai-codex/gpt-5.5      → Responses protocol on the ChatGPT-subscription
  *                               credential (imp login; see codex-auth.ts)
@@ -27,7 +30,14 @@ import { createZaiProvider } from "./zai.js";
  * pure string routing again.
  */
 
-export type ProviderName = "anthropic" | "openai" | "openai-codex" | "zai" | "deepseek";
+export type ProviderName =
+	| "anthropic"
+	| "openai"
+	| "openai-codex"
+	| "zai"
+	| "deepseek"
+	| "moonshotai"
+	| "moonshotai-cn";
 
 export interface ModelRef {
 	provider: ProviderName;
@@ -62,6 +72,8 @@ export function parseModelRef(reference: string): ModelRef {
 	if (provider === "openai-codex") return { provider: "openai-codex", modelId };
 	if (provider === "zai") return { provider: "zai", modelId };
 	if (provider === "deepseek") return { provider: "deepseek", modelId };
+	if (provider === "moonshotai") return { provider: "moonshotai", modelId };
+	if (provider === "moonshotai-cn") return { provider: "moonshotai-cn", modelId };
 	// Unknown prefix (e.g. a model id that legitimately contains a slash,
 	// like some OpenRouter or Bedrock ids): treat the whole string as a bare
 	// anthropic id — same behavior as before this module existed.
@@ -80,6 +92,10 @@ export function createProviderFor(provider: ProviderName): LLMProvider {
 			return createZaiProvider();
 		case "deepseek":
 			return createDeepSeekProvider();
+		case "moonshotai":
+			return createMoonshotProvider();
+		case "moonshotai-cn":
+			return createMoonshotCnProvider();
 		default: {
 			const exhaustive: never = provider;
 			throw new Error(`unreachable provider: ${JSON.stringify(exhaustive)}`);

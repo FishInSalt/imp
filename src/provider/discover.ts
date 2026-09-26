@@ -1,6 +1,13 @@
 import { loadApiKey, resolveApiKey } from "./auth-store.js";
 import { loadCodexCredential } from "./codex-auth.js";
 import { DEEPSEEK_DEFAULT_BASE_URL, DEEPSEEK_SEED_MODELS, deepseekApiKey } from "./deepseek.js";
+import {
+	MOONSHOT_CN_DEFAULT_BASE_URL,
+	MOONSHOT_DEFAULT_BASE_URL,
+	MOONSHOT_SEED_MODELS,
+	moonshotApiKey,
+	moonshotCnApiKey,
+} from "./moonshotai.js";
 import type { ProviderName } from "./resolve.js";
 import { ZAI_DEFAULT_BASE_URL, ZAI_SEED_MODELS, zaiApiKey } from "./zai.js";
 
@@ -95,6 +102,10 @@ export function familyConfigured(family: ProviderName): boolean {
 			return zaiApiKey() !== null;
 		case "deepseek":
 			return deepseekApiKey() !== null;
+		case "moonshotai":
+			return moonshotApiKey() !== null;
+		case "moonshotai-cn":
+			return moonshotCnApiKey() !== null;
 		default: {
 			const exhaustive: never = family;
 			throw new Error(`unreachable family: ${JSON.stringify(exhaustive)}`);
@@ -134,6 +145,30 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 			cacheKey,
 		).catch(() => null);
 		return redirected ? ids : (ids ?? ([...DEEPSEEK_SEED_MODELS] as string[]));
+	}
+	// moonshotai / moonshotai-cn: Moonshot's official endpoints serve an
+	// OpenAI-style /models; seeds are the pi.dev offline floor (both families
+	// share MOONSHOT_API_KEY — the stored key is per family, and a key that
+	// belongs to the other platform 401s into the seed fallback here).
+	if (family === "moonshotai" || family === "moonshotai-cn") {
+		const envVar = family === "moonshotai" ? "MOONSHOT_BASE_URL" : "MOONSHOT_CN_BASE_URL";
+		const fallback = family === "moonshotai" ? MOONSHOT_DEFAULT_BASE_URL : MOONSHOT_CN_DEFAULT_BASE_URL;
+		const redirected = process.env[envVar] !== undefined; // #gateway-truth
+		const base = (process.env[envVar] ?? fallback).replace(/\/+$/, "");
+		// per-(family, baseUrl) key, like the anthropic/openai path (review P3-5)
+		const cacheKey = `${family}|${base}`;
+		const hit = cache.get(cacheKey);
+		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
+		const key = family === "moonshotai" ? moonshotApiKey() : moonshotCnApiKey();
+		const ids = await fetchJson(
+			`${base}/models`,
+			{
+				accept: "application/json",
+				authorization: `Bearer ${String(key)}`,
+			},
+			cacheKey,
+		).catch(() => null);
+		return redirected ? ids : (ids ?? ([...MOONSHOT_SEED_MODELS] as string[]));
 	}
 	// zai: the coding endpoint serves an OpenAI-style /models; the pi.dev
 	// live catalog is the offline seed when it 404s or the family is

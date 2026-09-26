@@ -41,6 +41,11 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	// DeepSeek official (pi.dev deepseek catalog, 2026-09-25)
 	"deepseek-flash": 1_000_000,
 	"deepseek-v4-pro": 1_000_000,
+	// Moonshot / Kimi official (pi.dev moonshotai catalog, 2026-09-26)
+	"kimi-k2.6": 262_144,
+	"kimi-k2.7-code": 262_144,
+	"kimi-k2.7-code-highspeed": 262_144,
+	"kimi-k3": 1_048_576,
 	// OpenAI Codex — ChatGPT subscription models (pi openai-codex.json)
 	"gpt-6-astra": 272_000, // pi.dev catalog 2026-09
 	"gpt-5.3-codex-spark": 128_000,
@@ -91,6 +96,12 @@ const MODEL_COSTS: Record<string, ModelCost> = {
 	// DeepSeek official API (pi.dev deepseek catalog, 2026-09-25)
 	"deepseek-flash": { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
 	"deepseek-v4-pro": { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
+	// Moonshot / Kimi official API (pi.dev moonshotai catalog, 2026-09-26;
+	// USD display convention — the CN platform bills CNY, recorded divergence)
+	"kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+	"kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+	"kimi-k2.7-code-highspeed": { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
+	"kimi-k3": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
 	// OpenAI Codex — ChatGPT subscription; rates mirror the API list (pi openai-codex.json)
 	"gpt-6-astra": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
 	"gpt-5.3-codex-spark": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0, subscription: true },

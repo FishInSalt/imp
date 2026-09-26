@@ -78,16 +78,18 @@ function toUserParts(content: string | ContentBlock[]): string | WireUserPart[] 
 	return parts;
 }
 
-/** pi compat.requiresReasoningContentOnAssistantMessages (#deepseek-provider
- *  §2.4): DeepSeek V4's interleaved thinking requires assistant frames to
- *  carry reasoning_content on tool-call continuations. The field name is
- *  HARDCODED to reasoning_content — pi replays under the incoming field's
- *  name (:1312-1318), but imp reads only that one field (D5), so hardcoding
- *  is full parity for this family. */
+/** Reasoning replay (#deepseek-provider §2.4, generalized by
+ *  #moonshotai-provider §2.4): pi's two rules split — non-empty thinking
+ *  text replays as reasoning_content for every reasoning family (deepseek,
+ *  moonshotai, moonshotai-cn); the "" fill on bare frames is model-level
+ *  (deepseek family-constant true, pi :1643; Moonshot via catalog compat —
+ *  k3 only). The field name is HARDCODED to reasoning_content — pi replays
+ *  under the incoming field's name (:1312-1318), but imp reads only that
+ *  one field (D5), so hardcoding is full parity for these families. */
 function toWireMessages(
 	system: string,
 	messages: AgentMessage[],
-	reasoningContentReplay = false,
+	reasoningReplay: { fillEmpty: boolean } | null = null,
 ): WireMessage[] {
 	const wire: WireMessage[] = [{ role: "system", content: system }];
 	for (const msg of messages) {
@@ -112,20 +114,24 @@ function toWireMessages(
 				// Some providers reject a null content WITH tool_calls and others
 				// reject missing content WITHOUT — null is the documented shape.
 				// thinking blocks are otherwise display-only (never replayed) —
-				// the deepseek family is the one exception (pi :1357-1361: no
-				// thinking → reasoning_content:""; the vendor's guidance for
-				// every other family is to discard them).
-				const reasoning = reasoningContentReplay
-					? msg.blocks
-							.filter((b): b is Extract<AssistantBlock, { type: "thinking" }> => b.type === "thinking")
-							.map((b) => b.thinking)
-							.join("\n")
-					: undefined;
+				// the reasoning families are the exception (see toWireMessages).
+				let reasoningText: string | undefined;
+				if (reasoningReplay !== null) {
+					reasoningText = msg.blocks
+						.filter((b): b is Extract<AssistantBlock, { type: "thinking" }> => b.type === "thinking")
+						.map((b) => b.thinking)
+						.join("\n");
+				}
 				wire.push({
 					role: "assistant",
 					content: text === "" && toolCalls.length > 0 ? null : text,
 					...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-					...(reasoningContentReplay ? { reasoning_content: reasoning ?? "" } : {}),
+					// Non-empty text replays for every reasoning family; the "" fill
+					// is the per-model compat (k3 true, k2.6/k2.7 false — their bare
+					// frames carry NO key at all, not an empty string).
+					...(reasoningText !== undefined && (reasoningText !== "" || reasoningReplay?.fillEmpty === true)
+						? { reasoning_content: reasoningText }
+						: {}),
 				});
 				break;
 			}
@@ -212,15 +218,20 @@ interface StreamDelta {
 	}>;
 }
 
+interface StreamUsage {
+	prompt_tokens?: number;
+	completion_tokens?: number;
+	prompt_tokens_details?: { cached_tokens?: number };
+	/** OpenRouter's spelling of the same cache-read counter. */
+	prompt_cache_hit_tokens?: number;
+	/** Kimi documents the cache-read count at the TOP level of the final
+	 *  usage chunk (pi :1520 reads it as the last fallback). */
+	cached_tokens?: number;
+}
+
 interface StreamChunk {
-	choices?: Array<{ delta?: StreamDelta; finish_reason?: string | null }>;
-	usage?: null | {
-		prompt_tokens?: number;
-		completion_tokens?: number;
-		prompt_tokens_details?: { cached_tokens?: number };
-		/** OpenRouter's spelling of the same cache-read counter. */
-		prompt_cache_hit_tokens?: number;
-	};
+	choices?: Array<{ delta?: StreamDelta; finish_reason?: string | null; usage?: StreamUsage | null }>;
+	usage?: StreamUsage | null;
 }
 
 export function createOpenAICompletionsProvider(options: OpenAICompletionsProviderOptions = {}): LLMProvider {
@@ -258,15 +269,27 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				request.messages,
 				modelSupportsVision(family, request.model),
 			);
-			// reasoning replay rides ONLY the deepseek family, and only for
-			// reasoning models (thinking meta null = no knob = pi
-			// model.reasoning === false, which gates pi's fill too)
-			const reasoningContentReplay = family === "deepseek" && thinkingMetaFor(family, request.model) !== null;
+			// Reasoning replay (design §2.4; pi's two rules split): text replays
+			// for the deepseek + moonshot families, on reasoning models only
+			// (thinking meta null = no knob = pi model.reasoning === false, which
+			// gates pi's replay too). The "" fill is model-level: deepseek keeps
+			// its family-constant true (pi :1643 detected); moonshot reads the
+			// catalog compat (k3 true, k2.x false). The gate keys off the CURRENT
+			// request model (pi :1697-1698) — a /model switch re-decides.
+			const replayMeta = thinkingMetaFor(family, request.model);
+			const reasoningReplay =
+				(family === "deepseek" || family === "moonshotai" || family === "moonshotai-cn") &&
+				replayMeta !== null
+					? {
+							fillEmpty:
+								family === "deepseek" || replayMeta.requiresReasoningContentOnAssistantMessages === true,
+						}
+					: null;
 			const body: Record<string, unknown> = {
 				model: request.model,
 				stream: true,
 				stream_options: { include_usage: true },
-				messages: toWireMessages(request.system, messages, reasoningContentReplay),
+				messages: toWireMessages(request.system, messages, reasoningReplay),
 				[maxTokensField(request.model)]: request.maxTokens,
 			};
 			if (request.tools.length > 0) {
@@ -341,7 +364,9 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				const text = await response.text().catch(() => "");
 				const hint =
 					response.status === 401
-						? " — check OPENAI_API_KEY"
+						? options.auth !== undefined
+							? ` — check ${options.auth.envVar}`
+							: " — check OPENAI_API_KEY"
 						: response.status === 404
 							? " — check the model id and OPENAI_BASE_URL"
 							: "";
@@ -415,14 +440,24 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				// DeepSeek sends usage: null on interim chunks (observed live
 				// 2026-09-26: the field is PRESENT but null before the final
 				// usage-bearing chunk) — null-check, not just undefined.
-				if (chunk.usage != null) {
+				// Moonshot may carry the final usage on the CHOICE instead of the
+				// chunk (pi :565-568); Kimi also documents the cache-read count at
+				// the top level (`cached_tokens`, pi :1520). One guard, one raw
+				// object, every field read off it (review P2-2). Assumes usage
+				// arrives once (final chunk/choice): a partial early choice.usage
+				// could make Math.max keep a larger pre-cache input.
+				const rawUsage = chunk.usage ?? choice?.usage;
+				if (rawUsage != null) {
 					// prompt_tokens INCLUDES cache hits (both spellings report the
 					// hit count as a subset) — subtract to match the anthropic
 					// inputTokens convention the ctx%/compaction math assumes (review F1).
 					const cached =
-						chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens ?? 0;
-					usage.inputTokens = Math.max(usage.inputTokens, (chunk.usage.prompt_tokens ?? 0) - cached);
-					usage.outputTokens = Math.max(usage.outputTokens, chunk.usage.completion_tokens ?? 0);
+						rawUsage.prompt_tokens_details?.cached_tokens ??
+						rawUsage.prompt_cache_hit_tokens ??
+						rawUsage.cached_tokens ??
+						0;
+					usage.inputTokens = Math.max(usage.inputTokens, (rawUsage.prompt_tokens ?? 0) - cached);
+					usage.outputTokens = Math.max(usage.outputTokens, rawUsage.completion_tokens ?? 0);
 					if (cached > 0) usage.cacheReadTokens = Math.max(usage.cacheReadTokens ?? 0, cached);
 				}
 			}

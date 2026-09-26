@@ -48,6 +48,11 @@ export interface ModelThinkingMeta {
 	supportsEffort?: boolean;
 	/** pi model.maxTokens — the cap for the budget math and output clamp. */
 	maxOutputTokens?: number;
+	/** pi compat.requiresReasoningContentOnAssistantMessages (catalog-driven
+	 *  for Moonshot k3): assistant frames carry reasoning_content even with
+	 *  no thinking blocks. deepseek's "" fill does NOT read this — it stays
+	 *  a family constant in openai-completions.ts (pi :1643 detected). */
+	requiresReasoningContentOnAssistantMessages?: boolean;
 }
 
 /** The zai GLM 5.2 map (pi.dev live, 2026-09): minimal/low/medium all
@@ -67,6 +72,19 @@ const GLM_52_MAP: ThinkingLevelMap = {
  *  (off:null) and minimal/medium are unavailable — the ladder is
  *  low / high / max. */
 const GLM_53_MAP: ThinkingLevelMap = {
+	off: null,
+	minimal: null,
+	low: "low",
+	medium: null,
+	high: "high",
+	xhigh: null,
+	max: "max",
+};
+
+/** The moonshotai / moonshotai-cn kimi-k3 map (pi.dev live, 2026-09-26):
+ *  the reasoning_effort ladder is low/high/max; thinking CANNOT be disabled
+ *  and the thinking object is forbidden on k3 entirely. */
+const KIMI_K3_MAP: ThinkingLevelMap = {
 	off: null,
 	minimal: null,
 	low: "low",
@@ -186,6 +204,40 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 			levelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		},
 	},
+	// ---- moonshotai / moonshotai-cn (#moonshotai-provider) ----
+	// pi.dev live catalog 2026-09-26; both providers share the same three
+	// rules (no generic "kimi-" rule: legacy ids' knobs are unknown — the
+	// fail-safe is no knob, and the live catalog corrects online).
+	{
+		provider: "moonshotai",
+		prefix: "kimi-k3",
+		meta: {
+			style: "openai-effort",
+			levelMap: KIMI_K3_MAP,
+			requiresReasoningContentOnAssistantMessages: true,
+		},
+	},
+	{
+		provider: "moonshotai",
+		prefix: "kimi-k2.7-code",
+		meta: { style: "deepseek", supportsEffort: false, levelMap: { off: null } },
+	},
+	{ provider: "moonshotai", prefix: "kimi-k2.6", meta: { style: "deepseek", supportsEffort: false } },
+	{
+		provider: "moonshotai-cn",
+		prefix: "kimi-k3",
+		meta: {
+			style: "openai-effort",
+			levelMap: KIMI_K3_MAP,
+			requiresReasoningContentOnAssistantMessages: true,
+		},
+	},
+	{
+		provider: "moonshotai-cn",
+		prefix: "kimi-k2.7-code",
+		meta: { style: "deepseek", supportsEffort: false, levelMap: { off: null } },
+	},
+	{ provider: "moonshotai-cn", prefix: "kimi-k2.6", meta: { style: "deepseek", supportsEffort: false } },
 	{ provider: "openai", prefix: "deepseek-r", meta: { style: "auto" } },
 	// gpt-6 (pi.dev live catalog): off UNAVAILABLE, minimal→low, xhigh/max native
 	{
@@ -420,6 +472,32 @@ function catalogThinkingMeta(provider: string, modelId: string): ModelThinkingMe
 				style: "codex-effort",
 				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
 				maxOutputTokens: entry.maxTokens,
+			};
+		case "moonshotai":
+		case "moonshotai-cn":
+			// One shim, two families: the catalog compat decides the wire style.
+			// pi's DETECTED default is "openai" (:1644-1654) — only an explicit
+			// "deepseek" compat takes the thinking-object branch; the detected
+			// supportsReasoningEffort is FALSE for Moonshot (:1636 exclusion),
+			// so `=== true` is the right anchor (the opposite of deepseek).
+			// A compat-less entry therefore falls to openai-effort (pi falls
+			// the same way) — pinned as a decision by test 4d.
+			if (entry.compat?.thinkingFormat === "deepseek") {
+				return {
+					style: "deepseek",
+					supportsEffort: entry.compat?.supportsReasoningEffort === true,
+					levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+					maxOutputTokens: entry.maxTokens,
+					requiresReasoningContentOnAssistantMessages:
+						entry.compat?.requiresReasoningContentOnAssistantMessages === true,
+				};
+			}
+			return {
+				style: "openai-effort",
+				levelMap: sanitizeCatalogLevelMap(entry.thinkingLevelMap),
+				maxOutputTokens: entry.maxTokens,
+				requiresReasoningContentOnAssistantMessages:
+					entry.compat?.requiresReasoningContentOnAssistantMessages === true,
 			};
 		default:
 			return undefined;

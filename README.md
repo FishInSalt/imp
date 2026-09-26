@@ -183,6 +183,15 @@ imp            # interactive REPL (streaming, one-line tool status)
   is retired — `anthropic/glm-…` still forces that endpoint explicitly
   (generic compat passthrough, binary thinking knob only), and the
   footer and `/model` always show `zai/glm-…` for the coding path.
+- Moonshot / Kimi connects through the official open platform:
+  `MOONSHOT_API_KEY=... imp -m moonshotai-cn/kimi-k3` (China,
+  `api.moonshot.cn/v1`) or `moonshotai/kimi-k3` (overseas,
+  `api.moonshot.ai/v1`), or `/login` → Moonshot AI / Moonshot AI CN.
+  Both read `MOONSHOT_API_KEY` with per-family stored keys;
+  `MOONSHOT_BASE_URL` / `MOONSHOT_CN_BASE_URL` override the endpoints.
+  Thinking: k2.6 toggles off/on; k2.7-code and k3 always think (k3 takes
+  `reasoning_effort` low/high/max — the `medium` startup level maps to
+  `high`).
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
 - Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).

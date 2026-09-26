@@ -214,6 +214,18 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 		saveApiKey("moonshotai-cn", "sk-stored-cn", authPath);
 		expect(moonshotCnApiKey()).toBe("sk-stored-cn"); // stored wins
 		expect(moonshotApiKey()).toBe("sk-env-moonshot"); // other family untouched
+		// familyConfigured must key off the PER-FAMILY resolution (the review
+		// round's mutation gap: the cn case using moonshotApiKey() slipped
+		// through every other test)
+		setEnv("MOONSHOT_API_KEY", undefined);
+		clearApiKey("moonshotai-cn", authPath);
+		saveApiKey("moonshotai", "sk-only-ai", authPath);
+		expect(familyConfigured("moonshotai")).toBe(true);
+		expect(familyConfigured("moonshotai-cn")).toBe(false);
+		clearApiKey("moonshotai", authPath);
+		saveApiKey("moonshotai-cn", "sk-only-cn", authPath);
+		expect(familyConfigured("moonshotai")).toBe(false);
+		expect(familyConfigured("moonshotai-cn")).toBe(true);
 		// the no-key error names the family's own var — the OPENAI_API_KEY
 		// fallback must never lend its key to api.moonshot.* (design §2.2)
 		setEnv("MOONSHOT_BASE_URL", baseUrl);
@@ -391,6 +403,18 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 		}
 		expect(message).toContain("check MOONSHOT_API_KEY");
 		expect(message).not.toContain("check OPENAI_API_KEY");
+		// the same hint serves deepseek now that it passes `auth` (review P2-1)
+		setEnv("DEEPSEEK_BASE_URL", baseUrl);
+		setEnv("DEEPSEEK_API_KEY", "sk-bad");
+		nextStatus = 401;
+		let dsMessage = "";
+		try {
+			await collect(createProviderFor("deepseek").stream(REQ("deepseek-v4-pro", "high")));
+		} catch (e) {
+			dsMessage = e instanceof Error ? e.message : String(e);
+		}
+		expect(dsMessage).toContain("check DEEPSEEK_API_KEY");
+		expect(dsMessage).not.toContain("check OPENAI_API_KEY");
 	});
 
 	it("4. thinking ladders + default chain (clamp medium); floor rules for both families", () => {
@@ -452,12 +476,26 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 		expect(thinkingMetaFor("moonshotai", "kimi-silent")?.supportsEffort).toBe(false);
 	});
 
+	it("4d. a compat-less catalog entry follows pi's detected default (openai-effort) — pinned decision", async () => {
+		setEnv("MOONSHOT_BASE_URL", baseUrl);
+		setEnv("MOONSHOT_API_KEY", "sk-ms");
+		overlayCatalog("moonshotai", {
+			"kimi-k2.6": { id: "kimi-k2.6", reasoning: true, compat: {} },
+		});
+		expect(thinkingMetaFor("moonshotai", "kimi-k2.6")?.style).toBe("openai-effort");
+		await collect(createMoonshotProvider().stream(REQ("kimi-k2.6", "high")));
+		expect(captured.at(-1)?.reasoning_effort).toBe("high");
+		expect(captured.at(-1)?.thinking).toBeUndefined();
+	});
+
 	it("5. discovery: unreachable/401 default → seeds; redirect + unreachable → null; success parses the OpenAI shape", async () => {
 		setEnv("MOONSHOT_API_KEY", "sk-test");
 		delete process.env.MOONSHOT_BASE_URL;
 		delete process.env.MOONSHOT_CN_BASE_URL;
 		// default endpoints reject the bogus key (or are unreachable) — seeds are the floor
 		expect(await discoverModels("moonshotai")).toEqual([...MOONSHOT_SEED_MODELS]);
+		// P2-7: the shared env var marks BOTH configured; a key that belongs
+		// to the other platform 401s into the seeds — never an error
 		expect(await discoverModels("moonshotai-cn")).toEqual([...MOONSHOT_SEED_MODELS]);
 		setEnv("MOONSHOT_BASE_URL", "http://127.0.0.1:1"); // redirected + unreachable
 		expect(await discoverModels("moonshotai")).toBeNull(); // no invented ids
@@ -510,7 +548,7 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 		}
 	});
 
-	it("9. session store accepts both families; the reference keeps its prefix", async () => {
+	it("9. session store accepts both families (whitelist + persistence)", async () => {
 		const { SessionStore } = await import("../src/core/session/store.js");
 		const dir = await mkdtemp(path.join(tmpdir(), "imp-ms-sess-"));
 		const store = SessionStore.create(path.join(dir, "s.json"), dir);

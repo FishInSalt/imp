@@ -480,6 +480,8 @@ function catalogThinkingMeta(provider: string, modelId: string): ModelThinkingMe
 			// "deepseek" compat takes the thinking-object branch; the detected
 			// supportsReasoningEffort is FALSE for Moonshot (:1636 exclusion),
 			// so `=== true` is the right anchor (the opposite of deepseek).
+			// A compat-less entry therefore falls to openai-effort (pi falls
+			// the same way) — pinned as a decision by test 4d.
 			if (entry.compat?.thinkingFormat === "deepseek") {
 				return {
 					style: "deepseek",

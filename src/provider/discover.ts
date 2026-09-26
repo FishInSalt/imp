@@ -151,13 +151,14 @@ export async function discoverModels(family: ProviderName): Promise<string[] | n
 	// share MOONSHOT_API_KEY — the stored key is per family, and a key that
 	// belongs to the other platform 401s into the seed fallback here).
 	if (family === "moonshotai" || family === "moonshotai-cn") {
-		const cacheKey = family;
-		const hit = cache.get(cacheKey);
-		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
 		const envVar = family === "moonshotai" ? "MOONSHOT_BASE_URL" : "MOONSHOT_CN_BASE_URL";
 		const fallback = family === "moonshotai" ? MOONSHOT_DEFAULT_BASE_URL : MOONSHOT_CN_DEFAULT_BASE_URL;
 		const redirected = process.env[envVar] !== undefined; // #gateway-truth
 		const base = (process.env[envVar] ?? fallback).replace(/\/+$/, "");
+		// per-(family, baseUrl) key, like the anthropic/openai path (review P3-5)
+		const cacheKey = `${family}|${base}`;
+		const hit = cache.get(cacheKey);
+		if (hit !== undefined && now() - hit.at < CACHE_TTL_MS) return hit.ids;
 		const key = family === "moonshotai" ? moonshotApiKey() : moonshotCnApiKey();
 		const ids = await fetchJson(
 			`${base}/models`,

@@ -443,7 +443,9 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				// Moonshot may carry the final usage on the CHOICE instead of the
 				// chunk (pi :565-568); Kimi also documents the cache-read count at
 				// the top level (`cached_tokens`, pi :1520). One guard, one raw
-				// object, every field read off it (review P2-2).
+				// object, every field read off it (review P2-2). Assumes usage
+				// arrives once (final chunk/choice): a partial early choice.usage
+				// could make Math.max keep a larger pre-cache input.
 				const rawUsage = chunk.usage ?? choice?.usage;
 				if (rawUsage != null) {
 					// prompt_tokens INCLUDES cache hits (both spellings report the

@@ -426,6 +426,38 @@ describe("login dialog (#login-dialog)", () => {
 		expect(loginUsesDialog("/model", true)).toBe(false);
 	});
 
+	it("17. the input renders ONCE and only inside a prompt (no root-level copy; dogfood double->)", async () => {
+		const env = await fresh();
+		env.terminal.data("/login zai\r");
+		await settle();
+		// The api-key prompt: exactly ONE input row (">") — the pre-fix bug
+		// rendered the same Input in content AND at the root (two > rows).
+		const frame = env.terminal.frameSince(0);
+		const inputRowCount = (frame.match(/^>\s*$/gm) ?? []).length;
+		expect(inputRowCount).toBe(1);
+		expect(frame).toContain("Enter Z.AI API key");
+		// the cancel hint sits WITH the input (pi showApiKeyPrompt), not as a
+		// dialog-root static — and the oauth state (no prompt open) shows NO
+		// input row at all (pi: input joins the tree only via prompt())
+		const hintCount = (frame.match(/\(esc to cancel, enter to submit\)/g) ?? []).length;
+		expect(hintCount).toBe(1);
+		env.terminal.data("\x1b");
+		await settle();
+	});
+
+	it("17b. deviceCode state shows no input row (the root-level copy would survive content.clear)", async () => {
+		const env = await fresh();
+		env.terminal.data("/login openai-codex\r");
+		await frameEventually(env, "Enter code:", OAUTH_BUDGET);
+		const frame = env.terminal.frameSince(0);
+		// content.clear() emptied the prompt state; a ROOT-level input (the
+		// pre-fix bug) would still render a bare "> " row below the code
+		expect((frame.match(/^>\s*$/gm) ?? []).length).toBe(0);
+		expect(frame).toContain("Waiting");
+		env.terminal.data("\x03"); // Ctrl+C cancels the poll
+		await settle();
+	});
+
 	it("16. a second openLoginDialog queued behind a live selector re-runs after teardown", async () => {
 		// Machine-level: /login (picker → dialog) then another /login —
 		// but keyboard-wise a second command cannot be typed mid-dialog.

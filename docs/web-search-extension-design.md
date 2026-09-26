@@ -71,32 +71,49 @@ Contract per the provider's keyless documentation
 (https://docs.tavily.com/documentation/keyless), which was current when this
 revision was written; the unit tests cannot live-verify provider policy.
 
-- Trigger: no nonblank `TAVILY_API_KEY` and no config file at the selected path.
-  A present-but-invalid configuration remains a hard local error (fail closed);
-  keyless is a first-run default, not an error-recovery path.
+- Trigger: the environment key is blank/absent AND the selected config path is
+  absent (ENOENT). Any present-but-unreadable, invalid or unsafe configuration
+  is still a hard local error (fail closed): the keyless branch is reachable
+  only after resolution reports "no credential configured", never after a
+  configuration error. Keyless is a first-run default, not an error-recovery
+  path.
 - Request: when a key resolves, send `Authorization: Bearer <key>` and no
   access-mode header. When none resolves, send `X-Tavily-Access-Mode: keyless`
   and no authorization header. Never both. Endpoint, payload schema and all
   search parameters are unchanged; keyless `/search` is documented to support
   all parameters and to return the same response schema as keyed access.
-- Mode identity: the resolved key or an explicit module-level keyless sentinel
-  (never a string derived from input, config or provider output) is the
-  credential identity. Transitions in either direction (key added, removed or
-  rotated) invalidate the cache and bump the generation counter. Keyless
-  results cache normally and only within their own generation.
-- Errors: in keyless mode, 401/403/429/432/433 map to one sanitized actionable
-  hint: keyless access was rejected or limited — wait before retrying, or set
-  `TAVILY_API_KEY` for higher limits. Do not infer finer provider categories:
-  keyless limit responses are documented only as natural-language guidance,
-  not as stable status codes. Keyed-mode hints, 5xx and 400 handling stay as
-  they are. No retries and no automatic mode switching within a request.
+- Mode identity: the credential state is a module-level variable holding an
+  unset marker (initial/reset), a resolved key string, or an explicit keyless
+  sentinel (never a string derived from input, config or provider output). Per
+  call, compute identity = resolved key or sentinel; if it differs from the
+  stored state, clear the cache and bump the generation counter, then store it.
+  A configuration failure also clears the cache and bumps the generation
+  regardless of the prior state, and leaves the state unset. An in-flight
+  response may be cached only when its generation is still current; key removal
+  invalidates the keyed state before the keyless request is sent. Keyless
+  results cache normally, within their own generation.
+- Errors: the provider documents keyless limits only as natural-language
+  guidance, not as stable status codes, so keyless classification is a
+  defensive heuristic, not provider-verified: {401,403,429,432,433} map to one
+  sanitized actionable hint — keyless access was rejected or limited; wait
+  before retrying or set `TAVILY_API_KEY` for higher limits. Every other
+  non-2xx in keyless mode keeps mode-neutral wording (400 -> request rejected,
+  5xx -> service unavailable, the remaining 4xx -> request rejected). Keyless
+  mode never emits keyed-specific wording (no "check TAVILY_API_KEY or config
+  file", no "your Tavily account usage"). Keyed-mode hints stay as they are.
+  No retries and no automatic mode switching within a request.
 - Posture: an installation with the extension but no credential now performs
   unauthenticated requests to the same fixed Tavily endpoint; there is no new
   data recipient and no request is sent when configuration is present but
-  invalid. No disable switch: installing the extension is the opt-in.
+  invalid. The privacy delta versus keyed access is attribution: provider-side,
+  unauthenticated requests carry IP/network metadata, not an account identity.
+  No disable switch: installing the extension is the opt-in.
 - Failure UX: a keyless request failure surfaces as a normal tool error. The
   old local missing-key setup error and its teaching text are removed from
-  behavior, tests and active documentation.
+  behavior, tests and active documentation, including: the README statement
+  that no unauthenticated fallback exists, the README migration note that a
+  missing key produces a local setup error, the README troubleshooting bullet,
+  and the wording of the local credential-verification snippet.
 
 ## Search contract
 
@@ -168,8 +185,17 @@ private/local URLs remain accessible: full network policy is not implemented her
   transitions and the credential-change cache gate.
 - Test both request modes: keyed sends the bearer header and no access-mode
   header; keyless sends the access-mode header and no authorization header;
-  keyless 401/403/429/432/433 map to the single keyless hint; absent config
-  selects keyless while invalid config still fails locally.
+  keyless 401/403/429/432/433 map to the single keyless hint while other
+  non-2xx keep mode-neutral wording; absent config selects keyless while a
+  present-but-invalid config still fails locally with no request, even when no
+  environment key exists.
+- Rewrite the two tests that pin the removed missing-key error:
+  `test/extensions-contrib.test.ts` "no key → local missing-key error without
+  fetching" becomes a keyless success path through the actual loader; and the
+  `test/web-search.test.ts` credential-change cache case "missing" becomes a
+  keyed→keyless transition (cache cleared, keyless request sent, the old
+  in-flight keyed response still not cached). Add the reverse keyless→keyed
+  transition (cache cleared, bearer request sent).
 - Test valid request payload, integer/domain/query validation, output limits,
   malformed entries, empty results, status categories, body-read failures,
   cancellation/timeout, redaction, cache eviction/expiry, bounded stream reads.

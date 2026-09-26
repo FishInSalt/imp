@@ -1,19 +1,34 @@
 # imp 👹
 
-A small coding agent that runs in your terminal. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi-mono).
+A small coding agent that runs in your terminal. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
 > An imp is a little goblin that runs errands for its master — eager, fast, and best kept behind a permission gate.
 
-## Status: M0 (minimal viable agent)
+## Status
 
-- Agent loop: streaming LLM calls + tool execution, with abort, validation, error feedback, steering hooks, and a compaction hook
-- Sessions: append-only JSONL message trees (`~/.imp/sessions/`), `--continue` / `--resume <id>` / `imp sessions`
-- Auto-compaction: near the context window, older turns are LLM-summarized into a checkpoint; recent turns and the full history on disk are preserved
-- Tools: `bash` (timeout, truncation), `read` (offset/limit), `edit` (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd) — search tools respect .gitignore
-- Provider: Anthropic (streaming)
-- CLI: print mode (`imp -p "..."`)
+A working coding agent, built milestone by milestone (roadmap and history:
+`PROJECT_PLAN.md`). At a glance:
+
+- Interactive TUI (streaming, one-line tool status, queued steering and
+  follow-up runs) plus print mode (`imp -p "..."`) and piped stdin
+- Agent loop: streaming LLM calls + tool execution, with abort, validation,
+  error feedback, steering hooks, and a compaction hook
+- Sessions: append-only JSONL message trees (`~/.imp/sessions/`), `--continue`
+  / `--resume <id>` / `imp sessions`, the `/tree` navigator, `/fork`
+- Auto-compaction: near the context window, older turns are LLM-summarized
+  into a checkpoint; recent turns and the full history on disk are preserved
+- Tools: `bash` (timeout, truncation), `read` (offset/limit, images), `edit`
+  (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd), `ls`,
+  `task` (subagents) — search tools respect .gitignore
+- Providers: Anthropic, Z.AI (GLM), DeepSeek, Moonshot/Kimi, OpenAI (API key
+  or ChatGPT-plan OAuth) — credentials come from environment variables or
+  `/login`
+- Extensions, skills, named subagents, MCP servers, markdown quick commands,
+  and custom system prompts (SYSTEM.md)
 
 ## Setup
+
+Requires Node 20 or newer.
 
 ```bash
 npm install
@@ -29,8 +44,10 @@ routes to the zai family (pi parity: zai is the one official GLM path;
 a missing credential gets a sign-in pointer, never a silent fallback):
 
 ```
-/login            → Z.AI · Anthropic · OpenAI · OpenAI (ChatGPT plan)
-/login zai        → straight to the key prompt (Enter saves, Esc cancels)
+/login            → Z.AI · Anthropic · OpenAI · OpenAI (ChatGPT plan) ·
+                    DeepSeek · Moonshot AI · Moonshot AI CN
+/login zai        → straight to the key prompt (Enter saves, Esc cancels);
+                    any family name works (deepseek, moonshotai, …)
 /logout           → remove a stored credential (environment variables stay)
 ```
 
@@ -81,6 +98,12 @@ npm run dev -- -p "List the .ts files here and count their total lines"
 # options
 imp -p "..." -m claude-sonnet-4-5 --max-turns 20
 ```
+
+`imp --help` lists every option — sessions (`-c`, `-r`, `--no-session`), model
+and thinking (`-m`, `--thinking`), limits (`--max-turns`, `--max-tokens`;
+print/piped runs default to 100 turns, interactive TTY sessions are uncapped),
+and resource loading (`-e` / `-ne`, `--skill` / `--no-skills`, `-nc`,
+`--trust` / `--no-trust`).
 
 ## Model catalog (pi.dev)
 
@@ -162,7 +185,11 @@ imp            # interactive REPL (streaming, one-line tool status)
   low/medium/high to `high` effort. Switching model or level prints one
   dim status line (`Model: x` / `Thinking level: x`) — consecutive
   switches merge into a single line. `/compact` (summarize
-  older context now). Unknown commands get a hint instead of reaching the
+  older context now). Also `/status` (session, model, context, and trust at a
+  glance), `/copy` (copy the last agent message), `/name <name>` (name the
+  session), `/trust` (show the trust decision and its records), `/worktrees`
+  (worktrees kept for a manual merge), `/login` / `/logout`, `/mcp`, and
+  `/settings`. Unknown commands get a hint instead of reaching the
   model; prefix a line with a space to send a literal leading `/`.
 - Thinking levels can also start a session: `imp --thinking medium` or
   `IMP_THINKING=medium` (invalid env values are ignored with a notice).
@@ -183,6 +210,10 @@ imp            # interactive REPL (streaming, one-line tool status)
   is retired — `anthropic/glm-…` still forces that endpoint explicitly
   (generic compat passthrough, binary thinking knob only), and the
   footer and `/model` always show `zai/glm-…` for the coding path.
+- DeepSeek connects through the official API:
+  `DEEPSEEK_API_KEY=... imp -m deepseek/deepseek-v4-pro` (or
+  `deepseek/deepseek-flash`), or `/login` → DeepSeek. `DEEPSEEK_BASE_URL`
+  overrides the endpoint; a stored key wins over the environment variable.
 - Moonshot / Kimi connects through the official open platform:
   `MOONSHOT_API_KEY=... imp -m moonshotai-cn/kimi-k3` (China,
   `api.moonshot.cn/v1`) or `moonshotai/kimi-k3` (overseas,
@@ -313,10 +344,14 @@ own context window: exploration bloat stays out of the main conversation; the
 subagent's final message comes back as the tool result (with a usage trailer;
 oversized results are tail-truncated to 50KB). Children run in-process with
 the parent's tools (minus `task` itself) and the parent's working directory,
-under a 40-turn / 30-minute budget, and every child transcript is persisted as
-a session file in a `children/` directory next to the parent's (opt out with
-`IMP_CHILD_SESSIONS=0`). Several `task` calls in one turn run concurrently
-(waves of up to 5) with deterministic, call-ordered output.
+under a 60-turn backup wall (a degenerate-loop guard — budget decisions stay
+with the parent), and every child transcript is persisted as a session file in
+a `children/` directory next to the parent's (opt out with
+`IMP_CHILD_SESSIONS=0`). Wall-clock: no clock in the REPL (Ctrl+C is the
+backstop), a 60-minute hang guard in print/headless runs; a call's `timeoutMs`
+or an agent file's `timeout:` (seconds) always wins. Several `task` calls in
+one turn run concurrently (waves of up to 5) with deterministic, call-ordered
+output.
 
 Named agents live as markdown files with hand-parsed frontmatter — no YAML
 dependency, no builtins; the project directory wins on name collisions:
@@ -334,9 +369,10 @@ timeout: 300                # optional wall clock, seconds
 You are a code scout. Go broad before deep.
 ```
 
-The task tool's description enumerates registered agents (auto-routing hint);
-`task(agent: "scout", prompt: …)` runs one. Agent files load at startup — new
-files need a restart, like extension changes. A ready-to-copy example lives in
+Registered agents are advertised to the model in the system prompt's
+`<advertised_agents>` block (auto-routing hint); `task(agent: "scout", prompt:
+…)` runs one. Agent files load at startup — new files need a restart, like
+extension changes. A ready-to-copy example lives in
 `examples/agents/scout.md` (a read-only code scout: `tools: read, grep, find`).
 
 **Worktree isolation.** A `task` call may set `worktree: true` (or an agent
@@ -403,8 +439,9 @@ server with ≥10 tools shows up). Design + trigger table:
 
 ## Extensions
 
-imp loads **extensions** — plain ESM modules (`.mjs`) whose default export is a
-factory receiving one thin `api` object — from three places, in this order:
+imp loads **extensions** — plain ESM modules (`.mjs`, or `.js` under a
+module-typed package) whose default export is a factory receiving one thin
+`api` object — from three places, in this order:
 
 1. `-e <path>` / `--extension <path>` flags (repeatable; file or directory)
 2. `<project>/.imp/extensions/`
@@ -423,6 +460,9 @@ export default function (api) {
 }
 ```
 
+- Three read-only facts ride along: `cwd` (absolute working directory imp
+  started in), `version` (imp version string), and `origin` (`"cli" |
+  "project" | "global"` — where the extension was discovered).
 - `registerTool` adds an LLM-callable tool; `registerCommand` adds a REPL slash
   command (tagged `[source]` in `/help`); `registerContext(id, text)` appends a
   static section to the system prompt; `on("tool_call" | "tool_end" |
@@ -473,4 +513,4 @@ See `PROJECT_PLAN.md` for the roadmap.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

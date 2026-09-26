@@ -690,3 +690,4 @@ interface Tool {
 3. 写 `src/core/loop.ts`：先不支持工具，只做流式对话 —— 跑通第一轮对话
 4. 加 bash 工具 → 见证第一次自主工具调用 🎉
 5. 把 pi 的 `agent-loop.ts` 打开对照，逐段理解它比你多处理了什么（steering、重试、并发工具、abort 恢复…），记进 TODO
+- **imp-agent v0.1.0 发布(2026-09-27)**:npm 首版上线。流程按 RELEASING.md Bootstrap:CHANGELOG 日期改发布日(c419269)→ tag v0.1.0 推送(gate 全绿:1950 测试+打包冒烟,publish 按闸门跳过)→ 手工 npm publish --access public。插曲:npm EOTP 报错后查明 npm 现行 2FA 已是 security-key/passkey 制(Touch ID/Face ID/WebAuthn),无认证器 App 6 位码选项;非交互代理通道走不了 WebAuthn,由用户在自己终端完成发布。发布后验证:npm view imp-agent version=0.1.0(maintainer lllzzz);干净前缀目录 npm i -g imp-agent@0.1.0 → imp --version / --help 正常;gh variable NPM_PUBLISH_ENABLED=true 已设(后续 tag 自动发布开启);GitHub Release v0.1.0 已建(CHANGELOG 0.1.0 节做 notes)。待办:用户在 npmjs.com 包设置页绑 Trusted Publisher(repo FishInSalt/imp + workflow release.yml)后,常规版本走纯 tag 驱动+provenance,无需再手工发布。

@@ -34,3 +34,14 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      # Packaging smoke (node 20 only): the npm tarball must contain dist/ and
+      # a runnable bin — guards against "packed without a build" regressions.
+      - if: matrix.node == 20
+        run: |
+          npm pack
+          tar -tzf imp-agent-*.tgz > "$RUNNER_TEMP/pack-list.txt"
+          grep -q "^package/dist/cli.js$" "$RUNNER_TEMP/pack-list.txt"
+          grep -q "^package/bin/imp.js$" "$RUNNER_TEMP/pack-list.txt"
+          ! grep -qE "^package/(src|test|docs)/" "$RUNNER_TEMP/pack-list.txt"
+          npm install -g --prefix "$RUNNER_TEMP/imp-smoke" ./imp-agent-*.tgz
+          "$RUNNER_TEMP/imp-smoke/bin/imp" --help > /dev/null

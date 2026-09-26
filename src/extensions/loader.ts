@@ -212,6 +212,11 @@ function extensionApi(
 		on: (event: ExtensionEventName, handler: ExtensionEventHandlerMap[ExtensionEventName]): void => {
 			whileLoading(`subscribe to ${String(event)}`, () => registry.subscribe(event, handler));
 		},
+		// setStatus works at RUNTIME (timers, handlers, command callbacks), like
+		// confirm — no factory-window guard. The namespace bucket is captured
+		// HERE, from the load-time facts: the registry's open section is gone by
+		// the time a timer fires (task-timer design §4.2).
+		setStatus: (key, text) => registry.setExtensionStatus(`${facts.origin}:${facts.name}`, key, text),
 		// confirm works at RUNTIME (gates call it mid-run), unlike the
 		// registrations above — plain delegation, no factory-window guard.
 		confirm: (message, detail, options) => registry.confirm(message, detail, options),

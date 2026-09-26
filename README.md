@@ -426,13 +426,22 @@ export default function (api) {
 - `registerTool` adds an LLM-callable tool; `registerCommand` adds a REPL slash
   command (tagged `[source]` in `/help`); `registerContext(id, text)` appends a
   static section to the system prompt; `on("tool_call" | "tool_end" |
-  "message_end" | "run_end")` subscribes to loop/turn events — `tool_call`
+  "message_end" | "run_start" | "run_end")` subscribes to loop/turn events —
+  `tool_call`
   handlers run after argument validation and before execution, and a block
   decision becomes the tool result the model sees (teaching-style reason and
   all), so the run adapts instead of dying. Subagent tool calls pass through
   the same gate: those events carry `subagent: true` plus the `agent` profile
   name (if any), so a gate can hold children to stricter rules than the main
-  loop.
+  loop. `run_start` fires once when a top-level run begins; its pair `run_end`
+  does NOT fire if the run crashes (provider throw) — tolerate an unpaired
+  `run_start` (e.g. reset on the next one).
+- `setStatus(key, text)` sets a one-line status in the TUI footer
+  (`undefined` clears it; keys are namespaced per extension; the host owns
+  styling — control sequences are stripped). It works from handlers, timers,
+  and command callbacks, and is a safe no-op in print mode and the legacy
+  shell. If your extension creates timers, `unref()` them — a leaked,
+  referenced timer blocks process exit.
 - A bad extension never kills imp: load failures, registration conflicts, and
   handler throws each become one `imp:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).
@@ -441,11 +450,14 @@ export default function (api) {
 
 **Security**: extensions are code and run with your full permissions — the same
 posture as the agent itself. Check `.imp/extensions/` in repositories you
-didn't write, or run with `--no-extensions`. Two case studies ship in
-`examples/extensions/`: `notes.mjs` (the API tour) and `guardian.mjs` (a
+didn't write, or run with `--no-extensions`. Case studies ship in
+`examples/extensions/`: `notes.mjs` (the API tour), `guardian.mjs` (a
 rule-based permission gate over destructive bash commands and out-of-project
 writes — configurable via `IMP_GUARDIAN_BLOCK`, audited to
-`~/.imp/guardian.log`).
+`~/.imp/guardian.log`), `notify.mjs` (a macOS completion notification with
+sound), `task-timer.mjs` (a live per-run timer in the TUI footer, built on
+`run_start`/`run_end` + `setStatus`), and `web-search/` (a bundled multi-file
+search tool).
 
 ## Development
 

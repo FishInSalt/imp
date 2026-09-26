@@ -6,6 +6,7 @@ import type { SessionStore } from "../core/session/store.js";
 import { type QueueMode, saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
+import type { ExtensionRegistry } from "../extensions/registry.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
 import { dim, formatTokens, shorten, summarizeResult, VERSION } from "../format.js";
@@ -81,6 +82,12 @@ export interface ReplOptions {
 	 *  (late tools flush at run end — loop toolMap is per-run) and its
 	 *  shutdown (gracefulExit / forceExit). */
 	mcp?: McpManager;
+	/** Extension registry (cli.ts loads extensions before the REPL exists).
+	 *  The machine binds its status sink to the TUI shell's extension status
+	 *  line — capability-gated; absent in tests and print mode (task-timer
+	 *  design §4.2). Optional (unlike mcp's required key) so test-side
+	 *  ReplMachine constructions stay untouched. */
+	extensions?: ExtensionRegistry;
 }
 
 type ReplState = "idle" | "running" | "compacting" | "exited";
@@ -291,6 +298,9 @@ interface ReplMachineOptions {
 	 *  Required key (may be undefined) so forgetting to pass it is a type
 	 *  error, not a silent dead seam (review P1-1). */
 	mcp: McpManager | undefined;
+	/** Extension registry for the status-sink binding (from ReplOptions).
+	 *  Optional — the capability gate also covers its absence. */
+	extensions?: ExtensionRegistry;
 }
 
 /**
@@ -360,6 +370,20 @@ class ReplMachine {
 		this.mcp = options.mcp;
 		this.exit = options.exit;
 		this.finish = options.finish;
+		// Extension status line (task-timer design §4.2): bind the registry's
+		// sink only when this shell can render one (TUI; the legacy shell has
+		// no setExtensionStatus). The initial push replays statuses an
+		// extension set before the machine existed (load-time calls).
+		if (options.extensions !== undefined && this.input.setExtensionStatus !== undefined) {
+			const registry = options.extensions;
+			this.input.setExtensionStatus(
+				registry
+					.getExtensionStatusEntries()
+					.map((entry) => entry.text)
+					.join(" "),
+			);
+			registry.setStatusSink((line) => this.input.setExtensionStatus?.(line));
+		}
 		this.refreshFooter(); // eager warmup already knows model + session
 	}
 
@@ -1490,6 +1514,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		finish,
 		replay,
 		mcp: options.mcp, // M18: run boundaries + shutdown (review P1-1)
+		extensions: options.extensions, // status sink binding (capability-gated)
 	});
 	// api.confirm's tty side: route questions to this REPL's single readline
 	// interface (a second interface would race it for stdin bytes). With a

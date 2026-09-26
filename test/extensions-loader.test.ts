@@ -360,3 +360,43 @@ describe("api.confirm wiring (spec part 2)", () => {
 		}
 	});
 });
+
+describe("api.setStatus at load time (task-timer design §4.2/§4.6)", () => {
+	it("a factory-time setStatus lands in storage, namespaced origin:name — the closure-captured bucket, not the (gone) open section", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"clock.mjs": `export default function (api) {
+				api.setStatus("time", "12:00");
+			}`,
+		});
+		const { loaded, lines } = await load(env, { projectDirAllowed: true });
+		expect(lines).toEqual([]);
+		expect(loaded.runtime.getExtensionStatusEntries()).toEqual([
+			{ bucket: "project:clock", key: "time", text: "12:00" },
+		]);
+		// A sink bound afterwards receives the stored statuses on the initial
+		// push (the ReplMachine replays them at bind time, §4.2 step 2).
+		const entries = loaded.runtime.getExtensionStatusEntries();
+		expect(entries.map((e) => e.text).join(" ")).toBe("12:00");
+	});
+
+	it("setStatus remains valid after load (runtime method — a timer can call it)", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"timer.mjs": `export default function (api) {
+				api.on("run_start", () => {});
+				globalThis.__capturedSetStatus = api.setStatus;
+			}`,
+		});
+		const { loaded } = await load(env, { projectDirAllowed: true });
+		const setStatus = (globalThis as Record<string, unknown>).__capturedSetStatus as
+			| ((key: string, text: string | undefined) => void)
+			| undefined;
+		expect(setStatus).toBeDefined();
+		setStatus?.("tick", "running 0:01"); // after the factory window closed
+		expect(loaded.runtime.getExtensionStatusEntries()).toEqual([
+			{ bucket: "project:timer", key: "tick", text: "running 0:01" },
+		]);
+		delete (globalThis as Record<string, unknown>).__capturedSetStatus;
+	});
+});

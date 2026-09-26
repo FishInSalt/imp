@@ -15,6 +15,7 @@ import {
 	type Terminal,
 	Text,
 	TUI,
+	truncateToWidth,
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
@@ -30,6 +31,7 @@ import type {
 	TreeSelectRequest,
 } from "./line-input.js";
 import { LoginDialog, type LoginDialogOptions } from "./login-dialog.js";
+import { sanitizeDisplay } from "./tool-presentation.js";
 import type { TranscriptSink } from "./transcript.js";
 
 /** Autocomplete wiring for the editor (M10): slash commands at line start
@@ -104,8 +106,10 @@ export function tuiEditorTheme(): EditorTheme {
  *   ├─ editor     (a bordered box — it alone marks "type here", CC-style;
  *   │              focused except while a selector is open; its autocomplete
  *   │              panel — slash commands, @ files — renders in place)
- *   └─ footer     (dim status line: model · session · cumulative tokens;
+ *   ├─ footer     (dim status line: model · session · cumulative tokens;
  *                 pushed by the machine, pi places it below the editor too)
+ *   └─ extension  (extension-owned status line, host-styled; zero rows
+ *                 while no extension has set one — task-timer design §4.3)
  *
  * Semantics are the readline shell's, byte-for-byte where bytes are visible:
  * the ask FIFO (lines answer pending questions first; Ctrl+C declines;
@@ -226,6 +230,11 @@ export class TuiShell implements LineInput {
 	 *  machine's constructor runs first) and must not be dropped (M9-2
 	 *  review P1: the startup footer was silently blank). */
 	private footerText = "";
+	/** Buffered setExtensionStatus text (sanitized on write, truncated +
+	 *  dimmed at each application point — the footerText pattern, raw in the
+	 *  buffer). Empty renders zero rows. */
+	private extensionFooterText = "";
+	private extensionFooter: Text | null = null;
 	/** Buffered OSC title — the machine's first setTitle may arrive before
 	 *  start() (its constructor-time footer push); start() paints it. */
 	private titleText = "";
@@ -307,6 +316,9 @@ export class TuiShell implements LineInput {
 		const footer = new Text(this.footerText === "" ? "" : dim(this.footerText, true), 0, 0);
 		this.footer = footer;
 		tui.addChild(footer); // status line below the editor (pi's placement)
+		const extensionFooter = new Text(this.extensionStatusRendered(), 0, 0);
+		this.extensionFooter = extensionFooter;
+		tui.addChild(extensionFooter); // extension-owned status below the footer
 		tui.setFocus(editor);
 		tui.start();
 		if (this.titleText !== "") terminal.write(`\x1b]2;${this.titleText}\x07`);
@@ -492,6 +504,31 @@ export class TuiShell implements LineInput {
 		this.footerText = text; // buffered: start() seeds from this
 		this.footer?.setText(text === "" ? "" : dim(text, true));
 		this.tui?.requestRender();
+	}
+
+	/** Extension-owned status line (LineInput.setExtensionStatus): untrusted
+	 *  input — sanitize control sequences, collapse to one row, truncate to
+	 *  the terminal width (pi-tui's renderer throws on a rendered line wider
+	 *  than the terminal), host-dimmed (task-timer design §4.3). */
+	setExtensionStatus(text: string): void {
+		if (this.closed) return; // a leaked extension timer must not touch a torn-down shell
+		// sanitizeDisplay preserves "\n" (already-spaced \t and literal \r
+		// aside); the status is one line, so newlines fold to spaces here.
+		this.extensionFooterText = sanitizeDisplay(text).replace(/\n+/g, " ");
+		this.extensionFooter?.setText(this.extensionStatusRendered());
+		this.tui?.requestRender();
+	}
+
+	/** Raw buffered text → one terminal-safe row. dim() is applied HERE, at
+	 *  the application point (start() seed and push) — the buffer stays raw,
+	 *  the footerText pattern. Truncation is push-time only: a resize-narrow
+	 *  re-wraps (or throws on unbreakable text) until the next push — the
+	 *  existing footer shares that exposure (accepted, design §4.3). */
+	private extensionStatusRendered(): string {
+		if (this.extensionFooterText === "") return "";
+		const columns = this.tui?.terminal.columns ?? 80;
+		const clipped = truncateToWidth(this.extensionFooterText, Math.max(1, columns - 1), dim("…", true));
+		return dim(clipped, true);
 	}
 
 	/** Queue visual line (LineInput.setQueue): one dim row per queued entry

@@ -17,6 +17,7 @@ import {
 } from "./core/trust.js";
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
+import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
 import { discoverMcpConfig } from "./mcp/config.js";
@@ -524,6 +525,9 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
+	// Hoisted out of the try: runRepl (below the block) needs the registry
+	// for the extension status sink; the runner got it inside.
+	let extensionRegistry: ExtensionRegistry | undefined;
 	try {
 		const projectTrusted = await resolveProjectTrust(
 			opts,
@@ -536,6 +540,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 				: undefined,
 		);
 		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
+		extensionRegistry = extensions.runtime;
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		// M15 (review P1-2): hideThinking reads the MERGED view once the
 		// trust resolution exists — the renderer was built before the ask
@@ -599,6 +604,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			confirm,
 			releaseStartupNotes,
 			mcp,
+			extensions: extensionRegistry, // extension status line sink (task-timer design §4.2)
 			shell,
 			transcript,
 			inputHistoryPath: shell === "tui" ? historyFilePath(homedir()) : undefined,

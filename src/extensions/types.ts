@@ -61,7 +61,17 @@ export interface ExtensionApi {
 	on(event: "tool_call", handler: ToolCallHandler): void;
 	on(event: "tool_end", handler: (event: ToolEndEvent) => void): void;
 	on(event: "message_end", handler: (event: MessageEndEvent) => void): void;
+	on(event: "run_start", handler: (event: RunStartEvent) => void): void;
 	on(event: "run_end", handler: (event: RunEndEvent) => void): void;
+
+	/** Set this extension's status text for the TUI footer; undefined clears.
+	 *  Runtime method (like confirm): valid from event handlers, timers, and
+	 *  command callbacks — unlike the register/on methods above it is NOT
+	 *  gated to load time. The host owns styling; control sequences in text
+	 *  are stripped. No-op when nothing renders statuses (print mode, legacy
+	 *  shell). Keys are namespaced per extension (origin:name), so distinct
+	 *  extensions cannot clobber each other. */
+	setStatus(key: string, text: string | undefined): void;
 
 	/** Ask the human a yes/no question (the interactive host renders a [y/N]
 	 *  prompt on the tty). Resolves true only on explicit approval; false
@@ -125,6 +135,15 @@ export interface MessageEndEvent {
 	message: AssistantMessage;
 }
 
+/** `run_start` fires once when a top-level run begins. Handlers run
+ *  synchronously on the run's critical path and must return promptly. Its pair
+ *  is `run_end`, which does NOT fire if the run crashes (provider throw) —
+ *  consumers must tolerate an unpaired `run_start` (e.g. reset state on the
+ *  next one). Subagent runs emit neither event (task-timer design §4.1). */
+export interface RunStartEvent {
+	type: "run_start";
+}
+
 export interface RunEndEvent {
 	type: "run_end";
 	stopReason: "completed" | "max_iterations" | "aborted";
@@ -132,14 +151,15 @@ export interface RunEndEvent {
 	usage: Usage;
 }
 
-/** The normative event set (design §16 risk 7) — additions require a named consumer (M5+). */
-export type ExtensionEventName = "tool_call" | "tool_end" | "message_end" | "run_end";
+/** The normative event set (design §17 risk 7) — additions require a named consumer (M5+). */
+export type ExtensionEventName = "tool_call" | "tool_end" | "message_end" | "run_start" | "run_end";
 
 /** All handler shapes, keyed by event name. */
 export interface ExtensionEventHandlerMap {
 	tool_call: ToolCallHandler;
 	tool_end: (event: ToolEndEvent) => void;
 	message_end: (event: MessageEndEvent) => void;
+	run_start: (event: RunStartEvent) => void;
 	run_end: (event: RunEndEvent) => void;
 }
 

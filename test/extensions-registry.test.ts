@@ -276,7 +276,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			registry.subscribe("tool_end", "not a function");
 		});
 		expect(lines).toEqual([
-			'imp: extension odd could not subscribe to "session_shutdown" — known events: tool_call tool_end message_end run_end',
+			'imp: extension odd could not subscribe to "session_shutdown" — known events: tool_call tool_end message_end run_start run_end',
 			"imp: extension odd could not subscribe to tool_end — handler must be a function, got string",
 		]);
 	});
@@ -353,5 +353,84 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 		});
 		await expect(registry.confirm("q")).resolves.toBe(false);
 		expect(lines).toEqual(["imp: extension confirm handler error — prompt exploded"]);
+	});
+});
+
+describe("run_start event (task-timer design §4.1)", () => {
+	it("subscribes and receives the emit; observer isolation holds", () => {
+		const lines: string[] = [];
+		const seen: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "timer", () => {
+			registry.subscribe("run_start", () => seen.push("first"));
+		});
+		loadOne(registry, "broken", () => {
+			registry.subscribe("run_start", () => {
+				throw new Error("boom");
+			});
+		});
+		loadOne(registry, "later", () => {
+			registry.subscribe("run_start", () => seen.push("second"));
+		});
+		registry.emitRunStart({ type: "run_start" });
+		expect(seen).toEqual(["first", "second"]); // a throwing handler does not stop the chain
+		expect(lines).toEqual(["imp: extension broken handler error (run_start) — boom"]);
+	});
+});
+
+describe("extension status channel (task-timer design §4.2)", () => {
+	it("stores, overwrites, clears, and composes entries sorted by bucket:key", () => {
+		const registry = new ExtensionRegistry();
+		registry.setExtensionStatus("global:b-ext", "timer", "running 0:01");
+		registry.setExtensionStatus("cli:a-ext", "timer", "running 0:02");
+		registry.setExtensionStatus("global:b-ext", "other", "x");
+		// Same key in two buckets: both kept (namespacing).
+		expect(
+			registry.getExtensionStatusEntries().map((e) => `${e.bucket}:${e.key}=${e.text}`),
+		).toEqual(["cli:a-ext:timer=running 0:02", "global:b-ext:other=x", "global:b-ext:timer=running 0:01"]);
+		registry.setExtensionStatus("global:b-ext", "other", undefined);
+		registry.setExtensionStatus("global:b-ext", "timer", "running 0:03"); // overwrite
+		expect(registry.getExtensionStatusEntries().map((e) => `${e.bucket}:${e.key}=${e.text}`)).toEqual([
+			"cli:a-ext:timer=running 0:02",
+			"global:b-ext:timer=running 0:03",
+		]);
+		// Clearing the last key of a bucket removes the bucket; clearing an
+		// unknown key is a quiet no-op.
+		registry.setExtensionStatus("global:b-ext", "never-set", undefined);
+		registry.setExtensionStatus("cli:a-ext", "timer", undefined);
+		registry.setExtensionStatus("global:b-ext", "timer", undefined);
+		expect(registry.getExtensionStatusEntries()).toEqual([]);
+	});
+
+	it("invalid keys and non-string texts become teaching diagnostics, never throws", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		registry.setExtensionStatus("cli:x", "", "v");
+		registry.setExtensionStatus("cli:x", "  ", "v");
+		registry.setExtensionStatus("cli:x", "k", 42 as unknown as string);
+		expect(registry.getExtensionStatusEntries()).toEqual([]);
+		expect(lines).toEqual([
+			"imp: extension cli:x status dropped — key must be a non-empty string",
+			"imp: extension cli:x status dropped — key must be a non-empty string",
+			"imp: extension cli:x status dropped — text must be a string or undefined",
+		]);
+	});
+
+	it("stored text is capped at 500 UTF-16 code units (silently truncated)", () => {
+		const registry = new ExtensionRegistry();
+		registry.setExtensionStatus("cli:x", "k", "a".repeat(600));
+		expect(registry.getExtensionStatusEntries()[0]?.text.length).toBe(500);
+	});
+
+	it("the sink receives the recomposed line on every write; unbound means storage only", () => {
+		const registry = new ExtensionRegistry();
+		registry.setExtensionStatus("cli:x", "k", "before bind"); // no sink: no side effect
+		const pushes: string[] = [];
+		registry.setStatusSink((line) => pushes.push(line));
+		registry.setExtensionStatus("cli:x", "k", "after bind");
+		registry.setExtensionStatus("global:y", "k2", "second");
+		registry.setExtensionStatus("cli:x", "k", undefined); // clear → empty line
+		registry.setExtensionStatus("cli:x", "never-set", undefined); // no-op: no push
+		expect(pushes).toEqual(["after bind", "after bind second", "second"]);
 	});
 });

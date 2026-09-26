@@ -214,7 +214,7 @@ interface StreamDelta {
 
 interface StreamChunk {
 	choices?: Array<{ delta?: StreamDelta; finish_reason?: string | null }>;
-	usage?: {
+	usage?: null | {
 		prompt_tokens?: number;
 		completion_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number };
@@ -412,7 +412,10 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 					stopReason = mapFinishReason(choice.finish_reason);
 				}
 
-				if (chunk.usage !== undefined) {
+				// DeepSeek sends usage: null on interim chunks (observed live
+				// 2026-09-26: the field is PRESENT but null before the final
+				// usage-bearing chunk) — null-check, not just undefined.
+				if (chunk.usage != null) {
 					// prompt_tokens INCLUDES cache hits (both spellings report the
 					// hit count as a subset) — subtract to match the anthropic
 					// inputTokens convention the ctx%/compaction math assumes (review F1).

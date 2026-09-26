@@ -89,6 +89,10 @@ export interface LineInput {
 	/** TUI shell only: persistent bottom status line (model · session ·
 	 *  cumulative tokens). The legacy shell has no such line and ignores it. */
 	setFooter?(text: string): void;
+	/** TUI shell only: extension-owned status line below the footer (one line,
+	 *  host-styled; task-timer design §4.3). Empty string hides it (zero
+	 *  rows). The legacy shell has no such line and never implements this. */
+	setExtensionStatus?(text: string): void;
 	/** Short-lived presentation feedback; never writes into the transcript. */
 	showNotice?(text: string): void;
 	/** Append a collapsed fold (expandable body) INTO the transcript

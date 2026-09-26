@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { createSession, SessionNotFoundError } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { ExtensionRegistry } from "../src/extensions/registry.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
 import { createRunner, type Runner, resolveRunMode } from "../src/runner.js";
@@ -452,5 +453,152 @@ describe("Runner.newSession", () => {
 			.trim()
 			.split("\n");
 		expect(lines).toHaveLength(3); // header + user + assistant
+	});
+});
+
+describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
+	/** A registry with one "probe" extension recording observer-event order. */
+	function probeRegistry(events: string[]): ExtensionRegistry {
+		const registry = new ExtensionRegistry();
+		registry.beginExtension("probe", "cli");
+		registry.subscribe("run_start", () => events.push("run_start"));
+		registry.subscribe("message_end", () => events.push("message_end"));
+		registry.subscribe("run_end", () => events.push("run_end"));
+		registry.commitExtension();
+		return registry;
+	}
+
+	it("fires exactly once per runTurn, before message_end and run_end", async () => {
+		const { baseDir, cwd } = await setup();
+		const events: string[] = [];
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer: makeRenderer().renderer,
+			provider: scriptedProvider([assistant([{ type: "text", text: "hi" }])]),
+			extensions: probeRegistry(events),
+		});
+		await runner.runTurn({ userMessage: "go" });
+		await runner.runTurn({ userMessage: "again" });
+		// Both print (cli.ts:885) and REPL (repl.ts:608) reach runTurn — one
+		// site covers both shells by construction.
+		expect(events).toEqual(["run_start", "message_end", "run_end", "run_start", "message_end", "run_end"]);
+	});
+
+	it("overflow recovery: one run_start and one run_end across the compact-and-retry", async () => {
+		const { baseDir, cwd } = await setup();
+		const events: string[] = [];
+		let call = 0;
+		const provider: LLMProvider = {
+			name: "overflow-then-ok",
+			async *stream() {
+				call++;
+				if (call === 1) throw new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}');
+				if (call === 2) {
+					// the compaction summary call — internal, emits no extension events
+					yield { type: "text_delta", text: "SUMMARY-OF-OLD" };
+					yield { type: "message_end", message: assistant([{ type: "text", text: "SUMMARY-OF-OLD" }]) };
+					return;
+				}
+				yield { type: "text_delta", text: "recovered answer" };
+				yield { type: "message_end", message: assistant([{ type: "text", text: "recovered answer" }]) };
+			},
+		};
+		const store = createSession(cwd, baseDir);
+		const big = "context ".repeat(6000); // compaction needs material beyond keepRecent
+		store.appendMessage(userMsg(`old work A ${big}`));
+		store.appendMessage(assistantText(`answer A ${big}`));
+		store.appendMessage(userMsg(`old work B ${big}`));
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			resume: store.isPersisted ? store.header.id : undefined,
+			renderer: makeRenderer().renderer,
+			provider,
+			extensions: probeRegistry(events),
+		});
+		const result = await runner.runTurn({ userMessage: "please continue" });
+		expect(result.stopReason).toBe("completed");
+		// The retry re-enters runTurnInner, never runTurn: exactly one pair.
+		expect(events.filter((e) => e === "run_start")).toHaveLength(1);
+		expect(events.filter((e) => e === "run_end")).toHaveLength(1);
+		expect(events[0]).toBe("run_start");
+		expect(events.at(-1)).toBe("run_end");
+	});
+
+	it("does not fire for subagent runs — top-level only, symmetric with run_end", async () => {
+		const { baseDir, cwd } = await setup();
+		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(baseDir, "agents-home", ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		const events: string[] = [];
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer: makeRenderer().renderer,
+			agentsHomeDir: path.join(baseDir, "agents-home"),
+			provider: scriptedProvider([
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "task", arguments: { prompt: "explore", agent: "scout" } }],
+					"tool_use",
+				),
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "parent done" }]),
+			]),
+			deferInit: false,
+			extensions: probeRegistry(events),
+		});
+		const result = await runner.runTurn({ userMessage: "go" });
+		expect(result.stopReason).toBe("completed");
+		expect(events.filter((e) => e === "run_start")).toHaveLength(1);
+		expect(events.filter((e) => e === "run_end")).toHaveLength(1);
+	});
+
+	it("a provider crash emits run_start but no run_end (documented asymmetry, design §3.3)", async () => {
+		const { baseDir, cwd } = await setup();
+		const events: string[] = [];
+		const provider: LLMProvider = {
+			name: "always-fails",
+			// biome-ignore lint/correctness/useYield: the contract is an async generator; this fake must throw before any event
+			async *stream() {
+				throw new Error("provider exploded");
+			},
+		};
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			renderer: makeRenderer().renderer,
+			provider,
+			extensions: probeRegistry(events),
+		});
+		await expect(runner.runTurn({ userMessage: "go" })).rejects.toThrow("provider exploded");
+		expect(events).toEqual(["run_start"]);
 	});
 });

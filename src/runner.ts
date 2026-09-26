@@ -951,6 +951,12 @@ class RunnerImpl implements Runner {
 		const settings = this.settings;
 		this.lastRunModel = model;
 		const session = this.sessionStore;
+		// run_start fires HERE, not in runTurnInner: entry-level is the one site
+		// both shells reach exactly once per run — the overflow retry below
+		// re-enters runTurnInner, never runTurn (task-timer design §4.1). Its
+		// pair is run_end, which a provider crash skips — consumers must
+		// tolerate an unpaired run_start.
+		this.options.extensions?.emitRunStart({ type: "run_start" });
 		return this.runTurnOrRecoverFromOverflow(options, model, provider, settings, session);
 	}
 

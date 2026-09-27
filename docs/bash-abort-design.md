@@ -2,7 +2,7 @@
 
 - 批次：`fix/bash-process-group`
 - 日期：2026-09-27
-- 状态：rev2（吸收对抗审查四项强制修订：审查结论 REJECT rev1 → 本版处理）
+- 状态：rev3（吸收第二轮审查 R2-F1/F2 强制项；R2-F3/F5 一并处理）
 
 ## 1. 问题（dogfood 2026-09-27，已端到端复现）
 
@@ -64,14 +64,22 @@ CC 同语义。行为变化写进 CHANGELOG。
 - exit 后 100ms 空闲计时器（每个 data 块重置——仍在写的孙进程继续
   读满，不截断尾部输出；静默句柄 100ms 后 destroy 流并 resolve）。
 
-**绝对上限（审查 P0-1，对 pi 的刻意偏离）**：空闲重 Arm 无上限时，
-"setsid + 持续写"的逃逸者会在中止路径复现原 bug（组杀杀不到、
-exit 后计时器永远重置、工具永不 settle）。规则：
-- **中止/超时路径：exit 即 finalize**（进程已组杀，残余输出丢弃，
-  已 append 进 StreamState 的部分保留——与现状中止语义一致）；
-- **正常退出路径：空闲宽限照常重 Arm，但自 `exit` 起设
-  `MAX_POST_EXIT_MS = 2000` 绝对上限**（持续写逃逸者最多拖 2s，
-  尾部可能截断——记入 R2）。
+**绝对上限与中止不变式（审查 P0-1 + R2-F2，对 pi 的刻意偏离）**：空闲
+重 Arm 无上限时，"setsid + 持续写"的逃逸者会在中止路径复现原 bug。
+规则：
+- **中止/超时不变式**：abort/timeout 触发时，`waitForChildProcess`
+  **立即 resolve，无论 exit 是否已发生**（不止是"exit 即 finalize"的
+  事件式措辞——shell 早退、逃逸者持续写、abort 后到的场景，靠 exit
+  事件永远等不到）。实现上：abort 监听器直接 finalize 等待器本身，
+  同一个 `settled` 标志位，与 exit 事件/空闲计时器/绝对上限互斥
+  （谁先到谁赢，后到者 no-op）；
+- **正常退出路径**：空闲宽限照常重 Arm，但自 `exit` 起设
+  `MAX_POST_EXIT_MS = 2000` 绝对上限（持续写逃逸者最多拖 2s，尾部
+  可能截断——记入 R2）；
+- **abort-after-exit 的输出语义**：abort 后 finalize 时刻起不再
+  append（丢弃残余）；在此之前已 append 的保留。若 abort 落在
+  "已 exit、正常路径计时器重 Arm 中"的窗口，输出保留到 abort 时刻
+  为止——不追加也不回退，与中止语义一致。
 
 `settled` 的定义（审查 P1-5）：= waitForChildProcess 已 resolve。
 finalize 前到达的 data 块照常 append（宽限期间不丢）；finalize 时
@@ -91,12 +99,15 @@ finalize 前到达的 data 块照常 append（宽限期间不丢）；finalize �
 `detached:true` 的进程组收不到终端信号——不登记则 imp 退出会漏孤儿组。
 `trackDetachedChildPid/untrack` 模块级 Set；killProcessTree 与登记共用
 `src/core/process-tree.ts`（新文件，bash.ts 与退出路径都 import）。
-调用点（审查 P1-2 + P2-7）：
+调用点（审查 P1-2 + R2-F1）：
 - `gracefulExit` / `forceExit`：`killTrackedDetachedChildren()` 在
   `this.exit(code)`（可能 process.exit）**之前**；
-- **print 模式（审查补）**：`src/cli.ts` 的 SIGINT 强退路径
-  （裸 `process.exit(130)`）与运行完成退出路径都补调；简单做法是
-  在 cli 启动时一次性挂 `beforeExit`/SIGTERM/SIGHUP 钩子（pi 模式）。
+- **print 模式（审查补 + R2-F1 修订）**：`src/cli.ts` 的 SIGINT 强退
+  路径（裸 `process.exit(130)`）**必须显式先调
+  `killTrackedDetachedChildren()`**——`beforeExit` 在显式
+  `process.exit()` 下不触发，钩子方案对该路径无效；自然退出路径
+  （`process.processCode` 收尾）用 `beforeExit`/SIGTERM/SIGHUP 钩子
+  兜底（pi 模式），两者叠加，钩子仅作安全网。
 
 track 时机（审查 P2-8）：spawn 返回后同步登记，任何 `await` 之前；
 untrack 在 finally。
@@ -115,9 +126,9 @@ pi 用 `stdin: "ignore"`（交互命令 read 立即 EOF，挂不住）；CC 有�
 |---|---|
 | `src/core/process-tree.ts`（新） | `killProcessTree`（win taskkill / posix 组杀+回退）+ `track/untrack/killTrackedDetachedChildren`（~60 行） |
 | `src/core/wait-child.ts`（新） | `waitForChildProcess`：exit+空闲宽限+绝对上限，返回 `{ code, signal }`（~90 行） |
-| `src/core/tools/bash.ts` | spawn 加 `detached`（非 win32）+ 同步 track；`stop()` 改 `killProcessTree`（去掉 TERM/2s 升级）；等待换 `waitForChildProcess`（中止时 exit 即 finalize）；退出报告用其 signal |
+| `src/core/tools/bash.ts` | spawn 加 `detached`（非 win32）+ 同步 track（stop 先 untrack 再杀）；`stop()` 改 `killProcessTree`（去掉 TERM/2s 升级）；等待换 `waitForChildProcess`（abort 监听器直接 finalize 等待器，不等 exit）；退出报告用其 signal |
 | `src/repl/repl.ts` | gracefulExit / forceExit：`killTrackedDetachedChildren()`（在 exit 调用前） |
-| `src/cli.ts` | print 模式退出路径（SIGINT 强退 + 正常完成）补同一清理；或启动时挂 beforeExit/SIGTERM/SIGHUP 一次性钩子 |
+| `src/cli.ts` | SIGINT 强退路径：显式 `killTrackedDetachedChildren()` 后再 `process.exit(130)`（beforeExit 对显式 exit 无效）；自然退出路径挂 beforeExit/SIGTERM/SIGHUP 钩子兜底 |
 | `test/bash-tool.test.ts`（新） | 见 §6 |
 | `test/repro-esc.test.ts` | 断言收紧为修复后契约 |
 | `test/repro-esc2.test.ts` | 原样收编 |
@@ -146,8 +157,10 @@ pi 用 `stdin: "ignore"`（交互命令 read 立即 EOF，挂不住）；CC 有�
    do echo tick; i=$((i+1)); sleep 0.05; done' & sleep 0.3; echo
    parent-done`——断言 (a) 写者完成前工具不 settle（宽限持续重 Arm，
    ~2s），(b) 结果含全部 tick 行（尾部不截断）；
-4c. **持续写逃逸者 + 绝对上限**：写者无限循环 + abort → settle 不晚于
-   exit + MAX_POST_EXIT_MS（正常路径上限被 D2 规则覆盖）；
+4c. **持续写逃逸者 + abort 立即 finalize**：写者无限循环 + abort →
+   abort 监听器立即 finalize（不等 exit 后任何计时器），settle ≈
+   abort 时刻；另一变体：shell 已退、写者持续、abort 后到 → 同样
+   立即 finalize（abort-after-exit 窗口，审查 R2-F2 场景）；
 5. 正常命令输出完整性回归（现有测试覆盖，不重做）；
 6. `repro-esc.test.ts` 收紧：Esc#1 限期内完整中断（任务行消失、无
    forceExit）、Esc#2 idle 无操作；
@@ -167,4 +180,11 @@ pi 用 `stdin: "ignore"`（交互命令 read 立即 EOF，挂不住）；CC 有�
   本批不修，记为已知遗留；process-tree.ts 落地后单开小批复用。
 - **R3** macOS/Linux 进程组语义差异：`detached` 在两平台都是 setsid
   语义（新会话新组），`-pid` 组杀一致；Windows 走 taskkill 分支，本仓
-  平台未支持、分支保持防御性静默。
+  平台未支持、分支保持防御性静默（taskkill 助手进程自身即刻退出、
+  非 detached，无孤儿风险——审查 R2-F5）；
+- **R5（审查 R2-F3，接受的风险）**：工具自身 kill 与退出期清扫的
+  双杀竞态 / pid 复用误杀：`stop()` 先 `untrack(pid)` 再
+  `killProcessTree(pid)`，缩小窗口；pid 复用下 `kill(-pid)` 可能杀到
+  无关组——pi 同样接受此风险，本仓同等接受（单机工具、窗口极短）。
+- `settled` 标志（审查 R2-F4）：唯一，exit 事件 / 两条流 end /
+  空闲计时器 / 绝对上限 / abort 监听器五路触发共享互斥，先到先赢。

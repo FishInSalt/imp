@@ -494,3 +494,26 @@ by A-reject.
 - Implementation may start; residual risks logged by the reviewer are
   accepted as-is (duplicated C4 message assertion in two suites; fallback
   wirings may now reject a previously-running cross-family row).
+
+### Round 4 — owner acceptance review (2026-09-27): blank `model:` bypassed C6
+
+- Finding (blocking P2, acceptance of `6fd8ba4`): the frontmatter parser
+  dropped every empty value, so a real agent file with `model:` (or a
+  whitespace-only value) surfaced as `model: undefined` and the resolver
+  silently inherited — the C6 rejection branch was unreachable from the
+  file path. Reproduced by the reviewer (`parseAgentFile → createTaskTool
+  → fake provider`: `isError: false`, one provider call). The existing
+  `A-reject-malformed` test built `AgentDefinition` objects directly and
+  could not see it.
+- Fix (`5da9508`): `parseAgentFile` preserves the empty value for `model`
+  only; the resolver's existing C6 diagnostic rejects it before launch.
+  No other optional field's empty-value semantics change. New file-path
+  tests (parser unit + `parseAgentFile → task tool`) are red-before-green:
+  blank/spaced `model:` → `isError` with "empty model override" and zero
+  provider calls; an absent field still inherits.
+- Non-blocking review note also addressed: the runner vision tests now use
+  a real photon-decodable PNG, the helper throws when the child's tool
+  result is missing, and the positive cases assert the read text and the
+  image block — an empty string can no longer satisfy a `not contains`
+  claim.
+- Gates after the fix: typecheck, lint, build; 109 files / 2085 tests.

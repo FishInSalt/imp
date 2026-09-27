@@ -1,6 +1,7 @@
 # SA-02 design: child model binding — one resolution, three consistent consumers
 
-Status: DRAFT — pending independent adversarial design review (AGENTS.md).
+Status: APPROVED — independent adversarial review closed (rounds: REJECT,
+REJECT, APPROVE; see §7).
 Branch: `feat/sa-02-child-model-binding`. Owner-approved contract and scope
 (2026-09-27, conversation): priority is two levels only — agent-file `model:`
 wins, otherwise inherit the parent at dispatch; cross-provider is rejected,
@@ -199,8 +200,12 @@ choose a model on the current provider, or switch the session model first.
 ### D2 — `knownProvider()` in `src/provider/resolve.ts`
 
 The known-family list moves into one exported helper
-(`knownProvider(prefix): ProviderName | undefined`, trim + lowercase), and
-`parseModelRef` is refactored to consume it. This is behavior-preserving for
+(`knownProvider(prefix): ProviderName | undefined`, **lowercase only — no
+trimming**, so the refactor keeps `parseModelRef` bit-identical: the CLI
+must keep treating `"zai /x"` as an unknown-prefix fallback; `child-model.ts`
+trims the prefix itself before calling the helper, which is where the
+child-contract normalization lives). `parseModelRef` is refactored to
+consume it. This is behavior-preserving for
 the CLI: same families, same order, same bare-ID rules, same unknown-prefix
 fallback (`anthropic` + whole string) and same known-prefix-empty-ID
 fallback (`anthropic` + whole string). Existing `resolve`-level tests plus
@@ -355,8 +360,10 @@ code):
   `compacts` flips `false` → `true`.
 - All other rows keep today's expectations (verified row by row: inherit,
   bare, `vendor/small`, `undefined` + bare — same wire IDs, same
-  compaction choices, canonical reference identical to the old reference
-  string).
+  compaction choices; the canonical reference resolves to the same family
+  and catalog entry as the old reference string — for the `[undefined, …]`
+  rows the old string was bare (`"small"`) and the new canonical form is
+  `"anthropic/small"`: same family, same entry).
 
 These rows are the end-to-end evidence that compaction settings follow the
 canonical child reference (acceptance item 6), on top of the
@@ -472,3 +479,18 @@ by A-reject.
 - Confirmed in round 2, no action: D1 consequence list and D2 pin outcomes
   (including the untrimmed fallback return), A-vision-worktree
   feasibility, identity swap, §6 accounting honesty.
+
+### Round 3 (2026-09-27) — APPROVE (1×P3)
+
+- Independently recomputed all 8 compaction-wiring rows against the
+  injected catalog: exactly the three scheduled row changes, the other
+  five unchanged; the rejection-test harness supports `isError` + zero
+  requests; §4 audit and §7 corrections accurate; D1(c) matches the old
+  code.
+- R3-P3 (fixed): §4's unchanged-rows bullet claimed the canonical
+  reference was "identical to the old reference string" — false for the
+  `[undefined, …]` rows (old bare `"small"` vs new `"anthropic/small"`);
+  reworded to "same family and catalog entry".
+- Implementation may start; residual risks logged by the reviewer are
+  accepted as-is (duplicated C4 message assertion in two suites; fallback
+  wirings may now reject a previously-running cross-family row).

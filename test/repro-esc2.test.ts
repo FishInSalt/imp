@@ -2,12 +2,11 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
-import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 import { Renderer } from "../src/render.js";
-import { createRunner } from "../src/runner.js";
 import { runRepl } from "../src/repl/repl.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
+import { createRunner } from "../src/runner.js";
+import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 /** Contrast case: a NORMAL run (thinking/streaming) aborts cleanly — the
  *  settle path resets the machine to idle BEFORE a second Esc lands, so the

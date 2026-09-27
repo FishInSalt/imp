@@ -387,7 +387,9 @@ async function main(): Promise<void> {
 	for (const sig of ["SIGTERM", "SIGHUP"] as const) {
 		process.once(sig, () => {
 			killTrackedDetachedChildren();
-			process.exit(0);
+			// 128+signal number = conventional signal-death exit code — a
+			// supervisor must see SIGHUP death as 129, not success (review P2-1).
+			process.exit(128 + (sig === "SIGTERM" ? 15 : 1));
 		});
 	}
 	await loadDotEnv(); // loads .env from the imp installation root; real env wins

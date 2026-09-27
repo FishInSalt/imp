@@ -126,13 +126,15 @@ describe("#bash-abort: process-group kill + exit/idle wait", () => {
 		// cleanup the escapee (it setsid'd out of the group — kill by name)
 		const { exec } = await import("node:child_process");
 		await new Promise<void>((resolve) =>
-			exec("pkill -f 'echo spam' 2>/dev/null; pkill -f 'while :; do echo spam' 2>/dev/null || true", () => resolve()),
+			exec("pkill -f 'echo spam' 2>/dev/null; pkill -f 'while :; do echo spam' 2>/dev/null || true", () =>
+				resolve(),
+			),
 		);
 	}, 10000);
 
 	it("5. normal commands keep full output + exit code (regression guard)", async () => {
 		const tool = createBashTool();
-		const result = (await execute(tool, 'echo hello; echo world >&2; exit 7')) as {
+		const result = (await execute(tool, "echo hello; echo world >&2; exit 7")) as {
 			output: string;
 			exitCode: number;
 			isError: boolean;

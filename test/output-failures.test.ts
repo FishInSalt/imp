@@ -9,6 +9,14 @@ const mocks = vi.hoisted(() => ({
 	stat: vi.fn(),
 }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
+// #bash-abort: abort/timeout paths call killProcessTree — the real one
+// would process.kill(±424242) on a live machine (review P1-1).
+vi.mock("../src/core/process-tree.js", () => ({
+	trackDetachedChildPid: () => {},
+	untrackDetachedChildPid: () => {},
+	killTrackedDetachedChildren: () => {},
+	killProcessTree: () => {},
+}));
 vi.mock("node:fs/promises", () => ({
 	open: mocks.open,
 	unlink: mocks.unlink,
@@ -52,8 +60,14 @@ it.each(["create", "write", "close"])("does not promise an artifact when %s fail
 	if (failure === "close") close.mockRejectedValueOnce(new Error("fixture"));
 	const pending = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", Buffer.alloc(51201, 120));
-	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
-	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
+	child.emit("exit", 0, null);
+	child.emit("close", 0, null);
+	child.stdout.emit("end");
+	child.stderr.emit("end");
+	child.emit("exit", 0, null);
+	child.emit("close", 0, null);
+	child.stdout.emit("end");
+	child.stderr.emit("end");
 	const result = await pending;
 	expect(result.output).toContain("saving the output artifact failed");
 	expect(result.output).not.toContain("output saved to");
@@ -85,12 +99,18 @@ it("writes concurrent unique artifacts sequentially with raw prefix segments", a
 	const bytes = Buffer.alloc(51201, 255);
 	const first = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", bytes);
-	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
+	child.emit("exit", 0, null);
+	child.emit("close", 0, null);
+	child.stdout.emit("end");
+	child.stderr.emit("end");
 	child = new Child();
 	mocks.spawn.mockReturnValue(child);
 	const second = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", bytes);
-	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
+	child.emit("exit", 0, null);
+	child.emit("close", 0, null);
+	child.stdout.emit("end");
+	child.stderr.emit("end");
 	const results = await Promise.all([first, second]);
 	expect(mocks.open.mock.calls[0]![0]).not.toBe(mocks.open.mock.calls[1]![0]);
 	for (let i = 0; i < 2; i++) {

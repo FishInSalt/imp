@@ -2,12 +2,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assistant } from "./helpers/fakes.js";
-import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 import { Renderer } from "../src/render.js";
-import { createRunner } from "../src/runner.js";
 import { runRepl } from "../src/repl/repl.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
+import { createRunner } from "../src/runner.js";
+import { assistant } from "./helpers/fakes.js";
+import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 /**
  * Dogfood report 2026-09-27 (verified real, then fixed by #bash-abort): a
@@ -38,7 +38,7 @@ describe("repro: subagent bash hung by a grandchild (esc semantics)", () => {
 		let call = 0;
 		const provider = {
 			name: "mock",
-			async *stream(request: never) {
+			async *stream(_request: never) {
 				call++;
 				if (call === 1) {
 					// main agent delegates via task

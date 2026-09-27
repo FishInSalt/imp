@@ -340,3 +340,27 @@ Verdict REJECT (1×P0, 1×P1, 2×P2). Dispositions:
   into `creationReflog: undefined`; no call sites break.
 - **R3-P2 consistency** — `git gc`/`reflog expire` clearing the log is now covered
   explicitly by the empty-current rule in D7.
+
+## 8. Implementation review and deferred limitations (2026-09-27)
+
+Implementation commit `7ad74dc` reviewed by a fresh-context adversarial reviewer:
+verdict APPROVE. Verified: no false-`clean` in any state enumerated by D2; no
+auto-removal without a clean assessment; D5 message composition holds; the
+`git()` status-1 → -1 audit has no misbehaving caller; `createChildWorktree`
+capture cannot throw; U/I tests are genuinely red against the pre-fix code;
+scope limited to the four named files + this design. Full gates: typecheck,
+lint, build, 2049 tests across 107 files.
+
+Deferred limitations — explicitly recorded, candidates for a follow-up reviewed
+decision, not silently dismissed:
+
+- A child that `git stash`es its changes leaves a clean worktree: the assessment
+  returns `clean` and removes it. The stash entry itself lives in the shared
+  repository (`refs/stash`) and survives, so the content is recoverable, but the
+  task result shows no trailer and no notice. Detecting stashes created during
+  the child run needs its own attribution design (stash is repo-global).
+- Gitignored files created by the child (e.g. `.env`, build outputs) are
+  invisible to `status`/`diff`/`ls-files` and are deleted with the worktree.
+  `status --porcelain --ignored` awareness is the candidate fix; it needs its
+  own decision because it would also retain worktrees for children that only
+  produced ignored build artifacts.

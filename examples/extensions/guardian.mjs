@@ -132,10 +132,17 @@ export default function (api) {
 	 * separate -r and -f, or --recursive/--force. The ask-tier regex only
 	 * matches combined tokens; without this, `rm -r -f target` slipped past
 	 * BOTH tiers (floor checks targets, rules check the regex).
-	 * Returns false, or { span } — [start, end) offsets of the matched rm
-	 * segment in the ORIGINAL command, for the confirm picker's highlight. */
+	 * Returns false, { span } (offsets of the matched rm segment in the
+	 * ORIGINAL command), or {} when the segment cannot be located — the
+	 * gate stands either way, only the highlight is dropped. */
 	const rmForceRecursive = (command) => {
+		// Capturing split keeps separators; `cursor` walks ORIGINAL-command
+		// offsets so the span maps to THIS segment, never to an earlier
+		// identical substring (indexOf would highlight an echo argument).
+		let cursor = 0;
 		for (const segment of command.split(/([;&|])/)) {
+			const segStart = cursor;
+			cursor += segment.length;
 			if (segment === "" || /^[;&|]$/.test(segment)) continue; // separator captured by split
 			const words = segment.trim().split(/\s+/);
 			const at = words.indexOf("rm");
@@ -153,12 +160,13 @@ export default function (api) {
 				else if (word === "-f") force = true;
 			}
 			if (recursive && force) {
-				// Map the trimmed segment back to offsets in the ORIGINAL command.
-				const start = command.indexOf(segment);
-				if (start === -1) return {}; // gate stands; span unavailable
+				// Span covers `rm` through the last operand, leading whitespace
+				// excluded: locate the rm word inside THIS segment.
+				const rmWordAt = segment.indexOf("rm", segment.search(/\S/));
+				if (rmWordAt === -1) return {};
 				const lastWord = words[words.length - 1] ?? "";
-				const end = start + segment.lastIndexOf(lastWord) + lastWord.length;
-				return { span: [start, Math.min(end, command.length)] };
+				const end = segStart + segment.lastIndexOf(lastWord) + lastWord.length;
+				return { span: [segStart + rmWordAt, Math.min(end, command.length)] };
 			}
 		}
 		return false;
@@ -191,7 +199,7 @@ export default function (api) {
 				if (m !== null) {
 					matched = { rule: candidate, match: m };
 					break;
-			}
+				}
 			}
 			// Split-flag rm -r -f misses the combined-token regex; treat it as the
 			// same recursive force delete rule (ask tier) when the floor didn't hit.

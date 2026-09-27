@@ -90,10 +90,26 @@ describe("applyWarnSpans (confirm-picker alert highlight)", () => {
 		expect(applyWarnSpans("abc", [[2, 2]], true)).toBe("abc");
 	});
 	it("sorts and merges overlapping spans; multiple spans all highlight", () => {
-		expect(applyWarnSpans("abcdefgh", [[4, 6], [0, 2]], true)).toBe(
-			`\x1b[0m\x1b[1;31mab\x1b[0m\x1b[2mcd\x1b[0m\x1b[1;31mef\x1b[0m\x1b[2mgh`,
-		);
+		expect(
+			applyWarnSpans(
+				"abcdefgh",
+				[
+					[4, 6],
+					[0, 2],
+				],
+				true,
+			),
+		).toBe(`\x1b[0m\x1b[1;31mab\x1b[0m\x1b[2mcd\x1b[0m\x1b[1;31mef\x1b[0m\x1b[2mgh`);
 		// overlap: [0,3) and [1,4) merge into one [0,4) span
-		expect(applyWarnSpans("abcd", [[1, 4], [0, 3]], true)).toBe(`\x1b[0m\x1b[1;31mabcd\x1b[0m\x1b[2m`);
+		expect(
+			applyWarnSpans(
+				"abcd",
+				[
+					[1, 4],
+					[0, 3],
+				],
+				true,
+			),
+		).toBe(`\x1b[0m\x1b[1;31mabcd\x1b[0m\x1b[2m`);
 	});
 });

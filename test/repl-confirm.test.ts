@@ -47,6 +47,7 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 				"rm -rf node_modules\nwhy it matched: risky",
 				{
 					sessionKey: "guardian:bash:rm",
+					warnSpans: [[9, 15]], // the gated fragment inside the detail
 				},
 			),
 		).resolves.toBe(true);
@@ -54,6 +55,8 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		expect(host.picks[0]?.title).toBe("[guardian] allow this bash command?");
 		// the detail rides in the picker itself now (not only transcript notes)
 		expect(host.picks[0]?.detail).toBe("rm -rf node_modules\nwhy it matched: risky");
+		// and warnSpans survive the whole chain: extension → confirm options → picker
+		expect(host.picks[0]?.warnSpans).toEqual([[9, 15]]);
 		expect(host.picks[0]?.items.map((item) => item.label)).toEqual([
 			"Yes",
 			"Yes, don't ask again this session",

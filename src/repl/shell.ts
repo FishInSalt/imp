@@ -1,5 +1,4 @@
-import { dim } from "../format.js";
-import { applyWarnSpans, WARN_START, WARN_END } from "../format.js";
+import { applyWarnSpans, dim } from "../format.js";
 import { SPINNER_FRAMES } from "../render.js";
 import {
 	type AutocompleteSlashCommand,

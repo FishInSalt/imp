@@ -80,6 +80,11 @@ describe("guardian caller-cwd resolution (spec part 3 item 7)", () => {
 		const { gate, confirm } = await loadGuardian("/proj");
 		const decision = await gate(writeEvent("/proj", "../escape.txt"));
 		expect(confirm).toHaveBeenCalledTimes(1);
+		// the ask carries the target path and the reason (review observation:
+		// this detail text had no coverage)
+		const detail = String(confirm.mock.calls[0]?.[1]);
+		expect(detail).toContain("path: ../escape.txt");
+		expect(detail).toContain("why it matched: the target is outside the caller's working directory");
 		expect(decision).toEqual({
 			block: true,
 			reason:
@@ -264,6 +269,20 @@ describe("M7 review: the floor must be unbypassable — home spellings and split
 			reason: expect.stringContaining("recursive force delete"),
 		});
 		expect(g.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("split-flag span maps to the GATED rm, not an earlier identical substring (acceptance P3 fix)", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const command = "echo rm x rm -r -f d && rm -r -f d"; // echo argument mirrors the gated segment
+		await g.gate({ name: "bash", args: { command } });
+		const span = g.confirm.mock.calls[0]?.[2]?.warnSpans?.[0];
+		expect(span).toBeDefined();
+		const detail = String(g.confirm.mock.calls[0]?.[1]);
+		// The highlighted fragment is the SECOND (gated) rm: offset arithmetic
+		// walks original-command positions, no first-occurrence indexOf lookup
+		expect(detail.slice(span[0], span[1])).toBe("rm -r -f d");
+		// ...and it sits after the `&&` separator, not inside the echo argument
+		expect(span[0]).toBeGreaterThan(detail.indexOf("&&"));
 	});
 
 	it("plain rm (no flags) still never asks", async () => {

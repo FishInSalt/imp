@@ -421,7 +421,9 @@ async function executeChunk(
 
 /** History-shaped result (prompt-audit P1): display is render-only and
  *  must not reach history — the session persists results verbatim and resume
- *  replay would resurrect a display string no renderer set. Events keep it. */
+ *  replay would resurrect a display string no renderer set. Events keep it.
+ *  SA-03 taskRecord is the deliberate opposite: program metadata that MUST
+ *  reach history — the spread below keeps it while removing display. */
 function persistableResult(result: ToolResult): ToolResult {
 	if (result.display === undefined) return result;
 	const { display: _display, ...rest } = result;
@@ -491,6 +493,9 @@ async function runTool(
 			content: result.content ?? result.output,
 			isError: result.isError ?? false,
 			display: result.display,
+			// SA-03: explicit forwarding — the projection below drops unknown
+			// fields, so the task record must be copied by name.
+			taskRecord: result.taskRecord,
 		};
 	} catch (err) {
 		return {

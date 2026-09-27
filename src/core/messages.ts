@@ -64,6 +64,8 @@ export interface AssistantMessage {
 	model?: string;
 }
 
+import type { TaskRecord } from "./task-record.js";
+
 export interface ToolResult {
 	toolCallId: string;
 	toolName: string;
@@ -73,6 +75,11 @@ export interface ToolResult {
 	 *  events — the loop strips it before the result enters history, so it
 	 *  never reaches the model, the session file, or resume replay. */
 	display?: string;
+	/** SA-03 task metadata: program-visible and PERSISTED with the message —
+	 *  the opposite lifecycle of `display`. NEVER model-visible: provider
+	 *  converters construct wire objects field-by-field and must never read
+	 *  this field. Absent for non-task tools. */
+	taskRecord?: TaskRecord;
 }
 
 export interface ToolResultMessage {

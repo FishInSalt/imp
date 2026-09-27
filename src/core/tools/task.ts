@@ -1,15 +1,23 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Type } from "typebox";
+import { firstLine } from "../../format.js";
 import type { ProviderName } from "../../provider/resolve.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
-import { resolveChildModel } from "../child-model.js";
+import { type ChildModelBinding, resolveChildModel } from "../child-model.js";
 import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
+import type { AgentMessage } from "../messages.js";
 import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
+import {
+	buildTaskRecord,
+	type TaskRecordTerminal,
+	type TaskRecordTranscript,
+	type TaskRecordWorktree,
+} from "../task-record.js";
 import {
 	assessWorktreeRemoval,
 	buildWorktreeNotice,
@@ -30,6 +38,8 @@ import type { Tool, ToolExecuteResult } from "./types.js";
  * subagent. The child runs in-process (nested loop), shares the parent's cwd
  * and tool pool (minus task itself), and its final assistant message becomes
  * this tool's result — capped, trailed, and failure-taught per the contract.
+ * SA-03: every result also carries a TaskRecord (../task-record.ts) — the
+ * structured account persisted with the result message.
  */
 
 const taskSchema = Type.Object({
@@ -159,6 +169,63 @@ function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string 
 	return "";
 }
 
+/** SA-03: transcript facts — only what the store can attest to. `writeFailed`
+ *  is the observed-failure flag (message appends AND compaction checkpoints);
+ *  an unpersisted store WITHOUT an observed failure is `no-content`, never a
+ *  fabricated error. */
+function transcriptFor(
+	session: SessionStore | null,
+	childSessions: boolean,
+	writeFailed: boolean,
+): TaskRecordTranscript {
+	if (session?.isPersisted) {
+		return writeFailed
+			? { present: true, path: session.filePath, writeFailed: true }
+			: { present: true, path: session.filePath };
+	}
+	if (session !== null) return { present: false, why: writeFailed ? "write-failed" : "no-content" };
+	return { present: false, why: childSessions ? "no-parent-session" : "disabled" };
+}
+
+/** SA-03 D7: observe the child session's write failures for this attempt —
+ *  message appends AND compaction checkpoints (`compactSession` writes solely
+ *  through `appendCompaction`). A throw sets the fact flag and is re-thrown
+ *  unchanged: control flow stays exactly as before (a message failure crashes
+ *  the child loop; a compaction failure is caught by `compactChildHistory` and
+ *  the child continues un-compacted). */
+function observeSessionWrites(session: SessionStore, onFailure: () => void): void {
+	const appendMessage = session.appendMessage.bind(session);
+	session.appendMessage = (message: AgentMessage) => {
+		try {
+			return appendMessage(message);
+		} catch (err) {
+			onFailure();
+			throw err;
+		}
+	};
+	const appendCompaction = session.appendCompaction.bind(session);
+	session.appendCompaction = (...args: Parameters<SessionStore["appendCompaction"]>) => {
+		try {
+			return appendCompaction(...args);
+		} catch (err) {
+			onFailure();
+			throw err;
+		}
+	};
+}
+
+/** SA-03: the cleanup outcome in structured form (SA-01's layered honesty). */
+function worktreeRecord(wt: ChildWorktree, cleanup: CleanupOutcome): TaskRecordWorktree {
+	const base = { path: wt.path, branch: wt.branch };
+	if (cleanup.state === "removed") return { ...base, disposition: "removed" };
+	if (cleanup.state === "failed") {
+		return { ...base, disposition: "removal-failed", detail: cleanup.errors.join("; ") };
+	}
+	return cleanup.assessment.verdict === "work-present"
+		? { ...base, disposition: "kept-work", detail: cleanup.assessment.detail }
+		: { ...base, disposition: "kept-unknown", detail: cleanup.assessment.detail };
+}
+
 /** Byte-accurate tail cut that never splits a UTF-8 sequence. */
 function tailTruncate(text: string): { text: string; dropped: number } {
 	const total = Buffer.byteLength(text, "utf8");
@@ -194,17 +261,70 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 		async execute(args, signal, context): Promise<ToolExecuteResult> {
 			// One observer namespace per invocation, independent of labels and sessions.
 			const sourceId = randomUUID();
+			// SA-03: per-execute attempt identity — the record's unique key.
+			const attemptId = randomUUID();
 			const taskToolCallId = context?.toolCallId;
+			// Read once: the record reports it and the child session links to it.
+			const parentStore = options.getSession();
+			// Child cwd for gate events and the SA-03 record (M6b): the worktree
+			// path when isolation is active, otherwise the parent's cwd — gates
+			// resolve paths against the loop that executes the call. A rejection
+			// reports the parent cwd (no child ran; the worktree field names the
+			// created-and-removed path separately).
+			const parentCwd = options.cwd ?? process.cwd();
+			let childCwd = parentCwd;
+			// SA-03: the record accumulator. Fields are set progressively as the
+			// call resolves; EVERY return path goes through finish(), which takes
+			// the terminal facts explicitly (rejection paths included).
+			const rec: {
+				childId?: string;
+				tools?: string[];
+				timeoutMs?: number;
+				binding?: ChildModelBinding;
+				launched?: boolean;
+				transcript?: TaskRecordTranscript;
+				worktree?: TaskRecordWorktree;
+			} = {};
 			// Resolve the named agent (if any) before any side effects.
 			const wanted = typeof args.agent === "string" && args.agent !== "" ? args.agent : undefined;
 			const agent = wanted === undefined ? undefined : agentsByName.get(wanted);
+			const rejectTerminal = (output: string): TaskRecordTerminal => ({
+				status: "rejected",
+				reason: firstLine(output),
+				turns: 0,
+				textPresent: false,
+			});
+			const finish = (result: ToolExecuteResult, terminal: TaskRecordTerminal): ToolExecuteResult => ({
+				...result,
+				taskRecord: buildTaskRecord({
+					sourceId,
+					attemptId,
+					taskToolCallId,
+					parentSessionId: parentStore?.header.id,
+					childId: rec.childId,
+					launched: rec.launched === true,
+					agent: agent?.name,
+					binding: rec.binding,
+					cwd: rec.launched === true ? childCwd : parentCwd,
+					tools: rec.tools,
+					timeoutMs: rec.timeoutMs,
+					status: terminal.status,
+					reason: terminal.reason,
+					turns: terminal.turns,
+					textPresent: terminal.textPresent,
+					transcript: rec.transcript,
+					worktree: rec.worktree,
+					usage: terminal.usage,
+				}),
+			});
 			if (wanted !== undefined && agent === undefined) {
 				const available = agents.length
 					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .imp/agents/ and ~/.imp/agents/).`
 					: options.agentsProjectGated === true
 						? "No agents are loaded — this directory's .imp/agents was skipped because the directory is not trusted (review it, then restart with: imp --trust)."
 						: "No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).";
-				return { output: `unknown agent "${wanted}". ${available}`, isError: true };
+				const output = `unknown agent "${wanted}". ${available}`;
+				return finish({ output, isError: true }, rejectTerminal(output));
 			}
 
 			// SA-02: resolve the child model ONCE, before any side effect — a
@@ -216,8 +336,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				override: agent?.model,
 				agentName: agent?.name,
 			});
-			if (!resolution.ok) return { output: resolution.error, isError: true };
+			if (!resolution.ok)
+				return finish({ output: resolution.error, isError: true }, rejectTerminal(resolution.error));
 			const binding = resolution.binding;
+			rec.binding = binding;
 
 			// Tools narrowing first (review B1): it can only reject, never touch
 			// the filesystem — running it before worktree creation means no
@@ -244,10 +366,6 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			let cleanup: CleanupOutcome | undefined;
 			let prompt = String(args.prompt);
 			let tools: Tool[];
-			// Child cwd for gate events (M6b): the worktree path when isolation is
-			// active, otherwise the parent's cwd — gates resolve paths against the
-			// loop that executes the call, not the project root.
-			let childCwd = options.cwd ?? process.cwd();
 			if (wantWorktree) {
 				const cwd = options.cwd ?? process.cwd();
 				try {
@@ -258,10 +376,8 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						options.worktreeBaseDir,
 					);
 				} catch (err) {
-					return {
-						output: err instanceof Error ? err.message : String(err),
-						isError: true,
-					};
+					const message = err instanceof Error ? err.message : String(err);
+					return finish({ output: message, isError: true }, rejectTerminal(message));
 				}
 				// Subdirectory parents keep their relative position inside the
 				// worktree (pi's agentCwd pattern): relative paths keep working.
@@ -282,19 +398,21 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					// positively clean; a failed check or a failed removal is
 					// reported instead of silently leaking or losing it.
 					const attempt = await attemptWorktreeCleanup(wt, repo);
+					rec.worktree = worktreeRecord(wt, attempt);
 					const note = cleanupOutcomeNote(attempt, wt);
-					return {
-						output: `worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.${note ? `\n${note}` : ""}`,
-						isError: true,
-					};
+					const output = `worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.${note ? `\n${note}` : ""}`;
+					return finish({ output, isError: true }, rejectTerminal(output));
 				}
 				const narrowed = validateSubset(rebuilt);
 				if ("isError" in narrowed) {
 					const attempt = await attemptWorktreeCleanup(wt, repo);
+					rec.worktree = worktreeRecord(wt, attempt);
 					const note = cleanupOutcomeNote(attempt, wt);
-					return { ...narrowed, output: note ? `${narrowed.output}\n${note}` : narrowed.output };
+					const output = note ? `${narrowed.output}\n${note}` : narrowed.output;
+					return finish({ ...narrowed, output }, rejectTerminal(output));
 				}
 				tools = narrowed;
+				rec.tools = narrowed.map((tool) => tool.name);
 			} else {
 				// SA-02: prefer the child-bound pool; fall back to the parent pool
 				// (custom wirings that predate the seam keep their bindings).
@@ -306,21 +424,29 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						})
 						?.filter((tool) => tool.name !== "task") ?? parentPool;
 				const narrowed = validateSubset(childPool);
-				if ("isError" in narrowed) return narrowed;
+				if ("isError" in narrowed) return finish(narrowed, rejectTerminal(narrowed.output));
 				tools = narrowed;
+				rec.tools = narrowed.map((tool) => tool.name);
 			}
 			// #subagent-softlanding rev 4 precedence: call args > agent
 			// frontmatter > mode default (TTY: undefined = unlimited).
 			const effectiveTimeout =
 				(args.timeoutMs as number | undefined) ?? agent?.timeoutMs ?? timeoutMs ?? defaultChildTimeoutMs();
+			rec.timeoutMs = effectiveTimeout;
 
 			let session: SessionStore | null = null;
 			let outcome: SubagentOutcome;
+			// SA-03 D7: any observed session-write failure (message append or
+			// compaction checkpoint) sets the fact flag; control flow unchanged.
+			let transcriptWriteFailed = false;
 			try {
-				if (childSessions) {
-					const parent = options.getSession();
-					if (parent !== null) session = createChildSession(parent, options.sessionBaseDir);
+				if (childSessions && parentStore !== null) {
+					session = createChildSession(parentStore, options.sessionBaseDir);
+					observeSessionWrites(session, () => {
+						transcriptWriteFailed = true;
+					});
 				}
+				rec.launched = true;
 				outcome = await runSubagent({
 					autoCompact: options.getAutoCompact?.(),
 					provider: options.getProvider(),
@@ -333,7 +459,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					signal,
 					timeoutMs: effectiveTimeout,
 					session: session ?? undefined,
-					onMessage: session ? (message) => session?.appendMessage(message) : undefined,
+					onMessage: session ? (message: AgentMessage) => session?.appendMessage(message) : undefined,
 					onToolCall: options.onToolCall
 						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd })
 						: undefined,
@@ -356,23 +482,41 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					cleanup = await attemptWorktreeCleanup(wt, repo);
 				}
 			}
+			rec.childId = session?.header.id;
+			rec.transcript = transcriptFor(session, childSessions, transcriptWriteFailed);
+			if (wt !== undefined && cleanup !== undefined) rec.worktree = worktreeRecord(wt, cleanup);
+
+			// SA-03: terminal facts straight from the runtime outcome.
+			const terminal: TaskRecordTerminal = {
+				status: outcome.status,
+				reason: outcome.reason,
+				turns: outcome.turns,
+				textPresent: outcome.text !== undefined,
+				usage: outcome.usage,
+			};
 			const base = taskResult(outcome, session, effectiveTimeout, String(args.prompt));
-			if (cleanup === undefined || cleanup.state === "removed") return base;
+			if (cleanup === undefined || cleanup.state === "removed") return finish(base, terminal);
 			if (cleanup.state === "failed") {
-				return {
-					...base,
-					output: `${base.output}\n${cleanupFailureNote(cleanup.errors, wt as ChildWorktree)}`,
-				};
+				return finish(
+					{
+						...base,
+						output: `${base.output}\n${cleanupFailureNote(cleanup.errors, wt as ChildWorktree)}`,
+					},
+					terminal,
+				);
 			}
 			if (cleanup.assessment.verdict === "work-present") {
 				const kept = wt as ChildWorktree;
 				const stat = await worktreeChangeStat(kept, repo as RepoState);
-				return { ...base, output: `${base.output}${buildWorktreeTrailer(kept, stat)}` };
+				return finish({ ...base, output: `${base.output}${buildWorktreeTrailer(kept, stat)}` }, terminal);
 			}
-			return {
-				...base,
-				output: `${base.output}\n${keptForSafetyNote(cleanup.assessment, wt as ChildWorktree)}`,
-			};
+			return finish(
+				{
+					...base,
+					output: `${base.output}\n${keptForSafetyNote(cleanup.assessment, wt as ChildWorktree)}`,
+				},
+				terminal,
+			);
 		},
 	};
 }

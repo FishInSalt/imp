@@ -359,6 +359,49 @@ describe("codex-responses provider", () => {
 			expect(captured.at(-1)?.body.reasoning).toEqual({ effort: "max", summary: "auto" });
 		});
 	});
+
+	it("SA-03: a taskRecord on a tool result never reaches the wire body", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse("response.created", { response: { id: "resp_1" } }),
+				sse("response.output_item.added", { output_index: 0, item: { type: "message", id: "msg_1" } }),
+				sse("response.output_item.done", { output_index: 0, item: { type: "message", id: "msg_1" } }),
+				sse("response.completed", {
+					response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+				}),
+			],
+		};
+		const messages: AgentMessage[] = [
+			{
+				role: "toolResult",
+				results: [
+					{
+						toolCallId: "c1",
+						toolName: "task",
+						content: "done",
+						isError: false,
+						taskRecord: {
+							version: 1,
+							timestamp: "2026-09-27T00:00:00.000Z",
+							attemptId: "attempt-evil",
+							sourceId: "source-1",
+							launched: true,
+							cwd: "/work",
+							status: "completed",
+							turns: 1,
+							textPresent: true,
+						},
+					},
+				],
+			},
+		];
+		await collect(provider().stream(REQ("gpt-5.5", messages)));
+		const body = JSON.stringify(captured.at(-1)?.body ?? {});
+		expect(body.length).toBeGreaterThan(0);
+		expect(body).not.toContain("taskRecord");
+		expect(body).not.toContain("attempt-evil");
+	});
 });
 
 describe("contextWindowFor registry", () => {

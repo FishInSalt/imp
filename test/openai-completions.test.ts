@@ -332,6 +332,42 @@ describe("openai-completions provider", () => {
 		const users = (body.messages ?? []).filter((m) => m.role === "user");
 		expect(users.map((m) => m.content)).toEqual(["go", "first correction", "second correction"]);
 	});
+
+	it("SA-03: a taskRecord on a tool result never reaches the wire body", async () => {
+		script = {
+			status: 200,
+			chunks: [sse({ choices: [{ delta: {}, finish_reason: "stop" }] }), "data: [DONE]\n\n"],
+		};
+		const messages: AgentMessage[] = [
+			{
+				role: "toolResult",
+				results: [
+					{
+						toolCallId: "c1",
+						toolName: "task",
+						content: "done",
+						isError: false,
+						taskRecord: {
+							version: 1,
+							timestamp: "2026-09-27T00:00:00.000Z",
+							attemptId: "attempt-evil",
+							sourceId: "source-1",
+							launched: true,
+							cwd: "/work",
+							status: "completed",
+							turns: 1,
+							textPresent: true,
+						},
+					},
+				],
+			},
+		];
+		await collect(provider().stream(REQ("glm-4.6", messages)));
+		const body = JSON.stringify(captured.at(-1)?.body ?? {});
+		expect(body.length).toBeGreaterThan(0);
+		expect(body).not.toContain("taskRecord");
+		expect(body).not.toContain("attempt-evil");
+	});
 });
 
 describe("parseModelRef routing", () => {

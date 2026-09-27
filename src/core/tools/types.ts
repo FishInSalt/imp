@@ -1,5 +1,6 @@
 import type { TSchema } from "typebox";
 import type { ContentBlock } from "../messages.js";
+import type { TaskRecord } from "../task-record.js";
 
 export type ToolPresentationValue =
 	| null
@@ -75,6 +76,12 @@ export interface ToolExecuteResult {
 	 *  trailing "Exit code: N" section textually, which a command's own
 	 *  stdout could forge (debt clearance). Absent for non-process tools. */
 	exitCode?: number;
+	/** SA-03: the task tool's structured account of this call (identity,
+	 *  terminal status, transcript/worktree references, usage slot). Forwarded
+	 *  into `ToolResult` and persisted with the message; program-visible,
+	 *  never model-visible (provider converters must not read it). Absent for
+	 *  every other tool. */
+	taskRecord?: TaskRecord;
 }
 
 /**

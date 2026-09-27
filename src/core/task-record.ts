@@ -32,10 +32,13 @@ export type TaskRecordStatus =
 	| "rejected"; // pre-launch rejection — nothing ran
 
 /** Whether a transcript really exists — the facts only; resumability is a
- *  later, validated decision (SA-06), never inferred from this field. */
+ *  later, validated decision (SA-06), never inferred from this field.
+ *  `write-failed`: a write was observed to fail and nothing persisted.
+ *  `no-content`: nothing was persisted, and no write was observed to fail
+ *  (e.g. an attempt that produced no writes at all). */
 export type TaskRecordTranscript =
 	| { present: true; path: string; writeFailed?: true }
-	| { present: false; why: "disabled" | "no-parent-session" | "write-failed" };
+	| { present: false; why: "disabled" | "no-parent-session" | "write-failed" | "no-content" };
 
 /** SA-01's layered honesty in structured form: never claims a cleanup that did
  *  not happen. */
@@ -196,7 +199,12 @@ function isTranscript(v: unknown): boolean {
 	const t = v as Record<string, unknown>;
 	if (t.present === true) return isString(t.path) && (t.writeFailed === undefined || t.writeFailed === true);
 	if (t.present === false)
-		return t.why === "disabled" || t.why === "no-parent-session" || t.why === "write-failed";
+		return (
+			t.why === "disabled" ||
+			t.why === "no-parent-session" ||
+			t.why === "write-failed" ||
+			t.why === "no-content"
+		);
 	return false;
 }
 

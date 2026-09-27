@@ -169,7 +169,10 @@ function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string 
 	return "";
 }
 
-/** SA-03: transcript facts — only what the store can attest to. */
+/** SA-03: transcript facts — only what the store can attest to. `writeFailed`
+ *  is the observed-failure flag (message appends AND compaction checkpoints);
+ *  an unpersisted store WITHOUT an observed failure is `no-content`, never a
+ *  fabricated error. */
 function transcriptFor(
 	session: SessionStore | null,
 	childSessions: boolean,
@@ -180,8 +183,35 @@ function transcriptFor(
 			? { present: true, path: session.filePath, writeFailed: true }
 			: { present: true, path: session.filePath };
 	}
-	if (session !== null) return { present: false, why: "write-failed" };
+	if (session !== null) return { present: false, why: writeFailed ? "write-failed" : "no-content" };
 	return { present: false, why: childSessions ? "no-parent-session" : "disabled" };
+}
+
+/** SA-03 D7: observe the child session's write failures for this attempt —
+ *  message appends AND compaction checkpoints (`compactSession` writes solely
+ *  through `appendCompaction`). A throw sets the fact flag and is re-thrown
+ *  unchanged: control flow stays exactly as before (a message failure crashes
+ *  the child loop; a compaction failure is caught by `compactChildHistory` and
+ *  the child continues un-compacted). */
+function observeSessionWrites(session: SessionStore, onFailure: () => void): void {
+	const appendMessage = session.appendMessage.bind(session);
+	session.appendMessage = (message: AgentMessage) => {
+		try {
+			return appendMessage(message);
+		} catch (err) {
+			onFailure();
+			throw err;
+		}
+	};
+	const appendCompaction = session.appendCompaction.bind(session);
+	session.appendCompaction = (...args: Parameters<SessionStore["appendCompaction"]>) => {
+		try {
+			return appendCompaction(...args);
+		} catch (err) {
+			onFailure();
+			throw err;
+		}
+	};
 }
 
 /** SA-03: the cleanup outcome in structured form (SA-01's layered honesty). */
@@ -406,13 +436,15 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 
 			let session: SessionStore | null = null;
 			let outcome: SubagentOutcome;
-			// SA-03 D7: a mid-run append failure keeps the existing behavior (the
-			// child loop crashes on the throw) but is recorded — the wrapper only
-			// sets the flag; control flow is unchanged.
+			// SA-03 D7: any observed session-write failure (message append or
+			// compaction checkpoint) sets the fact flag; control flow unchanged.
 			let transcriptWriteFailed = false;
 			try {
 				if (childSessions && parentStore !== null) {
 					session = createChildSession(parentStore, options.sessionBaseDir);
+					observeSessionWrites(session, () => {
+						transcriptWriteFailed = true;
+					});
 				}
 				rec.launched = true;
 				outcome = await runSubagent({
@@ -427,16 +459,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					signal,
 					timeoutMs: effectiveTimeout,
 					session: session ?? undefined,
-					onMessage: session
-						? (message: AgentMessage) => {
-								try {
-									session?.appendMessage(message);
-								} catch (err) {
-									transcriptWriteFailed = true;
-									throw err;
-								}
-							}
-						: undefined,
+					onMessage: session ? (message: AgentMessage) => session?.appendMessage(message) : undefined,
 					onToolCall: options.onToolCall
 						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd })
 						: undefined,

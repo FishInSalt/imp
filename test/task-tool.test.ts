@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type AgentDefinition, formatAgentsForPrompt, parseAgentFile } from "../src/core/agents/registry.js";
 import { type AgentEvent, runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
@@ -2212,6 +2212,71 @@ describe("task record (SA-03)", () => {
 		expect(toolResult.results[0]?.taskRecord).toBeUndefined();
 		const toolEnd = events.find((e) => e.type === "tool_end");
 		expect(toolEnd?.type === "tool_end" && toolEnd.result.taskRecord === undefined).toBe(true);
+	});
+
+	it("acceptance P2: a compaction write failure sets writeFailed without changing the continue-uncompacted behavior", async () => {
+		// The compaction checkpoint is the second write path
+		// (compactSession → appendCompaction). One injected failure must be
+		// observed even though the child continues and completes.
+		const spy = vi.spyOn(SessionStore.prototype, "appendCompaction").mockImplementationOnce(() => {
+			throw new Error("disk full");
+		});
+		try {
+			const base = await mkdtemp(path.join(tmpdir(), "imp-rec-cw-"));
+			const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-cw-cwd-"));
+			const parent = createSession(cwd, base);
+			const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "x" } };
+			const { task } = recordHarness({
+				// The huge usage anchors the context estimate over the trigger; the
+				// huge text gives findCutIndex something older than the keep window
+				// to summarize (both are needed for a real compaction attempt).
+				scripts: [
+					assistant([{ type: "text", text: "x".repeat(200_000) }, toolCall], "tool_use", {
+						inputTokens: 500_000,
+						outputTokens: 5,
+					}),
+					assistant([{ type: "text", text: "final answer" }]),
+				],
+				tools: [echo],
+				session: parent,
+				childSessions: true,
+				sessionBaseDir: base,
+				cwd,
+			});
+			const result = await task.execute({ prompt: "go" }, new AbortController().signal);
+			expect(result.isError).toBe(false); // the child still completes
+			expect(result.taskRecord?.status).toBe("completed");
+			const transcript = result.taskRecord?.transcript;
+			if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+			expect(transcript.writeFailed).toBe(true);
+			expect(spy).toHaveBeenCalledTimes(1);
+			// A LATER ordinary write succeeded after the failed compaction write.
+			const reopened = SessionStore.open(transcript.path);
+			const finalAppended = reopened
+				.getEntries()
+				.some(
+					(entry) =>
+						entry.type === "message" &&
+						entry.message.role === "assistant" &&
+						entry.message.blocks.some((block) => block.type === "text" && block.text === "final answer"),
+				);
+			expect(finalAppended).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
+	}, 30000);
+
+	it("acceptance P2: a zero-write attempt reports no-content, never a fabricated write failure", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-nw-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-nw-cwd-"));
+		const parent = createSession(cwd, base);
+		const { task, sink } = recordHarness({ session: parent, childSessions: true, sessionBaseDir: base, cwd });
+		const controller = new AbortController();
+		controller.abort(); // aborted before any provider call and before any write
+		const result = await task.execute({ prompt: "" }, controller.signal);
+		expect(result.taskRecord).toMatchObject({ status: "aborted", launched: true });
+		expect(result.taskRecord?.transcript).toEqual({ present: false, why: "no-content" });
+		expect(sink).toHaveLength(0);
 	});
 
 	it("T21: the loop persists the record with the message and carries it on tool_end", async () => {

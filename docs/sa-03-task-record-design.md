@@ -85,7 +85,7 @@ export type TaskRecordStatus =
 
 export type TaskRecordTranscript =
   | { present: true; path: string; writeFailed?: true }
-  | { present: false; why: "disabled" | "no-parent-session" | "write-failed" };
+  | { present: false; why: "disabled" | "no-parent-session" | "write-failed" | "no-content" };
 
 export interface TaskRecordWorktree {
   path: string;
@@ -178,10 +178,13 @@ Plumbing (all explicit):
 - `textPresent` reflects `outcome.text !== undefined`; the "(subagent completed with no
   output)" prose sentinel never becomes text presence.
 - Transcript facts come from the store: `disabled` (child sessions off),
-  `no-parent-session` (no parent store), `write-failed` (never persisted),
-  `present:true` with optional `writeFailed:true` (a persist failure was observed during
-  the attempt). Nothing in the record advertises resumability — that decision is SA-06's,
-  built on these facts.
+  `no-parent-session` (no parent store), `write-failed` (a write was observed to fail and
+  nothing persisted), `no-content` (nothing persisted and no write was observed to fail —
+  e.g. an attempt that produced no writes), and `present:true` with optional
+  `writeFailed:true` (a write failure was observed during the attempt, covering message
+  appends AND compaction checkpoints). `isPersisted === false` alone never implies an
+  error. Nothing in the record advertises resumability — that decision is SA-06's, built
+  on these facts.
 - Every value originates from runtime objects (`SubagentOutcome`, `CleanupOutcome`,
   session store, SA-02 binding). Child text is never parsed; changing the result prose or
   the child's answer cannot change any field.
@@ -261,14 +264,17 @@ attempt id. A doc-comment on `ToolResult.taskRecord` states the rule.
 - Child-session creation throwing (mkdir/open failure) currently makes the whole task
   throw before the child runs; unchanged. Such thrown paths carry **no record** — a
   documented crash window; absence means unknown, never fabricated facts.
-- Mid-run append failure: `onMessage` is wrapped so the failure sets
-  `transcriptWriteFailed = true` in the accumulator and is re-thrown (the child loop
-  still crashes exactly as today; outcome `crash`). The wrapper's only job is to set the
-  flag — control flow is unchanged (`loop.ts:125-133` already pops the user message and
-  rethrows for that call site; `runSubagent` maps the throw to a `crash` outcome, as
-  today). The record then reports `transcript: {present: true, path, writeFailed: true}`
-  when the store had persisted at least once, else
-  `{present: false, why: "write-failed"}`.
+- Mid-run write failures: for the attempt's duration, the child session's TWO write
+  entry points are wrapped — `appendMessage` (the loop's message persistence) and
+  `appendCompaction` (`compactSession` writes solely through it). A throw from either
+  sets `transcriptWriteFailed = true` and is re-thrown unchanged, so control flow is
+  exactly as today (a message failure crashes the child loop — `loop.ts:125-133` pops the
+  user message and rethrows; `runSubagent` maps it to a `crash` outcome; a compaction
+  failure is caught by `compactChildHistory` and the child continues un-compacted, with
+  the existing retry/limit behavior untouched). The record then reports
+  `{present: true, path, writeFailed: true}` when the store had persisted at least once;
+  an unpersisted store reports `write-failed` only when a failure was actually observed,
+  else `no-content`.
 - `disabled` / `no-parent-session` are the two no-session variants, distinguished at the
   point where the child session would have been created.
 

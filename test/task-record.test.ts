@@ -186,6 +186,11 @@ describe("collectTaskRecords (SA-03)", () => {
 		).toHaveLength(1);
 	});
 
+	it("accepts the no-content transcript variant (an unpersisted store without an observed failure)", () => {
+		const record = buildTaskRecord(input({ transcript: { present: false, why: "no-content" } }));
+		expect(collectTaskRecords([messageEntry(record)])).toHaveLength(1);
+	});
+
 	it("ignores child text that looks like a record (content is never a source)", () => {
 		const spoof: AgentMessage = {
 			role: "toolResult",

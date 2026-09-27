@@ -80,6 +80,14 @@
   且 `cap = 0.8×reserve < reserve` ⇒ `输入 + cap < 窗口`。
   **比例分支（窗口 ≤ reserve，即 ≤32k 窗口）不在该证明范围内**——连同"手动在接近
   满窗口时 /compact"，一并归入 D3 已知边界，不修。
+- **已知副作用（已实测确认）**：当 `reserve > 0.15×W`（即 W < 约 218k）时，
+  `min(0.85W, W−reserve)` 恒等于 `W−reserve`——已知窗口与回退分支的阈值**数值重合**，
+  触发点不再能区分来源（测试改为断言 `contextWindowInfoFor(...).source`；行为本身
+  正确：这类窗口现在保留满额 reserve）。
+- **受影响测试（实测）**：`test/compaction-threshold.test.ts` 的 `it.each` 阈值表
+  （200k→167,232、131k→98,304、65k→32,768、32,768→27,852、16,385→13,927 等）、
+  "uses static known windows and legacy unknown thresholds"（114,688 → 98,304）
+  与 provenance 用例；见 §4。
 
 ### D3 明确不做（各记触发条件）
 
@@ -112,8 +120,14 @@
 ## 4. 测试计划
 
 - **更新**：
-  - `test/compaction-wiring.test.ts:96`：`triggerTokens 83616 → 67232`（100k 窗口、
-    新 reserve 下的正确值）；
+  - `test/compaction-wiring.test.ts`：`triggerTokens 83616 → 67232`；`childScript` 夹具的
+    子上下文 100,000 → 90000（必须落在目录 100k 阈值 67,232 与遗留阈值 98,304 之间，
+    否则 cross-provider / 无 reference 两个用例失去判别力）；
+  - `test/compaction-threshold.test.ts`：`it.each` 阈值表按新 reserve 重算
+    （200k→167,232、131k→98,304、65k→32,768、32,768→27,852、16,385→13,927）；
+    reserve 断言 16,384→32,768、摘要上限断言 13,107→26,214；
+    "uses static…" 的 114,688→98,304；provenance 用例改断言 `source`
+    （131,072 窗口下两条分支阈值已数值重合，见 D2 副作用）；
   - `test/compaction.test.ts:46-47`：补钉子 `DEFAULT_COMPACTION_SETTINGS.reserveTokens === 32768`。
 - **新增**（`test/compaction.test.ts`，scriptedProvider 会重复最后一个脚本，
   现有两个 "token cap" 用例天然变成"两跳都失败"路径，断言补"调用次数=2"）：

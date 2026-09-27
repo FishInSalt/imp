@@ -60,7 +60,12 @@ const echo = {
 };
 function childScript(compacts: boolean) {
 	const first = assistant([{ type: "toolCall" as const, id: "t", name: "echo", arguments: {} }]);
-	first.usage = { inputTokens: 100000, outputTokens: 1 };
+	// #compaction-thinking-retry: the fixture context must sit BETWEEN the
+	// catalog-100k threshold (min(85k, 100k − 32,768) = 67,232) and the legacy
+	// DEFAULT threshold (131,072 − 32,768 = 98,304), so the cross-provider /
+	// no-reference cases (legacy settings → no compact) still discriminate
+	// against the catalog cases (compact).
+	first.usage = { inputTokens: 90000, outputTokens: 1 };
 	return [
 		first,
 		...(compacts ? [assistant([{ type: "text" as const, text: "SUMMARY" }])] : []),
@@ -93,7 +98,7 @@ describe("child model-aware compaction wiring", () => {
 		const { compactionSettingsFor } = await import("../src/provider/compaction-settings.js");
 		expect(compactionSettingsFor("openai/vendor/small")).toMatchObject({
 			contextWindow: 100000,
-			triggerTokens: 83616,
+			triggerTokens: 67232,
 		});
 	});
 

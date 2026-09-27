@@ -8,6 +8,11 @@ Trigger automatic compaction earlier for large known model windows without chang
 
 For a known effective context window W and the existing 16,384-token reserve:
 
+【#compaction-thinking-retry（2026-09-27）更新：reserveTokens 默认已 16,384 → 32,768，
+故现行 threshold = min(0.85W, W − 32,768)（W > 32,768），131,072 回退窗口的阈值
+为 98,304；本节以下数值保留为当时的历史值，现行值与依据见
+`docs/compaction-thinking-retry-design.md`。】
+
 - W > 16,384: threshold = min(floor(0.85 * W), W - 16,384).
 - W <= 16,384: threshold = max(1, floor(0.85 * W)); this avoids nonpositive thresholds, but does not guarantee summarization can fit tiny windows.
 - Unknown model with no override: retain the 131,072-token fallback window and 114,688-token threshold.
@@ -18,7 +23,7 @@ For a known effective context window W and the existing 16,384-token reserve:
 
 Add a provenance-aware context-window resolver in provider/models.ts, preserving current precedence: environment, catalog, discovery, static table, fallback. Retain contextWindowFor as a number-returning wrapper. Do not infer provenance from the numeric window.
 
-Add optional triggerTokens to CompactionSettings. shouldCompact uses it when present, otherwise preserves the existing contextWindow - reserveTokens behavior for explicitly injected settings. reserveTokens remains unchanged; summary output budget calculations must not depend on the ratio.
+Add optional triggerTokens to CompactionSettings. shouldCompact uses it when present, otherwise preserves the existing contextWindow - reserveTokens behavior for explicitly injected settings. reserveTokens stays at the value in DEFAULT_COMPACTION_SETTINGS (this design only adds triggerTokens; that default was later raised 16,384 → 32,768 by #compaction-thinking-retry); summary output budget calculations must not depend on the ratio.
 
 Add a shared model-aware compaction-settings factory (in a separate provider module importing models and compaction, avoiding a core compaction -> provider cycle). Use it at Runner construction and model switch, and for default subagent settings using the child's actual model. Explicitly injected subagent settings stay authoritative. Preserve existing per-run model/provider/settings snapshots; refreshing catalog metadata during a run is out of scope.
 

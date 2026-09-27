@@ -1,5 +1,10 @@
 import { formatTokens } from "../format.js";
-import type { ThinkingLevel } from "../provider/thinking.js";
+import {
+	clampThinkingLevel,
+	THINKING_LEVELS,
+	type ThinkingLevel,
+	thinkingMetaFor,
+} from "../provider/thinking.js";
 import type { LLMProvider } from "../provider/types.js";
 import {
 	type AgentMessage,
@@ -43,7 +48,14 @@ function envInt(name: string, fallback: number): number {
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
-	reserveTokens: 16384,
+	// #compaction-thinking-retry: 32768 (was 16384). The summarizer rides the
+	// session's thinking level and thinking shares the output budget — three
+	// live failures (glm-5.3/kimi-k3/deepseek-flash) had reasoning consume the
+	// whole cap. 0.8 × reserve = 26214 covers the worst observed combination
+	// (~13k thinking + ~6k text). Trigger impact: 1M windows unchanged (850k);
+	// 131k-200k windows compact 1.6-14% earlier. See
+	// docs/compaction-thinking-retry-design.md.
+	reserveTokens: 32768,
 	keepRecentTokens: envInt("IMP_KEEP_RECENT", 20000),
 	contextWindow: envInt("IMP_CONTEXT_WINDOW", 131072),
 };
@@ -362,6 +374,108 @@ Use this EXACT format:
 
 Keep it under ~200 words. Preserve exact file paths, function names, and error messages.`;
 
+// ============================================================================
+// Summarizer seam (#compaction-thinking-retry)
+// ============================================================================
+
+interface SummarizerRun {
+	summary: string;
+	finalText: string | undefined;
+	usage: Usage;
+	stopReason: string | null | undefined;
+}
+
+/** One summarizer stream — shared by history compaction and branch summaries
+ *  (they differ only in prompt, cap and result handling). */
+async function runSummarizer(args: {
+	provider: LLMProvider;
+	model: string;
+	system: string;
+	userContent: string;
+	maxTokens: number;
+	thinking?: ThinkingLevel;
+	signal?: AbortSignal;
+}): Promise<SummarizerRun> {
+	const usage = emptyUsage();
+	let summary = "";
+	let finalText: string | undefined;
+	let stopReason: string | null | undefined;
+	for await (const event of args.provider.stream({
+		system: args.system,
+		messages: [{ role: "user", content: args.userContent }],
+		tools: [],
+		model: args.model,
+		maxTokens: args.maxTokens,
+		signal: args.signal,
+		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
+	})) {
+		if (event.type === "text_delta") summary += event.text;
+		if (event.type === "message_end") {
+			addUsage(usage, event.message.usage);
+			stopReason = event.message.stopReason;
+			finalText = event.message.blocks
+				.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+				.map((b) => b.text)
+				.join("");
+		}
+	}
+	return { summary, finalText, usage, stopReason };
+}
+
+/** Rank a level for the "did the retry actually lower anything" test; an
+ *  undefined thinking request (session off / no knob) ranks as off. */
+function levelRank(level: ThinkingLevel | undefined): number {
+	return THINKING_LEVELS.indexOf(level ?? "off");
+}
+
+/**
+ * #compaction-thinking-retry: retry a token-capped summarizer run ONCE at the
+ * lowest thinking level the model supports. Thinking and the summary text share
+ * the output budget; at high/max levels reasoning alone consumed the entire cap
+ * in all three live failures (glm-5.3/kimi-k3/deepseek-flash — zero or
+ * truncated text). The cap and the transcript are unchanged — only the level
+ * drops. prompt-audit P2 still holds: a capped summary is a half checkpoint and
+ * must never be persisted; retrying is how we avoid reaching that state.
+ *
+ * Abort wins (D1/review): an aborted run never starts another provider call,
+ * and an abort racing the retry keeps its own message.
+ */
+async function summarizeWithRetry(args: {
+	provider: LLMProvider;
+	model: string;
+	system: string;
+	userContent: string;
+	maxTokens: number;
+	thinking?: ThinkingLevel;
+	signal?: AbortSignal;
+	tokenCapMessage: string;
+	abortedMessage: string;
+}): Promise<SummarizerRun> {
+	const first = await runSummarizer(args);
+	if (first.stopReason !== "max_tokens") return first;
+	// Abort first: the pre-retry code checked the token cap before the abort —
+	// that order must not turn a user interrupt into a retry.
+	if (args.signal?.aborted) throw new Error(args.abortedMessage);
+	// "off" is not always available (levelMap.off === null — forced-reasoning
+	// models); clampThinkingLevel picks the lowest supported level. For
+	// meta-less models it returns "off", which the request maps to "no thinking
+	// field" (intervention-free — the model's default applies; documented).
+	const lowered = clampThinkingLevel(thinkingMetaFor(args.provider.name, args.model), "off");
+	if (levelRank(lowered) >= levelRank(args.thinking)) {
+		throw new Error(`${args.tokenCapMessage} (thinking=${args.thinking ?? "off"}; no lower level available)`);
+	}
+	const retry = await runSummarizer({ ...args, thinking: lowered });
+	addUsage(retry.usage, first.usage); // honest accounting across both hops
+	if (retry.stopReason === "max_tokens") {
+		if (args.signal?.aborted) throw new Error(args.abortedMessage);
+		throw new Error(
+			`${args.tokenCapMessage} (thinking=${args.thinking ?? "off"} then ${lowered} both capped)`,
+		);
+	}
+	if (args.signal?.aborted) throw new Error(args.abortedMessage);
+	return retry;
+}
+
 export async function summarizeBranchSegment(args: {
 	messages: AgentMessage[];
 	provider: LLMProvider;
@@ -384,33 +498,23 @@ export async function summarizeBranchSegment(args: {
 		args.customInstructions !== undefined && args.customInstructions.trim() !== ""
 			? `\n\nFollow these user instructions too:\n${args.customInstructions.trim()}`
 			: "";
-	let summary = "";
-	for await (const event of args.provider.stream({
-		system: SUMMARIZATION_SYSTEM_PROMPT,
-		messages: [{ role: "user", content: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}${suffix}` }],
-		tools: [],
+	const run = await summarizeWithRetry({
+		provider: args.provider,
 		model: args.model,
+		system: SUMMARIZATION_SYSTEM_PROMPT,
+		userContent: `${transcript}\n\n---\n\n${BRANCH_SUMMARY_PROMPT}${suffix}`,
 		// Half the derived budget: branch segments are shorter than full
 		// sessions (#derived-budget).
 		maxTokens: Math.floor(
 			summarizerMaxTokens(DEFAULT_COMPACTION_SETTINGS.reserveTokens, args.modelMaxTokens) / 2,
 		),
+		thinking: args.thinking,
 		signal: args.signal,
-		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
-	})) {
-		if (event.type === "text_delta") summary += event.text;
-		// prompt-audit P2: a token-capped summary is half a checkpoint — reject
-		// it rather than persist a truncated memory (imp's StopReason vocabulary
-		// has no pi-style "error"/"length"; provider failures already throw).
-		if (event.type === "message_end" && event.message.stopReason === "max_tokens") {
-			throw new Error("branch summary: hit the token cap — incomplete, rejected");
-		}
-	}
-	if (args.signal?.aborted) {
-		throw new Error("branch summary: summarizer aborted — incomplete, rejected");
-	}
-	if (summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
-	return summary.trim();
+		tokenCapMessage: "branch summary: hit the token cap — incomplete, rejected",
+		abortedMessage: "branch summary: summarizer aborted — incomplete, rejected",
+	});
+	if (run.summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
+	return run.summary.trim();
 }
 
 // ============================================================================
@@ -496,42 +600,19 @@ export async function compactHistory(args: {
 		previousSummary === undefined
 			? `${transcript}\n\n---\n\n${SUMMARIZATION_PROMPT}`
 			: `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n${transcript}\n\n---\n\n${UPDATE_SUMMARIZATION_PROMPT}`;
-	const usage = emptyUsage();
-	let summary = "";
-	let finalText: string | undefined;
-	let summarizerStopReason: string | null | undefined;
-	for await (const event of args.provider.stream({
-		system: SUMMARIZATION_SYSTEM_PROMPT,
-		messages: [{ role: "user", content: userContent }],
-		tools: [],
+	const run = await summarizeWithRetry({
+		provider: args.provider,
 		model: args.model,
+		system: SUMMARIZATION_SYSTEM_PROMPT,
+		userContent,
 		maxTokens: summarizerMaxTokens(settings.reserveTokens, args.modelMaxTokens),
+		thinking: args.thinking,
 		signal: args.signal,
-		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
-	})) {
-		if (event.type === "text_delta") summary += event.text;
-		if (event.type === "message_end") {
-			addUsage(usage, event.message.usage);
-			summarizerStopReason = event.message.stopReason;
-			finalText = event.message.blocks
-				.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
-				.map((b) => b.text)
-				.join("");
-		}
-	}
-	// prompt-audit P2: a token-capped summary is half a checkpoint — it must
-	// never become the session's resume point (imp's stopReason vocabulary is
-	// end_turn|tool_use|max_tokens|stop_sequence|null; provider errors throw).
-	if (summarizerStopReason === "max_tokens") {
-		throw new Error("compaction: summary hit the token cap — incomplete, rejected");
-	}
-	// Aborted streams end without message_end — a partial summary must not be
-	// spliced in either (impl review P3-3; the child seam forwards its signal,
-	// and the recovery seam re-classifies the throw as timeout/aborted).
-	if (args.signal?.aborted) {
-		throw new Error("compaction: summarizer aborted — incomplete, rejected");
-	}
-	if (summary.trim() === "" && finalText !== undefined) summary = finalText;
+		tokenCapMessage: "compaction: summary hit the token cap — incomplete, rejected",
+		abortedMessage: "compaction: summarizer aborted — incomplete, rejected",
+	});
+	let summary = run.summary;
+	if (summary.trim() === "" && run.finalText !== undefined) summary = run.finalText;
 	if (summary.trim() === "") throw new Error("compaction: summarizer returned an empty summary");
 
 	const summaryMessage: AgentMessage = {
@@ -540,7 +621,7 @@ export async function compactHistory(args: {
 	};
 	const tokensAfter =
 		estimateTokens(summaryMessage) + retainedTail.reduce((sum, m) => sum + estimateTokens(m), 0);
-	return { summary, retainedTail, tokensBefore, tokensAfter, usage };
+	return { summary, retainedTail, tokensBefore, tokensAfter, usage: run.usage };
 }
 
 /**

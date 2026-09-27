@@ -52,23 +52,32 @@ describe("context window provenance", () => {
 	it("distinguishes catalog and discovery 131072 windows from the same numeric fallback", () => {
 		installCatalog({ known: { id: "known", contextWindow: 131072 } });
 		registerDiscoveredContextWindows({ discovered: 131072 });
+		expect(contextWindowInfoFor("zai/known").source).toBe("catalog");
+		expect(contextWindowInfoFor("zai/discovered").source).toBe("discovery");
+		expect(contextWindowInfoFor("unknown-model").source).toBe("fallback");
+		// #compaction-thinking-retry: with reserve 32,768 > 0.15 × 131,072 the
+		// min() branch and the fallback branch COINCIDE numerically — provenance
+		// is asserted via source above; both thresholds now read 98,304.
 		for (const reference of ["zai/known", "zai/discovered"]) {
 			expect(contextWindowFor(reference)).toBe(131072);
-			expect(compactionSettingsFor(reference).triggerTokens).toBe(111411);
+			expect(compactionSettingsFor(reference).triggerTokens).toBe(98304);
 		}
-		expect(compactionSettingsFor("unknown-model").triggerTokens).toBe(114688);
+		expect(compactionSettingsFor("unknown-model").triggerTokens).toBe(98304);
 	});
 });
 
 describe("automatic compaction thresholds", () => {
+	// #compaction-thinking-retry: reserve 16,384 → 32,768; every row reflects
+	// min(floor(0.85 × W), W − 32,768) — or the ratio branch when W ≤ reserve.
+	// Rows with W > 218,453 are unchanged; smaller windows keep the full reserve.
 	it.each([
 		[1000000, 850000],
 		[272000, 231200],
-		[200000, 170000],
-		[131072, 111411],
-		[65536, 49152],
-		[32768, 16384],
-		[16385, 1],
+		[200000, 167232],
+		[131072, 98304],
+		[65536, 32768],
+		[32768, 27852],
+		[16385, 13927],
 		[16384, 13926],
 		[8192, 6963],
 		[1, 1],
@@ -81,9 +90,9 @@ describe("automatic compaction thresholds", () => {
 		expect(shouldCompact(threshold - 1, settings)).toBe(false);
 		expect(shouldCompact(threshold, settings)).toBe(false);
 		expect(shouldCompact(threshold + 1, settings)).toBe(true);
-		expect(settings.reserveTokens).toBe(16384);
+		expect(settings.reserveTokens).toBe(32768);
 		expect(settings.keepRecentTokens).toBe(DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
-		expect(summarizerMaxTokens(settings.reserveTokens)).toBe(13107);
+		expect(summarizerMaxTokens(settings.reserveTokens)).toBe(26214);
 		expect(summarizerMaxTokens(settings.reserveTokens, 4096)).toBe(4096);
 	});
 
@@ -91,8 +100,8 @@ describe("automatic compaction thresholds", () => {
 		expect(compactionSettingsFor("zai/glm-5.3").triggerTokens).toBe(850000);
 		const settings = compactionSettingsFor("unknown-model");
 		expect(settings.contextWindow).toBe(131072);
-		expect(shouldCompact(114688, settings)).toBe(false);
-		expect(shouldCompact(114689, settings)).toBe(true);
+		expect(shouldCompact(98304, settings)).toBe(false);
+		expect(shouldCompact(98305, settings)).toBe(true);
 	});
 
 	it("preserves explicit legacy settings and honors an explicit zero trigger", () => {

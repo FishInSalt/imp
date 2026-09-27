@@ -331,6 +331,74 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		).rejects.toThrow("token cap");
 	});
 
+	it("#compaction-thinking-retry: a capped run retries once at the model's lowest level", async () => {
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "text", text: "## Goal\nhalf" }], "max_tokens"),
+				assistant([{ type: "text", text: "## Goal\nfull summary" }]),
+			],
+			requests,
+			"moonshotai", // kimi-k2.7-code: off unavailable -> clamp lands on minimal
+		);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const result = await compactHistory({
+			messages: overflowishHistory(6),
+			provider,
+			model: "kimi-k2.7-code",
+			settings,
+			thinking: "high",
+		});
+		expect(result?.summary).toContain("full summary");
+		expect(requests).toHaveLength(2);
+		expect(requests[0]?.thinking).toBe("high");
+		expect(requests[1]?.thinking).toBe("minimal");
+	});
+
+	it("#compaction-thinking-retry: a meta-less model's retry asks for off (no thinking field)", async () => {
+		const requests: LLMRequest[] = [];
+		// The script repeats its last step, so hop 2 is capped as well.
+		const provider = scriptedProvider([assistant([{ type: "text", text: "half" }], "max_tokens")], requests);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await expect(
+			compactHistory({ messages: overflowishHistory(6), provider, model: "m", settings, thinking: "max" }),
+		).rejects.toThrow(/token cap.*both capped/);
+		expect(requests).toHaveLength(2);
+		expect(requests[1]?.thinking).toBeUndefined(); // off -> omitted, intervention-free
+	});
+
+	it("#compaction-thinking-retry: no retry when no lower level exists", async () => {
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "half" }], "max_tokens")], requests);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await expect(
+			compactHistory({ messages: overflowishHistory(6), provider, model: "m", settings, thinking: "off" }),
+		).rejects.toThrow("no lower level available");
+		expect(requests).toHaveLength(1);
+	});
+
+	it("#compaction-thinking-retry: usage accumulates across both hops", async () => {
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "text", text: "half" }], "max_tokens"),
+				assistant([{ type: "text", text: "## Goal\nfull" }]),
+			],
+			requests,
+			"moonshotai",
+		);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const result = await compactHistory({
+			messages: overflowishHistory(6),
+			provider,
+			model: "kimi-k2.7-code",
+			settings,
+			thinking: "high",
+		});
+		// assistant() defaults: 10 input / 5 output per hop.
+		expect(result?.usage).toMatchObject({ inputTokens: 20, outputTokens: 10 });
+	});
+
 	// #derived-budget: pi parity — min(0.8 × reserveTokens, model maxTokens
 	// ?? Infinity). No magic constants; the reserve share is the always-present
 	// bound. glm-5.3's thinking blocks count against max_tokens and the old

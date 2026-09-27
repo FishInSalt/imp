@@ -125,10 +125,10 @@ export function user(content: string): AgentMessage {
 export type ScriptStep = AssistantMessage | (() => AssistantMessage | Promise<AssistantMessage>);
 
 /** Replays scripted assistant messages in order; repeats the last if called again. */
-export function scriptedProvider(scripts: ScriptStep[], sink?: LLMRequest[]): LLMProvider {
+export function scriptedProvider(scripts: ScriptStep[], sink?: LLMRequest[], name = "mock"): LLMProvider {
 	let call = 0;
 	return {
-		name: "mock",
+		name,
 		async *stream(request) {
 			if (sink) sink.push({ ...request, messages: [...request.messages] });
 			const step = scripts[Math.min(call, scripts.length - 1)];

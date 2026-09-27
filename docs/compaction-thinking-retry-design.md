@@ -1,6 +1,7 @@
 # 压缩抗"思考挤占正文预算"：降档重试 + reserve 提升（#compaction-thinking-retry）
 
-状态：待审批（2026-09-27）
+状态：已审批（2026-09-27，两轮独立评审：第一轮超时前完成大部分核验；第二轮收窄复核
+判"先修后实施"，4 项必改已全部落入本文）
 分支：`fix/compaction-thinking-retry`（独立 worktree `imp-wt-compaction`；与在途的
 `fix/bash-process-group` 零文件重叠，可独立合入）
 参考：实测日志 `~/.imp/logs/*.jsonl`（三次失败 + 八次成功，见 §1）；pi 对照：
@@ -39,6 +40,14 @@
   复用现成语义："off 可用 → off；off 被标为不支持（`levelMap.off === null`，
   如 `thinking.ts:159/:223/:238` 的模型）→ 就近取最低可用档（minimal/low）"。
   不硬写 `off`（对强制推理的模型毫无意义）。
+- **未知模型的语义**（`thinkingMetaFor` 返回 null，含测试 mock）：clamp 恒得 `"off"` →
+  经 `!== "off"` 映射后请求里**不带任何 thinking 字段**——对 provider 是"不干预"
+  （模型默认行为；GLM/deepseek 族默认开思考），不是"关"。如实记录：
+  ① 已知 meta 的模型，阶梯真实生效（`off:null` → 降到最低可用档，如 minimal/low）；
+  ② `meta === null` 时重试只改变请求意图，线路上是"不发 thinking 字段"，效果取决于
+  模型默认值——文档不假装能关（测试 mock 即此类，可用请求里的 thinking 字段断言
+  重试发生）；
+  ③ 强制推理类（`off:null` 且无 effort 可降）可能两跳都失败——由 D3 触发条件兜底。
 - **仅当降档后的有效档严格低于第一次尝试时才重试**（按 `THINKING_LEVELS` 索引比较）。
   会话本身就是 `off`/未启用思考（`args.thinking` 为 undefined）时**不重试**，直接按现行
   语义拒绝——重试不会改变任何输入。
@@ -66,9 +75,11 @@
 | 131k（已知/回退） | 111,411 / 114,688 | 98,304 | 早 12–14% |
 | ≤32k | 16,384 | 27,852 | 改走比例分支 |
 
-- **不需要窗口钳制的证明**：`cap = 0.8×reserve < reserve`，且触发点 ≤ 窗口 − reserve
-  ⇒ `输入 + cap < (窗口 − reserve) + reserve = 窗口`（对自动压缩路径恒成立）。
-  唯二例外（手动在接近满窗口时 /compact、≤55k 窗口模型）记入 D3，不修。
+- **不需要窗口钳制的证明（限定范围）**：在 `source === "fallback"` 与
+  `contextWindow > reserve` 的 `min(...)` 两条分支上 `触发 ≤ 窗口 − reserve`，
+  且 `cap = 0.8×reserve < reserve` ⇒ `输入 + cap < 窗口`。
+  **比例分支（窗口 ≤ reserve，即 ≤32k 窗口）不在该证明范围内**——连同"手动在接近
+  满窗口时 /compact"，一并归入 D3 已知边界，不修。
 
 ### D3 明确不做（各记触发条件）
 
@@ -88,8 +99,13 @@
     `{provider, model, system, userContent, maxTokens, thinking, signal}`，
     返回 `{summary, finalText, usage, stopReason}`（校验逻辑不变：text_delta 累加、
     finalText 兜底、空摘要拒绝）；
-  - 新增 `runSummarizerWithRetry(args)`：attempt 1（原档位）→ 若 max_tokens 且可降档
-    且未 abort → attempt 2（降档、同 cap）→ 返回后跳结果/抛错（D1 文案）；
+  - 新增 `runSummarizerWithRetry(args)`：attempt 1（原档位）→ **先判 abort**：已中止则
+    抛现行 `"summarizer aborted — incomplete, rejected"`（`compaction.ts:531-532`）
+    且不重试；未中止且 max_tokens 且可降档 → attempt 2（降档、同 cap；若 signal 已中止
+    同样抛 aborted 文案）→ 返回后跳结果/抛错（D1 文案）。分支摘要（`:405/:409`）按同一
+    顺序调整。注意这会**调整现行 max_tokens / aborted 两条检查的相对顺序**（`:526` 在
+    `:532` 之前 → 改为 abort 优先）——对既有测试无影响（中止流不产生 message_end，
+    stopReason 为 undefined，两条检查不会同时命中）。
   - 两处调用点改走包装；分支摘要的 `thinking` 来源（runner 传 `this.level`）不变。
 - 不改：provider 层、runner、settings schema、CLI、配置面。
 
@@ -124,4 +140,5 @@
 | `src/core/compaction.ts` | reserve 常量 +1；抽取/包装函数 ~60 行 |
 | `test/compaction.test.ts` | +3 用例、+1 钉子、2 处断言补强 |
 | `test/compaction-wiring.test.ts` | 1 行（触发点期望值） |
+| `docs/compaction-ratio-threshold.md` | 第 21 行 "reserveTokens remains unchanged" 等措辞改为随默认值走（指向本文）；第 9/12 行"16,384-token reserve"字样同步 |
 | `docs/compaction-thinking-retry-design.md` | 本文（新增） |

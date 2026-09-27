@@ -396,12 +396,22 @@ dependency, no builtins; the project directory wins on name collisions:
 name: scout
 description: Explores a codebase to answer research questions
 tools: read, grep, find     # optional subset of the parent pool
-model: glm-5.3              # optional spawn-time override
+model: glm-5.3              # optional: override on the current provider
+                            # (bare id or a same-provider `provider/id` prefix;
+                            #  a cross-provider reference is rejected up front)
 timeout: 300                # optional wall clock, seconds
 ---
 
 You are a code scout. Go broad before deep.
 ```
+
+`model:` overrides which model that agent's children run — on the CURRENT
+provider only: a bare id, or a `provider/id` prefix naming the same
+provider (the prefix is stripped for the request). A reference to a
+different provider is rejected before the child starts, with an error that
+names the workaround; cross-provider children are not supported. Omit the
+field to inherit the session's model; a blank `model:` is a configuration
+error and is rejected the same way (before the child starts).
 
 Registered agents are advertised to the model in the system prompt's
 `<advertised_agents>` block (auto-routing hint); `task(agent: "scout", prompt:

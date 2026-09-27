@@ -393,20 +393,24 @@ class RunnerImpl implements Runner {
 		// keep their hermetic set, extension tools append after the base six. The
 		// default six run under options.cwd — never process.cwd() — so the
 		// runner's cwd is the one contract everywhere (and hermetic cwds stay hermetic).
+		// SA-02 D5: keep the identity of the runner-owned read tool — the
+		// child-scoped pool swap replaces THIS instance (bound to the child's
+		// model) and never a tool that merely shares the name "read".
+		const parentRead = createReadTool({
+			cwd: options.cwd,
+			// M13: the live getter — /model can switch vision off mid-session.
+			modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
+			// M13 batch 2: images.autoResize, snapshotted at tool construction
+			// (pi parity — its read definition captures it the same way);
+			// a settings edit takes effect on the next session.
+			imageProcessing: {
+				autoResize: this.effectiveSettings().images?.autoResize ?? true,
+			},
+		});
 		this.tools = [
 			...(options.tools ?? [
 				createBashTool({ cwd: options.cwd }),
-				// M13: the live getter — /model can switch vision off mid-session.
-				createReadTool({
-					cwd: options.cwd,
-					modelSupportsVision: () => modelSupportsVision(this.providerName, this.model),
-					// M13 batch 2: images.autoResize, snapshotted at tool construction
-					// (pi parity — its read definition captures it the same way);
-					// a settings edit takes effect on the next session.
-					imageProcessing: {
-						autoResize: this.effectiveSettings().images?.autoResize ?? true,
-					},
-				}),
+				parentRead,
 				createEditTool({ cwd: options.cwd }),
 				createWriteTool({ cwd: options.cwd }),
 				createGrepTool({ cwd: options.cwd }),
@@ -453,6 +457,34 @@ class RunnerImpl implements Runner {
 					createFindTool({ cwd }),
 					createLsTool({ cwd }),
 				],
+				// SA-02 D5: the child-bound pool. At the parent cwd: the parent's
+				// live list with ONLY the runner-owned read instance swapped (a
+				// fresh instance whose image gate follows the CHILD's model —
+				// extensions and custom tools ride along by reference). At a
+				// worktree cwd: the seven builtins rebuilt at that path, read
+				// bound to the child (extensions excluded — M6b D5).
+				getToolsForChild: (cwd, binding) => {
+					const readFor = (targetCwd: string) =>
+						createReadTool({
+							cwd: targetCwd,
+							modelSupportsVision: () => modelSupportsVision(binding.providerName, binding.modelId),
+							imageProcessing: {
+								autoResize: this.effectiveSettings().images?.autoResize ?? true,
+							},
+						});
+					if (cwd === (options.cwd ?? process.cwd())) {
+						return this.tools.map((tool) => (tool === parentRead ? readFor(cwd) : tool));
+					}
+					return [
+						createBashTool({ cwd }),
+						readFor(cwd),
+						createEditTool({ cwd }),
+						createWriteTool({ cwd }),
+						createGrepTool({ cwd }),
+						createFindTool({ cwd }),
+						createLsTool({ cwd }),
+					];
+				},
 				// Same registry gate as the main loop, but events are marked
 				// subagent-sourced so "tool_call" handlers can tell children
 				// apart (M6a — closes the M5 design Q3 gap). cwd is the child's

@@ -40,7 +40,10 @@ have the task tool; complete the job yourself.`;
 export interface SubagentOptions {
 	provider: LLMProvider;
 	model: string;
-	/** Provider-qualified metadata reference; does not change wire routing. */
+	/** Canonical `provider/modelId` metadata reference — every metadata lookup
+	 *  (compaction settings, summarizer output cap) uses it; does not change
+	 *  wire routing (SA-02). The task tool always passes it; absent → the wire
+	 *  model is used as the reference (older callers unchanged). */
 	modelReference?: string;
 	/** The parent's assembled system prompt (AGENTS.md + extension contexts ride along). */
 	system: string;
@@ -155,6 +158,24 @@ function historyStats(messages: AgentMessage[]): { turns: number; usage: Usage }
 	return { turns, usage };
 }
 
+/** SA-02 D4: the model-metadata decisions for one child run — both the
+ *  compaction settings and the summarizer output-token cap key off the SAME
+ *  canonical reference, so a bare wire id can never select another family
+ *  (the pre-SA-02 `modelMaxTokensFor(options.model)` defect). Exported for
+ *  direct unit testing of acceptance item 6. */
+export function childModelMetadata(options: Pick<SubagentOptions, "model" | "modelReference" | "settings">): {
+	reference: string;
+	settings: CompactionSettings;
+	modelMaxTokens: number | undefined;
+} {
+	const reference = options.modelReference ?? options.model;
+	return {
+		reference,
+		settings: options.settings ?? compactionSettingsFor(reference),
+		modelMaxTokens: modelMaxTokensFor(reference),
+	};
+}
+
 export async function runSubagent(options: SubagentOptions): Promise<SubagentOutcome> {
 	// #subagent-softlanding rev 4: no implicit clock. `undefined` (the REPL
 	// default) means unlimited — see defaultChildTimeoutMs. The caller resolves
@@ -162,7 +183,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// this module only honors the resolved value.
 	const timeoutMs = options.timeoutMs;
 	const history: AgentMessage[] = [];
-	const settings = options.settings ?? compactionSettingsFor(options.modelReference ?? options.model);
+	// SA-02 D4: settings AND the summarizer output cap come from the SAME
+	// canonical reference — one lookup helper, consumed below.
+	const { settings, modelMaxTokens } = childModelMetadata(options);
 
 	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
 	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.
@@ -229,7 +252,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					model: options.model,
 					signal: child.signal,
 					settings,
-					modelMaxTokens: modelMaxTokensFor(options.model), // #derived-budget
+					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
 				});
 				if (compacted) {
 					history.splice(0, history.length, ...options.session.buildContext().messages);
@@ -245,7 +268,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					model: options.model,
 					signal: child.signal,
 					settings,
-					modelMaxTokens: modelMaxTokensFor(options.model), // #derived-budget
+					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
 				});
 				if (compacted) {
 					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);

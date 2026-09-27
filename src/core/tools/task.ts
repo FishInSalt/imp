@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Type } from "typebox";
-import { parseModelRef } from "../../provider/resolve.js";
+import type { ProviderName } from "../../provider/resolve.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
-import { DEFAULT_COMPACTION_SETTINGS } from "../compaction.js";
+import { resolveChildModel } from "../child-model.js";
 import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import { createChildSession } from "../session/manager.js";
@@ -65,7 +65,9 @@ export interface TaskToolOptions {
 	getProvider: () => LLMProvider;
 	/** Read at spawn: `/model` writes the runner's model mid-session. */
 	getModel: () => string;
-	/** Current canonical provider/model reference for metadata, not routing. */
+	/** Current canonical provider/model reference; family-exact when supplied
+	 *  (the real runner always wires it). The getModel() fallback is a
+	 *  documented approximation — SA-02 design D1. */
 	getModelReference?: () => string;
 	/** Read at spawn: `/new`/`/resume` re-assemble the system prompt. */
 	getSystem: () => string;
@@ -106,6 +108,15 @@ export interface TaskToolOptions {
 	/** Rebuild the builtin tool pool rooted at another cwd (M6b worktree
 	 * children). Returning undefined falls back to the parent pool minus task. */
 	getToolsForCwd?: (cwd: string) => Tool[] | undefined;
+	/** SA-02: rebuild the child's tool pool bound to the CHILD's model (the
+	 *  read tool's image gate must follow the child, not the parent). At the
+	 *  parent cwd the runner swaps only its own read instance (extensions and
+	 *  custom tools ride along); at a worktree cwd it rebuilds the builtins.
+	 *  Absent → the older wiring keeps its (parent-bound) bindings. */
+	getToolsForChild?: (
+		cwd: string,
+		binding: { providerName: ProviderName; modelId: string },
+	) => Tool[] | undefined;
 	/** Test seam: worktree base dir override (IMP_WORKTREE_DIR in production). */
 	worktreeBaseDir?: string;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
@@ -196,6 +207,18 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				return { output: `unknown agent "${wanted}". ${available}`, isError: true };
 			}
 
+			// SA-02: resolve the child model ONCE, before any side effect — a
+			// rejected configuration must not create a worktree, a child session,
+			// or a provider call. Wire requests use binding.wireModelId; every
+			// metadata lookup uses binding.reference.
+			const resolution = resolveChildModel({
+				parentReference: options.getModelReference?.() ?? options.getModel(),
+				override: agent?.model,
+				agentName: agent?.name,
+			});
+			if (!resolution.ok) return { output: resolution.error, isError: true };
+			const binding = resolution.binding;
+
 			// Tools narrowing first (review B1): it can only reject, never touch
 			// the filesystem — running it before worktree creation means no
 			// teaching error can leak a created worktree.
@@ -249,7 +272,11 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				// rooted at the PARENT cwd — silently violating the isolation
 				// this feature exists to provide. A missing function AND an
 				// undefined return both fail loudly (review nit 3).
-				const rebuilt = options.getToolsForCwd?.(agentCwd);
+				const rebuilt =
+					options.getToolsForChild?.(agentCwd, {
+						providerName: binding.providerName,
+						modelId: binding.wireModelId,
+					}) ?? options.getToolsForCwd?.(agentCwd);
 				if (rebuilt === undefined) {
 					// SA-01: the fresh worktree is rolled back only when it is
 					// positively clean; a failed check or a failed removal is
@@ -269,7 +296,16 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				}
 				tools = narrowed;
 			} else {
-				const narrowed = validateSubset(parentPool);
+				// SA-02: prefer the child-bound pool; fall back to the parent pool
+				// (custom wirings that predate the seam keep their bindings).
+				const childPool =
+					options
+						.getToolsForChild?.(childCwd, {
+							providerName: binding.providerName,
+							modelId: binding.wireModelId,
+						})
+						?.filter((tool) => tool.name !== "task") ?? parentPool;
+				const narrowed = validateSubset(childPool);
 				if ("isError" in narrowed) return narrowed;
 				tools = narrowed;
 			}
@@ -277,26 +313,6 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// frontmatter > mode default (TTY: undefined = unlimited).
 			const effectiveTimeout =
 				(args.timeoutMs as number | undefined) ?? agent?.timeoutMs ?? timeoutMs ?? defaultChildTimeoutMs();
-
-			const parentModel = options.getModel();
-			const parentReference = options.getModelReference?.() ?? parentModel;
-			const slash = parentReference.indexOf("/");
-			const parentProvider = slash > 0 ? parentReference.slice(0, slash) : undefined;
-			const model = agent?.model ?? parentModel;
-			const parsedOverride = parseModelRef(model);
-			// Only recognized provider prefixes are explicit; bare IDs may contain slashes.
-			const overrideSlash = model.trim().indexOf("/");
-			const explicitProvider =
-				agent?.model !== undefined &&
-				overrideSlash > 0 &&
-				parsedOverride.modelId === model.trim().slice(overrideSlash + 1);
-			const crossProvider =
-				explicitProvider && (parentProvider === undefined || parsedOverride.provider !== parentProvider);
-			const modelReference = agent?.model
-				? explicitProvider || parentProvider === undefined
-					? model
-					: `${parentProvider}/${model}`
-				: parentReference;
 
 			let session: SessionStore | null = null;
 			let outcome: SubagentOutcome;
@@ -308,10 +324,8 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				outcome = await runSubagent({
 					autoCompact: options.getAutoCompact?.(),
 					provider: options.getProvider(),
-					model,
-					modelReference,
-					// Profiles do not route providers. Never use another provider's window.
-					settings: crossProvider ? DEFAULT_COMPACTION_SETTINGS : undefined,
+					model: binding.wireModelId,
+					modelReference: binding.reference,
 					system: options.getSystem(),
 					extraSystem: agent?.system,
 					tools,

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -600,5 +601,177 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 		});
 		await expect(runner.runTurn({ userMessage: "go" })).rejects.toThrow("provider exploded");
 		expect(events).toEqual(["run_start"]);
+	});
+});
+
+describe("child model vision binding (SA-02)", () => {
+	const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	/** Real, photon-decodable PNG (pattern from test/images.test.ts): the read
+	 *  must SUCCEED — a synthetic header would only exercise the refusal path. */
+	function realPng(width = 4, height = 4): Buffer {
+		const zlib = require("node:zlib") as typeof import("node:zlib");
+		const crcTable: number[] = [];
+		for (let n = 0; n < 256; n++) {
+			let c = n;
+			for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+			crcTable[n] = c >>> 0;
+		}
+		const crc32 = (buf: Buffer): number => {
+			let c = 0xffffffff;
+			for (const byte of buf) c = crcTable[(c ^ byte) & 0xff]! ^ (c >>> 8);
+			return (c ^ 0xffffffff) >>> 0;
+		};
+		const chunk = (type: string, data: Buffer): Buffer => {
+			const len = Buffer.alloc(4);
+			len.writeUInt32BE(data.length);
+			const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+			const crc = Buffer.alloc(4);
+			crc.writeUInt32BE(crc32(body));
+			return Buffer.concat([len, body, crc]);
+		};
+		const ihdr = Buffer.alloc(13);
+		ihdr.writeUInt32BE(width, 0);
+		ihdr.writeUInt32BE(height, 4);
+		ihdr[8] = 8; // bit depth
+		ihdr[9] = 6; // RGBA
+		const raw = Buffer.concat(
+			Array.from({ length: height }, (_, y) =>
+				Buffer.concat([
+					Buffer.from([0]), // filter: none
+					Buffer.concat(
+						Array.from({ length: width }, (_, x) => Buffer.from([(x * 40) % 256, (y * 40) % 256, 128, 255])),
+					),
+				]),
+			),
+		);
+		return Buffer.concat([
+			PNG_SIG,
+			chunk("IHDR", ihdr),
+			chunk("IDAT", zlib.deflateSync(raw)),
+			chunk("IEND", Buffer.alloc(0)),
+		]);
+	}
+
+	/** Runs one task dispatch through the REAL runner wiring and returns the
+	 *  child's read tool-result — asserting the result EXISTS and the read
+	 *  SUCCEEDED, so an empty string can never satisfy a "not contains" claim. */
+	async function childReadResult(args: {
+		parentModel: string;
+		childModel: string;
+		worktree: boolean;
+	}): Promise<{ text: string; hasImage: boolean }> {
+		const { baseDir, cwd } = await setup();
+		await mkdir(cwd, { recursive: true });
+		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(baseDir, "agents-home", ".imp", "agents", "visionless.md"),
+			`---\nname: visionless\ndescription: test visionless\nmodel: ${args.childModel}\n---\nbody\n`,
+			"utf-8",
+		);
+		await writeFile(path.join(cwd, "img.png"), realPng());
+		if (args.worktree) {
+			const rgit = (a: string[]) => {
+				const r = spawnSync("git", a, { cwd, encoding: "utf8" });
+				if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+			};
+			rgit(["init", "-q", "-b", "main"]);
+			rgit(["config", "user.email", "t@imp.dev"]);
+			rgit(["config", "user.name", "t"]);
+			rgit(["add", "."]);
+			rgit(["commit", "-qm", "seed"]);
+		}
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "t1",
+							name: "task",
+							arguments: {
+								prompt: "look",
+								agent: "visionless",
+								...(args.worktree ? { worktree: true } : {}),
+							},
+						},
+					],
+					"tool_use",
+				),
+				assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "img.png" } }], "tool_use"),
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "parent done" }]),
+			],
+			sink,
+		);
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: args.parentModel,
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			agentsHomeDir: path.join(baseDir, "agents-home"),
+			renderer,
+			provider,
+		});
+		const result = await runner.runTurn({ userMessage: "go" });
+		expect(result.stopReason).toBe("completed");
+		// Request order: parent#1, child#1, child#2 (carries the read result), parent#2.
+		const childSecond = sink[2];
+		const toolMsg = childSecond?.messages.find((m) => m.role === "toolResult");
+		if (toolMsg === undefined || toolMsg.role !== "toolResult") {
+			throw new Error("the child's read produced no tool result — the gate test cannot pass vacuously");
+		}
+		const readResult = toolMsg.results[0];
+		if (readResult === undefined) throw new Error("empty tool result");
+		const blocks = Array.isArray(readResult.content) ? readResult.content : [];
+		const textBlock = blocks.find((b) => b.type === "text");
+		const text = textBlock !== undefined ? String(textBlock.text) : String(readResult.content);
+		return { text, hasImage: blocks.some((b) => b.type === "image") };
+	}
+
+	it("A-vision-shared: the shared-cwd child's read gate follows the CHILD's model", async () => {
+		// RED before SA-02: the gate was bound to the parent's model in both directions.
+		const childCantSee = await childReadResult({
+			parentModel: "zai/glm-5v",
+			childModel: "glm-5.3",
+			worktree: false,
+		});
+		expect(childCantSee.text).toContain("Read image file [image/png]"); // the read SUCCEEDED
+		expect(childCantSee.hasImage).toBe(true); // real image content reached history
+		expect(childCantSee.text).toContain("does not support images");
+
+		const childCanSee = await childReadResult({
+			parentModel: "zai/glm-5.3",
+			childModel: "glm-5v",
+			worktree: false,
+		});
+		expect(childCanSee.text).toContain("Read image file [image/png]");
+		expect(childCanSee.hasImage).toBe(true);
+		expect(childCanSee.text).not.toContain("does not support images");
+	});
+
+	it("A-vision-worktree: the worktree child's rebuilt read gate follows the CHILD's model", async () => {
+		const childCantSee = await childReadResult({
+			parentModel: "zai/glm-5v",
+			childModel: "glm-5.3",
+			worktree: true,
+		});
+		expect(childCantSee.text).toContain("Read image file [image/png]");
+		expect(childCantSee.hasImage).toBe(true);
+		expect(childCantSee.text).toContain("does not support images");
+
+		const childCanSee = await childReadResult({
+			parentModel: "zai/glm-5.3",
+			childModel: "glm-5v",
+			worktree: true,
+		});
+		expect(childCanSee.text).toContain("Read image file [image/png]");
+		expect(childCanSee.hasImage).toBe(true);
+		expect(childCanSee.text).not.toContain("does not support images");
 	});
 });

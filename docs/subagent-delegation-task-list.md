@@ -99,7 +99,9 @@ No automatic merge, patch export, stale-worktree sweeping, sandboxing, or new cl
 
 In `src/core/tools/task.ts`, `agent.model` becomes the raw `model` passed to `runSubagent()`, while `provider` remains `options.getProvider()`. `parseModelRef()` is used for metadata decisions, not actual child provider routing. Even a recognized same-provider prefix can remain in the wire model ID. A cross-provider configuration can be sent to the parent's provider instead of being honored or rejected.
 
-Some model-dependent behavior also remains parent-bound: inspect `src/runner.ts` read-tool construction and `src/core/subagent.ts` compaction/model-limit lookups. Correct routing alone is not enough if tool capability and context-window decisions use a different model.
+The read tool's image-capability check is parent-bound: both the shared-cwd and worktree tool factories in `src/runner.ts` call `modelSupportsVision(this.providerName, this.model)`, using the parent Runner's live model rather than the child's selected model.
+
+Compaction/model-limit lookups in `src/core/subagent.ts` are NOT parent-bound. They already use child parameters: `compactionSettingsFor(options.modelReference ?? options.model)` and `modelMaxTokensFor(options.model)`. The separate issue is inconsistent reference qualification. The latter lookup reparses a potentially bare wire ID through `parseModelRef()`, normally selecting the `anthropic` family (with a `glm-*` exception selecting `zai`), which can differ from the actual child provider. This can affect inherited models as well as explicit overrides. For cross-provider overrides, `task.ts` currently supplies `DEFAULT_COMPACTION_SETTINGS` explicitly; that fallback is not a parent-model lookup either.
 
 ### Proposed minimal contract to confirm in design review
 
@@ -115,7 +117,7 @@ This is a recommended bounded fix, not a decision to build cross-provider delega
 
 `src/core/tools/task.ts`, `src/core/agents/registry.ts`, `src/core/subagent.ts`, `src/runner.ts`, `src/provider/resolve.ts`, `src/provider/compaction-settings.ts`, model metadata helpers and relevant tests. Do not change main-CLI model shorthand semantics as a side effect.
 
-Ensure actual routing, canonical provider/model metadata, model limits, image support, and later pricing agree. Audit both shared-cwd and worktree children. Prefer a targeted capability binding over rebuilding arbitrary extensions or expanding their authority.
+Ensure actual routing, canonical provider/model metadata, model limits, image support, and later pricing agree. Use the resolved canonical provider/model reference for metadata lookups, including compaction context settings and summarizer output-token limits; use the wire model ID with any recognized provider prefix stripped for API requests. Do not describe existing child-parameter lookups as parent-bound or replace them with parent-model lookups. Audit both shared-cwd and worktree children. Prefer a targeted capability binding over rebuilding arbitrary extensions or expanding their authority.
 
 ### Acceptance tests
 
@@ -123,7 +125,8 @@ Ensure actual routing, canonical provider/model metadata, model limits, image su
 - [ ] Bare and explicit same-provider overrides produce the expected wire ID and canonical metadata.
 - [ ] Different-provider and malformed explicit references fail before launch side effects under the minimal contract.
 - [ ] Legitimate slash-containing IDs are not incorrectly rejected or rerouted.
-- [ ] A child model differing from the parent's uses child-appropriate context/output limits and image capability decisions.
+- [ ] A child model differing from the parent's uses its own image-capability decision in both shared-cwd and worktree tools.
+- [ ] Compaction context settings and summarizer output-token limits use the same canonical child provider/model reference, including when a non-Anthropic parent's model is inherited without an override. Bare-ID parsing defaults must not select a different metadata family from the actual provider; cover the `glm-*` exception as well.
 - [ ] Task descriptions, agent configuration documentation, and errors describe the implemented contract rather than promising cross-provider support.
 
 ## SA-03 — Preserve structured task identity and terminal outcomes

@@ -2279,6 +2279,36 @@ describe("task record (SA-03)", () => {
 		expect(sink).toHaveLength(0);
 	});
 
+	it("acceptance P2: a summarizer failure alone never sets writeFailed (only actual writes do)", async () => {
+		const boom = (): never => {
+			throw new Error("summarizer down");
+		};
+		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-sum-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-sum-cwd-"));
+		const parent = createSession(cwd, base);
+		const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "x" } };
+		const { task } = recordHarness({
+			scripts: [
+				assistant([{ type: "text", text: "x".repeat(200_000) }, toolCall], "tool_use", {
+					inputTokens: 500_000,
+					outputTokens: 5,
+				}),
+				boom, // the summarizer call fails — that is NOT a persistence failure
+				assistant([{ type: "text", text: "final answer" }]),
+			],
+			tools: [echo],
+			session: parent,
+			childSessions: true,
+			sessionBaseDir: base,
+			cwd,
+		});
+		const result = await task.execute({ prompt: "go" }, new AbortController().signal);
+		expect(result.taskRecord?.status).toBe("completed");
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		expect(transcript.writeFailed).toBeUndefined();
+	}, 30000);
+
 	it("T21: the loop persists the record with the message and carries it on tool_end", async () => {
 		const { task } = recordHarness({ tools: [echo] });
 		const events: AgentEvent[] = [];

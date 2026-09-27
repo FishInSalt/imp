@@ -10,16 +10,15 @@ import { runRepl } from "../src/repl/repl.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 
 /**
- * Dogfood report 2026-09-27 (verified real): a subagent's bash tool ran a
- * command whose GRANDCHILD kept the stdio pipes open; the first Esc aborted
- * the controllers (the direct child died) but the tool promise never settled
- * (close waits for every pipe holder) — the UI sat on the task row and the
- * first Esc LOOKED dead. The second Esc hit the still-running state with
- * interruptCount=1 → forceExit(130): the whole REPL quit.
+ * Dogfood report 2026-09-27 (verified real, then fixed by #bash-abort): a
+ * subagent's bash tool ran a command whose GRANDCHILD kept the stdio pipes
+ * open; the first Esc LOOKED dead (close-based wait never settled) and the
+ * second Esc force-quit the whole REPL.
  *
- * Pin of the CURRENT behavior (witness, not endorsement): esc1 interrupts,
- * the run stays wedged on the grandchild, esc2 force-exits with 130. When
- * the wedging is fixed, this test should be tightened to the fixed contract.
+ * Post-fix contract: the first Esc interrupts the whole process tree and
+ * settles the run to idle within the deadline; the second Esc is an idle
+ * no-op; quitting takes Ctrl+C x2 and is graceful. Mirrors the clean-abort
+ * case (repro-esc2.test.ts).
  */
 describe("repro: subagent bash hung by a grandchild (esc semantics)", () => {
 	it("esc1 shows the interrupt note while the run is wedged; esc2 force-exits 130", async () => {
@@ -113,29 +112,41 @@ describe("repro: subagent bash hung by a grandchild (esc semantics)", () => {
 			}
 		}
 		expect(hung).toBe(true);
-		// First Esc: the interrupt note appears, but the run stays wedged —
-		// the grandchild holds the pipes, the tool never settles
+		// FIXED CONTRACT (#bash-abort): the first Esc interrupts the whole
+		// tree (group SIGKILL reaches the grandchild; the wait finalizes at
+		// abort) — the run settles to idle WITHIN THE DEADLINE, no force exit.
 		terminal.data("\x1b");
-		let sawNote = false;
-		for (let i = 0; i < 20; i++) {
+		const markAfterEsc1 = terminal.writes.length;
+		let backToIdle = false;
+		for (let i = 0; i < 60; i++) {
 			await sleep(50);
-			if (terminal.frameSince(0).includes("press Ctrl+C again to force quit")) {
-				sawNote = true;
+			// The esc-hint row only renders while active: its reappearance in
+			// INCREMENTAL frames after the interrupt = the run settled to idle.
+			if (!terminal.frameSince(markAfterEsc1).includes("(esc to interrupt")) {
+				backToIdle = true;
 				break;
 			}
 		}
-		expect(sawNote).toBe(true);
-		expect(exitCodes).toEqual([]); // nothing exited yet
-		// Second Esc while the run is still wedged: force exit 130 (current
-		// behavior — the "whole REPL quits" dogfood report)
-		let threw: string | null = null;
-		try {
-			terminal.data("\x1b");
-			await settle(300);
-		} catch (err) {
-			threw = String(err);
+		expect(backToIdle).toBe(true);
+		expect(exitCodes).toEqual([]); // the FIRST Esc settled it — no force exit
+		// Second Esc in idle: an editing no-op, never an exit (parity with the
+		// clean-abort case — repro-esc2.test.ts)
+		terminal.data("\x1b");
+		await sleep(300);
+		expect(exitCodes).toEqual([]);
+		// Quitting takes the real gesture: Ctrl+C twice — GRACEFUL (bye
+		// note), never the force path
+		terminal.data("\x03");
+		await sleep(150);
+		terminal.data("\x03");
+		let sawBye = false;
+		for (let i = 0; i < 30; i++) {
+			await sleep(50);
+			if (terminal.frameSince(0).match(/▪ (bye|session)/) !== null) {
+				sawBye = true;
+				break;
+			}
 		}
-		expect(exitCodes).toEqual([130]);
-		if (threw !== null) expect(threw).toContain("force-exit:130");
+		expect(sawBye).toBe(true);
 	}, 30000);
 });

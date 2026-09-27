@@ -19,10 +19,19 @@ vi.mock("node:fs/promises", () => ({
 import { createBashTool } from "../src/core/tools/bash.js";
 import { createLsTool } from "../src/core/tools/ls.js";
 
+class FakeStream extends EventEmitter {
+	destroy = vi.fn(() => {
+		this.emit("close");
+	});
+}
 class Child extends EventEmitter {
-	stdout = new EventEmitter();
-	stderr = new EventEmitter();
+	stdout = new FakeStream();
+	stderr = new FakeStream();
 	kill = vi.fn();
+	// #bash-abort: the real tool now spawns detached and tracks the pid —
+	// a stable fake pid keeps the tracked-set bookkeeping symmetrical
+	// (track + untrack), never reaching a real kill (kill is mocked).
+	pid = 424242;
 }
 let child: Child;
 const signal = new AbortController().signal;
@@ -43,8 +52,8 @@ it.each(["create", "write", "close"])("does not promise an artifact when %s fail
 	if (failure === "close") close.mockRejectedValueOnce(new Error("fixture"));
 	const pending = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", Buffer.alloc(51201, 120));
-	child.emit("close", 0, null);
-	child.emit("close", 0, null);
+	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
+	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
 	const result = await pending;
 	expect(result.output).toContain("saving the output artifact failed");
 	expect(result.output).not.toContain("output saved to");
@@ -76,12 +85,12 @@ it("writes concurrent unique artifacts sequentially with raw prefix segments", a
 	const bytes = Buffer.alloc(51201, 255);
 	const first = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", bytes);
-	child.emit("close", 0, null);
+	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
 	child = new Child();
 	mocks.spawn.mockReturnValue(child);
 	const second = createBashTool().execute({ command: "fixture" }, signal);
 	child.stdout.emit("data", bytes);
-	child.emit("close", 0, null);
+	child.emit("exit", 0, null); child.emit("close", 0, null); child.stdout.emit("end"); child.stderr.emit("end");
 	const results = await Promise.all([first, second]);
 	expect(mocks.open.mock.calls[0]![0]).not.toBe(mocks.open.mock.calls[1]![0]);
 	for (let i = 0; i < 2; i++) {

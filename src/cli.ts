@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
+import { killTrackedDetachedChildren } from "./core/process-tree.js";
 import { listSessions } from "./core/session/manager.js";
 import { effectiveSettings, loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
@@ -379,6 +380,16 @@ function printSessionList(): void {
 }
 
 async function main(): Promise<void> {
+	// #bash-abort D3: safety net for the natural-drain exit paths
+	// (process.exitCode). Explicit process.exit sites sweep themselves —
+	// beforeExit does NOT fire there (design rev3.1, round-2 review F1).
+	process.once("beforeExit", () => killTrackedDetachedChildren());
+	for (const sig of ["SIGTERM", "SIGHUP"] as const) {
+		process.once(sig, () => {
+			killTrackedDetachedChildren();
+			process.exit(0);
+		});
+	}
 	await loadDotEnv(); // loads .env from the imp installation root; real env wins
 	// M14 (#model-catalog): the pi.dev disk cache loads BEFORE any model
 	// resolution (the Runner constructor reads contextWindowFor) and after
@@ -856,6 +867,10 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		} else {
 			// Keep the session resumable: close any dangling tool_use before dying.
 			runner.persistMissingToolResults("(force quit before this tool ran)");
+			// #bash-abort D3: explicit sweep BEFORE process.exit — beforeExit
+			// does not fire on explicit exit (round-2 review F1); a tracked
+			// detached bash group would otherwise outlive us.
+			killTrackedDetachedChildren();
 			process.exit(130);
 		}
 	};

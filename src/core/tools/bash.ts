@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { MAX_BYTES } from "../constants.js";
+import { killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../process-tree.js";
+import { waitForChildProcess } from "../wait-child.js";
 import { logicalLines, tailStart } from "./output-text.js";
 import { bashPresentation } from "./presentation.js";
 import type { Tool, ToolExecuteResult } from "./types.js";
@@ -12,7 +14,6 @@ import type { Tool, ToolExecuteResult } from "./types.js";
 const MAX_LINES = 500;
 const TAIL_KEEP_BYTES = 262144;
 const FULL_KEEP_BYTES = 10485760;
-const KILL_GRACE_MS = 2000;
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(
@@ -103,20 +104,35 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 			if (signal.aborted)
 				return { output: "Error: command aborted by user. Partial output:\n(no output)", isError: true };
 			return new Promise((resolve) => {
-				const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, IMP: "1" } });
+				// #bash-abort: detached → its own process group (POSIX), so the
+				// whole tree (wrapper grandchildren included) dies on one
+				// kill(-pid). Track it until settle — gracefulExit/forceExit/
+				// print-mode teardown sweep live groups (design D1/D3).
+				const child = spawn("/bin/bash", ["-c", command], {
+					cwd,
+					env: { ...process.env, IMP: "1" },
+					detached: process.platform !== "win32",
+				});
+				if (child.pid !== undefined) trackDetachedChildPid(child.pid);
 				const stdout = new StreamState(),
 					stderr = new StreamState();
 				let timedOut = false,
 					aborted = false,
 					settled = false,
 					stopping = false;
-				let escalation: ReturnType<typeof setTimeout> | undefined;
 				const stop = () => {
 					if (settled || stopping) return;
 					stopping = true;
-					child.kill("SIGTERM");
-					escalation = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
-					escalation.unref();
+					// A failed spawn has NO pid (undefined) — the pending "error"
+					// event settles the tool. NEVER call killProcessTree without a
+					// real pid: a sentinel like -1 reaches kill(-1) = POSIX BROADCAST
+					// (the 2026-09-27 incident — every user process SIGKILLed).
+					if (child.pid === undefined) return;
+					// Design D1/R5: untrack BEFORE killing — a tracked-set sweep at
+					// exit time would double-kill (harmless) or, after pid reuse,
+					// kill an unrelated group (harmful). Our own tree, our own kill.
+					untrackDetachedChildPid(child.pid);
+					killProcessTree(child.pid);
 				};
 				const timer =
 					timeoutSec === undefined
@@ -134,8 +150,8 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 					if (settled) return false;
 					settled = true;
 					clearTimeout(timer);
-					clearTimeout(escalation);
 					signal.removeEventListener("abort", onAbort);
+					if (child.pid !== undefined) untrackDetachedChildPid(child.pid);
 					return true;
 				};
 				child.stdout.on("data", (chunk: Buffer) => {
@@ -147,14 +163,17 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 				child.on("error", (err) => {
 					if (settle()) resolve({ output: `Error: failed to spawn command: ${err.message}`, isError: true });
 				});
-				child.on("close", async (code, closeSignal) => {
+				// #bash-abort D2: exit + stdio-idle wait (never `close` — a
+				// grandchild holding the pipes wedges it forever). The abort
+				// signal finalizes the wait immediately, exit event or not.
+				void waitForChildProcess(child, { killSignal: signal }).then(async ({ code, signal: exitSignal }) => {
 					if (!settle()) return;
 					const error = timedOut
 						? `command timed out after ${timeoutSec}s and was killed`
 						: aborted
 							? "command aborted by user"
-							: closeSignal
-								? `command terminated by signal ${closeSignal}`
+							: exitSignal
+								? `command terminated by signal ${exitSignal}`
 								: code === null
 									? "command ended without an exit status"
 									: undefined;

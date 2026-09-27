@@ -45,6 +45,22 @@ export interface ModelRef {
 	modelId: string;
 }
 
+/** The known family for an exact provider prefix, or undefined. Lowercase
+ *  matching only — NO trimming: `parseModelRef`'s treatment of a padded
+ *  prefix ("zai /x" → unknown-prefix fallback) is pinned CLI behavior.
+ *  Child-contract callers trim before calling (SA-02 design D2). */
+export function knownProvider(prefix: string): ProviderName | undefined {
+	const name = prefix.toLowerCase();
+	if (name === "anthropic") return "anthropic";
+	if (name === "openai") return "openai";
+	if (name === "openai-codex") return "openai-codex";
+	if (name === "zai") return "zai";
+	if (name === "deepseek") return "deepseek";
+	if (name === "moonshotai") return "moonshotai";
+	if (name === "moonshotai-cn") return "moonshotai-cn";
+	return undefined;
+}
+
 export function parseModelRef(reference: string): ModelRef {
 	// Trim + case-insensitive prefix matching (review P2-6): "OpenAI/gpt-5.2"
 	// or " openai/gpt-5.2" used to fall through to a bare anthropic id and
@@ -64,16 +80,10 @@ export function parseModelRef(reference: string): ModelRef {
 		}
 		return { provider: "anthropic", modelId: trimmed };
 	}
-	const provider = trimmed.slice(0, slash).toLowerCase();
 	const modelId = trimmed.slice(slash + 1);
 	if (modelId === "") return { provider: "anthropic", modelId: trimmed };
-	if (provider === "anthropic") return { provider: "anthropic", modelId };
-	if (provider === "openai") return { provider: "openai", modelId };
-	if (provider === "openai-codex") return { provider: "openai-codex", modelId };
-	if (provider === "zai") return { provider: "zai", modelId };
-	if (provider === "deepseek") return { provider: "deepseek", modelId };
-	if (provider === "moonshotai") return { provider: "moonshotai", modelId };
-	if (provider === "moonshotai-cn") return { provider: "moonshotai-cn", modelId };
+	const provider = knownProvider(trimmed.slice(0, slash));
+	if (provider !== undefined) return { provider, modelId };
 	// Unknown prefix (e.g. a model id that legitimately contains a slash,
 	// like some OpenRouter or Bedrock ids): treat the whole string as a bare
 	// anthropic id — same behavior as before this module existed.

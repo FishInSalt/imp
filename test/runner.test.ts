@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -600,5 +601,126 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 		});
 		await expect(runner.runTurn({ userMessage: "go" })).rejects.toThrow("provider exploded");
 		expect(events).toEqual(["run_start"]);
+	});
+});
+
+describe("child model vision binding (SA-02)", () => {
+	const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	/** Synthetic PNG header — enough for the read tool's magic-byte gate; the
+	 *  processor may refuse it, and the refusal path carries the same note. */
+	function pngBytes(): Buffer {
+		const buf = Buffer.alloc(64);
+		PNG_SIG.copy(buf, 0);
+		buf.writeUInt32BE(13, 8);
+		buf.write("IHDR", 12, "ascii");
+		buf.writeUInt32BE(2, 33);
+		buf.write("IDAT", 37, "ascii");
+		return buf;
+	}
+
+	/** Runs one task dispatch through the REAL runner wiring and returns the
+	 *  child's read tool-result text (the vision gate's observable). */
+	async function childReadText(args: {
+		parentModel: string;
+		childModel: string;
+		worktree: boolean;
+	}): Promise<string> {
+		const { baseDir, cwd } = await setup();
+		await mkdir(cwd, { recursive: true });
+		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(baseDir, "agents-home", ".imp", "agents", "visionless.md"),
+			`---\nname: visionless\ndescription: test visionless\nmodel: ${args.childModel}\n---\nbody\n`,
+			"utf-8",
+		);
+		await writeFile(path.join(cwd, "img.png"), pngBytes());
+		if (args.worktree) {
+			const rgit = (a: string[]) => {
+				const r = spawnSync("git", a, { cwd, encoding: "utf8" });
+				if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+			};
+			rgit(["init", "-q", "-b", "main"]);
+			rgit(["config", "user.email", "t@imp.dev"]);
+			rgit(["config", "user.name", "t"]);
+			rgit(["add", "."]);
+			rgit(["commit", "-qm", "seed"]);
+		}
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "t1",
+							name: "task",
+							arguments: {
+								prompt: "look",
+								agent: "visionless",
+								...(args.worktree ? { worktree: true } : {}),
+							},
+						},
+					],
+					"tool_use",
+				),
+				assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "img.png" } }], "tool_use"),
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "parent done" }]),
+			],
+			sink,
+		);
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: args.parentModel,
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: true,
+			sessionBaseDir: baseDir,
+			agentsHomeDir: path.join(baseDir, "agents-home"),
+			renderer,
+			provider,
+		});
+		const result = await runner.runTurn({ userMessage: "go" });
+		expect(result.stopReason).toBe("completed");
+		// Request order: parent#1, child#1, child#2 (carries the read result), parent#2.
+		const childSecond = sink[2];
+		const toolMsg = childSecond?.messages.find((m) => m.role === "toolResult");
+		return toolMsg !== undefined && toolMsg.role === "toolResult"
+			? String(toolMsg.results[0]?.content ?? "")
+			: "";
+	}
+
+	it("A-vision-shared: the shared-cwd child's read gate follows the CHILD's model", async () => {
+		// RED before SA-02: the gate was bound to the parent's model in both directions.
+		const childCantSee = await childReadText({
+			parentModel: "zai/glm-5v",
+			childModel: "glm-5.3",
+			worktree: false,
+		});
+		expect(childCantSee).toContain("does not support images");
+		const childCanSee = await childReadText({
+			parentModel: "zai/glm-5.3",
+			childModel: "glm-5v",
+			worktree: false,
+		});
+		expect(childCanSee).not.toContain("does not support images");
+	});
+
+	it("A-vision-worktree: the worktree child's rebuilt read gate follows the CHILD's model", async () => {
+		const childCantSee = await childReadText({
+			parentModel: "zai/glm-5v",
+			childModel: "glm-5.3",
+			worktree: true,
+		});
+		expect(childCantSee).toContain("does not support images");
+		const childCanSee = await childReadText({
+			parentModel: "zai/glm-5.3",
+			childModel: "glm-5v",
+			worktree: true,
+		});
+		expect(childCanSee).not.toContain("does not support images");
 	});
 });

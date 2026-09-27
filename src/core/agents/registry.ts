@@ -16,7 +16,10 @@ import { escapeXml } from "../skills.js";
  *   name: scout
  *   description: Explores a codebase to answer research questions
  *   tools: read, grep, find        # optional: subset of the parent pool
- *   model: glm-5.3                 # optional: spawn-time override
+ *   model: glm-5.3                 # optional: override on the CURRENT provider
+ *                                  # (bare id or provider/id with the same
+ *                                  #  provider; cross-provider is rejected at
+ *                                  #  dispatch — SA-02 contract)
  *   timeout: 300                   # optional: seconds, wall clock
  *   worktree: true                 # optional: isolated git worktree (M6b)
  *   ---
@@ -31,7 +34,10 @@ export interface AgentDefinition {
 	description: string;
 	/** Optional subset of the parent tool pool (names). */
 	tools?: string[];
-	/** Optional model override, read at spawn. */
+	/** Optional model override on the CURRENT provider (bare id, or
+	 *  provider/id naming the same provider). A recognized cross-provider
+	 *  prefix is rejected before the child starts (SA-02 contract). Read at
+	 *  spawn. */
 	model?: string;
 	/** Run this agent's tasks in an isolated git worktree (M6b). */
 	worktree?: boolean;

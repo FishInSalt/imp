@@ -125,33 +125,60 @@ describe("child model-aware compaction wiring", () => {
 	});
 
 	it.each([
-		["anthropic/shared", undefined, false],
-		["zai/shared", undefined, true],
-		["anthropic/shared", "small", true],
-		["openai/shared", "vendor/small", true],
-		["anthropic/shared", "anthropic/small", true],
-		["anthropic/shared", "zai/shared", false],
-		[undefined, "anthropic/small", false],
-		[undefined, "small", true],
-	] as const)("task reference %s override %s compacts=%s", async (reference, override, compacts) => {
+		// [parent reference, agent override, compacts, expected wire model]
+		["anthropic/shared", undefined, false, "shared"],
+		["zai/shared", undefined, true, "shared"],
+		["anthropic/shared", "small", true, "small"],
+		["openai/shared", "vendor/small", true, "vendor/small"],
+		// SA-02 C3: the same-provider prefix is stripped for the request.
+		["anthropic/shared", "anthropic/small", true, "small"],
+		// SA-02 D1 fallback: parent derived from "shared" = anthropic/shared,
+		// so the override is same-provider (C3) — wire "small" and the settings
+		// come from the canonical anthropic/small window (100k → compacts).
+		[undefined, "anthropic/small", true, "small"],
+		[undefined, "small", true, "small"],
+	] as const)(
+		"task reference %s override %s compacts=%s wire=%s",
+		async (reference, override, compacts, wire) => {
+			const { createTaskTool } = await import("../src/core/tools/task.js");
+			const requests: LLMRequest[] = [];
+			const tool = createTaskTool({
+				getProvider: () => scriptedProvider(childScript(compacts), requests),
+				getModel: () => "shared",
+				getModelReference: reference ? () => reference : undefined,
+				getSystem: () => "test",
+				getTools: () => [echo],
+				getSession: () => null,
+				getAutoCompact: () => true,
+				childSessions: false,
+				agents: [{ name: "worker", description: "test", system: "", source: "test", model: override }],
+			});
+			const result = await tool.execute({ prompt: "go", agent: "worker" }, new AbortController().signal);
+			expect(result.isError).toBe(false);
+			expect(result.output).toContain("FINAL");
+			expect(requests).toHaveLength(compacts ? 3 : 2);
+			expect(requests.every((r) => r.model === wire)).toBe(true);
+		},
+	);
+
+	it("SA-02 C4: a cross-provider override is rejected before launch — zero provider calls", async () => {
 		const { createTaskTool } = await import("../src/core/tools/task.js");
 		const requests: LLMRequest[] = [];
 		const tool = createTaskTool({
-			getProvider: () => scriptedProvider(childScript(compacts), requests),
+			getProvider: () => scriptedProvider(childScript(false), requests),
 			getModel: () => "shared",
-			getModelReference: reference ? () => reference : undefined,
+			getModelReference: () => "anthropic/shared",
 			getSystem: () => "test",
 			getTools: () => [echo],
 			getSession: () => null,
 			getAutoCompact: () => true,
 			childSessions: false,
-			agents: [{ name: "worker", description: "test", system: "", source: "test", model: override }],
+			agents: [{ name: "worker", description: "test", system: "", source: "test", model: "zai/shared" }],
 		});
 		const result = await tool.execute({ prompt: "go", agent: "worker" }, new AbortController().signal);
-		expect(result.isError).toBe(false);
-		expect(result.output).toContain("FINAL");
-		expect(requests).toHaveLength(compacts ? 3 : 2);
-		expect(requests.every((r) => r.model === (override ?? "shared"))).toBe(true);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("Cross-provider subagents are not supported");
+		expect(requests).toHaveLength(0);
 	});
 });
 

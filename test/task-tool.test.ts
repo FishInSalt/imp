@@ -1678,3 +1678,170 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		expect(listed.stdout).toContain("imp-worktree-");
 	});
 });
+
+describe("task model binding (SA-02)", () => {
+	const scoutWith = (model: string): unknown[] => [
+		{ name: "scout", description: "test", system: "", source: "test", model },
+	];
+
+	/** Harness: records provider requests and the child tool-pool binding that
+	 *  the task tool passes to getToolsForChild (SA-02 D5). */
+	function modelTask(args: {
+		parentReference?: () => string;
+		parentWire?: () => string;
+		agents?: unknown[];
+		overrides?: Record<string, unknown>;
+	}) {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[assistant([{ type: "text", text: "child done" }]), assistant([{ type: "text", text: "child done" }])],
+			sink,
+		);
+		const bindings: Array<{ cwd: string; providerName: string; modelId: string }> = [];
+		const task = createTaskTool({
+			getProvider: () => provider,
+			getModel: args.parentWire ?? (() => "parent-wire"),
+			getModelReference: args.parentReference,
+			getSystem: () => "PARENT",
+			getTools: () => [echo],
+			getSession: () => null,
+			childSessions: false,
+			agents: (args.agents ?? []) as never,
+			getToolsForChild: (cwd, binding) => {
+				bindings.push({ cwd, providerName: binding.providerName, modelId: binding.modelId });
+				return [echo];
+			},
+			...args.overrides,
+		});
+		return { task, sink, bindings };
+	}
+
+	it("A-wire: an explicit same-provider prefix is stripped for the request; the binding is canonical", async () => {
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => "openai/gpt-5.2",
+			agents: scoutWith("openai/gpt-5.4"),
+		});
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(result.isError).toBe(false);
+		// RED before SA-02: the raw string "openai/gpt-5.4" reached the API.
+		expect(sink[0]?.model).toBe("gpt-5.4");
+		expect(bindings[0]).toMatchObject({ providerName: "openai", modelId: "gpt-5.4" });
+	});
+
+	it("A-wire: a bare override runs on the parent's provider — no CLI default routing", async () => {
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => "anthropic/claude-x",
+			agents: scoutWith("glm-5.3"),
+		});
+		expect((await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal)).isError).toBe(
+			false,
+		);
+		expect(sink[0]?.model).toBe("glm-5.3");
+		expect(bindings[0]).toMatchObject({ providerName: "anthropic", modelId: "glm-5.3" });
+	});
+
+	it("A-inherit-live: the child follows a parent model/provider change made before dispatch", async () => {
+		let reference = "anthropic/claude-a";
+		let wire = "claude-a";
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => reference,
+			parentWire: () => wire,
+		});
+		expect((await task.execute({ prompt: "go" }, new AbortController().signal)).isError).toBe(false);
+		expect(sink[0]?.model).toBe("claude-a");
+		reference = "zai/glm-5.3";
+		wire = "glm-5.3";
+		expect((await task.execute({ prompt: "go" }, new AbortController().signal)).isError).toBe(false);
+		expect(sink[1]?.model).toBe("glm-5.3");
+		expect(bindings[1]).toMatchObject({ providerName: "zai", modelId: "glm-5.3" });
+	});
+
+	it("A-reject-cross: a different-provider override fails before any launch side effect", async () => {
+		// The cwd is not a git repo and worktree:true is requested — the model
+		// error must win over any worktree/repo error, proving resolution runs first.
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => "anthropic/claude-x",
+			agents: scoutWith("zai/glm-5.3"),
+			overrides: { cwd: await mkdtemp(path.join(tmpdir(), "imp-sa02-no-repo-")) },
+		});
+		const result = await task.execute(
+			{ prompt: "go", agent: "scout", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain('"zai"');
+		expect(result.output).toContain('"anthropic"');
+		expect(result.output).toContain("Cross-provider subagents are not supported");
+		expect(sink).toHaveLength(0);
+		expect(bindings).toHaveLength(0);
+	});
+
+	it("A-reject-malformed: empty and known-prefix-without-id overrides fail before launch", async () => {
+		for (const model of ["", "   ", "zai/"]) {
+			const { task, sink, bindings } = modelTask({
+				parentReference: () => "anthropic/claude-x",
+				agents: scoutWith(model),
+			});
+			const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+			expect(result.isError).toBe(true);
+			expect(result.output).toContain('agent "scout"');
+			expect(sink).toHaveLength(0);
+			expect(bindings).toHaveLength(0);
+		}
+	});
+
+	it("A-slash: slash-containing wire ids are not rejected or rerouted", async () => {
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => "anthropic/claude-x",
+			agents: scoutWith("vendor/models/x"),
+		});
+		expect((await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal)).isError).toBe(
+			false,
+		);
+		expect(sink[0]?.model).toBe("vendor/models/x");
+		expect(bindings[0]).toMatchObject({ providerName: "anthropic", modelId: "vendor/models/x" });
+	});
+
+	it("A-vision-wiring: getToolsForChild receives the canonical child binding at the right cwd", async () => {
+		// Shared cwd: the seam is called with the parent cwd.
+		const parentCwd = await mkdtemp(path.join(tmpdir(), "imp-sa02-shared-"));
+		const shared = modelTask({
+			parentReference: () => "zai/glm-5v",
+			agents: scoutWith("glm-5.3"),
+			overrides: { cwd: parentCwd },
+		});
+		expect(
+			(await shared.task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal)).isError,
+		).toBe(false);
+		expect(shared.bindings).toEqual([{ cwd: parentCwd, providerName: "zai", modelId: "glm-5.3" }]);
+
+		// Worktree cwd: the seam is called with the worktree path (real git fixture).
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa02-wt-"));
+		const rgit = (a: string[]) => {
+			const r = spawnSync("git", a, { cwd: root, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+		};
+		rgit(["init", "-q", "-b", "main"]);
+		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.name", "t"]);
+		writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
+		rgit(["add", "."]);
+		rgit(["commit", "-qm", "seed"]);
+		const wt = modelTask({
+			parentReference: () => "zai/glm-5v",
+			agents: scoutWith("glm-5.3"),
+			overrides: {
+				cwd: root,
+				worktreeBaseDir: path.join(tmpdir(), `imp-sa02-wt-base-${Date.now()}`),
+			},
+		});
+		const wtResult = await wt.task.execute(
+			{ prompt: "go", agent: "scout", worktree: true },
+			new AbortController().signal,
+		);
+		expect(wtResult.isError).toBe(false);
+		expect(wt.bindings).toHaveLength(1);
+		expect(wt.bindings[0]?.cwd).not.toBe(root);
+		expect(wt.bindings[0]).toMatchObject({ providerName: "zai", modelId: "glm-5.3" });
+	});
+});

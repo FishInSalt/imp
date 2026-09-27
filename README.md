@@ -409,7 +409,9 @@ You are a code scout. Go broad before deep.
 provider only: a bare id, or a `provider/id` prefix naming the same
 provider (the prefix is stripped for the request). A reference to a
 different provider is rejected before the child starts, with an error that
-names the workaround; cross-provider children are not supported.
+names the workaround; cross-provider children are not supported. Omit the
+field to inherit the session's model; a blank `model:` is a configuration
+error and is rejected the same way (before the child starts).
 
 Registered agents are advertised to the model in the system prompt's
 `<advertised_agents>` block (auto-routing hint); `task(agent: "scout", prompt:

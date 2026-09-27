@@ -819,6 +819,20 @@ class ReplMachine {
 		this.refreshFooter();
 	}
 
+	/** Ctrl+L — pi's app.model.select: open the /model picker through the
+	 *  same command path as typing "/model" (list built from the configured
+	 *  endpoints; a pick switches, applies from the next turn; allowed
+	 *  mid-run). Held-key repeats are swallowed while the previous pick is
+	 *  in flight — select() QUEUES a second callee (M10 reentrancy contract),
+	 *  which would pop a stray second picker when the first resolves. */
+	selectModel(): void {
+		if (this.modelSelectPending) return;
+		this.modelSelectPending = true;
+		void this.runCommand("/model", "model").finally(() => {
+			this.modelSelectPending = false;
+		});
+	}
+
 	private refreshFooter(): void {
 		// modelReference() is the CONNECTION TELL (#zai-default): zai/glm-5.3
 		// vs a bare glm-5.3 distinguishes the coding endpoint from compat.
@@ -1183,6 +1197,9 @@ class ReplMachine {
 	 *  refuse, the widened isActive() refuses allowedDuringRun:false
 	 *  commands; the opening dispatch itself is exempt (authorizedDialog). */
 	private dialogOpen = false;
+	/** Ctrl+L re-entrancy latch (see selectModel): true while the picker the
+	 *  key opened is still in flight. */
+	private modelSelectPending = false;
 
 	private pushActivity(): void {
 		if (this.input.setActivity === undefined) return;
@@ -1492,6 +1509,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					onDequeue: () => machine.handleDequeue(),
 					onCycleThinking: () => machine.cycleThinking(),
 					onToggleThinking: () => machine.toggleThinkingVisibility(),
+					onModelSelect: () => machine.selectModel(),
 					transcript: tuiSink,
 					terminal: options.terminal,
 					autocomplete,

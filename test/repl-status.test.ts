@@ -366,6 +366,7 @@ describe("LineInput.setTitle contract", () => {
 			onDequeue: () => {},
 			onCycleThinking: () => {},
 			onToggleThinking: () => {},
+			onModelSelect: () => {},
 		});
 		expect(typeof tui.setTitle).toBe("function");
 		const legacy: LineInput = new ReplInput({

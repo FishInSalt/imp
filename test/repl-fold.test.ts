@@ -143,6 +143,7 @@ function makeShell() {
 		onDequeue: () => events.push("dequeue"),
 		onCycleThinking: () => events.push("cycle-thinking"),
 		onToggleThinking: () => events.push("toggle-thinking"),
+		onModelSelect: () => events.push("model-select"),
 	});
 	return { terminal, transcript, shell, events };
 }

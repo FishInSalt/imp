@@ -56,6 +56,8 @@ export interface TuiShellOptions extends LineInputEvents {
 	onCycleThinking(): void;
 	/** ctrl+t — pi's app.thinking.toggle: hide/show reasoning traces. */
 	onToggleThinking(): void;
+	/** ctrl+l — pi's app.model.select: open the /model picker. */
+	onModelSelect(): void;
 	/** Shared with the Renderer's write sink — the transcript IS the output. */
 	transcript: TranscriptSink;
 	/** Injected in tests; default binds the real process terminal. */
@@ -378,6 +380,15 @@ export class TuiShell implements LineInput {
 			}
 			if (this.selector === null && matchesKey(data, "shift+tab")) {
 				this.options.onCycleThinking();
+				return { consume: true };
+			}
+			// Ctrl+L — pi's app.model.select: open the model picker (the same
+			// command the line "/model" runs). Allowed mid-run like the typed
+			// command. Held back while a question is pending: typed input would
+			// answer that question, so the key must not bypass the ask FIFO;
+			// with a picker already open the guard above keeps its keys.
+			if (this.selector === null && this.pendingAsks.length === 0 && matchesKey(data, "ctrl+l")) {
+				this.options.onModelSelect();
 				return { consume: true };
 			}
 			// Esc while active mirrors Ctrl+C (M10) — same settle-or-interrupt

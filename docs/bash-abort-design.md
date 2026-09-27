@@ -2,7 +2,7 @@
 
 - 批次：`fix/bash-process-group`
 - 日期：2026-09-27
-- 状态：rev3（吸收第二轮审查 R2-F1/F2 强制项；R2-F3/F5 一并处理）
+- 状态：rev3.1（终审 APPROVE；4b 时序余量按 P3 放宽为 30 ticks）
 
 ## 1. 问题（dogfood 2026-09-27，已端到端复现）
 
@@ -153,7 +153,7 @@ pi 用 `stdin: "ignore"`（交互命令 read 立即 EOF，挂不住）；CC 有�
    "无 2s 升级延迟"——即 abort 后 settle 时长远小于旧 KILL_GRACE）；
 4. setsid 逃逸者（命令里 `setsid sleep 300`）→ exit+空闲宽限兜底，
    100ms 后 settle（零输出——测静默句柄路径）；
-4b. **空闲重 Arm（审查 P1-4）**：`setsid sh -c 'i=0; while [ $i -lt 40 ];
+4b. **空闲重 Arm（审查 P1-4）**：`setsid sh -c 'i=0; while [ $i -lt 30 ];
    do echo tick; i=$((i+1)); sleep 0.05; done' & sleep 0.3; echo
    parent-done`——断言 (a) 写者完成前工具不 settle（宽限持续重 Arm，
    ~2s），(b) 结果含全部 tick 行（尾部不截断）；

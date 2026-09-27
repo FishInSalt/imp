@@ -298,4 +298,31 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		const branches = spawnSync("git", ["branch", "--list", wt.branch], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout).toContain(wt.branch);
 	});
+
+	it("U14: status.showUntrackedFiles=no cannot hide untracked files (work-present)", async () => {
+		const root = await makeRepo();
+		git(root, ["config", "status.showUntrackedFiles", "no"]);
+		const state = await resolveRepoState(root);
+		const wt = await createChildWorktree(state, "u14", baseDir());
+		writeFileSync(path.join(wt.path, "valuable.txt"), "not throwaway\n", "utf8");
+		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
+	});
+
+	it("U15: a gitignored node_modules created by the child → unknown (not the runtime link)", async () => {
+		const root = await makeRepo();
+		writeFileSync(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
+		git(root, ["add", ".gitignore"]);
+		git(root, ["commit", "-qm", "ignore node_modules"]);
+		const state = await resolveRepoState(root);
+		// No root node_modules → no synthetic link is created.
+		const wt = await createChildWorktree(state, "u15", baseDir());
+		expect(wt.nodeModulesLinked).toBe(false);
+		mkdirSync(path.join(wt.path, "node_modules"), { recursive: true });
+		writeFileSync(path.join(wt.path, "node_modules", "user-work.txt"), "mine\n", "utf8");
+		const assessment = await assessWorktreeRemoval(wt, state);
+		expect(assessment.verdict).toBe("unknown");
+		if (assessment.verdict === "unknown") {
+			expect(assessment.detail).toContain("not the runtime-created synthetic link");
+		}
+	});
 });

@@ -240,36 +240,41 @@ async function assessWorktreeRemovalInner(
 		return work("branch reflog shows commit history that later moved away from the creation baseline");
 	}
 
-	// 4. The synthetic node_modules link, verified NOW: only a live symlink to
-	//    the repo root's node_modules may be filtered out of the status below.
+	// 4. node_modules at the worktree root: the only exempt occupant is the
+	//    runtime-created link, verified now. The check runs regardless of the
+	//    creation-time flag — otherwise gitignored user content there is invisible
+	//    to every git command below (acceptance-round P1). A repo that tracks
+	//    node_modules therefore never auto-cleans; the retention is visible in the
+	//    result note.
 	let filterSyntheticLink = false;
-	if (wt.nodeModulesLinked) {
-		const link = path.join(wt.path, "node_modules");
-		let stat: ReturnType<typeof lstatSync> | undefined;
+	const link = path.join(wt.path, "node_modules");
+	let stat: ReturnType<typeof lstatSync> | undefined;
+	try {
+		stat = lstatSync(link);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			return unknown(`node_modules is unreadable: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	if (stat !== undefined) {
+		if (!wt.nodeModulesLinked) {
+			return unknown("node_modules exists but is not the runtime-created synthetic link");
+		}
+		if (!stat.isSymbolicLink()) {
+			return unknown("node_modules is no longer the verified synthetic link");
+		}
+		let target: string;
+		let rootModules: string;
 		try {
-			stat = lstatSync(link);
-		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-				return unknown(`node_modules is unreadable: ${err instanceof Error ? err.message : String(err)}`);
-			}
+			target = realpathSync(link);
+			rootModules = realpathSync(path.join(repo.root, "node_modules"));
+		} catch {
+			return unknown("node_modules link cannot be verified");
 		}
-		if (stat !== undefined) {
-			if (!stat.isSymbolicLink()) {
-				return unknown("node_modules is no longer the verified synthetic link");
-			}
-			let target: string;
-			let rootModules: string;
-			try {
-				target = realpathSync(link);
-				rootModules = realpathSync(path.join(repo.root, "node_modules"));
-			} catch {
-				return unknown("node_modules link cannot be verified");
-			}
-			if (target !== rootModules) {
-				return unknown("node_modules link points outside the repository");
-			}
-			filterSyntheticLink = true;
+		if (target !== rootModules) {
+			return unknown("node_modules link points outside the repository");
 		}
+		filterSyntheticLink = true;
 	}
 
 	// 5. Index flags (skip-worktree/assume-unchanged) hide real modifications
@@ -280,10 +285,18 @@ async function assessWorktreeRemovalInner(
 		return unknown("index flags (skip-worktree/assume-unchanged) make change detection unreliable");
 	}
 
-	// 6. Status — no pathspec: a `:!node_modules` exclusion could hide tracked
-	//    content under that path. Only the verified link's own untracked line
-	//    is filtered out.
-	const status = await git(wt.path, ["status", "--porcelain"]);
+	// 6. Status — no pathspec (a `:!node_modules` exclusion could hide tracked
+	//    content under that path). The explicit flags override display-oriented
+	//    config that can hide real state: `status.showUntrackedFiles=no` hides
+	//    untracked files even from `--porcelain`, and submodule-ignore configs
+	//    hide submodule changes. Only the verified link's own untracked line is
+	//    filtered out afterwards.
+	const status = await git(wt.path, [
+		"status",
+		"--porcelain",
+		"--untracked-files=all",
+		"--ignore-submodules=none",
+	]);
 	if (status.status !== 0) return unknown(`git status failed: ${commandFailure(status)}`);
 	const statusLines = status.stdout
 		.split("\n")
@@ -291,8 +304,9 @@ async function assessWorktreeRemovalInner(
 		.filter((line) => !(filterSyntheticLink && line === "?? node_modules"));
 	if (statusLines.length > 0) return work("uncommitted, staged, or untracked files");
 
-	// 7. Diff: independent confirmation that the tree equals the baseline.
-	const diff = await git(wt.path, ["diff", "--quiet", repo.head, "--"]);
+	// 7. Diff: independent confirmation that the tree equals the baseline
+	//    (`--ignore-submodules=none` against submodule-ignore configs).
+	const diff = await git(wt.path, ["diff", "--quiet", "--ignore-submodules=none", repo.head, "--"]);
 	if (diff.status === 0) return { verdict: "clean" };
 	if (diff.status === 1) return work("committed changes relative to the creation baseline");
 	return unknown(`git diff failed: ${commandFailure(diff)}`);

@@ -1633,4 +1633,48 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		expect(result.output).toContain("timed out");
 		expect(result.output).toContain("changes kept in worktree");
 	}, 15000);
+
+	it("I8: gitignored node_modules content created by the child is kept, not deleted", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i8-"));
+		await seedRepo(root);
+		const g = gitAt(root);
+		writeFileSync(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
+		g(["add", ".gitignore"]);
+		g(["commit", "-qm", "ignore node_modules"]);
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([{ type: "toolCall", id: "c1", name: "make_dep", arguments: {} }]),
+					assistant([{ type: "text", text: "installed" }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [
+				{
+					name: "make_dep",
+					description: "creates gitignored node_modules content",
+					parameters: Type.Object({}),
+					async execute() {
+						const dir = path.join(cwd, "node_modules");
+						const { mkdirSync } = await import("node:fs");
+						mkdirSync(dir, { recursive: true });
+						writeFileSync(path.join(dir, "user-work.txt"), "mine\n", "utf8");
+						return { output: "installed" };
+					},
+				},
+			],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i8-base-${Date.now()}`),
+		});
+		const result = await task.execute(
+			{ prompt: "install deps", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain("worktree kept for safety");
+		expect(result.output).toContain("not the runtime-created synthetic link");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).toContain("imp-worktree-");
+	});
 });

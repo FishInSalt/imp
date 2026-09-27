@@ -238,8 +238,11 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			const parentStore = options.getSession();
 			// Child cwd for gate events and the SA-03 record (M6b): the worktree
 			// path when isolation is active, otherwise the parent's cwd — gates
-			// resolve paths against the loop that executes the call.
-			let childCwd = options.cwd ?? process.cwd();
+			// resolve paths against the loop that executes the call. A rejection
+			// reports the parent cwd (no child ran; the worktree field names the
+			// created-and-removed path separately).
+			const parentCwd = options.cwd ?? process.cwd();
+			let childCwd = parentCwd;
 			// SA-03: the record accumulator. Fields are set progressively as the
 			// call resolves; EVERY return path goes through finish(), which takes
 			// the terminal facts explicitly (rejection paths included).
@@ -272,7 +275,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					launched: rec.launched === true,
 					agent: agent?.name,
 					binding: rec.binding,
-					cwd: childCwd,
+					cwd: rec.launched === true ? childCwd : parentCwd,
 					tools: rec.tools,
 					timeoutMs: rec.timeoutMs,
 					status: terminal.status,

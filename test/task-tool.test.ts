@@ -2100,6 +2100,8 @@ describe("task record (SA-03)", () => {
 		expect(result.taskRecord?.worktree?.disposition).toBe("removed");
 		expect(result.taskRecord?.worktree?.path.startsWith(wtBase)).toBe(true);
 		expect(existsSync(result.taskRecord?.worktree?.path ?? "")).toBe(false); // the rollback really happened
+		// No child ran: cwd reports where the call was made, not the removed worktree.
+		expect(result.taskRecord?.cwd).toBe(root);
 	}, 20000);
 
 	it("T11: parallel attempts get distinct identities while correlating their calls", async () => {

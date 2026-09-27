@@ -117,7 +117,10 @@ export interface TaskRecord {
   launched: boolean;            // false = rejected before the child loop ran
   agent?: string;               // resolved agent definition name
   binding?: ChildModelBinding;  // SA-02 canonical provider/model reference
-  cwd: string;                  // execution cwd (worktree path when isolation was active)
+  cwd: string;                  // execution cwd (worktree path when isolation was active).
+                                // For launched:false records: the cwd the call was
+                                // made from — the created-and-removed worktree path
+                                // is named by worktree.path only (review LOW, closed)
   tools?: string[];             // final child tool names
   timeoutMs?: number;           // resolved wall-clock budget (absent = no clock)
   // terminal
@@ -414,6 +417,15 @@ additive.
   unchanged); D5 states the `worktree` presence invariant; T20 asserts on captured body
   bytes and T24 is signature-enforced.
 - Corrections applied in the revision commit following round 1; implementation may start.
+- **Implementation review (2026-09-27) — APPROVE, 1×LOW closed**: the reviewer
+  reproduced the red/positive-control evidence, audited every return path and
+  the collector, and proved the REAL runner persistence path keeps the record
+  (runner onMessage → appendMessage → reopenable). The LOW finding —
+  worktree-rollback rejections reported the removed worktree path as `cwd` —
+  is closed: non-launched records report the parent cwd (test T9 asserts it);
+  `worktree.path` remains the only field naming the removed path. The one
+  informational note (`tools` array is not length-bounded) is accepted: the
+  child pool is a small fixed set.
 - **Implementation-time correction (round 1, 2026-09-27)**: T13's original premise
   ("the `childId` appears in the transcript path") was wrong — child session file
   names embed an INDEPENDENT UUID chosen at creation (`manager.ts:61`), separate from

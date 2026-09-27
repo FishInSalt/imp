@@ -210,7 +210,7 @@ imp            # interactive REPL (streaming, one-line tool status)
   to row n), `/sessions` (list
   saved sessions for this directory),
   `/resume <id>` (switch to one — history replays on screen),
-  `/model [id]` (applies from the next turn),
+  `/model [id]` (applies from the next turn; **Ctrl+L** opens the picker),
   `/think [level]` (thinking intensity; bare `/think` or **Shift+Tab**
   cycles; models without a thinking knob say so; the footer shows
   `think:<level>`). Available levels follow each model's catalog entry

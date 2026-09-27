@@ -272,8 +272,14 @@ describe("login dialog (#login-dialog)", () => {
 		// the process is still alive — /exit did not dispatch
 		env.terminal.data("/help\r");
 		await settle();
-		// the help listing rendered — /exit did not kill the process
-		expect(env.terminal.frameSince(0).slice(-3000)).toContain("/logout");
+		// the help listing rendered — /exit did not kill the process. The marker
+		// is helpText's own closing sentence (commands.ts only), shortened to
+		// its first row: the full line exceeds 80 columns, so the TUI wraps it
+		// and the complete sentence never appears contiguously. (A fixed-size
+		// tail was the old pin; the body grows — Ctrl+L once pushed "/logout"
+		// out of slice(-3000)) — and a command name could also come from the
+		// autocomplete panel rather than the help output.
+		expect(env.terminal.frameSince(0)).toContain("Lines typed while imp is working are queued");
 	});
 
 	it("13. dialogOpen refusals: a delayed submitPrompt mid-dialog is refused (authorized exemption holds)", async () => {
@@ -330,6 +336,7 @@ describe("login dialog (#login-dialog)", () => {
 			onDequeue: () => events.push("dequeue"),
 			onCycleThinking: () => events.push("cycle-thinking"),
 			onToggleThinking: () => events.push("toggle-thinking"),
+			onModelSelect: () => events.push("model-select"),
 		});
 		shell.start();
 		await settle(0);
@@ -377,6 +384,7 @@ describe("login dialog (#login-dialog)", () => {
 			onDequeue: () => events.push("dequeue"),
 			onCycleThinking: () => events.push("cycle-thinking"),
 			onToggleThinking: () => events.push("toggle-thinking"),
+			onModelSelect: () => events.push("model-select"),
 		});
 		shell.start();
 		await settle(0);

@@ -212,6 +212,7 @@ function makeShell(options?: {
 		},
 		onCycleThinking: () => events.push("cycle-thinking"),
 		onToggleThinking: () => events.push("toggle-thinking"),
+		onModelSelect: () => events.push("model-select"),
 	});
 	return { terminal, transcript, shell, events };
 }
@@ -546,6 +547,41 @@ describe("TuiShell", () => {
 		await expect(q1).resolves.toBe(false);
 		await expect(q2).resolves.toBe(false);
 		expect(events).toEqual(["eof"]);
+		shell.close();
+	});
+
+	it("Ctrl+L fires model-select; a pending ask or an open picker keeps the key", async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.data("\x0c"); // ctrl+l — pi's app.model.select
+		await settle();
+		expect(events).toEqual(["model-select"]);
+		// A pending question owns the input: a typed "/model" would answer the
+		// question, so the key must not bypass the ask FIFO either.
+		const question = shell.ask("proceed? [y/N] ");
+		await settle(0);
+		terminal.data("\x0c");
+		await settle();
+		expect(events).toEqual(["model-select"]); // still just the one
+		terminal.data("n\r"); // decline — input becomes live again
+		await settle();
+		await expect(question).resolves.toBe(false);
+		// An open picker keeps its keys too (its guard runs first); Esc still
+		// cancels the picker, never the machine.
+		const pick = shell.select({ items: [{ label: "a" }] });
+		await settle(0);
+		terminal.data("\x0c");
+		await settle();
+		expect(events).toEqual(["model-select"]);
+		terminal.data("\x1b"); // cancel the picker
+		await expect(pick).resolves.toBeNull();
+		// Mid-run the key still opens the picker — /model parity
+		// (allowedDuringRun: the switch applies from the next turn).
+		shell.setActive(true);
+		terminal.data("\x0c");
+		await settle();
+		expect(events).toEqual(["model-select", "model-select"]);
 		shell.close();
 	});
 
@@ -1376,6 +1412,71 @@ describe("runRepl with shell:tui", () => {
 				else process.env[key] = value;
 			}
 		}
+	});
+
+	it("Ctrl+L opens the model picker (pi's app.model.select); held-key repeats queue no second picker", async () => {
+		// #model-discovery hermeticity (same pin as the /model tests above)
+		const saved: Record<string, string | undefined> = {};
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		try {
+			const env = await startTuiRepl([reply("first"), reply("second")]);
+			await settle();
+			// A held key repeats the byte; all three arrive before the async
+			// list build reaches select() — exactly ONE picker may open (the
+			// latch in selectModel; without it select() QUEUES a second).
+			env.terminal.data("\x0c\x0c\x0c");
+			await frameContains(env, "models — switch applies from the next turn");
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("→ test-model"); // current id first, preselected
+			expect(frame).toContain("claude-sonnet-4-5");
+			env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
+			await settle();
+			env.terminal.data("\r"); // pick
+			await settle();
+			expect(env.runner.model).toBe("claude-sonnet-4-5");
+			expect(env.transcript.completedLines().join("\n")).toContain("Model: claude-sonnet-4-5");
+			// Repeat-guard proof (behavioral): the editor — not a stray queued
+			// picker — consumes the next line. A stray picker would swallow
+			// "hello…" as a filter query and Enter would pick a row instead.
+			env.terminal.data("hello after pick\r");
+			await settle();
+			expect(env.requests).toHaveLength(1);
+			expect(env.requests[0]?.messages.at(-1)).toMatchObject({ role: "user", content: "hello after pick" });
+			env.terminal.data("/exit\r");
+			const code = await env.repl;
+			expect(code).toBe(0);
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	it("Ctrl+L DURING a run: the picker opens mid-stream; Esc leaves the turn running", async () => {
+		let releaseTurn: () => void = () => {};
+		const gated = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		const env = await startTuiRepl([() => gated.then(() => reply("streamed answer"))]);
+		await settle();
+		env.terminal.data("hi\r");
+		await settle();
+		env.terminal.data("\x0c"); // ctrl+l mid-run — /model's allowedDuringRun parity
+		await frameContains(env, "models — switch applies from the next turn");
+		env.terminal.data("\x1b"); // cancel the picker — NOT an interrupt
+		await settle();
+		expect(env.runner.model).toBe("test-model"); // a cancelled pick changes nothing
+		releaseTurn();
+		await settle();
+		await settle();
+		expect(env.transcript.completedLines().join("\n")).toContain("streamed answer"); // the run survived
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
 	});
 
 	it("EOF on a pristine session exits gracefully without a file or saved hint", async () => {

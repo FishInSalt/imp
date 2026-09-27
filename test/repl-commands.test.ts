@@ -319,6 +319,8 @@ describe("slash commands", () => {
 				"                     visible when expanded; does not expand or collapse folds",
 				"  Shift+Tab          cycle the thinking level (models with thinking)",
 				"  Ctrl+T             hide/show reasoning traces (pi's toggle, persisted)",
+				"  Ctrl+L             open the model picker — same list as /model; a pick",
+				"                     switches, applies from the next turn",
 				"  newline            Shift+Enter · Ctrl+J · backslash at end of line + Enter",
 				"  follow-up          Alt+Enter queues the line for the SAME run — consumed",
 				"                     when the model would stop, one per answer (Enter steers into",

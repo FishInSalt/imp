@@ -129,6 +129,7 @@ function makeShell(columns = 80): { shell: TuiShell; terminal: FakeTerminal } {
 		onDequeue: () => {},
 		onCycleThinking: () => {},
 		onToggleThinking: () => {},
+		onModelSelect: () => {},
 	});
 	return { shell, terminal };
 }

@@ -119,6 +119,12 @@ case-insensitively (`ZAI/glm-5.3`) and is trimmed (`"zai / glm-5.3"` →
 an `isError` tool result returned **before** worktree creation, child-session
 creation, or any provider call.
 
+**Family-attribution guarantee.** The exact family comes from
+`getModelReference()` (always wired by the real runner). Without it the
+fallback derives the family from the model string by the main-CLI rule (D1)
+— an approximation to be replaced by wiring `getModelReference()`, documented
+rather than claimed exact.
+
 Scope boundaries (explicit):
 
 - **No cross-provider children.** Honoring one would require re-examining
@@ -155,13 +161,31 @@ export function resolveChildModel(input: {
 }): ChildModelResolution;
 ```
 
-Parent parsing: `parseModelRef(parentReference)` — for the real runner
-`parentReference` is `runner.modelReference()` (canonical; bare only for
-anthropic) and for custom wirings without `getModelReference` it is the raw
-`getModel()`, parsed by the same rule the runner itself uses at construction
-(`runner.ts:297-300`: provider derived via `parseModelRef(options.model)`).
-An empty/blank parent reference is an internal error (`ok: false`), never a
-guess.
+Parent parsing has two modes, stated without over-claiming:
+
+- **Canonical (the real runner — always wired, `runner.ts:428`):**
+  `parentReference = runner.modelReference()`; the family is exact.
+- **Fallback (custom wirings/tests without `getModelReference`):**
+  `parseModelRef(options.getModel())` — the main-CLI bare-ID rule. This is
+  an **approximation, and only for wiring that has no better source**:
+  after `setModel("openai/gpt-5.2")` the runner stores family `openai`
+  with wire ID `gpt-5.2` (`runner.ts:897-900`), and the wire ID alone
+  cannot recover the family (`parseModelRef("gpt-5.2")` → `anthropic`).
+  A wiring whose live family can differ from what the CLI rule derives
+  from the current string must supply `getModelReference()`. Consequences,
+  stated honestly:
+  - *inherit*: same family as the pre-SA-02 metadata path (both parse the
+    same parent string); no change.
+  - *bare override*: the family now follows the derived parent (C2), which
+    can differ from pre-SA-02's `parseModelRef(overrideString)` (e.g. bare
+    `glm-4.6` under a derived-anthropic parent: was `zai`, now
+    `anthropic`). This divergence is the contract working as intended.
+  - *recognized-prefix override whose family ≠ derived parent*: now
+    rejected (C4). Pre-SA-02 ran it with the raw string against the
+    parent's provider — that raw path is the defect being removed.
+
+An empty/blank parent reference is an internal error (`ok: false`), never
+a guess.
 
 Error strings (D7) name the agent when known, quote the offending value, and
 state the actual provider context, e.g.:
@@ -188,6 +212,15 @@ Documented divergences (intentional, child contract only):
 |---|---|---|
 | `zai/` (known prefix, empty ID) | `anthropic` family, whole string as ID | reject (C7) |
 | `glm-5.3` bare | routes to `zai` (default-provider rule) | parent's provider (C2) |
+
+Pin requirement: the refactor is behavior-identical for the CLI, pinned by
+new resolve-level tests — `"zai / glm-5.3"` and `"zai /glm-5.3"` (space
+before the slash → unknown prefix → `anthropic` + whole string), `"zai/"`
+(`anthropic` + whole string), `"OpenAI/gpt"` and `" openai/gpt"` (trim +
+case folding that already exists). The child-contract normalization in D1
+(`"zai / glm-5.3"` → `zai/glm-5.3`) is implemented ONLY in `child-model.ts`
+on top of `knownProvider()`; `parseModelRef` keeps today's exact behavior,
+including its use of the untrimmed input in the fallback return.
 
 ### D3 — `task.ts`: resolve first, reject early, pass binding through
 
@@ -278,7 +311,8 @@ run on, and the workaround (C4 wording in D1).
 
 No cross-provider support; no task-arg model; no env layer; no change to
 `parseModelRef`'s CLI behavior; no pricing work (SA-04 will consume
-`ChildModelBinding.reference` — field names chosen for that reuse); no
+`ChildModelBinding.reference` — field names chosen for that reuse; exposure
+transport is SA-03/SA-04 work, see §6); no
 special-case warning for bare `glm-*` (contract §2).
 
 ## 4. Test plan (labels map to SA-02 acceptance items)
@@ -299,7 +333,9 @@ New file `test/child-model.test.ts` (pure matrix):
 - A-slash: `vendor/models/x` accepted, request `model` is the whole string.
 - A-vision-wiring: harness `getToolsForChild` records `(cwd, binding)`;
   shared path passes the parent cwd, worktree path the agentCwd, and the
-  binding equals `{providerName, modelId: wireModelId}` in both.
+  binding equals `{providerName, modelId: wireModelId}` in both. This
+  proves WIRING only — the stubs bypass the runner; the real swap is
+  evidenced by A-vision-shared / A-vision-worktree in `runner.test.ts`.
 
 `test/runner.test.ts` (real wiring, M10 B pattern + `scriptedProvider` sink):
 
@@ -307,13 +343,16 @@ New file `test/child-model.test.ts` (pure matrix):
   turn → child request `model` equals the NEW wire ID.
 - A-vision-shared: parent `zai/glm-5v` (vision true per the frozen prefix
   table), agent override bare `glm-5.3` (vision false via the `glm-` rule),
-  child scripted to `read` a committed PNG → the child's follow-up request
-  contains no image block; the inverted pair (parent `glm-5.3`, child
-  `glm-5v`) contains one. This exercises the real runner's identity-based
-  read swap.
-- A-vision-worktree: same PNG scenario with `worktree: true` inside a git
-  fixture (seed repo pattern from `test/task-tool.test.ts`) → the child's
-  follow-up request matches the CHILD's vision capability.
+  child scripted to `read` a PNG in the shared cwd → the child's follow-up
+  request (sink) contains no image block; the inverted pair (parent
+  `glm-5.3`, child `glm-5v`) contains one. Exercises the real runner's
+  identity-based read swap.
+- A-vision-worktree: the same scenario in a **git-initialized cwd fixture**
+  (init + commit the PNG; the `repoTask` pattern in `test/task-tool.test.ts`
+  shows the shape), parent scripted tool call
+  `{prompt, agent, worktree: true}` → the child runs in a real worktree and
+  its follow-up request matches the CHILD's vision capability. Exercises
+  the rebuilt-builtins path with the real runner's swap.
 
 `test/subagent-*` (new or existing file) for D4:
 
@@ -345,9 +384,38 @@ by A-reject.
 - Bare `glm-*` under non-zai parents fails at the provider (owner-approved
   literal semantics).
 - Custom wirings without `getToolsForChild` keep the parent-bound read gate.
+- **Binding exposure / accounting.** `ChildModelBinding` is consumed inside
+  one task invocation today: it is not returned by the tool, child sessions
+  record no model (`session/manager.ts:58-62` passes `undefined` as the
+  model), and no usage/event/presentation consumer of the child model
+  exists yet. SA-04 pricing will need the canonical reference; the transport
+  is deliberately left to SA-03's structured task-result contract. The
+  binding field names are chosen for that reuse, but nothing produces them
+  outward yet — this design does not claim it is wired.
 - Catalog/overlay-derived model max tokens remain best-effort (`undefined`
   = no model-side bound), unchanged from #derived-budget.
 
 ## 7. Review record
 
-(appended after each adversarial round)
+### Round 1 (2026-09-27) — REJECT (3×P1, 2×P2)
+
+- R1-P1 fallback equivalence claim: "the same rule the runner itself uses
+  at construction" is false after `setModel` (live family field vs bare
+  wire ID; `runner.ts:897-900`). Fixed: D1 defines the fallback as a
+  documented approximation with the exact-family requirement on
+  `getModelReference()`, and §2 carries the family-attribution guarantee.
+- R1-P1 fallback vs C2 (bare `glm-*`, `test/task-tool.test.ts:228`): the
+  fallback family follows the CLI rule. Fixed: D1 now states the
+  consequences per case, including the deliberate bare-override family
+  change and the new rejection of mismatched prefixes under fallback
+  wiring; no existing test asserts the affected metadata.
+- R1-P1 A-vision-worktree infeasible as written: the task-tool harness
+  stubs bypass the runner, and `runner.test.ts` cwds were not git repos.
+  Fixed: the worktree vision case moved to a git-initialized fixture under
+  `test/runner.test.ts`; the task-tool stub test now claims wiring only.
+- R1-P2 identity-based read swap: reviewer found no false-replacement/
+  missed-swap case; kept as designed.
+- R1-P2 unconsumed binding / accounting: named explicitly in §6 instead of
+  implying SA-04 wiring exists.
+- Reviewer residual (pin CLI `"zai / glm"` fallthrough): added to D2's pin
+  requirement.

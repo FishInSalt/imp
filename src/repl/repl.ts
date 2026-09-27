@@ -259,7 +259,12 @@ export class TtyConfirm {
 		if (detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
 		const select = this.select;
 		if (select !== null) {
-			const choice = await select({ title: message, items: CONFIRM_ITEMS });
+			const choice = await select({
+				title: message,
+				detail,
+				warnSpans: options?.warnSpans,
+				items: CONFIRM_ITEMS,
+			});
 			if (choice === null) return false; // cancelled picker declines, like Ctrl+C at the ask
 			if (choice === 1 && sessionKey !== undefined) this.sessionAllowed.add(sessionKey);
 			return choice !== 2;

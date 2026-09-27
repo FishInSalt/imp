@@ -80,6 +80,11 @@ describe("guardian caller-cwd resolution (spec part 3 item 7)", () => {
 		const { gate, confirm } = await loadGuardian("/proj");
 		const decision = await gate(writeEvent("/proj", "../escape.txt"));
 		expect(confirm).toHaveBeenCalledTimes(1);
+		// the ask carries the target path and the reason (review observation:
+		// this detail text had no coverage)
+		const detail = String(confirm.mock.calls[0]?.[1]);
+		expect(detail).toContain("path: ../escape.txt");
+		expect(detail).toContain("why it matched: the target is outside the caller's working directory");
 		expect(decision).toEqual({
 			block: true,
 			reason:
@@ -124,7 +129,14 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 		});
 		expect(confirm).toHaveBeenCalledTimes(1);
 		expect(confirm.mock.calls[0]?.[0]).toContain("[guardian]");
-		expect(String(confirm.mock.calls[0]?.[1])).toContain("rm -rf node_modules");
+		// the confirm question carries the command AND why it matched — the
+		// human sees both in the approval prompt, at a glance
+		const detail = String(confirm.mock.calls[0]?.[1]);
+		expect(detail).toContain("command: rm -rf node_modules");
+		expect(detail).toContain("why it matched:");
+		// warnSpans flags the risky fragment inside the command — the picker
+		// highlights "rm -rf" (label "command: " is 9 chars, rm -rf is 6)
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 15]]);
 
 		confirm.mockResolvedValue(true);
 		const approved = await gate({ args: { command: "rm -rf node_modules" } });
@@ -140,17 +152,23 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 			reason: "matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run",
 		});
 		// M10: the session key is the matched pattern string, so "don't ask
-		// again" scopes to this rule — not to all bash
-		expect(confirm.mock.calls[0]?.[2]).toEqual({ sessionKey: "guardian:bash:deploy-prod" });
+		// again" scopes to this rule — not to all bash. The warn span points
+		// at the matched pattern's occurrence inside the command.
+		expect(confirm.mock.calls[0]?.[2]).toMatchObject({
+			sessionKey: "guardian:bash:deploy-prod",
+		});
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 20]]);
 	});
 
 	it("M10 sessionKey passthrough: built-in bash rules key on the matched regex's source", async () => {
 		const { gate, confirm } = await loadGuardian("/proj");
 		await gate({ args: { command: "rm -rf node_modules" } });
 		expect(confirm).toHaveBeenCalledTimes(1);
-		expect(confirm.mock.calls[0]?.[2]).toEqual({
+		// sessionKey keys on the regex source; warnSpans flags "rm -rf" in the detail
+		expect(confirm.mock.calls[0]?.[2]).toMatchObject({
 			sessionKey: "guardian:bash:\\brm\\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\b",
 		});
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 15]]);
 	});
 
 	it("harmless bash never asks", async () => {
@@ -251,6 +269,20 @@ describe("M7 review: the floor must be unbypassable — home spellings and split
 			reason: expect.stringContaining("recursive force delete"),
 		});
 		expect(g.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("split-flag span maps to the GATED rm, not an earlier identical substring (acceptance P3 fix)", async () => {
+		const g = await loadGuardian("/tmp/proj");
+		const command = "echo rm x rm -r -f d && rm -r -f d"; // echo argument mirrors the gated segment
+		await g.gate({ name: "bash", args: { command } });
+		const span = g.confirm.mock.calls[0]?.[2]?.warnSpans?.[0];
+		expect(span).toBeDefined();
+		const detail = String(g.confirm.mock.calls[0]?.[1]);
+		// The highlighted fragment is the SECOND (gated) rm: offset arithmetic
+		// walks original-command positions, no first-occurrence indexOf lookup
+		expect(detail.slice(span[0], span[1])).toBe("rm -r -f d");
+		// ...and it sits after the `&&` separator, not inside the echo argument
+		expect(span[0]).toBeGreaterThan(detail.indexOf("&&"));
 	});
 
 	it("plain rm (no flags) still never asks", async () => {

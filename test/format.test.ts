@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shorten, summarizeArgs, summarizeResult } from "../src/format.js";
+import { applyWarnSpans, shorten, summarizeArgs, summarizeResult } from "../src/format.js";
 
 describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay, activity)", () => {
 	it("bash keeps the historical `$ command` form, byte-identical", () => {
@@ -75,5 +75,41 @@ describe("summarizeArgs (tool line labels — one funnel for print, TUI, replay,
 	it("shorten: 80-char cap with ellipsis", () => {
 		expect(shorten("short")).toBe("short");
 		expect(shorten(`${"z".repeat(81)}`)).toBe(`${"z".repeat(80)}…`);
+	});
+});
+
+describe("applyWarnSpans (confirm-picker alert highlight)", () => {
+	it("wraps the named range in warn colors; ansi=false passes text through untouched", () => {
+		const out = applyWarnSpans("a rm -rf b", [[2, 8]], true);
+		expect(out).toBe(`a \x1b[0m\x1b[1;31mrm -rf\x1b[0m\x1b[2m b`);
+		expect(applyWarnSpans("a rm -rf b", [[2, 8]], false)).toBe("a rm -rf b");
+	});
+	it("clips out-of-range spans and drops empty ones — extension math is untrusted", () => {
+		expect(applyWarnSpans("abc", [[-5, 2]], true)).toBe(`\x1b[0m\x1b[1;31mab\x1b[0m\x1b[2mc`);
+		expect(applyWarnSpans("abc", [[10, 20]], true)).toBe("abc");
+		expect(applyWarnSpans("abc", [[2, 2]], true)).toBe("abc");
+	});
+	it("sorts and merges overlapping spans; multiple spans all highlight", () => {
+		expect(
+			applyWarnSpans(
+				"abcdefgh",
+				[
+					[4, 6],
+					[0, 2],
+				],
+				true,
+			),
+		).toBe(`\x1b[0m\x1b[1;31mab\x1b[0m\x1b[2mcd\x1b[0m\x1b[1;31mef\x1b[0m\x1b[2mgh`);
+		// overlap: [0,3) and [1,4) merge into one [0,4) span
+		expect(
+			applyWarnSpans(
+				"abcd",
+				[
+					[1, 4],
+					[0, 3],
+				],
+				true,
+			),
+		).toBe(`\x1b[0m\x1b[1;31mabcd\x1b[0m\x1b[2m`);
 	});
 });

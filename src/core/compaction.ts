@@ -453,10 +453,12 @@ async function summarizeWithRetry(args: {
 	abortedMessage: string;
 }): Promise<SummarizerRun> {
 	const first = await runSummarizer(args);
-	if (first.stopReason !== "max_tokens") return first;
-	// Abort first: the pre-retry code checked the token cap before the abort —
-	// that order must not turn a user interrupt into a retry.
+	// Abort gate is UNCONDITIONAL (pre-refactor parity): abortSafe streams end
+	// cleanly WITHOUT a message_end, so stopReason stays undefined — a partial
+	// summary must be rejected, never returned as complete (P1 regression from
+	// hoisting this check into the max_tokens branch only).
 	if (args.signal?.aborted) throw new Error(args.abortedMessage);
+	if (first.stopReason !== "max_tokens") return first;
 	// "off" is not always available (levelMap.off === null — forced-reasoning
 	// models); clampThinkingLevel picks the lowest supported level. For
 	// meta-less models it returns "off", which the request maps to "no thinking
@@ -471,7 +473,7 @@ async function summarizeWithRetry(args: {
 	if (args.signal?.aborted) throw new Error(args.abortedMessage);
 	if (retry.stopReason === "max_tokens") {
 		throw new Error(
-			`${args.tokenCapMessage} (thinking=${args.thinking ?? "off"} then ${lowered} both capped)`,
+			`${args.tokenCapMessage} (attempt 1: thinking=${args.thinking ?? "off"}, cap=${args.maxTokens}; retry: thinking=${lowered} — both capped)`,
 		);
 	}
 	return retry;

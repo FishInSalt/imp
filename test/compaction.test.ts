@@ -362,7 +362,7 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
 		await expect(
 			compactHistory({ messages: overflowishHistory(6), provider, model: "m", settings, thinking: "max" }),
-		).rejects.toThrow(/token cap.*both capped/);
+		).rejects.toThrow(/token cap.*cap=12.*both capped/);
 		expect(requests).toHaveLength(2);
 		expect(requests[1]?.thinking).toBeUndefined(); // off -> omitted, intervention-free
 	});
@@ -422,6 +422,32 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		expect(result?.summary).toContain("full");
 		expect(requests).toHaveLength(2);
 		expect(requests[1]?.thinking).toBeUndefined();
+	});
+
+	it("#compaction-thinking-retry: an aborted clean-ended stream is rejected, not returned (P1 guard)", async () => {
+		// abortSafe contract (provider/shared.ts): an aborted stream ends CLEANLY
+		// with no message_end — stopReason stays undefined. The abort gate must
+		// fire regardless of stopReason, or a partial summary would be returned
+		// as complete and persisted as a checkpoint.
+		const ac = new AbortController();
+		const provider: LLMProvider = {
+			name: "mock",
+			async *stream() {
+				yield { type: "text_delta", text: "## Goal\npartial half summary" };
+				ac.abort();
+			},
+		};
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		await expect(
+			compactHistory({
+				messages: overflowishHistory(6),
+				provider,
+				model: "m",
+				settings,
+				thinking: "max",
+				signal: ac.signal,
+			}),
+		).rejects.toThrow("aborted");
 	});
 
 	// #derived-budget: pi parity — min(0.8 × reserveTokens, model maxTokens

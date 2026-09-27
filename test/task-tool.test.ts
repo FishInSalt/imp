@@ -6,7 +6,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { type AgentDefinition, formatAgentsForPrompt } from "../src/core/agents/registry.js";
+import { type AgentDefinition, formatAgentsForPrompt, parseAgentFile } from "../src/core/agents/registry.js";
 import {
 	createChildSession,
 	createSession,
@@ -1843,5 +1843,40 @@ describe("task model binding (SA-02)", () => {
 		expect(wt.bindings).toHaveLength(1);
 		expect(wt.bindings[0]?.cwd).not.toBe(root);
 		expect(wt.bindings[0]).toMatchObject({ providerName: "zai", modelId: "glm-5.3" });
+	});
+
+	it("A-reject-malformed-file: a blank `model:` in a real agent file is rejected before launch, not inherited", async () => {
+		// The FILE PARSING path, not a hand-built AgentDefinition: an empty
+		// frontmatter value must survive as "" so C6 can reject it.
+		for (const frontmatter of ["model:", "model:   "]) {
+			const parsed = parseAgentFile(
+				`---\nname: blank\ndescription: d\n${frontmatter}\n---\nbody\n`,
+				"/x/blank.md",
+			);
+			if (typeof parsed === "string") throw new Error(parsed);
+			const { task, sink, bindings } = modelTask({
+				parentReference: () => "anthropic/claude-x",
+				agents: [parsed as never],
+			});
+			const result = await task.execute({ prompt: "go", agent: "blank" }, new AbortController().signal);
+			expect(result.isError).toBe(true);
+			expect(result.output).toContain('agent "blank"');
+			expect(result.output).toContain("empty model override");
+			expect(sink).toHaveLength(0);
+			expect(bindings).toHaveLength(0);
+		}
+	});
+
+	it("A-inherit-file: an agent file WITHOUT `model` still inherits the parent", async () => {
+		const parsed = parseAgentFile("---\nname: inherit\ndescription: d\n---\nbody\n", "/x/inherit.md");
+		if (typeof parsed === "string") throw new Error(parsed);
+		const { task, sink, bindings } = modelTask({
+			parentReference: () => "zai/glm-5.3",
+			agents: [parsed as never],
+		});
+		const result = await task.execute({ prompt: "go", agent: "inherit" }, new AbortController().signal);
+		expect(result.isError).toBe(false);
+		expect(sink[0]?.model).toBe("glm-5.3");
+		expect(bindings[0]).toMatchObject({ providerName: "zai", modelId: "glm-5.3" });
 	});
 });

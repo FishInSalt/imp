@@ -32,6 +32,30 @@ timeout: 300
 You are a code scout. Go broad before deep.
 `;
 
+describe("SA-02 C6: a blank `model:` is explicit configuration, not absence", () => {
+	it("parseAgentFile preserves an empty model value; an absent field stays undefined", () => {
+		// RED before the fix: the frontmatter loop skipped every empty value,
+		// so `model:` (or a whitespace-only value) surfaced as undefined and
+		// the resolver silently inherited instead of rejecting (design C6).
+		const blank = parseAgentFile("---\nname: a\ndescription: d\nmodel:\n---\nbody\n", "/x/a.md");
+		if (typeof blank === "string") throw new Error(blank);
+		expect(blank.model).toBe("");
+
+		const spaced = parseAgentFile("---\nname: a\ndescription: d\nmodel:   \n---\nbody\n", "/x/a.md");
+		if (typeof spaced === "string") throw new Error(spaced);
+		expect(spaced.model).toBe("");
+
+		const absent = parseAgentFile("---\nname: a\ndescription: d\n---\nbody\n", "/x/a.md");
+		if (typeof absent === "string") throw new Error(absent);
+		expect(absent.model).toBeUndefined();
+
+		// Other optional fields keep their empty-value semantics (no drive-by change).
+		const emptyTools = parseAgentFile("---\nname: a\ndescription: d\ntools:\n---\nbody\n", "/x/a.md");
+		if (typeof emptyTools === "string") throw new Error(emptyTools);
+		expect(emptyTools.tools).toBeUndefined();
+	});
+});
+
 describe("parseAgentFile", () => {
 	it("parses full frontmatter: tools trimmed, timeout seconds → ms, body kept", () => {
 		const parsed = parseAgentFile(SCOUT, "/x/scout.md");

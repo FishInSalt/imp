@@ -116,8 +116,22 @@ describe("ephemeral task source identity", () => {
 			expect(sourceEvents.some(({ event }) => event.type === "tool_end")).toBe(true);
 			for (const entry of sourceEvents) expect(entry.info).toEqual(info);
 		}
-		expect(JSON.stringify(history)).not.toContain("sourceId");
-		expect(JSON.stringify(history)).not.toContain("taskToolCallId");
+		// SA-03: the ephemeral identity now persists INSIDE the taskRecord (durable
+		// correlation); everywhere else in the history it must not leak.
+		const outsideRecords = JSON.stringify(history, (key, value) =>
+			key === "taskRecord" ? undefined : value,
+		);
+		expect(outsideRecords).not.toContain("sourceId");
+		expect(outsideRecords).not.toContain("taskToolCallId");
+		const records = history
+			.filter((message) => message.role === "toolResult")
+			.flatMap((message) => (message.role === "toolResult" ? message.results : []))
+			.map((result) => result.taskRecord);
+		expect(records.map((record) => record?.taskToolCallId)).toEqual(["parent-a", "parent-b"]);
+		for (const record of records) {
+			const start = starts.find(({ info }) => info.taskToolCallId === record?.taskToolCallId);
+			expect(record?.sourceId).toBe(start?.info.sourceId);
+		}
 	});
 
 	it("direct execution has a source identity without inventing a parent association", async () => {

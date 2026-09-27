@@ -221,4 +221,37 @@ describe("anthropic thinking", () => {
 		expect(wire).toContain('"signature":"sig-1"');
 		expect(wire).toContain('"type":"tool_use"');
 	});
+
+	it("SA-03: a taskRecord on a tool result never reaches the wire body", async () => {
+		captured = [];
+		const messages: AgentMessage[] = [
+			{
+				role: "toolResult",
+				results: [
+					{
+						toolCallId: "c1",
+						toolName: "task",
+						content: "done",
+						isError: false,
+						taskRecord: {
+							version: 1,
+							timestamp: "2026-09-27T00:00:00.000Z",
+							attemptId: "attempt-evil",
+							sourceId: "source-1",
+							launched: true,
+							cwd: "/work",
+							status: "completed",
+							turns: 1,
+							textPresent: true,
+						},
+					},
+				],
+			},
+		];
+		await collect(provider().stream(REQ("claude-sonnet-4-5", messages)));
+		const body = JSON.stringify(captured[0]?.body ?? {});
+		expect(body.length).toBeGreaterThan(0);
+		expect(body).not.toContain("taskRecord");
+		expect(body).not.toContain("attempt-evil");
+	});
 });

@@ -320,8 +320,10 @@ Identity — **A3**:
   matches its call and `sourceId` matches its relayed events.
 - T12 no-session mode (child sessions off; and no-parent-store variant) → `childId`
   absent, transcript `disabled` / `no-parent-session`, `attemptId` present.
-- T13 sessions on → `childId` equals the child session header id and appears in the
-  transcript path.
+- T13 sessions on → `childId` equals the child session header id. Note: child
+  session file names embed an INDEPENDENT UUID (the header id is generated
+  separately — `manager.ts:61` + `SessionStore.create`'s default); identity is
+  read from the header, never inferred from the filename.
 
 Persistence — **A4**:
 
@@ -412,3 +414,10 @@ additive.
   unchanged); D5 states the `worktree` presence invariant; T20 asserts on captured body
   bytes and T24 is signature-enforced.
 - Corrections applied in the revision commit following round 1; implementation may start.
+- **Implementation-time correction (round 1, 2026-09-27)**: T13's original premise
+  ("the `childId` appears in the transcript path") was wrong — child session file
+  names embed an INDEPENDENT UUID chosen at creation (`manager.ts:61`), separate from
+  the header id that `SessionStore.create` generates (the manager passes `undefined`
+  as the id). The record carries `childId` (header) and `transcript.path` explicitly,
+  so nothing depended on the premise; T13 asserts header identity only. Future
+  managed-lookup designs must read the header, not infer identity from the name.

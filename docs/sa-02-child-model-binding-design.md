@@ -337,6 +337,37 @@ New file `test/child-model.test.ts` (pure matrix):
   proves WIRING only — the stubs bypass the runner; the real swap is
   evidenced by A-vision-shared / A-vision-worktree in `runner.test.ts`.
 
+`test/compaction-wiring.test.ts` — **existing rows that pin the removed
+raw behavior**; intentional red-before-green updates (they pass on `main`,
+are rewritten on the branch, and the rewritten form fails against the old
+code):
+
+- Row `["anthropic/shared", "anthropic/small", true]` (`:127-156`): wire
+  expectation `"anthropic/small"` → `"small"` (C3); compaction outcome
+  (true) and the canonical reference are unchanged.
+- Row `["anthropic/shared", "zai/shared", false]`: becomes a dedicated
+  rejection test — `isError === true`, zero provider requests, D7 message
+  (C4). The old row asserted the raw string ran on the parent's provider.
+- Row `[undefined, "anthropic/small", false]`: with the fallback parent
+  derived as `anthropic/shared`, the override is same-provider (C3) →
+  wire `"small"`; the settings then come from the canonical
+  `anthropic/small` catalog window (100k → compacts at 90k tokens), so
+  `compacts` flips `false` → `true`.
+- All other rows keep today's expectations (verified row by row: inherit,
+  bare, `vendor/small`, `undefined` + bare — same wire IDs, same
+  compaction choices, canonical reference identical to the old reference
+  string).
+
+These rows are the end-to-end evidence that compaction settings follow the
+canonical child reference (acceptance item 6), on top of the
+`childModelMetadata` unit tests.
+
+Audit of the other `createTaskTool` callers —
+`builtin-visual-verification.test.ts`, `child-compaction.test.ts`,
+`task-source-identity.test.ts`, `builtin-tool-presentation-integration.test.ts`,
+`test/task-tool.test.ts` — found no `modelReference`/override assertions
+affected (checked for `modelReference`, `modelMaxTokens`, `model:`).
+
 `test/runner.test.ts` (real wiring, M10 B pattern + `scriptedProvider` sink):
 
 - A-inherit-live: `setModel()` after runner construction, before the parent
@@ -368,7 +399,8 @@ by A-reject.
 
 ## 5. Verification protocol
 
-- Red-before-green where a pre-fix defect exists (wire cases, vision cases):
+- Red-before-green where a pre-fix defect exists (wire cases, vision cases,
+  and the rewritten `test/compaction-wiring.test.ts` rows listed in §4):
   the new assertions run against `main` first and must fail for the stated
   reason.
 - Gates on the branch: `npm run typecheck`, `npm run lint`, `npm run build`,
@@ -408,7 +440,11 @@ by A-reject.
   fallback family follows the CLI rule. Fixed: D1 now states the
   consequences per case, including the deliberate bare-override family
   change and the new rejection of mismatched prefixes under fallback
-  wiring; no existing test asserts the affected metadata.
+  wiring. The original disposition claimed "no existing test asserts the
+  affected metadata" — round 2 showed that false: wire/reject assertions
+  in `test/compaction-wiring.test.ts:127-156` pinned the removed raw
+  behavior; those rows are now scheduled as intentional red-before-green
+  updates in §4.
 - R1-P1 A-vision-worktree infeasible as written: the task-tool harness
   stubs bypass the runner, and `runner.test.ts` cwds were not git repos.
   Fixed: the worktree vision case moved to a git-initialized fixture under
@@ -419,3 +455,20 @@ by A-reject.
   implying SA-04 wiring exists.
 - Reviewer residual (pin CLI `"zai / glm"` fallthrough): added to D2's pin
   requirement.
+
+### Round 2 (2026-09-27) — REJECT (1×P1, 2×P2)
+
+- R2-P1 `test/compaction-wiring.test.ts:127-156` pins the removed raw
+  behavior (same-provider prefix kept in the wire ID; the cross-provider
+  row ran the raw string on the parent's provider). Fixed: §4 names the
+  three affected rows with per-row new expected values as red-before-green
+  updates, and the round-1 disposition above is corrected.
+- R2-P2 incomplete caller enumeration: the round-1 audit listed only four
+  files. Fixed: all other `createTaskTool` callers audited (§4) — no
+  further `modelReference`/override assertions affected.
+- R2-P2 acceptance coverage: the compaction-wiring updates preserve the
+  end-to-end settings/reference coverage (acceptance item 6); §4 states
+  this explicitly alongside the new `childModelMetadata` unit tests.
+- Confirmed in round 2, no action: D1 consequence list and D2 pin outcomes
+  (including the untrimmed fallback return), A-vision-worktree
+  feasibility, identity swap, §6 accounting honesty.

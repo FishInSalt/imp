@@ -11,14 +11,15 @@ import { createChildSession } from "../session/manager.js";
 import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
 import {
+	assessWorktreeRemoval,
 	buildWorktreeNotice,
 	buildWorktreeTrailer,
 	type ChildWorktree,
 	createChildWorktree,
-	hasWorktreeChanges,
 	type RepoState,
 	removeChildWorktree,
 	resolveRepoState,
+	type WorktreeRemovalAssessment,
 	worktreeChangeStat,
 } from "../worktree.js";
 import { taskPresentation } from "./presentation.js";
@@ -111,6 +112,42 @@ export interface TaskToolOptions {
 	agents?: readonly AgentDefinition[];
 }
 
+/** SA-01: what the cleanup attempt did — drives the result text (design §D5). */
+type CleanupOutcome =
+	| { state: "removed" }
+	| { state: "failed"; errors: string[] }
+	| { state: "kept"; assessment: Exclude<WorktreeRemovalAssessment, { verdict: "clean" }> };
+
+/** SA-01: assess-then-maybe-remove. Auto-removal happens ONLY on a positively
+ *  clean assessment; a failed check or failed removal preserves the worktree. */
+async function attemptWorktreeCleanup(wt: ChildWorktree, repo: RepoState): Promise<CleanupOutcome> {
+	const assessment = await assessWorktreeRemoval(wt, repo);
+	if (assessment.verdict !== "clean") return { state: "kept", assessment };
+	const errors = await removeChildWorktree(wt, repo);
+	return errors.length === 0 ? { state: "removed" } : { state: "failed", errors };
+}
+
+/** SA-01 §D5: a failed removal names what may remain and claims nothing about
+ *  the tree (also covers the half-removed case: dir gone, branch delete failed). */
+function cleanupFailureNote(errors: string[], wt: ChildWorktree): string {
+	return `[task] worktree cleanup failed: ${errors.join("; ")}. The worktree or its branch may still exist: ${wt.path}, branch ${wt.branch}.`;
+}
+
+/** SA-01 §D5: retained but not verified — never claims "changes kept". */
+function keptForSafetyNote(
+	assessment: Exclude<WorktreeRemovalAssessment, { verdict: "clean" }>,
+	wt: ChildWorktree,
+): string {
+	return `[task] worktree kept for safety: ${assessment.detail}. Path: ${wt.path}, branch ${wt.branch}. Nothing was deleted.`;
+}
+
+/** The note the setup-error paths append ("" when the worktree was removed). */
+function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string {
+	if (cleanup.state === "failed") return cleanupFailureNote(cleanup.errors, wt);
+	if (cleanup.state === "kept") return keptForSafetyNote(cleanup.assessment, wt);
+	return "";
+}
+
 /** Byte-accurate tail cut that never splits a UTF-8 sequence. */
 function tailTruncate(text: string): { text: string; dropped: number } {
 	const total = Buffer.byteLength(text, "utf8");
@@ -181,7 +218,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				args.worktree === true || (args.worktree === undefined && agent?.worktree === true);
 			let wt: ChildWorktree | undefined;
 			let repo: RepoState | undefined;
-			let cleanupErrors: string[] = [];
+			let cleanup: CleanupOutcome | undefined;
 			let prompt = String(args.prompt);
 			let tools: Tool[];
 			// Child cwd for gate events (M6b): the worktree path when isolation is
@@ -214,17 +251,21 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				// undefined return both fail loudly (review nit 3).
 				const rebuilt = options.getToolsForCwd?.(agentCwd);
 				if (rebuilt === undefined) {
-					cleanupErrors = await removeChildWorktree(wt, repo);
+					// SA-01: the fresh worktree is rolled back only when it is
+					// positively clean; a failed check or a failed removal is
+					// reported instead of silently leaking or losing it.
+					const attempt = await attemptWorktreeCleanup(wt, repo);
+					const note = cleanupOutcomeNote(attempt, wt);
 					return {
-						output:
-							"worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.",
+						output: `worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.${note ? `\n${note}` : ""}`,
 						isError: true,
 					};
 				}
 				const narrowed = validateSubset(rebuilt);
 				if ("isError" in narrowed) {
-					cleanupErrors = await removeChildWorktree(wt, repo);
-					return narrowed;
+					const attempt = await attemptWorktreeCleanup(wt, repo);
+					const note = cleanupOutcomeNote(attempt, wt);
+					return { ...narrowed, output: note ? `${narrowed.output}\n${note}` : narrowed.output };
 				}
 				tools = narrowed;
 			} else {
@@ -293,27 +334,31 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						: undefined,
 				});
 			} finally {
-				// Cleanup runs on every path (design D8): completed, aborted,
-				// timeout, crash. Preserved work is never discarded. Removal
-				// failures surface instead of leaking silently (review nit 2).
+				// Cleanup runs on every path (completed, cap, abort, timeout, crash,
+				// provider failure): SA-01 — auto-remove ONLY when the assessment
+				// positively certified the worktree untouched; work-present and
+				// unknown both keep it and the result says why.
 				if (wt !== undefined && repo !== undefined) {
-					const changed = await hasWorktreeChanges(wt, repo).catch(() => true);
-					if (!changed) {
-						cleanupErrors = await removeChildWorktree(wt, repo);
-						if (cleanupErrors.length === 0) wt = undefined;
-					}
+					cleanup = await attemptWorktreeCleanup(wt, repo);
 				}
 			}
 			const base = taskResult(outcome, session, effectiveTimeout, String(args.prompt));
-			if (wt === undefined && cleanupErrors.length === 0) return base;
-			if (wt === undefined) {
+			if (cleanup === undefined || cleanup.state === "removed") return base;
+			if (cleanup.state === "failed") {
 				return {
 					...base,
-					output: `${base.output}\n[task] worktree cleanup failed: ${cleanupErrors.join("; ")}`,
+					output: `${base.output}\n${cleanupFailureNote(cleanup.errors, wt as ChildWorktree)}`,
 				};
 			}
-			const stat = await worktreeChangeStat(wt, repo as RepoState);
-			return { ...base, output: `${base.output}${buildWorktreeTrailer(wt, stat)}` };
+			if (cleanup.assessment.verdict === "work-present") {
+				const kept = wt as ChildWorktree;
+				const stat = await worktreeChangeStat(kept, repo as RepoState);
+				return { ...base, output: `${base.output}${buildWorktreeTrailer(kept, stat)}` };
+			}
+			return {
+				...base,
+				output: `${base.output}\n${keptForSafetyNote(cleanup.assessment, wt as ChildWorktree)}`,
+			};
 		},
 	};
 }

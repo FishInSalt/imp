@@ -25,7 +25,8 @@ import { type SessionStore, SUMMARY_MARK } from "./session/store.js";
  */
 
 export interface CompactionSettings {
-	/** Summary budget reserve; also used by the legacy trigger. Default 16384. */
+	/** Summary budget reserve; also used by the legacy trigger. Default 32768
+	 *  (#compaction-thinking-retry — 0.8 share = 26214). */
 	reserveTokens: number;
 	/** Explicit automatic-compaction threshold; absent uses window - reserve. */
 	triggerTokens?: number;
@@ -63,7 +64,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 /** The summarizer's output budget (#derived-budget, pi parity):
  *  min(0.8 × reserveTokens, model maxTokens ?? Infinity).
  *
- *  - The 0.8 × reserve share (≈13107 at defaults) is the ALWAYS-present,
+ *  - The 0.8 × reserve share (≈26214 at defaults) is the ALWAYS-present,
  *  settings-scaled bound — it carries all the safety roles the old hard
  *  2048/8192 constants played (runaway protection, cost ceiling).
  *  - The model side caps at the model's own output limit when known
@@ -466,13 +467,13 @@ async function summarizeWithRetry(args: {
 	}
 	const retry = await runSummarizer({ ...args, thinking: lowered });
 	addUsage(retry.usage, first.usage); // honest accounting across both hops
+	// Abort wins over the cap on the retry hop too (design §3).
+	if (args.signal?.aborted) throw new Error(args.abortedMessage);
 	if (retry.stopReason === "max_tokens") {
-		if (args.signal?.aborted) throw new Error(args.abortedMessage);
 		throw new Error(
 			`${args.tokenCapMessage} (thinking=${args.thinking ?? "off"} then ${lowered} both capped)`,
 		);
 	}
-	if (args.signal?.aborted) throw new Error(args.abortedMessage);
 	return retry;
 }
 

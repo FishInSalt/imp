@@ -399,6 +399,31 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		expect(result?.usage).toMatchObject({ inputTokens: 20, outputTokens: 10 });
 	});
 
+	it("#compaction-thinking-retry: the default settings path retries even for a prefixed id", async () => {
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "text", text: "half" }], "max_tokens"),
+				assistant([{ type: "text", text: "## Goal\nfull" }]),
+			],
+			requests,
+		);
+		// A reference-shaped model id matches no family rule (meta null): the
+		// ladder still retries — asking for off maps to "no thinking field".
+		// reserveTokens 32768 = the DEFAULT_COMPACTION_SETTINGS value (#compaction-
+		// thinking-retry); keepRecentTokens is trimmed so the fixture has a cut.
+		const result = await compactHistory({
+			messages: overflowishHistory(6),
+			provider,
+			model: "moonshotai/kimi-k2.7-code",
+			settings: { reserveTokens: 32768, keepRecentTokens: 1, contextWindow: 131072 },
+			thinking: "high",
+		});
+		expect(result?.summary).toContain("full");
+		expect(requests).toHaveLength(2);
+		expect(requests[1]?.thinking).toBeUndefined();
+	});
+
 	// #derived-budget: pi parity — min(0.8 × reserveTokens, model maxTokens
 	// ?? Infinity). No magic constants; the reserve share is the always-present
 	// bound. glm-5.3's thinking blocks count against max_tokens and the old

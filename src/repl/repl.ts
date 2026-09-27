@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import { type AgentMessage, type AssistantMessage, contentText, type Usage } from "../core/messages.js";
+import { killTrackedDetachedChildren } from "../core/process-tree.js";
 import type { SessionStore } from "../core/session/store.js";
 import { type QueueMode, saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
@@ -1303,6 +1304,9 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "exited";
 		this.mcp?.close(); // M18: kill MCP children before goodbye
+		// #bash-abort D3: detached bash groups outlive the parent by
+		// construction — sweep them BEFORE anything else can exit the process.
+		killTrackedDetachedChildren();
 		const session = this.runner.session;
 		if (session?.isPersisted) {
 			const id8 = session.header.id.slice(0, 8);
@@ -1317,6 +1321,9 @@ class ReplMachine {
 		if (this.state === "exited") return;
 		this.state = "exited";
 		this.mcp?.forceKill(); // M18: synchronous best-effort kill
+		// #bash-abort D3: must run BEFORE this.exit(code) — after a real
+		// process.exit nothing runs (round-2 review F1).
+		killTrackedDetachedChildren();
 		// Close dangling tool_use in the session so a force-quit run stays
 		// resumable (single Ctrl+C is handled by the loop; this is the 130 path).
 		this.runner.persistMissingToolResults("(force quit before this tool ran)");

@@ -691,6 +691,43 @@ describe("TuiShell selector", () => {
 		shell.close();
 	});
 
+	it("renders the detail block between title and items (the confirm carrier): command + reason stay in the picker", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "[guardian] allow this bash command?",
+			detail: "command: rm -rf node_modules\nwhy it matched: recursive force delete",
+			items: [{ label: "Yes" }, { label: "No" }],
+		});
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("command: rm -rf node_modules");
+		expect(frame).toContain("why it matched: recursive force delete");
+		// placement: detail sits AFTER the title, BEFORE the first item
+		expect(frame.indexOf("[guardian] allow this bash command?")).toBeLessThan(
+			frame.indexOf("command: rm -rf node_modules"),
+		);
+		expect(frame.indexOf("why it matched")).toBeLessThan(frame.indexOf("→ Yes"));
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("wraps a long detail line to the viewport width — nothing exceeds it", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const longCommand = `cargo build --release --target x86_64-unknown-linux-gnu ${"--features very-long-feature-name ".repeat(6)}`;
+		void shell.select({ title: "allow?", detail: longCommand, items: [{ label: "Yes" }] });
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("very-long-feature-name");
+		// every rendered line honors the 80-column terminal (no horizontal spill)
+		for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
+		shell.close();
+	});
+
 	it("Down moves the selection; Enter confirms the moved-to index", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();

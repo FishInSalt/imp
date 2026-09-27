@@ -183,7 +183,7 @@ export default function (api) {
 				// matched pattern, so "don't ask again" covers this shape, not all bash
 				const approved = await api.confirm(
 					"[guardian] allow this bash command?",
-					`${command}\nwhy it matched: ${effective.reason}`,
+					`command: ${command}\nwhy it matched: ${effective.reason}`,
 					{ sessionKey: `guardian:bash:${effective.test.source}` },
 				);
 				if (approved) return undefined; // the human said yes — run it
@@ -197,9 +197,11 @@ export default function (api) {
 			if (!insideDir(event.args.path, cwd)) {
 				// sessionKey "guardian:write:<cwd>" — one remembered decision per
 				// caller directory (outside writes for the same tree share it)
-				const approved = await api.confirm(`[guardian] allow writing outside ${cwd}?`, event.args.path, {
-					sessionKey: `guardian:write:${cwd}`,
-				});
+				const approved = await api.confirm(
+					`[guardian] allow writing outside ${cwd}?`,
+					`path: ${event.args.path}\nwhy it matched: the target is outside the caller's working directory`,
+					{ sessionKey: `guardian:write:${cwd}` },
+				);
 				if (approved) return undefined; // the human said yes — run it
 				return {
 					block: true,

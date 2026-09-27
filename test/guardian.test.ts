@@ -124,7 +124,11 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 		});
 		expect(confirm).toHaveBeenCalledTimes(1);
 		expect(confirm.mock.calls[0]?.[0]).toContain("[guardian]");
-		expect(String(confirm.mock.calls[0]?.[1])).toContain("rm -rf node_modules");
+		// the confirm question carries the command AND why it matched — the
+		// human sees both in the approval prompt, at a glance
+		const detail = String(confirm.mock.calls[0]?.[1]);
+		expect(detail).toContain("command: rm -rf node_modules");
+		expect(detail).toContain("why it matched:");
 
 		confirm.mockResolvedValue(true);
 		const approved = await gate({ args: { command: "rm -rf node_modules" } });

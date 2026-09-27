@@ -31,6 +31,12 @@ export interface TreeSelectRequest {
 export interface SelectOptions {
 	/** Line rendered above the items (e.g. "pick a model"). */
 	title?: string;
+	/** Context shown INSIDE the picker, between title and items (dim,
+	 * wrapped, multi-line — newlines preserved). The ask-side carrier for
+	 * api.confirm's detail: the gated command and why it matched stay
+	 * visible in the picker itself, not only in transcript notes that a
+	 * busy screen scrolls away. */
+	detail?: string;
 	items: SelectItemOption[];
 	/** Type-to-filter while the picker is open (M11 #9): printable input
 	 *  builds a case-insensitive substring query over the labels; arrows and

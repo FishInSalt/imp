@@ -52,6 +52,8 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		).resolves.toBe(true);
 		expect(host.picks).toHaveLength(1);
 		expect(host.picks[0]?.title).toBe("[guardian] allow this bash command?");
+		// the detail rides in the picker itself now (not only transcript notes)
+		expect(host.picks[0]?.detail).toBe("rm -rf node_modules\nwhy it matched: risky");
 		expect(host.picks[0]?.items.map((item) => item.label)).toEqual([
 			"Yes",
 			"Yes, don't ask again this session",

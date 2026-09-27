@@ -791,6 +791,12 @@ export class TuiShell implements LineInput {
 		let list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
 		const box = new Container();
 		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title, 0, 0));
+		// The confirm detail rides in the picker (not just transcript notes):
+		// Text wraps + preserves newlines, so the gated command and its reason
+		// stay in view while the list waits for the answer.
+		if (options.detail !== undefined && options.detail !== "") {
+			box.addChild(new Text(dim(options.detail, true), 0, 0));
+		}
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;
 		const queryRow = new Text("", 0, 0);

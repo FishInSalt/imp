@@ -144,6 +144,43 @@ export function bold(text: string, ansi = process.stdout.isTTY === true): string
 	return ansi ? `\x1b[1m${text}\x1b[0m` : text;
 }
 
+/** Alert colors for gated-content highlights in the confirm picker.
+ * Full-reset-based: SGR 22 (undim) also cancels bold on most terminals, so
+ * a span ends by REBUILDING the dim environment (\x1b[0m\x1b[2m) rather than
+ * partially resetting into it. ansi=false is the identity transform. */
+export const WARN_START = "\x1b[0m\x1b[1;31m";
+export const WARN_END = "\x1b[0m\x1b[2m";
+
+/** Apply alert coloring to plain [start, end) ranges of `text`. Ranges are
+ * clipped to bounds, sorted, and merged — a defensive host never trusts
+ * extension math. Non-ANSI output passes text through untouched. */
+export function applyWarnSpans(
+	text: string,
+	spans: ReadonlyArray<readonly [number, number]>,
+	ansi: boolean,
+): string {
+	if (!ansi || spans.length === 0) return text;
+	const sorted = [...spans]
+		.map(([s, e]) => [Math.max(0, s), Math.min(text.length, e)] as const)
+		.filter(([s, e]) => s < e)
+		.sort((a, b) => a[0] - b[0]);
+	// Merge FIRST, emit after: an overlapping later span must extend the
+	// earlier one's coverage, not be dropped once its text is already out.
+	const merged: Array<[number, number]> = [];
+	for (const [start, end] of sorted) {
+		const last = merged[merged.length - 1];
+		if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end);
+		else merged.push([start, end]);
+	}
+	let out = "";
+	let at = 0;
+	for (const [start, end] of merged) {
+		out += text.slice(at, start) + WARN_START + text.slice(start, end) + WARN_END;
+		at = end;
+	}
+	return out + text.slice(at);
+}
+
 /**
  * Lightweight markdown rendering for streamed assistant text — the subset
  * models actually emit (bold, headers, bullets, fenced code, rules).

@@ -131,9 +131,12 @@ export default function (api) {
 	/** rm with recursive+force intent in ANY flag spelling — combined -rf/-fr,
 	 * separate -r and -f, or --recursive/--force. The ask-tier regex only
 	 * matches combined tokens; without this, `rm -r -f target` slipped past
-	 * BOTH tiers (floor checks targets, rules check the regex). */
+	 * BOTH tiers (floor checks targets, rules check the regex).
+	 * Returns false, or { span } — [start, end) offsets of the matched rm
+	 * segment in the ORIGINAL command, for the confirm picker's highlight. */
 	const rmForceRecursive = (command) => {
-		for (const segment of command.split(/[;&|]/)) {
+		for (const segment of command.split(/([;&|])/)) {
+			if (segment === "" || /^[;&|]$/.test(segment)) continue; // separator captured by split
 			const words = segment.trim().split(/\s+/);
 			const at = words.indexOf("rm");
 			if (at === -1) continue;
@@ -149,7 +152,14 @@ export default function (api) {
 				} else if (word === "-r" || word === "-R") recursive = true;
 				else if (word === "-f") force = true;
 			}
-			if (recursive && force) return true;
+			if (recursive && force) {
+				// Map the trimmed segment back to offsets in the ORIGINAL command.
+				const start = command.indexOf(segment);
+				if (start === -1) return {}; // gate stands; span unavailable
+				const lastWord = words[words.length - 1] ?? "";
+				const end = start + segment.lastIndexOf(lastWord) + lastWord.length;
+				return { span: [start, Math.min(end, command.length)] };
+			}
 		}
 		return false;
 	};
@@ -173,19 +183,44 @@ export default function (api) {
 			const cwd = callerCwd(event);
 			const floor = rmFloor(command, cwd);
 			if (floor !== undefined) return { block: true, reason: floorReason(floor) };
-			const rule = rules.find((r) => r.test.test(command));
+			// First matching rule plus its regex match — the match's offsets
+			// become the picker's warn-highlight span.
+			let matched;
+			for (const candidate of rules) {
+				const m = candidate.test.exec(command);
+				if (m !== null) {
+					matched = { rule: candidate, match: m };
+					break;
+			}
+			}
 			// Split-flag rm -r -f misses the combined-token regex; treat it as the
 			// same recursive force delete rule (ask tier) when the floor didn't hit.
-			const splitFlagRm = !rule && rmForceRecursive(command) ? rmRule : undefined;
-			const effective = rule ?? splitFlagRm;
-			if (effective) {
+			if (!matched) {
+				const split = rmForceRecursive(command);
+				if (split) matched = { rule: rmRule, span: split.span };
+			}
+			if (matched) {
+				const effective = matched.rule;
+				// Whole command for approval semantics; the matched part highlighted
+				// so the risky fragment is visible at a glance in the picker.
+				const label = "command: ";
+				let span;
+				if (matched.match !== undefined && matched.match.index !== undefined) {
+					span = [matched.match.index, matched.match.index + matched.match[0].length];
+				} else if (matched.span !== undefined) {
+					span = matched.span;
+				}
+				const warnSpans =
+					span !== undefined
+						? { warnSpans: [[label.length + span[0], label.length + span[1]]] }
+						: {};
+				const detail = `${label}${command}\nwhy it matched: ${effective.reason}`;
 				// sessionKey "guardian:bash:<pattern>" — one remembered decision per
 				// matched pattern, so "don't ask again" covers this shape, not all bash
-				const approved = await api.confirm(
-					"[guardian] allow this bash command?",
-					`command: ${command}\nwhy it matched: ${effective.reason}`,
-					{ sessionKey: `guardian:bash:${effective.test.source}` },
-				);
+				const approved = await api.confirm("[guardian] allow this bash command?", detail, {
+					sessionKey: `guardian:bash:${effective.test.source}`,
+					...warnSpans,
+				});
 				if (approved) return undefined; // the human said yes — run it
 				return { block: true, reason: effective.reason }; // declined: same teaching text as before
 			}

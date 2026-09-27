@@ -1,4 +1,5 @@
 import { dim } from "../format.js";
+import { applyWarnSpans, WARN_START, WARN_END } from "../format.js";
 import { SPINNER_FRAMES } from "../render.js";
 import {
 	type AutocompleteSlashCommand,
@@ -793,9 +794,12 @@ export class TuiShell implements LineInput {
 		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title, 0, 0));
 		// The confirm detail rides in the picker (not just transcript notes):
 		// Text wraps + preserves newlines, so the gated command and its reason
-		// stay in view while the list waits for the answer.
+		// stay in view while the list waits for the answer. Warn spans overlay
+		// the alert highlight on the named ranges (host owns color).
 		if (options.detail !== undefined && options.detail !== "") {
-			box.addChild(new Text(dim(options.detail, true), 0, 0));
+			const spans = options.warnSpans ?? [];
+			// The outer dim wraps the whole block; span coloring rides inside it.
+			box.addChild(new Text(dim(applyWarnSpans(options.detail, spans, true), true), 0, 0));
 		}
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;

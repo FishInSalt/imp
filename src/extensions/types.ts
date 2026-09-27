@@ -35,6 +35,12 @@ export interface ConfirmOptions {
 	 *  prompting again. Extensions pick the key's granularity (e.g. the
 	 *  matched rule, the target directory). */
 	sessionKey?: string;
+	/** Character ranges ([start, end), 0-based) within `detail` to render
+	 * as an alert highlight. Extensions declare plain offsets — never ANSI —
+	 * and only color-capable hosts (the TUI confirm picker) apply them;
+	 * every other surface shows the detail verbatim. Out-of-range clips,
+	 * overlaps merge. */
+	warnSpans?: Array<[number, number]>;
 }
 
 /**

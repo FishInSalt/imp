@@ -728,6 +728,27 @@ describe("TuiShell selector", () => {
 		shell.close();
 	});
 
+	it("warn spans highlight the risky fragment in red bold — and the color carries across wrapped lines", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const command = "cargo build --release && cargo test --workspace && rm -rf target/debug node_modules";
+		const hit = "rm -rf target/debug node_modules";
+		const start = command.indexOf(hit);
+		void shell.select({
+			title: "[guardian] allow this bash command?",
+			detail: `command: ${command}\nwhy it matched: recursive force delete`,
+			warnSpans: [[`command: `.length + start, `command: `.length + start + hit.length]],
+			items: [{ label: "Yes" }, { label: "No" }],
+		});
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\x1b[1;31m"); // the warn color really renders
+		// and the dim environment resumes after the span
+		expect(raw).toContain("\x1b[0m\x1b[2m");
+		shell.close();
+	});
+
 	it("Down moves the selection; Enter confirms the moved-to index", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();

@@ -37,6 +37,11 @@ export interface SelectOptions {
 	 * visible in the picker itself, not only in transcript notes that a
 	 * busy screen scrolls away. */
 	detail?: string;
+	/** Character ranges ([start, end), 0-based) within `detail` to render
+	 * with the alert highlight (warn colors, overrides the dim). Carried
+	 * from api.confirm's options.warnSpans — the host owns color, the
+	 * extension owns only plain-text offsets. */
+	warnSpans?: Array<[number, number]>;
 	items: SelectItemOption[];
 	/** Type-to-filter while the picker is open (M11 #9): printable input
 	 *  builds a case-insensitive substring query over the labels; arrows and

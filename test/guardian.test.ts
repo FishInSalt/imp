@@ -129,6 +129,9 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 		const detail = String(confirm.mock.calls[0]?.[1]);
 		expect(detail).toContain("command: rm -rf node_modules");
 		expect(detail).toContain("why it matched:");
+		// warnSpans flags the risky fragment inside the command — the picker
+		// highlights "rm -rf" (label "command: " is 9 chars, rm -rf is 6)
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 15]]);
 
 		confirm.mockResolvedValue(true);
 		const approved = await gate({ args: { command: "rm -rf node_modules" } });
@@ -144,17 +147,23 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 			reason: "matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run",
 		});
 		// M10: the session key is the matched pattern string, so "don't ask
-		// again" scopes to this rule — not to all bash
-		expect(confirm.mock.calls[0]?.[2]).toEqual({ sessionKey: "guardian:bash:deploy-prod" });
+		// again" scopes to this rule — not to all bash. The warn span points
+		// at the matched pattern's occurrence inside the command.
+		expect(confirm.mock.calls[0]?.[2]).toMatchObject({
+			sessionKey: "guardian:bash:deploy-prod",
+		});
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 20]]);
 	});
 
 	it("M10 sessionKey passthrough: built-in bash rules key on the matched regex's source", async () => {
 		const { gate, confirm } = await loadGuardian("/proj");
 		await gate({ args: { command: "rm -rf node_modules" } });
 		expect(confirm).toHaveBeenCalledTimes(1);
-		expect(confirm.mock.calls[0]?.[2]).toEqual({
+		// sessionKey keys on the regex source; warnSpans flags "rm -rf" in the detail
+		expect(confirm.mock.calls[0]?.[2]).toMatchObject({
 			sessionKey: "guardian:bash:\\brm\\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\b",
 		});
+		expect(confirm.mock.calls[0]?.[2]?.warnSpans).toEqual([[9, 15]]);
 	});
 
 	it("harmless bash never asks", async () => {

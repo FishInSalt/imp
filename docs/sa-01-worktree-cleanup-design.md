@@ -130,30 +130,42 @@ verdict wins; checks short-circuit in the listed order.
    setup-error path the single rollback). `creationReflog` is optional and
    `createChildWorktree`'s only production caller is `task.ts`, so no call site
    breaks.
-4. **Synthetic `node_modules` link, verified now.** Only when `wt.nodeModulesLinked`
-   was true at creation. lstat `<wt.path>/node_modules`:
-   - symlink whose realpath equals `realpath(repo.root/node_modules)` → mark it as
-     a *known synthetic entry* (consumed by step 6);
+4. **`node_modules` at the worktree root — the only exempt occupant is the
+   runtime-created link, verified now.** (Acceptance-round revision, §9: the
+   check runs regardless of the creation-time flag.) lstat
+   `<wt.path>/node_modules`:
    - absent → nothing to filter;
-   - anything else (real directory, different target, unreadable) → `unknown`
-     ("node_modules is no longer the verified synthetic link") — never silently
-     excluded, never implicitly deletable. (If `nodeModulesLinked` is false, the
-     path is ordinary user state and git sees it normally.)
+   - present, `wt.nodeModulesLinked` is true, and it is a symlink whose realpath
+     equals `realpath(repo.root/node_modules)` → mark it as a *known synthetic
+     entry* (consumed by step 6);
+   - present, but `nodeModulesLinked` is false → `unknown` ("node_modules exists
+     but is not the runtime-created synthetic link") — even when `.gitignore`
+     hides it from every git command below;
+   - present, linked, but not that symlink (real directory, different target,
+     unreadable) → `unknown` ("node_modules is no longer the verified synthetic
+     link").
+   A repo that tracks `node_modules` content therefore never auto-cleans; the
+   conservative retention is visible in the result note.
 5. **Index-flag probe (round-1 F3).** `git -C wt.path ls-files -v`: exit 0 required;
    every line must start with `H` (tracked, no special flags). Any other prefix
    (`h` assume-unchanged, `S` skip-worktree, …) → `unknown` ("index flags make change
    detection unreliable") — such flags hide real modifications from both `status`
    and `diff` (verified experimentally).
-6. **Status.** `git -C wt.path status --porcelain` — no pathspec (round-1 F4: a
-   `:!node_modules` pathspec can suppress tracked-content changes under that path).
-   Exit 0 required; then filter: when step 4 marked the link as known-synthetic, drop
+6. **Status.** `git -C wt.path status --porcelain --untracked-files=all
+   --ignore-submodules=none` — no pathspec (round-1 F4: a `:!node_modules`
+   pathspec can suppress tracked-content changes under that path), and the
+   explicit flags override display-oriented config that can hide real state
+   (`status.showUntrackedFiles=no` empirically hides untracked files even from
+   `--porcelain`; submodule ignore configs hide submodule changes). Exit 0
+   required; then filter: when step 4 marked the link as known-synthetic, drop
    a single line that is exactly `?? node_modules`; every other line is real state.
    Remaining output non-empty → `work-present` ("uncommitted, staged, or untracked
    files"); empty → continue. A gitignored link may or may not emit the untracked
    line depending on the ignore configuration (both observed); the filter handles
    both. A tracked-content deletion under `node_modules` surfaces here instead of
    being suppressed.
-7. **Diff.** `git -C wt.path diff --quiet <repo.head> --`: exit 0 → continue;
+7. **Diff.** `git -C wt.path diff --quiet --ignore-submodules=none <repo.head> --`:
+   exit 0 → continue;
    exit 1 → `work-present` ("committed changes relative to the creation baseline");
    any other exit → `unknown` ("git diff failed: …"). Independent confirmation
    signal for steps 2/3/6, and the backstop when they were fooled (e.g. content the
@@ -256,6 +268,11 @@ Unit (`test/worktree.test.ts`, real temp git repos):
 - U13 commit → reset → `git reflog expire --expire=all --all` (log fully cleared) →
   `unknown`, branch and directory intact (round-3 R3-P0; currently `clean` — red
   before the fix).
+- U14 `status.showUntrackedFiles=no` with an untracked file present →
+  `work-present` (acceptance-round A-P1; currently `clean` — red before the fix).
+- U15 child-created `node_modules/user-work.txt` under a `.gitignore`, with
+  `nodeModulesLinked` false → `unknown` (acceptance-round A-P1; currently `clean`
+  — red before the fix).
 
 Injection notes: chmod-based injections (unreadable index) must be skipped when
 running as root; the PATH-shim utility saves and restores `process.env.PATH` in every
@@ -363,4 +380,30 @@ decision, not silently dismissed:
   invisible to `status`/`diff`/`ls-files` and are deleted with the worktree.
   `status --porcelain --ignored` awareness is the candidate fix; it needs its
   own decision because it would also retain worktrees for children that only
-  produced ignored build artifacts.
+  produced ignored build artifacts. (The `node_modules` path itself is no longer
+  part of this gap — see §9.)
+
+## 9. Post-acceptance revision (2026-09-27)
+
+External acceptance review of `61db0e1` rejected the branch with two P1
+blockers; both were reproduced independently before this revision:
+
+- **A-P1 `status.showUntrackedFiles=no` hides untracked files.** A worktree
+  containing `valuable.txt` with that repo config set returned an empty
+  `status --porcelain` (and thus `clean`); `--untracked-files=all` shows
+  `?? valuable.txt`. A display-oriented config must never authorize deletion.
+  Fixed in D2 step 6 (explicit `--untracked-files=all`, plus
+  `--ignore-submodules=none` against submodule-ignore configs in steps 6 and
+  7); regression U14.
+- **A-P1 gitignored `node_modules` content.** With `nodeModulesLinked=false`
+  (no link was created) and `node_modules/` in `.gitignore`, a child-created
+  `node_modules/user-work.txt` is invisible to status/diff/ls-files and the
+  worktree assessed `clean`. Fixed in D2 step 4: the check now runs regardless
+  of the creation flag, and only the verified runtime link is exempt;
+  regression U15. The general gitignored-files deferral above is unchanged —
+  this specific path was an explicit SA-01 requirement ("do not ignore
+  arbitrary user-created content at that path").
+
+Both fixes were implemented and passed a focused adversarial delta review
+before merge; the existing U/I suite re-guards the previously verified
+behavior.

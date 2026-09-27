@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -27,6 +27,12 @@ export interface ChildWorktree {
 	branch: string;
 	/** Symlinked node_modules was created (excluded from change detection). */
 	nodeModulesLinked: boolean;
+	/** SA-01 D2 step 3: `reflog show --format=%H %gs` lines captured right after
+	 *  creation. The cleanup assessment requires the branch reflog to still end
+	 *  with these lines, so a rewritten log (update-ref -d + recreate, expiry)
+	 *  cannot masquerade as "no history was discarded". Undefined = capture
+	 *  failed → cleanup verdict `unknown` (the worktree is retained). */
+	creationReflog?: string[];
 }
 
 function git(cwd: string, args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
@@ -40,7 +46,12 @@ function git(cwd: string, args: string[]): Promise<{ status: number; stdout: str
 		child.stderr.on("data", (chunk) => {
 			stderr += chunk;
 		});
-		child.on("error", () => resolve({ status: 1, stdout, stderr: "git failed to spawn" }));
+		child.on("error", () =>
+			// Spawn failure is -1, never a git exit code: `git diff --quiet` exits 1
+			// for "differences", so conflating the two would read a broken git as
+			// "changes" — or an unspawnable status as "no changes" (SA-01 D3).
+			resolve({ status: -1, stdout, stderr: "git failed to spawn" }),
+		);
 		child.on("close", (code) => resolve({ status: code ?? 1, stdout, stderr }));
 	});
 }
@@ -118,20 +129,187 @@ export async function createChildWorktree(
 			// sees a normal filesystem and can install or report — never fatal
 		}
 	}
-	return { path: dir, branch, nodeModulesLinked };
+	// SA-01 D2 step 3: snapshot the branch reflog immediately after creation.
+	// Best-effort — a capture failure stores `undefined`, which makes the later
+	// cleanup assessment `unknown` (retain the worktree rather than guess).
+	let creationReflog: string[] | undefined;
+	const reflog = await git(repo.root, ["reflog", "show", "--format=%H %gs", `refs/heads/${branch}`]);
+	if (reflog.status === 0) {
+		creationReflog = reflog.stdout.split("\n").filter((line) => line !== "");
+	}
+	return { path: dir, branch, nodeModulesLinked, creationReflog };
 }
 
-/** Any change vs the base commit: committed, staged, or plain dirty files.
- * The symlinked node_modules is synthetic — excluded, or repos that do not
- * gitignore it would always look changed (review nit 4). */
-export async function hasWorktreeChanges(wt: ChildWorktree, repo: RepoState): Promise<boolean> {
-	const statusArgs = wt.nodeModulesLinked
-		? ["status", "--porcelain", "--", ":!node_modules"]
-		: ["status", "--porcelain"];
-	const status = await git(wt.path, statusArgs);
-	if (status.status === 0 && status.stdout.trim() !== "") return true;
-	const diff = await git(wt.path, ["diff", "--quiet", repo.head, "--"]);
-	return diff.status === 1;
+/** SA-01: verdict of the auto-removal safety assessment. `clean` requires every
+ *  check to pass positively; anything else keeps the worktree. */
+export type WorktreeRemovalAssessment =
+	| { verdict: "clean" }
+	| { verdict: "work-present"; detail: string }
+	| { verdict: "unknown"; detail: string };
+
+function commandFailure(result: { status: number; stdout: string; stderr: string }): string {
+	return (result.stderr || result.stdout).trim() || `exit ${result.status}`;
+}
+
+/** Decide whether a task-owned worktree can be auto-removed (design
+ *  docs/sa-01-worktree-cleanup-design.md §D2). Never throws — internal errors
+ *  become `unknown`, which preserves the worktree. */
+export async function assessWorktreeRemoval(
+	wt: ChildWorktree,
+	repo: RepoState,
+): Promise<WorktreeRemovalAssessment> {
+	try {
+		return await assessWorktreeRemovalInner(wt, repo);
+	} catch (err) {
+		return {
+			verdict: "unknown",
+			detail: `assessment failed: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
+}
+
+async function assessWorktreeRemovalInner(
+	wt: ChildWorktree,
+	repo: RepoState,
+): Promise<WorktreeRemovalAssessment> {
+	const unknown = (detail: string): WorktreeRemovalAssessment => ({ verdict: "unknown", detail });
+	const work = (detail: string): WorktreeRemovalAssessment => ({ verdict: "work-present", detail });
+
+	// 1. Ownership: the repo must still register this path under this branch.
+	let wtReal: string;
+	try {
+		wtReal = realpathSync(wt.path);
+	} catch {
+		return unknown("worktree path does not resolve (moved or deleted)");
+	}
+	const listed = await git(repo.root, ["worktree", "list", "--porcelain"]);
+	if (listed.status !== 0) return unknown(`git worktree list failed: ${commandFailure(listed)}`);
+	let owned = false;
+	for (const block of listed.stdout.split(/\n\n+/)) {
+		const lines = block.split("\n").filter((line) => line !== "");
+		const entryPath = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+		if (entryPath === undefined || entryPath === "") continue;
+		let entryReal: string;
+		try {
+			entryReal = realpathSync(entryPath); // stale/prunable entries are skipped
+		} catch {
+			continue;
+		}
+		if (entryReal !== wtReal) continue;
+		const branchLine = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length);
+		if (branchLine !== `refs/heads/${wt.branch}`) {
+			return unknown(
+				`worktree is registered under ${branchLine ?? "no branch"}, not refs/heads/${wt.branch}`,
+			);
+		}
+		owned = true;
+		break;
+	}
+	if (!owned) return unknown("worktree is not registered under the expected path");
+
+	// 2. Branch + HEAD identity vs the creation baseline. A different HEAD is
+	//    positive evidence of new commits (empty/net-zero history included).
+	const symRef = await git(wt.path, ["symbolic-ref", "-q", "HEAD"]);
+	if (symRef.status !== 0 || symRef.stdout.trim() !== `refs/heads/${wt.branch}`) {
+		const found = symRef.stdout.trim();
+		return unknown(`worktree HEAD is not on the expected branch (${found || commandFailure(symRef)})`);
+	}
+	const head = await git(wt.path, ["rev-parse", "HEAD"]);
+	if (head.status !== 0) return unknown(`git rev-parse HEAD failed: ${commandFailure(head)}`);
+	if (head.stdout.trim() !== repo.head) {
+		return work("commit history differs from the creation baseline");
+	}
+
+	// 3. Discarded-history probe: the branch reflog must still end with the
+	//    creation snapshot, and every entry must sit at the baseline.
+	if (wt.creationReflog === undefined || wt.creationReflog.length === 0) {
+		return unknown("creation reflog snapshot unavailable");
+	}
+	const reflog = await git(repo.root, ["reflog", "show", "--format=%H %gs", `refs/heads/${wt.branch}`]);
+	if (reflog.status !== 0) return unknown(`git reflog failed: ${commandFailure(reflog)}`);
+	const entries = reflog.stdout.split("\n").filter((line) => line !== "");
+	if (entries.length === 0) {
+		return unknown("branch reflog was cleared — cannot verify that discarded commit history is absent");
+	}
+	const snapshot = wt.creationReflog;
+	const tail = entries.slice(entries.length - snapshot.length);
+	if (tail.length !== snapshot.length || !snapshot.every((line, i) => tail[i] === line)) {
+		return unknown("branch reflog was rewritten or truncated — the creation entry is gone");
+	}
+	if (entries.some((line) => line.slice(0, 40) !== repo.head)) {
+		return work("branch reflog shows commit history that later moved away from the creation baseline");
+	}
+
+	// 4. node_modules at the worktree root: the only exempt occupant is the
+	//    runtime-created link, verified now. The check runs regardless of the
+	//    creation-time flag — otherwise gitignored user content there is invisible
+	//    to every git command below (acceptance-round P1). A repo that tracks
+	//    node_modules therefore never auto-cleans; the retention is visible in the
+	//    result note.
+	let filterSyntheticLink = false;
+	const link = path.join(wt.path, "node_modules");
+	let stat: ReturnType<typeof lstatSync> | undefined;
+	try {
+		stat = lstatSync(link);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			return unknown(`node_modules is unreadable: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	if (stat !== undefined) {
+		if (!wt.nodeModulesLinked) {
+			return unknown("node_modules exists but is not the runtime-created synthetic link");
+		}
+		if (!stat.isSymbolicLink()) {
+			return unknown("node_modules is no longer the verified synthetic link");
+		}
+		let target: string;
+		let rootModules: string;
+		try {
+			target = realpathSync(link);
+			rootModules = realpathSync(path.join(repo.root, "node_modules"));
+		} catch {
+			return unknown("node_modules link cannot be verified");
+		}
+		if (target !== rootModules) {
+			return unknown("node_modules link points outside the repository");
+		}
+		filterSyntheticLink = true;
+	}
+
+	// 5. Index flags (skip-worktree/assume-unchanged) hide real modifications
+	//    from both status and diff — refuse to certify such a worktree.
+	const flags = await git(wt.path, ["ls-files", "-v"]);
+	if (flags.status !== 0) return unknown(`git ls-files failed: ${commandFailure(flags)}`);
+	if (flags.stdout.split("\n").some((line) => line !== "" && !line.startsWith("H"))) {
+		return unknown("index flags (skip-worktree/assume-unchanged) make change detection unreliable");
+	}
+
+	// 6. Status — no pathspec (a `:!node_modules` exclusion could hide tracked
+	//    content under that path). The explicit flags override display-oriented
+	//    config that can hide real state: `status.showUntrackedFiles=no` hides
+	//    untracked files even from `--porcelain`, and submodule-ignore configs
+	//    hide submodule changes. Only the verified link's own untracked line is
+	//    filtered out afterwards.
+	const status = await git(wt.path, [
+		"status",
+		"--porcelain",
+		"--untracked-files=all",
+		"--ignore-submodules=none",
+	]);
+	if (status.status !== 0) return unknown(`git status failed: ${commandFailure(status)}`);
+	const statusLines = status.stdout
+		.split("\n")
+		.filter((line) => line !== "")
+		.filter((line) => !(filterSyntheticLink && line === "?? node_modules"));
+	if (statusLines.length > 0) return work("uncommitted, staged, or untracked files");
+
+	// 7. Diff: independent confirmation that the tree equals the baseline
+	//    (`--ignore-submodules=none` against submodule-ignore configs).
+	const diff = await git(wt.path, ["diff", "--quiet", "--ignore-submodules=none", repo.head, "--"]);
+	if (diff.status === 0) return { verdict: "clean" };
+	if (diff.status === 1) return work("committed changes relative to the creation baseline");
+	return unknown(`git diff failed: ${commandFailure(diff)}`);
 }
 
 /** Compact change summary for the result trailer: shortstat vs HEAD plus

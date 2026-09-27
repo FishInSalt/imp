@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1398,4 +1398,283 @@ describe("cap-hit transcript handoff (e2e)", () => {
 		expect(existsSync(file)).toBe(true);
 		expect(readFileSync(file, "utf8")).toContain("loop forever");
 	}, 30000);
+});
+
+describe("SA-01: conservative worktree cleanup (integration)", () => {
+	function gitAt(cwd: string) {
+		return (args: string[]) => {
+			const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+			return r;
+		};
+	}
+
+	async function seedRepo(dir: string): Promise<void> {
+		const g = gitAt(dir);
+		g(["init", "-q", "-b", "main"]);
+		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.name", "t"]);
+		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
+		g(["add", "."]);
+		g(["commit", "-qm", "seed"]);
+	}
+
+	it("I1: an empty commit alone keeps the worktree and shows the merge trailer", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i1-"));
+		await seedRepo(root);
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([{ type: "toolCall", id: "c1", name: "empty_commit", arguments: {} }]),
+					assistant([{ type: "text", text: "committed" }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [
+				{
+					name: "empty_commit",
+					description: "creates an empty commit",
+					parameters: Type.Object({}),
+					async execute() {
+						spawnSync("git", ["commit", "-q", "--allow-empty", "-m", "child work"], {
+							cwd,
+							encoding: "utf8",
+						});
+						return { output: "committed" };
+					},
+				},
+			],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i1-base-${Date.now()}`),
+		});
+		const result = await task.execute(
+			{ prompt: "commit nothing", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain("[task] changes kept in worktree");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).toContain("imp-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).not.toBe("");
+	});
+
+	it("I2: a child that corrupts its own worktree is kept for safety, not deleted", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i2-"));
+		await seedRepo(root);
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([{ type: "toolCall", id: "c1", name: "break_git", arguments: {} }]),
+					assistant([{ type: "text", text: "broke it" }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [
+				{
+					name: "break_git",
+					description: "removes the worktree .git file",
+					parameters: Type.Object({}),
+					async execute() {
+						rmSync(path.join(cwd, ".git"));
+						return { output: "broke" };
+					},
+				},
+			],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i2-base-${Date.now()}`),
+		});
+		const result = await task.execute({ prompt: "break it", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("worktree kept for safety");
+		expect(result.output).toContain("Nothing was deleted");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).not.toBe("");
+	});
+
+	it("I3: a failed removal surfaces instead of a silent leak (locked worktree)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i3-"));
+		await seedRepo(root);
+		const task = createTaskTool({
+			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "looked" }])]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => {
+				const r = spawnSync("git", ["worktree", "lock", cwd], { cwd: root, encoding: "utf8" });
+				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
+				return [createWriteTool({ cwd })];
+			},
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i3-base-${Date.now()}`),
+		});
+		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
+		expect(result.output).toContain("worktree cleanup failed");
+		expect(result.output).toContain("may still exist");
+		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(branches.stdout.trim()).not.toBe("");
+	});
+
+	it("I4: a setup-error rollback that fails is reported on the teaching error", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i4-"));
+		await seedRepo(root);
+		const task = createTaskTool({
+			getProvider: () => scriptedProvider([]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => {
+				const r = spawnSync("git", ["worktree", "lock", cwd], { cwd: root, encoding: "utf8" });
+				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
+				return [];
+			},
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i4-base-${Date.now()}`),
+			agents: [
+				{
+					name: "builder",
+					description: "writes",
+					worktree: true,
+					tools: ["missing_tool"],
+					system: "b",
+					source: "/x/b.md",
+				},
+			],
+		});
+		const result = await task.execute({ prompt: "build", agent: "builder" }, new AbortController().signal);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("unknown tools: missing_tool");
+		expect(result.output).toContain("worktree cleanup failed");
+	});
+
+	it("I6: the 60-turn cap keeps the child's written work (worktree + trailer)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i6-"));
+		await seedRepo(root);
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([
+						{
+							type: "toolCall",
+							id: "w1",
+							name: "write",
+							arguments: { path: "capped.txt", content: "work before the cap" },
+						},
+					]),
+					assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [createWriteTool({ cwd }), echo],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i6-base-${Date.now()}`),
+		});
+		const result = await task.execute(
+			{ prompt: "write then loop", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain("without producing a final answer");
+		expect(result.output).toContain("changes kept in worktree");
+	}, 30000);
+
+	it("I7: the timeout path keeps the child's written work (worktree + trailer)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i7-"));
+		await seedRepo(root);
+		const holdGate = gate();
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([
+						{
+							type: "toolCall",
+							id: "w1",
+							name: "write",
+							arguments: { path: "timed.txt", content: "work before timeout" },
+						},
+					]),
+					assistant([{ type: "toolCall", id: "h1", name: "hang", arguments: { message: "x" } }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [
+				createWriteTool({ cwd }),
+				{
+					name: "hang",
+					description: "hangs until the signal aborts",
+					parameters: Type.Object({ message: Type.String() }),
+					async execute(_args, signal) {
+						await Promise.race([
+							holdGate.promise,
+							new Promise<void>((resolve) => {
+								if (signal.aborted) return resolve();
+								signal.addEventListener("abort", () => resolve(), { once: true });
+							}),
+						]);
+						return { output: "held" };
+					},
+				},
+			],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i7-base-${Date.now()}`),
+		});
+		const result = await task.execute(
+			{ prompt: "write then hang", worktree: true, timeoutMs: 1000 },
+			new AbortController().signal,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("timed out");
+		expect(result.output).toContain("changes kept in worktree");
+	}, 15000);
+
+	it("I8: gitignored node_modules content created by the child is kept, not deleted", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i8-"));
+		await seedRepo(root);
+		const g = gitAt(root);
+		writeFileSync(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
+		g(["add", ".gitignore"]);
+		g(["commit", "-qm", "ignore node_modules"]);
+		const task = createTaskTool({
+			getProvider: () =>
+				scriptedProvider([
+					assistant([{ type: "toolCall", id: "c1", name: "make_dep", arguments: {} }]),
+					assistant([{ type: "text", text: "installed" }]),
+				]),
+			getModel: () => "m",
+			getSystem: () => "PARENT",
+			getTools: () => [],
+			getSession: () => null,
+			cwd: root,
+			getToolsForCwd: (cwd) => [
+				{
+					name: "make_dep",
+					description: "creates gitignored node_modules content",
+					parameters: Type.Object({}),
+					async execute() {
+						const dir = path.join(cwd, "node_modules");
+						const { mkdirSync } = await import("node:fs");
+						mkdirSync(dir, { recursive: true });
+						writeFileSync(path.join(dir, "user-work.txt"), "mine\n", "utf8");
+						return { output: "installed" };
+					},
+				},
+			],
+			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i8-base-${Date.now()}`),
+		});
+		const result = await task.execute(
+			{ prompt: "install deps", worktree: true },
+			new AbortController().signal,
+		);
+		expect(result.output).toContain("worktree kept for safety");
+		expect(result.output).toContain("not the runtime-created synthetic link");
+		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).toContain("imp-worktree-");
+	});
 });

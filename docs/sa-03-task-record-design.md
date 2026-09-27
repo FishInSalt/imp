@@ -432,6 +432,23 @@ additive.
   `worktree.path` remains the only field naming the removed path. The one
   informational note (`tools` array is not length-bounded) is accepted: the
   child pool is a small fixed set.
+
+### Owner acceptance review (2026-09-27) — 2×P2, both fixed (`0cf12b9`)
+
+- **P2-1 (fixed)**: compaction checkpoint writes were not observed — the flag was
+  only set by the `onMessage` wrapper, while the child's second write path
+  (`compactChildHistory → compactSession → session.appendCompaction`) failed into
+  the continue-uncompacted catch without a trace. Fix: `observeSessionWrites`
+  wraps the child session instance's `appendMessage` AND `appendCompaction` for
+  the attempt; a throw sets the flag and is re-thrown unchanged. Regression test:
+  one injected `appendCompaction` failure → status `completed`,
+  `transcript.writeFailed:true`, with the later ordinary write verified by
+  reopening the child file. The continue-uncompacted behavior is unchanged.
+- **P2-2 (fixed)**: an unpersisted store without any observed failure (empty
+  prompt + pre-aborted signal: zero writes, zero provider calls) was misreported
+  as `write-failed`. New `no-content` variant; `isPersisted === false` alone
+  never implies an error. Type, collector validation and this document updated;
+  the real first-write-failure test (T19) unchanged.
 - **Implementation-time correction (round 1, 2026-09-27)**: T13's original premise
   ("the `childId` appears in the transcript path") was wrong — child session file
   names embed an INDEPENDENT UUID chosen at creation (`manager.ts:61`), separate from

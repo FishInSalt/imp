@@ -529,9 +529,20 @@ export class SessionStore {
 		// the next append would turn it into an interior (fatal) line.
 		let parses = false;
 		try {
-			const probe = JSON.parse(tail) as { type?: unknown; leafId?: unknown; explicit?: unknown };
+			const probe = JSON.parse(tail) as {
+				type?: unknown;
+				leafId?: unknown;
+				explicit?: unknown;
+				version?: unknown;
+				id?: unknown;
+			};
 			if (probe.type === "position") parses = probe.leafId === null || typeof probe.leafId === "string";
 			else if (probe.type === "session_model") parses = typeof probe.explicit === "boolean";
+			// A session header is only recognizable AT POSITION 0 (the whole
+			// file, no newline yet) — a "session"-typed line later in the file
+			// is garbage and must fall through to the entry parser.
+			else if (probe.type === "session" && lastNewline < 0)
+				parses = probe.version === 1 && typeof probe.id === "string";
 			else {
 				parseEntryLine(tail, 0);
 				parses = true;
@@ -543,6 +554,12 @@ export class SessionStore {
 			appendFileSync(this.filePath, "\n", { encoding: "utf8" });
 			this.tornFinalLine = false;
 			return { action: "terminated", bytes: 1 };
+		}
+		if (lastNewline < 0) {
+			// A single unrecognizable line as the WHOLE file — unreachable for
+			// stores open() accepted (line 1 must be a valid header). Never
+			// zero the file; leave it and report nothing.
+			return undefined;
 		}
 		truncateSync(this.filePath, lastNewline + 1);
 		this.tornFinalLine = false;

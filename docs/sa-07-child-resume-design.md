@@ -234,7 +234,11 @@ The fresh path's selection is factored into one helper
 (`selectChildToolPool(agent, cwd, binding, sources)` in task.ts): rebuild
 (`getToolsForChild(cwd, { providerName, modelId })` / `getToolsForCwd(cwd)` /
 parent-pool fallback per the fresh rules) → apply the agent's `tools:`
-allowlist narrowing (the existing `validateSubset`) → filter `task` out.
+allowlist narrowing (the existing `validateSubset`) → filter `task` out —
+the `task` drop is CANONICAL for both paths (the pre-SA-07 worktree path did
+not re-filter; no shipped wiring ever puts `task` in a rebuilt pool; the
+helper makes the rule explicit so the executed pool and the recorded
+contract stay one projection — implementation review track 2, F1).
 Fresh dispatch and resume MUST both call it: rebuilding without the agent
 allowlist is a false `tools-drift` for every allowlisted agent, because the
 launch record stores the NARROWED array (`task.ts:353–364, 411, 431, 457`)
@@ -825,3 +829,26 @@ wrong for shape b — truncating a complete-but-unterminated entry deletes a
 recorded entry and desyncs the in-memory leaf (broken parent chain after
 the next append + reopen). §6.2/§11/T15 now pin shape-dependent repair:
 shape a truncates, shape b terminates.
+
+### Implementation review (fresh context, two tracks, HEAD c10ef86)
+
+Both tracks returned APPROVE WITH CORRECTIONS; corrections folded:
+
+- Track 1 (lease + repair): F1 — `repairTornFinalLine` could zero a
+  header-only no-newline file (`lastNewline === -1` → truncate at 0). The
+  completeness probe now recognizes a session header ONLY at position 0
+  (whole-file, no newline yet), and an unrecognizable single-line file is
+  left untouched instead of truncated; regression R2d pins
+  terminate + append + reopen. F2 — the reviewer's scratch fixture
+  mis-authored the mid-history orphan; a genuine non-last-assistant
+  variant is now T17. F3/F4 (identical-bytes steal window; release
+  semantics) are the documented §7.3 residual. Unverified: real
+  two-process interleaving (the §7.3 limit stands).
+- Track 2 (branch/seeding/handle line/accounting): F1 — the helper's
+  `task` drop documented as canonical (§5.1). F2 — the truncation-is-
+  irreversible comment added at the repair site. F3 — refusal records keep
+  the fresh-path cwd shape (parent cwd) on purpose. The SA-05 tracker
+  (`usage-totals.ts`) dedupes by `attemptId` and sums by `childId`:
+  resumed attempts cannot double-count (re-verified by the reviewer).
+  Unverified: an executed throw-path probe (code-read verdict).
+

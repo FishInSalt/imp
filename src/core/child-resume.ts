@@ -203,6 +203,8 @@ export function buildContinuationHistory(store: SessionStore): ContinuationHisto
 		return { ok: false, problem: scan.problem ?? "the transcript is not continuable" };
 	}
 	const repairs: string[] = [];
+	// Truncation is irreversible by design — it only ever removes bytes no
+	// reader can interpret as a record (termination keeps a complete one).
 	const torn = store.repairTornFinalLine();
 	if (torn !== undefined) {
 		repairs.push(

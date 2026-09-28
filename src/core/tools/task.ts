@@ -271,7 +271,11 @@ function tailTruncate(text: string): { text: string; dropped: number } {
 /** SA-07: one tool-pool selection for fresh and resumed children — rebuild
  *  the pool for the child's cwd/binding (a worktree child REQUIRES a
  *  rebuilt pool; a shared-cwd child falls back to the parent pool), apply
- *  the agent's `tools:` allowlist narrowing, and drop `task` itself. Fresh
+ *  the agent's `tools:` allowlist narrowing, and drop `task` itself — the
+ *  drop is CANONICAL for both paths (the pre-SA-07 worktree path did not
+ *  re-filter; no shipped wiring ever puts `task` in a rebuilt pool, and the
+ *  helper makes the rule explicit so the executed pool and the recorded
+ *  contract stay one projection). Fresh
  *  dispatch and resume must share this: the launch record stores the
  *  NARROWED array, so rebuilding without the allowlist would refuse every
  *  allowlisted agent with a false tools-drift. */

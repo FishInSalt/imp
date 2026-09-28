@@ -255,6 +255,23 @@ describe("SA-07 resume", () => {
 		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
 	});
 
+	it("R2d: a header-only file without a trailing newline is TERMINATED (never zeroed)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn4-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-4");
+		store.appendMessage(user("first"));
+		// Force the persisted single-line header: no entries, no newline.
+		writeFileSync(filePath, readFileSync(filePath, "utf8").split("\n")[0] ?? "");
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true);
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("terminated"); // the header must survive
+		const finalStore = SessionStore.open(filePath);
+		finalStore.appendMessage(user("after"));
+		const check = SessionStore.open(filePath);
+		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(1);
+	});
+
 	it("R3: the task schema exposes the resume parameter", async () => {
 		const { base, cwd, parent } = await fixture();
 		const { task } = harness({ session: parent, baseDir: base, cwd });
@@ -615,6 +632,30 @@ describe("SA-07 resume", () => {
 		expect(refused.isError).toBe(true);
 		expect(refused.output).toContain("inconsistent beyond a crash tail");
 		expect(readFileSync(transcript.path, "utf8")).toBe(before); // refusals mutate nothing
+	});
+
+	it("T17: an orphan introduced by a NON-last assistant refuses as well", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "old-call", name: "echo", arguments: {} }]));
+		child.appendMessage(assistant([{ type: "toolCall", id: "new-call", name: "echo", arguments: {} }]));
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "new-call", toolName: "echo", content: "ok", isError: false }],
+		});
+		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
+		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
+		expect(refused.isError).toBe(true);
+		expect(refused.output).toContain("inconsistent beyond a crash tail");
 	});
 
 	it("T22: recorded tool calls are never re-executed by history restoration", async () => {

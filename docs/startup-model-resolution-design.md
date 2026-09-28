@@ -1,6 +1,6 @@
 # Startup model resolution (#startup-model-resolution)
 
-Status: rev2 — round-1 findings folded; awaiting round-2 verification; implementation not started
+Status: rev3 — round-2 findings folded; awaiting round-3 verification; implementation not started
 Branch: `fix/startup-model-resolution` (worktree, base main `bae428e`)
 Date: 2026-09-28
 Review log: §9 (round 1: two independent tracks, both FIX-FIRST — folded in rev2)
@@ -151,11 +151,13 @@ Resolution step (D2 runs at the CLI boundary before runner
 construction; D3 runs inside the runner after restore — R1-A-F1):
 
 ```
+0. blank/empty effective id (§5)              → no resolution; existing path
 a. effective model's family usable?           → use it            (P3: no change)
 b. source is cli/env/project/global?          → do not override   (P5; copy per D6)
-                                              (D3/OPEN-1 may add the resume path here)
-c. source is builtin, families (D1) == 1      → use that family's switchHint
-d. source is builtin, families == 0 or >= 2   → no resolution; copy per D6
+   (explicit -m also outranks the saved row on -c/-r → D3 skipped)
+c. builtin source, families (D1) == 1         → use that family's switchHint
+   (resume/restore path per D3/OPEN-1: same, when no explicit -m)
+d. otherwise                                  → no resolution; copy per D6
 ```
 
 Wiring (R1-A-F1): the CLI-level rewrite covers the NON-resume path only.
@@ -195,7 +197,9 @@ message fails at the provider (`restoreModelFromSession`,
 model is unusable and one credential-source family exists; apply
 in-memory only, do **not** rewrite the session's `session_model` row
 (that row records what the session actually used; re-deriving on each
-startup is deterministic).
+startup is deterministic). An explicit startup `-m` outranks the saved row
+(`restoreModelFromSession`'s explicit branch) — D3 never applies then
+(R2-A-N1).
 
 Implementation requirement (R1-A-F2): no existing store call achieves
 "apply in memory without writing" — `seedModel` no-ops once a model row
@@ -224,8 +228,10 @@ without it.
 
 ### 3.4 D4 — Login-time selection
 
-All three success tails of `/login` (`commands.ts:877/882` codex OAuth,
-`:905/913` api-key legacy, `:959/967` dialog) today end with:
+All three success tails of `/login` — codex OAuth (status `:877`, refresh
+`:878`, note `:882`), api-key legacy (status `:905`, refresh `:906`, note
+`:913`), dialog (status `:959`/`:961`, refresh `:963`, note `:967`) —
+today end with:
 
 ```ts
 ctx.refreshFooter?.();
@@ -235,7 +241,7 @@ if (currentFamily !== target.family) ctx.renderer.note(`▪ switch with /model $
 New behavior: after the credential is saved, if
 `!ctx.runner.modelUsable()` — imp's analog of pi's `isUnknownModel` —
 switch instead of teaching, and refresh the footer AFTER the switch
-(R1-A-F5: the tails currently refresh first at `:877/:905/:959`; keep
+(R1-A-F5: the tails currently refresh first at `:878/:906/:963`; keep
 exactly one refresh, after `setModel`, so the footer never renders the
 pre-switch state):
 
@@ -243,9 +249,15 @@ pre-switch state):
 if (!ctx.runner.modelUsable()) {
   ctx.runner.setModel(target.switchHint);   // session_model explicit:true
   ctx.renderer.note(`▪ switched to ${target.switchHint}`);
+  ctx.refreshFooter?.();                    // refresh AFTER the switch
+} else {
+  ctx.refreshFooter?.();                    // usable path keeps today's order
+  if (currentFamily !== target.family) ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
 }
-ctx.refreshFooter?.();                      // single refresh, post-switch
 ```
+
+(R2-A-N2: the usable branch's refresh-then-note order is preserved verbatim
+— the earlier snippet had dropped that hint.)
 
 If a usable model already exists, behavior is unchanged (status + the
 `switch with /model` hint when families differ) — same "only when none is
@@ -334,8 +346,9 @@ per-shell surfaces accordingly.
 
 ```
 req = sourceAwareChain()        // {model, source}   (undefined-tolerant: P7)
-resumeRef = resume ? restore(saved) : undefined       // runner-side (D3)
+resumeRef = (resume && !modelExplicit) ? restore(saved) : undefined   // D3; -m outranks (R2-A-N1)
 eff = resumeRef ?? req
+if eff.model.trim() == ""          -> eff (blank: resolution skipped — §5)  # R2-A-N4
 if usable(eff)                     -> eff                                # P3
 else if resumeRef != undefined      -> D3: resolve-or-teach              # OPEN-1
 else if req.source != "builtin"     -> teach (D6 explicit-source copy)   # P5
@@ -478,7 +491,15 @@ FIX-FIRST — all findings folded into rev2):
   shell surface precision (F2); D5 reachability (F3); once-per-session
   state host (F4); untrusted-project suppression (F5);
   session-restore amendment wording (F6); missing test cases (F7).
-Round 2 (verification of the fold-ins): pending.
+Round 2 (2026-09-28, two independent fresh-context tracks): technical
+track FIX-FIRST — all six round-1 findings CLOSED; four new findings
+folded in rev3: resume pseudocode ignored `-m`'s outrank (A-N1), the D4
+replacement snippet dropped the usable-case `switch with /model` hint
+(A-N2), tail line refs reconciled (A-N3/B-N1), blank-id guard made
+explicit in the algorithm (A-N4). Copy/tests track APPROVE — all seven
+round-1 findings CLOSED; two P3 notes (footer-cell wording; print
+fail-fast refs to confirm before pinning OPEN-5 bytes).
+Round 3 (narrow verification of the rev3 fold-ins): pending.
 
 ## 10. Implementation log
 

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { modelAvailability } from "../src/provider/model-availability.js";
-import { Renderer } from "../src/render.js";
 import { NO_MODEL_SEGMENT, NO_MODEL_SHORT, welcomeLines } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
@@ -263,11 +262,10 @@ describe("#fresh-install-hint availability seam", () => {
 		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
 		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
 		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
-		const result: unknown = await run(
-			process.execPath,
-			[BIN, "-p", "hello"],
-			{ cwd, env: { PATH: process.env.PATH, HOME: home } },
-		).catch((err: unknown) => err);
+		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
+			cwd,
+			env: { PATH: process.env.PATH, HOME: home },
+		}).catch((err: unknown) => err);
 		const err = result as { stderr: string; code?: number; stdout: string };
 		expect(err.code).toBe(1);
 		expect(err.stderr).toContain("claude-sonnet-4-5 (anthropic) has no credential");

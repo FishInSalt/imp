@@ -26,7 +26,7 @@ import { clearApiKey, loadApiKey, saveApiKey, storedApiKeyFamilies } from "../pr
 import { catalogModelIds, refreshCatalog } from "../provider/catalog.js";
 import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
-import { LOGIN_TARGETS, loginTargetFor, type LoginTarget } from "../provider/login-targets.js";
+import { LOGIN_TARGETS, type LoginTarget, loginTargetFor } from "../provider/login-targets.js";
 import {
 	supportedThinkingLevels,
 	THINKING_LEVELS,

@@ -6,7 +6,9 @@ Date: 2026-09-28
 Review round 1: FIX-FIRST (F1–F8, folded in rev2; all verified correct in round 2)
 Review round 2: FIX-FIRST (N1–N8; fold-ins clean, new-in-rev2 issues)
 Review round 3: APPROVE (fold-ins verified; one P3 line nit — legacy codex
-OAuth success tail is commands.ts:936, not :941 — fix in passing at M2)
+OAuth success tail is commands.ts:936, not :941 — fixed at M2)
+Implementation review: FIX-FIRST (6 findings) → fixes folded, APPROVE
+(see §9)
 
 ## 1. Problem
 
@@ -369,3 +371,38 @@ issues in rev2's own decisions, folded into rev3)
 - N8 (P3) trust-store write precedes createRunner under
   `--trust`/`--no-trust` → recorded as explicit exception; test 5 scope
   fixed to session dir + log dir.
+
+## 9. Implementation review record (2026-09-28)
+
+Independent adversarial code review after M1–M3: FIX-FIRST — F1 (P1) and
+F2 (P2) required before merge, F3 strongly recommended, F4–F6
+record-or-fix. Disposition:
+
+- F1 (P1): print pre-flight probed `opts.model`, ignoring the SAVED model
+  under `-c`/`-r` — a stored-zai-key user whose last session ran zai/*
+  would be blocked by an anthropic error before the saved model was ever
+  consulted. **Fixed**: `-c`/`-r` skip the pre-flight entirely; the
+  provider's own key error teaches (0.1.0 behavior for that path).
+- F2 (P2): biome failures on the new code (formatter + one unused import).
+  **Fixed** (format --write; the pre-existing commands.ts import-sort on
+  base 88be785 also cleared in passing).
+- F3 (P2): the unit-suite "footer" test pinned constants, not behavior —
+  a revert of the `usable &&` think-drop gate would have passed. **Fixed**:
+  three real footer tests in repl-tui.test.ts (design tests 2/10/11) via a
+  new `realProvider` startTuiRepl flag (no scripted injection — the D7
+  seam would mask the gating; no turn is submitted, nothing hits the
+  network): unusable→`no model — /login` + no think segment + dead id
+  never rendered; /model to an unconfigured family flips the footer back
+  (post-switch real-provider probe); /login success flips it forward.
+- F4 (P3): mid-session `/resume` to an unusable model swaps the footer
+  but fires no `▪` teaching note (the D2 note lives on the warmup path
+  only). **Accepted gap** — the footer carries the pointer; recorded.
+- F5 (P3): `/model <unconfigured family>` persists via `setModel`
+  (explicit user intent — resumable once the user logs in). **Accepted,
+  deliberate**: D4 gates seeds, never explicit selections.
+- F6 (P3): design D3/N1 said the pre-flight "honors the D7 seam"; the
+  implementation documents the CLI entry never injects instead.
+  Behaviorally equivalent; **design addendum recorded here**.
+
+Gates after fixes: 2164/2164 tests (3 new footer pins), typecheck clean,
+biome clean (214 files), tarball smoke re-verified.

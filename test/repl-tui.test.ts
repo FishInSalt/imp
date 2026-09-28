@@ -160,6 +160,19 @@ function stripAnsi(text: string): string {
 }
 
 /** Settle TUI renders: nextTick + the 16ms minimum render interval. */
+/** #fresh-install-hint: every env var familyConfigured reads — scrubbed
+ *  by the footer-behavior tests so the live probe answers from a clean
+ *  world (plus a redirected IMP_AUTH_PATH, set per-test). */
+const CREDENTIAL_ENV_KEYS = [
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"OPENAI_API_KEY",
+	"ZAI_API_KEY",
+	"DEEPSEEK_API_KEY",
+	"MOONSHOT_API_KEY",
+	"IMP_MODEL",
+] as const;
+
 async function settle(extraMs = 30): Promise<void> {
 	await new Promise<void>((resolve) => setTimeout(resolve, extraMs));
 	for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1254,6 +1267,10 @@ describe("runRepl with shell:tui", () => {
 			confirm?: boolean;
 			agentsHomeDir?: string;
 			provider?: LLMProvider; // inject an abort-aware hold stream when needed
+			/** #fresh-install-hint: skip the scripted injection entirely — the
+			 *  runner resolves a REAL provider so the D7 seam stays OFF (footer
+			 *  tests for the unusable state). No turn is submitted on that path. */
+			realProvider?: boolean;
 			model?: string; // default test-model is knob-less; Claude opts into thinking
 			seed?: AgentMessage[]; // pre-written session history (replayed at startup)
 			noSession?: boolean;
@@ -1266,7 +1283,8 @@ describe("runRepl with shell:tui", () => {
 			for (const message of options.seed) store.appendMessage(message);
 		}
 		const requests: LLMRequest[] = [];
-		const provider: LLMProvider = options?.provider ?? scriptedProvider(scripts, requests);
+		const provider: LLMProvider | undefined = options?.provider ??
+			(options?.realProvider === true ? undefined : scriptedProvider(scripts, requests));
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
@@ -1432,6 +1450,101 @@ describe("runRepl with shell:tui", () => {
 			env.terminal.data("/exit\r");
 			const code = await env.repl;
 			expect(code).toBe(0);
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	// ── #fresh-install-hint: real footer behavior pins (design tests 2/10/11;
+	// implementation review F3 — the unit-suite footer test only pinned the
+	// constants, not the gating) ────────────────────────────────────────
+
+	it("#fresh-install-hint: unusable model — footer shows 'no model — /login' and DROPS the think segment", async () => {
+		// scrubbed credentials + a REAL provider (no injection — the D7 seam
+		// must NOT mask the gating). claude-sonnet-4-5 HAS a thinking meta, so
+		// a missing think segment is the F7 pin (a reverted `usable &&` gate
+		// would render `no model — /login think:medium` and fail this).
+		const saved: Record<string, string | undefined> = {};
+		for (const key of CREDENTIAL_ENV_KEYS) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		try {
+			// NO provider injection — the runner resolves a REAL anthropic
+			// provider; no turn is ever submitted, so nothing reaches the
+			// network. Injecting would trip the D7 seam (usable) and mask the
+			// gating this test pins.
+			const env = await startTuiRepl([], { model: "claude-sonnet-4-5", realProvider: true });
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("no model — /login");
+			expect(frame).not.toContain("think:"); // F7: no knob beside "no model"
+			expect(frame).not.toContain("claude-sonnet-4-5 ·"); // dead id never renders as in use
+			env.terminal.data("/exit\r");
+			await env.repl;
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	it("#fresh-install-hint test 11: /model to an unconfigured family mid-session flips the footer back", async () => {
+		const saved: Record<string, string | undefined> = {};
+		for (const key of CREDENTIAL_ENV_KEYS) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		try {
+			// start USABLE (env key on) so the initial footer shows the model;
+			// then drop the key and switch family — the live probe must flip it.
+			process.env.OPENAI_API_KEY = "test-key";
+			const env = await startTuiRepl([reply("ok")], { model: "openai/gpt-5.2" });
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("openai/gpt-5.2");
+			delete process.env.OPENAI_API_KEY;
+			env.terminal.data("/model zai/glm-5.3\r");
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("Model: zai/glm-5.3"); // the switch itself worked
+			expect(frame).toContain("no model — /login"); // footer re-probed (post-switch provider is REAL)
+			env.terminal.data("/exit\r");
+			await env.repl;
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	it("#fresh-install-hint test 10: /login success repaints the footer (credential change flips the segment)", async () => {
+		const saved: Record<string, string | undefined> = {};
+		for (const key of CREDENTIAL_ENV_KEYS) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		try {
+			const env = await startTuiRepl([], { model: "deepseek/deepseek-v4-pro", realProvider: true });
+			await settle();
+			expect(env.terminal.frameSince(0)).toContain("no model — /login"); // unusable start
+			// /login deepseek → the shell's secret prompt (readline-style TUI)
+			env.terminal.data("/login deepseek\r");
+			await settle();
+			env.terminal.data("a-test-key-123\r"); // the key prompt's answer
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			expect(frame).toContain("Saved API key for DeepSeek");
+			expect(frame).toContain("deepseek/deepseek-v4-pro"); // D6: footer flipped on login success
+			env.terminal.data("/exit\r");
+			await env.repl;
 		} finally {
 			for (const [key, value] of Object.entries(saved)) {
 				if (value === undefined) delete process.env[key];

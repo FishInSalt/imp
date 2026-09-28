@@ -710,8 +710,13 @@ function loadSkillSetup(
  *  when the resolved model's family holds a credential; otherwise the
  *  error text. Reuses LOGIN_TARGETS for the family→env-var mapping (no
  *  hand table). The D7 seam does not apply here: the CLI entry never
- *  injects a provider (tests exercise this via env scrubbing). */
+ *  injects a provider (tests exercise this via env scrubbing).
+ *  -c/-r SKIP the pre-flight entirely (implementation review F1): the
+ *  saved session model outranks opts.model there, and resolving it here
+ *  would duplicate restoreModelFromSession — the provider's own key
+ *  error teaches, exactly like 0.1.0. */
 function printModelUnusable(opts: CliOptions): string | undefined {
+	if (opts.resume !== undefined || opts.continueRecent) return undefined;
 	const ref = parseModelRef(opts.model);
 	if (modelAvailability(ref.provider).usable) return undefined;
 	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);

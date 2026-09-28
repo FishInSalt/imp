@@ -588,7 +588,8 @@ class RunnerImpl implements Runner {
 			// model-less until the user picks/logs in. resume keeps working —
 			// restoreModelFromSession's `saved ? … : options.model` chain
 			// resolves the startup default without a stored row.
-			if (this.modelUsable()) this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
+			if (this.modelUsable())
+				this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 		}
 		this.noteModelCredential(`${this.providerName}/${this.model}`, this.providerName);
 		for (const warning of this.agents.warnings) {
@@ -707,7 +708,7 @@ class RunnerImpl implements Runner {
 			// #fresh-install-hint (D4, round-1 F2 — site 2/3): /new must not
 			// resurrect the dead default on a fresh install.
 			if (this.modelUsable())
-					this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
+				this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 			const id8 = this.sessionStore.header.id.slice(0, 8);
 			const old8 = previous.header.id.slice(0, 8);
 			this.options.renderer.note(

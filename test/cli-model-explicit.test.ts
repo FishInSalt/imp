@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 // Extract declarations via TypeScript's AST rather than copying parser logic.
 const source = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
 const file = ts.createSourceFile("cli.ts", source, ts.ScriptTarget.Latest, true);
-const names = new Set(["defaultModel", "envThinking", "parseArgs", "runnerOptions"]);
+const names = new Set(["BUILTIN_MODEL", "requestedModel", "envThinking", "parseArgs", "runnerOptions"]);
 const declarations = file.statements.filter((statement) => {
 	if (ts.isFunctionDeclaration(statement)) return names.has(statement.name?.text ?? "");
 	if (ts.isVariableStatement(statement)) {
@@ -25,10 +25,16 @@ const { outputText } = ts.transpileModule(declarations.map((node) => node.getTex
 function parse(
 	argv: string[],
 	defaults: { env?: string; global?: string; project?: string } = {},
-): { model: string; modelExplicit: boolean; forwarded: { model: string; modelExplicit: boolean } } {
+): {
+	model: string;
+	modelSource: string;
+	modelExplicit: boolean;
+	forwarded: { model: string; modelExplicit: boolean };
+} {
 	return vm.runInNewContext(
 		`${outputText}\nconst parsed = parseArgs(argv);\n({
 			model: parsed.model,
+			modelSource: parsed.modelSource,
 			modelExplicit: parsed.modelExplicit,
 			forwarded: runnerOptions(parsed, argv, {}),
 		});`,
@@ -107,5 +113,19 @@ describe("CLI model provenance", () => {
 
 	it.each(["-m", "--model"])("%s still rejects a missing value", (flag) => {
 		expect(() => parse([flag])).toThrow("CLI exit 1");
+	});
+
+	// #startup-model-resolution (D2): the rung rides along as modelSource —
+	// only "builtin" tolerates resolution (P5).
+	it("reports the chain rung as modelSource", () => {
+		const source = (argv: string[], defaults: Parameters<typeof parse>[1] = {}) =>
+			parse(argv, defaults).modelSource;
+		expect(source([])).toBe("builtin");
+		expect(source([], { env: "env-model" })).toBe("env");
+		expect(source([], { global: "global-model", project: "project-model" })).toBe("project");
+		expect(source(["--no-trust"], { global: "global-model", project: "project-model" })).toBe("global");
+		expect(source(["--no-trust"])).toBe("builtin");
+		expect(source(["-m", "chosen"])).toBe("cli");
+		expect(source(["-m", "chosen"], { env: "env-model" })).toBe("cli");
 	});
 });

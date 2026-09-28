@@ -11,6 +11,13 @@ Implementation review: FIX-FIRST (6 findings) → fixes folded, APPROVE
 (see §9)
 Round-2 implementation review (post-merge): F1–F7 all fixed (see §10)
 
+> Superseded in part by #startup-model-resolution
+> (docs/startup-model-resolution-design.md, merged separately): the D2
+> startup note's configured-elsewhere wording and the D3 print-mode text
+> changed — with a configured provider present, the pointer is now
+> `/model` (or `-m <hint>`) instead of `/login <family>`; the banner/footer
+> segments gained a `/model` variant. The rest of this document stands.
+
 ## 1. Problem
 
 User feedback after publishing 0.1.0 (verified against the published

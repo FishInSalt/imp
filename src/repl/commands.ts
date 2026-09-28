@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AssistantBlock } from "../core/messages.js";
@@ -29,6 +30,7 @@ import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-
 import { discoverModels, familyConfigured } from "../provider/discover.js";
 import { LOGIN_TARGETS, type LoginTarget, loginTargetFor } from "../provider/login-targets.js";
 import { costFor } from "../provider/models.js";
+import { resolveStartupModelFallback } from "../provider/startup-model.js";
 import {
 	supportedThinkingLevels,
 	THINKING_LEVELS,
@@ -37,6 +39,7 @@ import {
 } from "../provider/thinking.js";
 import type { Renderer } from "../render.js";
 import type { NavigateTreeSuccess, Runner } from "../runner.js";
+import { noModelText } from "../runner.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import { buildTreeRows, TREE_FILTER_MODES } from "./components/tree-selector.js";
 import type { SelectOptions, TreeSelectRequest } from "./line-input.js";
@@ -68,6 +71,11 @@ export interface CommandContext {
 	/** Repaint the TUI footer (wired in repl.ts; /think changes its level
 	 *  segment). Absent in test recorders unless injected. */
 	refreshFooter?: () => void;
+	/** #startup-model-resolution (D5): per-session one-shot guard for the
+	 *  "/settings defaultModel …" hint. The ReplMachine owns the object
+	 *  (its lifetime = the session); absent → the hint is suppressed
+	 *  (dispatch fixtures must not gain surprise bytes). */
+	hintState?: { defaultModelHintShown: boolean };
 	/** Clipboard write, bound in repl.ts (/copy). Injectable in tests so
 	 *  the suite never touches the real clipboard. */
 	copyText?: (text: string) => Promise<void>;
@@ -775,6 +783,42 @@ function switchModel(ctx: CommandContext, id: string): void {
 	// Canonical refs on both sides (review P2-5): "gpt-5.4" alone cannot tell
 	// the user WHICH protocol family the switch landed on.
 	ctx.renderer.status(`Model: ${ctx.runner.modelReference()}`); // pi's showStatus form
+	maybeNoteDefaultModelHint(ctx); // #startup-model-resolution D5
+}
+
+/** #startup-model-resolution (D5): does the (possibly gated-off) project
+ *  settings file carry a defaultModel? Unreadable/unparsable reads as
+ *  "yes" — conservative: silence the hint rather than claim the wrong
+ *  thing. Implementation-review F2: mere file presence must not count. */
+function projectDefaultModelPresent(cwd: string): boolean {
+	const file = projectSettingsPath(cwd);
+	if (!existsSync(file)) return false;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(file, "utf-8"));
+		return typeof (parsed as { defaultModel?: unknown } | null)?.defaultModel === "string";
+	} catch {
+		return true;
+	}
+}
+
+/** #startup-model-resolution (D5): after an explicit switch, teach the one
+ *  command that makes it survive new sessions — at most once per session
+ *  (the ReplMachine owns `hintState`), only when no explicit default already
+ *  pins the startup model, and not when the pick IS what D2 would resolve
+ *  anyway (new sessions get it regardless). */
+function maybeNoteDefaultModelHint(ctx: CommandContext): void {
+	const state = ctx.hintState;
+	if (state === undefined || state.defaultModelHintShown) return;
+	if (settingSource(ctx, "defaultModel") !== "default") return;
+	// With project settings gated off a project defaultModel is invisible —
+	// suppress rather than claim the wrong thing (round-2 B-F5; impl-review
+	// F2: only when the file actually carries one).
+	if (!ctx.runner.projectSettingsAllowed && projectDefaultModelPresent(ctx.runner.runnerCwd)) return;
+	const fallback = resolveStartupModelFallback();
+	const reference = ctx.runner.modelReference();
+	if (fallback !== undefined && fallback.reference === reference) return;
+	state.defaultModelHintShown = true;
+	ctx.renderer.note(`▪ /settings defaultModel ${reference} keeps this model for new sessions`);
 }
 
 /** /resume <id>'s body, shared by the by-arg path and the picker's pick — the
@@ -789,7 +833,9 @@ function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 			// #fresh-install-hint (round-2 review F5): the third resumed surface —
 			// N3 covered startup only.
 			`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored · ${
-				ctx.runner.modelUsable() ? ctx.runner.modelReference() : "no model — /login"
+				ctx.runner.modelUsable()
+					? ctx.runner.modelReference()
+					: noModelText(ctx.runner.hasConfiguredProviders(), true)
 			}`,
 		);
 	} catch (err) {
@@ -848,6 +894,28 @@ export function loginUsesDialog(line: string, hasDialogShell: boolean): boolean 
 	return parsed !== null && parsed.name === "login";
 }
 
+/** #startup-model-resolution (D4): the shared login success tail. When NO
+ *  usable model exists — imp's analog of pi's unknown-model sentinel — the
+ *  family's curated switchHint is selected (pi auto-selects too) and the
+ *  manual /model step after a first login is gone. With a usable model the
+ *  pre-D4 behavior is byte-identical: footer refresh, then the family
+ *  pointer. The switch branch refreshes AFTER setModel so the footer never
+ *  renders the pre-switch state (round-1 A-F5). */
+function loginSelectionTail(ctx: CommandContext, target: LoginTarget): void {
+	if (!ctx.runner.modelUsable()) {
+		ctx.runner.setModel(target.switchHint);
+		ctx.renderer.note(`▪ switched to ${target.switchHint}`);
+		ctx.refreshFooter?.();
+		return;
+	}
+	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
+	const current = ctx.runner.modelReference();
+	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
+	if (currentFamily !== target.family) {
+		ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
+	}
+}
+
 /** /login's body, shared by the picker's pick and "/login <family>".
  *  #login-dialog: dialog shells route through the exclusive dialog
  *  (design §2.2.2) before the legacy flow below. */
@@ -875,12 +943,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 				},
 			});
 			ctx.renderer.status(`Logged in to ${target.name}`); // pi's wording
-			ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
-			const current = ctx.runner.modelReference();
-			const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
-			if (currentFamily !== target.family) {
-				ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
-			}
+			loginSelectionTail(ctx, target); // #startup-model-resolution D4
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			if (message === "Login cancelled") return; // pi: silent cancel
@@ -903,15 +966,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	if (key === null || key.trim() === "") return; // cancelled/blank — silent, like pi's "Login cancelled"
 	saveApiKey(target.family, key, ctx.authStorePath);
 	ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
-	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
-	// pi switches the model only when none was selected; imp always has one,
-	// so the pointer takes pi's place when the login changed the available
-	// family.
-	const current = ctx.runner.modelReference();
-	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
-	if (currentFamily !== target.family) {
-		ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
-	}
+	loginSelectionTail(ctx, target); // #startup-model-resolution D4
 }
 
 /** #login-dialog: the dialog-path body (design §2.2.2). The success tail
@@ -960,12 +1015,7 @@ async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise
 	} else {
 		ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
 	}
-	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
-	const current = ctx.runner.modelReference();
-	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
-	if (currentFamily !== target.family) {
-		ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
-	}
+	loginSelectionTail(ctx, target); // #startup-model-resolution D4
 }
 function renderNavigateSuccess(
 	ctx: CommandContext,
@@ -1415,7 +1465,11 @@ export const COMMANDS: readonly SlashCommand[] = [
 					// #fresh-install-hint (round-2 review F5): same rule on the legacy
 					// text path — no unusable id rendered as current.
 					ctx.renderer.writeLine(
-						`model: ${ctx.runner.modelUsable() ? ctx.runner.modelReference() : "no model — /login"}`,
+						`model: ${
+							ctx.runner.modelUsable()
+								? ctx.runner.modelReference()
+								: noModelText(ctx.runner.hasConfiguredProviders(), true)
+						}`,
 					);
 					ctx.renderer.writeLine(
 						"switch with: /model <id> — e.g. claude-sonnet-4-5, zai/glm-5.3 (any id your endpoint accepts)",
@@ -1706,7 +1760,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const runner = ctx.runner;
 			// #fresh-install-hint (round-2 review F5): /status is a display
 			// surface — an unusable model shows the /login pointer instead.
-			ctx.renderer.note(`▪ model ${runner.modelUsable() ? runner.model : "no model — /login"}`);
+			ctx.renderer.note(
+				`▪ model ${runner.modelUsable() ? runner.model : noModelText(runner.hasConfiguredProviders(), true)}`,
+			);
 			const session = runner.session;
 			if (session === null) {
 				ctx.renderer.note("▪ session none (--no-session)");

@@ -16,6 +16,13 @@ not the previous live session's model. No model discovery or credential-driven
 fallback occurs; provider request errors remain visible. There is no API request
 at restoration time to validate model availability.
 
+> Amended by #startup-model-resolution (docs/startup-model-resolution-design.md
+> §3.3, D3): when the restored model's family holds no credential and exactly
+> ONE credential source exists, the runner resolves that family's curated
+> LOGIN_TARGETS switchHint in memory — the recorded `session_model` row is NOT
+> rewritten. This is the narrow exception to the "no credential-driven
+> fallback" sentence above; everything else in this document stands.
+
 ## Persistence
 
 Use file-level `session_model` records (not tree entries):

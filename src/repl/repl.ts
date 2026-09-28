@@ -16,7 +16,7 @@ import type { McpManager } from "../mcp/manager.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
 import { imageSuffix, type Renderer } from "../render.js";
-import type { AgentEventInfo, Runner } from "../runner.js";
+import { type AgentEventInfo, noModelText, type Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import {
@@ -98,12 +98,12 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
  *  already — this only bounds pathological results). */
 const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
 
-/** #fresh-install-hint (D1, round-2 N7): the canonical unusable-model
- *  segments — short forms only (banner identity line; footer; resumed
- *  session line). The per-family detail lives in the D2 startup note and
- *  the D3 print error, never here. */
-export const NO_MODEL_SEGMENT = "no model available — run /login to connect one";
-export const NO_MODEL_SHORT = "no model — /login";
+/** #startup-model-resolution (D6): the unusable-model copy now lives in
+ *  the runner module — every surface (banner, footer, title, resumed line,
+ *  /status, legacy /model, notes) picks between the /login and /model
+ *  pointers via `noModelText`. These re-exports keep the established
+ *  import path for tests. */
+export { NO_MODEL_SEGMENT, NO_MODEL_SHORT } from "../runner.js";
 
 /** Claude Code-style welcome panel for fresh TUI sessions: branding, a
  *  quick-reference of the commands people actually reach for, and the
@@ -331,6 +331,11 @@ interface ReplMachineOptions {
  */
 class ReplMachine {
 	private state: ReplState = "idle";
+	/** #startup-model-resolution (D5): per-SESSION one-shot guard for the
+	 *  "/settings defaultModel …" hint. Lives here (not per dispatched
+	 *  CommandContext, which is rebuilt per line) so one session hints once;
+	 *  handed to every context by commandContext(). */
+	private readonly defaultModelHintState = { defaultModelHintShown: false };
 	/** Queued input (see QueueEntry): typed lines with their routing mode
 	 *  (steer / follow-up) and markdown-command prompts, which are model
 	 *  input verbatim and never re-interpreted (M11 #6 review P1 — a body
@@ -858,7 +863,9 @@ class ReplMachine {
 		// DROPPED (round-1 F7 — `no model — /login think:medium` renders a
 		// knob for a model that cannot run; it returns once usable).
 		const usable = this.runner.modelUsable();
-		const parts: string[] = [usable ? this.runner.modelReference() : NO_MODEL_SHORT];
+		const parts: string[] = [
+			usable ? this.runner.modelReference() : noModelText(this.runner.hasConfiguredProviders(), true),
+		];
 		// pi parity (#thinking-levels): the level segment sits beside the
 		// model whenever the model HAS a knob — "off" included, so the
 		// control is discoverable from the footer alone.
@@ -943,7 +950,10 @@ class ReplMachine {
 		// user's PICK, not "in use" — an explicit /model or -m shows the id
 		// even before a credential exists; only the startup default on a
 		// keyless machine shows the /login pointer.
-		const titleModel = usable || this.runner.modelSelectedExplicitly() ? this.runner.model : NO_MODEL_SHORT;
+		const titleModel =
+			usable || this.runner.modelSelectedExplicitly()
+				? this.runner.model
+				: noModelText(this.runner.hasConfiguredProviders(), true);
 		this.input.setTitle?.(`imp — ${titleModel}`);
 	}
 
@@ -1389,6 +1399,7 @@ class ReplMachine {
 			// Md quick commands (M11 #6) land here: a prompt, not a rerouted
 			// line — body text starting with "/" or "!" must stay model content.
 			submitPrompt: (text: string, opts?: { display?: string }) => this.enqueuePrompt(text, opts?.display),
+			hintState: this.defaultModelHintState, // #startup-model-resolution D5
 			copyText: (text: string) => copyToClipboard(text), // /copy (M16)
 			mcp: this.mcp, // M18: /mcp status
 			clearView: this.input.clearConversation?.bind(this.input), // TUI: /new wipes the screen
@@ -1575,7 +1586,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			// instead (welcomeLines' third arg is the DISPLAY segment).
 			const welcome = welcomeLines(
 				session.header.id.slice(0, 8),
-				runner.modelUsable() ? runner.modelReference() : NO_MODEL_SEGMENT,
+				runner.modelUsable() ? runner.modelReference() : noModelText(runner.hasConfiguredProviders()),
 				renderer.ansiEnabled,
 			);
 			for (const line of welcome.slice(0, -1)) renderer.writeLine(line);
@@ -1588,10 +1599,12 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		// deferred environment notes (extensions, context, trust) follow it
 		release?.();
 		if (!fresh && session) {
-			// #fresh-install-hint (D1, round-2 N3): same rule on the resumed
-			// line — `no model — /login` when the saved model's family holds
-			// no credential (resumed 0.1.0 sessions carry the dead default).
-			const modelSegment = runner.modelUsable() ? runner.model : NO_MODEL_SHORT;
+			// #startup-model-resolution (D6): same picker on the legacy resumed
+			// line — /login when nothing is configured, /model when a configured
+			// model merely was not selected.
+			const modelSegment = runner.modelUsable()
+				? runner.model
+				: noModelText(runner.hasConfiguredProviders(), true);
 			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${modelSegment}`);
 			// Replay the resumed history so the user sees what the model sees
 			// (the crash-recovery loop's missing half).

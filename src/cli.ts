@@ -3,7 +3,7 @@ import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { killTrackedDetachedChildren } from "./core/process-tree.js";
-import { listSessions } from "./core/session/manager.js";
+import { listSessions, resolveSession } from "./core/session/manager.js";
 import { effectiveSettings, loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
@@ -26,8 +26,9 @@ import { McpManager } from "./mcp/manager.js";
 import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { LOGIN_TARGETS } from "./provider/login-targets.js";
-import { modelAvailability } from "./provider/model-availability.js";
+import { configuredFamilies, modelAvailability } from "./provider/model-availability.js";
 import { parseModelRef } from "./provider/resolve.js";
+import { decideStartupModel, type ModelSource, type StartupModelDecision } from "./provider/startup-model.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
@@ -40,25 +41,38 @@ import { resolveShell } from "./tui.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
 // Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
+/** #startup-model-resolution (P7): the builtin rung's id — the only rung
+ *  that means "nobody asked"; D2 may resolve it (provider/startup-model.ts).
+ *  Removing this rung is a separate, budgeted milestone (design §8). */
+const BUILTIN_MODEL = "claude-sonnet-4-5";
+
 // M15 precedence: IMP_MODEL > global settings defaultModel > project settings
 // defaultModel (ONLY when the trust store already says trusted — parse time
 // precedes the interactive trust resolution, and "unknown" must be the
 // conservative skip) > builtin.
-const defaultModel = (argv: string[] = []): string => {
+// #startup-model-resolution D2: the rung rides along as `source` — only
+// `builtin` tolerates resolution; every configured rung is a user decision
+// (P5: explicit sources are never overridden).
+const requestedModel = (argv: string[] = []): { model: string; source: ModelSource } => {
 	const env = process.env.IMP_MODEL;
-	if (env !== undefined) return env;
+	if (env !== undefined) return { model: env, source: "env" };
 	// --no-trust refuses this directory's .imp/ resources (review P1-3): the
 	// project settings file must not seed the model the flag just refused —
 	// the parse-time default runs before trustDecision is known, so the flag
 	// is pre-scanned from raw argv.
-	if (argv.includes("--no-trust")) return loadSettings().defaultModel ?? "claude-sonnet-4-5";
+	if (argv.includes("--no-trust")) {
+		const globalDefault = loadSettings().defaultModel;
+		return globalDefault !== undefined
+			? { model: globalDefault, source: "global" }
+			: { model: BUILTIN_MODEL, source: "builtin" };
+	}
 	// project WINS over global (pi's scope semantics — the design table's
 	// "env > project > global > default"; smoke caught the inverted order)
 	const projectDefault = projectDefaultModelIfTrusted();
-	if (projectDefault !== undefined) return projectDefault;
+	if (projectDefault !== undefined) return { model: projectDefault, source: "project" };
 	const globalDefault = loadSettings().defaultModel;
-	if (globalDefault !== undefined) return globalDefault;
-	return "claude-sonnet-4-5";
+	if (globalDefault !== undefined) return { model: globalDefault, source: "global" };
+	return { model: BUILTIN_MODEL, source: "builtin" };
 };
 
 function projectDefaultModelIfTrusted(): string | undefined {
@@ -88,6 +102,9 @@ interface CliOptions {
 	/** M13 batch 2: `@path` positionals → file attachments (print mode). */
 	fileArgs: string[];
 	model: string;
+	/** #startup-model-resolution D2: which chain rung `model` came from —
+	 *  `-m` sets "cli"; only "builtin" tolerates resolution (P5). */
+	modelSource: ModelSource;
 	/** True only for -m/--model; defaults must not override a saved session model. */
 	modelExplicit: boolean;
 	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity).
@@ -204,10 +221,12 @@ on/off, codex effort). Set with --thinking <level> or IMP_THINKING, in
 a session with /think <level> (bare /think or Shift+Tab cycles).
 `;
 function parseArgs(argv: string[]): CliOptions {
+	const requested = requestedModel(argv);
 	const opts: CliOptions = {
 		prompt: undefined,
 		fileArgs: [],
-		model: defaultModel(argv),
+		model: requested.model,
+		modelSource: requested.source,
 		modelExplicit: false,
 		thinking: envThinking(),
 		maxTokens: 16384,
@@ -249,6 +268,7 @@ function parseArgs(argv: string[]): CliOptions {
 			case "-m":
 			case "--model":
 				opts.model = next();
+				opts.modelSource = "cli";
 				opts.modelExplicit = true;
 				break;
 			case "--thinking": {
@@ -539,6 +559,19 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			for (const line of startupNotes.splice(0)) liveNote(line);
 		};
 	}
+	// #startup-model-resolution (D2): the requested model came from the
+	// builtin rung, is unusable, and exactly ONE credential source exists →
+	// resolve to that family's switchHint before the runner is built. The
+	// note rides the deferral wrapper above (it lands after the welcome
+	// panel in the TUI, live in the scripted shell). Explicit sources and
+	// the resume path are untouched (P5; D3 owns -c/-r inside the runner).
+	const startupDecision = decideStartupResolution(opts);
+	if (startupDecision.kind === "resolve") {
+		opts.model = startupDecision.fallback.reference;
+		renderer.note(
+			`▪ no startup model configured — using ${startupDecision.fallback.reference} (only configured provider; /model to change, /settings defaultModel to keep)`,
+		);
+	}
 	let runner: Runner;
 	let commands: readonly RegisteredExtensionCommand[] = [];
 	// Hoisted out of the try: runRepl (below the block) needs the registry
@@ -706,22 +739,81 @@ function loadSkillSetup(
 	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
 }
 
-/** #fresh-install-hint (D3): print-mode pre-flight. Returns undefined
- *  when the resolved model's family holds a credential; otherwise the
- *  error text. Reuses LOGIN_TARGETS for the family→env-var mapping (no
- *  hand table). The D7 seam does not apply here: the CLI entry never
- *  injects a provider (tests exercise this via env scrubbing).
+/** #startup-model-resolution (D2, user-review finding 2): does `-c`/`-r`
+ *  actually have a session to restore? With none (or --no-session) the start
+ *  is effectively fresh — the D2 decision applies — otherwise the dead
+ *  builtin default survives on that path. A found session is D3's domain
+ *  (the saved row outranks opts.model). Unreadable/ambiguous stores return
+ *  true: the runner's own resolve path reports them. */
+function resumingExistingSession(opts: CliOptions): boolean {
+	if ((opts.resume === undefined && !opts.continueRecent) || opts.noSession) return false;
+	try {
+		return (
+			resolveSession(process.cwd(), { resume: opts.resume, continueRecent: opts.continueRecent }) !== null
+		);
+	} catch {
+		return true;
+	}
+}
+
+/** #startup-model-resolution D2: the shared decision table
+ *  (provider/startup-model.ts) wired to the live credential probe.
+ *  Callers apply `resolve` by rewriting opts.model — interactive announces
+ *  it, print stays silent (stdout byte contract). */
+function decideStartupResolution(opts: CliOptions): StartupModelDecision {
+	return decideStartupModel({
+		model: opts.model,
+		source: opts.modelSource,
+		explicit: opts.modelExplicit,
+		resuming: resumingExistingSession(opts),
+		isUsable: (model) => modelAvailability(parseModelRef(model).provider).usable,
+	});
+}
+
+/** #startup-model-resolution D6: print copy for the builtin-but-unresolvable
+ *  case — zero families or an ambiguous (multi-source) credential set.
+ *  Names the configured families and a concrete -m escape instead of the
+ *  pre-D2 dead-default message. Implementation-review F1: the copy must
+ *  count FAMILIES, not source-collapsed families — the env-only moonshot
+ *  pair has one source but two families, and claiming "no model configured"
+ *  would be false. */
+function printNoModelText(): string {
+	// The copy counts FAMILIES (first review F1; second review finding 5):
+	// the source-collapsed set hides the env-only moonshot pair, and a mixed
+	// zai + env-only-moonshot machine would lose the pair from the list.
+	const families = configuredFamilies();
+	if (families.length === 0) {
+		return "no model configured — export <FAMILY>_API_KEY (see `imp --help`) or run /login in an interactive session";
+	}
+	const first = LOGIN_TARGETS.find((target) => families.some((family) => family === target.family));
+	const escapeRef = first?.switchHint ?? "<provider/model>";
+	return `no startup model — configured: ${families.join(", ")} — pass -m ${escapeRef} (see \`imp --help\`), or set /settings defaultModel`;
+}
+
+/** #fresh-install-hint (D3) + #startup-model-resolution (D2/D6): print-mode
+ *  pre-flight. Returns undefined when the run may proceed — including the
+ *  D2 resolution case, applied silently (stdout stays empty until the run
+ *  starts) — otherwise the stderr text. Reuses LOGIN_TARGETS for the
+ *  family→env-var mapping (no hand table). The D7 seam does not apply here:
+ *  the CLI entry never injects a provider (tests exercise this via env
+ *  scrubbing).
  *  -c/-r SKIP the pre-flight UNLESS -m was given explicitly (round-2
- *  review F4): the SAVED session model outranks opts.model there, and
- *  resolving it here would duplicate restoreModelFromSession — the
- *  provider's own key error teaches, exactly like 0.1.0. An EXPLICIT -m
- *  outranks the saved model (restoreModelFromSession's explicit branch),
+ *  review F4): the SAVED session model outranks opts.model there (D3
+ *  resolves it inside the runner). An EXPLICIT -m outranks the saved model,
  *  so the pre-flight applies again: the user just named a family. */
 function printModelUnusable(opts: CliOptions): string | undefined {
-	if (opts.modelExplicit !== true && (opts.resume !== undefined || opts.continueRecent)) return undefined;
+	if (opts.modelExplicit !== true && resumingExistingSession(opts)) return undefined;
 	if (opts.model.trim() === "") return undefined; // F7e: a blank id is a parse matter, not a credential one
 	const ref = parseModelRef(opts.model);
 	if (modelAvailability(ref.provider).usable) return undefined;
+	const decision = decideStartupResolution(opts);
+	if (decision.kind === "resolve") {
+		opts.model = decision.fallback.reference; // D2 — silent in print mode
+		return undefined;
+	}
+	if (decision.kind === "unresolved") return printNoModelText(); // D6
+	// Explicit-source unusable (or an unusable legacy/builtin id that could
+	// not be resolved): the family-targeted teaching is unchanged.
 	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);
 	if (ref.provider === "openai-codex") {
 		return (

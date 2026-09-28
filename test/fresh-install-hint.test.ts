@@ -109,7 +109,9 @@ describe("#fresh-install-hint availability seam", () => {
 			renderer,
 		});
 		expect(output()).toContain("claude-sonnet-4-5 (anthropic) has no credential");
-		expect(output()).toContain("/login anthropic (or /model to pick a configured one)");
+		// #startup-model-resolution D6: /model leads — a configured model EXISTS
+		// (the pre-D2 "/login anthropic" lead was wrong for this state).
+		expect(output()).toContain("— configured: zai — /model to pick one, or /settings defaultModel <id>");
 		expect(output()).not.toContain("no model available — sign in with /login (");
 	});
 
@@ -275,9 +277,12 @@ describe("#fresh-install-hint availability seam", () => {
 		}).catch((err: unknown) => err);
 		const err = result as { stderr: string; code?: number; stdout: string };
 		expect(err.code).toBe(1);
-		expect(err.stderr).toContain("claude-sonnet-4-5 (anthropic) has no credential");
-		expect(err.stderr).toContain("export ANTHROPIC_API_KEY");
+		// #startup-model-resolution D6: zero credential sources → the generic
+		// zero-family text (the dead-default family pointer is gone).
+		expect(err.stderr).toContain("no model configured");
+		expect(err.stderr).toContain("export <FAMILY>_API_KEY");
 		expect(err.stderr).toContain("run /login");
+		expect(err.stderr).not.toContain("claude-sonnet-4-5 (anthropic) has no credential");
 		expect(err.stdout).toBe(""); // print byte contract — stdout stays empty
 		const written: string[] = [];
 		const walk = (dir: string): void => {
@@ -348,7 +353,11 @@ describe("#fresh-install-hint availability seam", () => {
 		try {
 			runner.setModel("zai/glm-4.6"); // live family switches (and the pick becomes explicit)
 			runner.resumeSession(legacy.header.id); // model-less target: options.model = anthropic (keyless)
-			expect(runner.session?.getModel()).toBeUndefined(); // the F2 pin: NO anthropic row
+			// #startup-model-resolution D3: the stale/unusable default resolves to
+			// the unique configured family instead of seeding a dead verdict. The
+			// F2 pin holds in its corrected form: NO anthropic row is ever written
+			// — the resolved zai row is.
+			expect(runner.session?.getModel()).toEqual({ provider: "zai", modelId: "glm-5.3" });
 			const onDisk = readFileSync(legacy.filePath, "utf8");
 			expect(onDisk).not.toContain('"type":"session_model"');
 		} finally {
@@ -373,7 +382,11 @@ describe("#fresh-install-hint availability seam", () => {
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.stdout).not.toContain("no model available — sign in with /login ("); // F3: not on stdout
-		expect(err.stderr).toContain("No API key found"); // the provider's own error teaches (D3)
+		// #startup-model-resolution (user-review 2): --no-session -c counts as a
+		// fresh start — the pre-flight applies and fails fast with the
+		// zero-family text instead of the provider's own key error.
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("no model configured");
 	});
 
 	it("round-2 F4: -c + explicit -m still pre-flights the named family", async () => {

@@ -1,9 +1,10 @@
 # Startup model resolution (#startup-model-resolution)
 
-Status: rev3 APPROVED (round 3, 2026-09-28) — implementation may start
+Status: rev3 APPROVED (round 3) — IMPLEMENTED (commit `5f0d56f`); implementation review pending
 Branch: `fix/startup-model-resolution` (worktree, base main `bae428e`)
 Date: 2026-09-28
 Review log: §9 (round 1: two independent tracks, both FIX-FIRST — folded in rev2)
+Implementation log: §10
 Implementation log: §10 (empty)
 
 ## 1. Problem
@@ -474,8 +475,8 @@ regression the implementation must catch with a knowingly-diffed suite.
 - OPEN-3 (§3.4): login selection marks explicit:true? [REC: yes]
 - OPEN-4 (§3.5): RESOLVED in rev2 — the flag lives on `ReplMachine`
   (R1-B-F4); round 2 to verify.
-- OPEN-5 (§3.6): exact copy bytes for all new strings (pin table before
-  implementation).
+- OPEN-5 (§3.6): RESOLVED at implementation — exact bytes pinned in
+  §10.2 and in `test/startup-model-resolution.test.ts`.
 - OPEN-6 (§3.2): resolution note once per process (yes) and its exact
   bytes; print-mode silence.
 - OPEN-7 (§3.2): source-aware chain shape — extend `defaultModel()` or a
@@ -509,4 +510,62 @@ Design review closed.
 
 ## 10. Implementation log
 
-Empty — implementation starts only after this review closes.
+### 10.1 What landed (commit `5f0d56f`, 2026-09-28)
+
+- `src/provider/startup-model.ts` (new): D1 `credentialSourceFamilies()`
+  (moonshot pair collapse: stored key authoritative, env-only ambiguous),
+  `resolveStartupModelFallback()`, and the pure `decideStartupModel()` table.
+- `src/provider/model-availability.ts`: exported `configuredFamilies()`.
+- `src/cli.ts`: the chain is source-aware (`requestedModel()` returning
+  {model, source}; `-m` → "cli"); `decideStartupResolution()` wires the
+  decision to the live probe; runInteractive resolves + notes (deferred
+  with the other startup notes), print pre-flight resolves silently and
+  fails with the new D6 zero/multi copy otherwise.
+- `src/runner.ts`: `hasConfiguredProviders()`; D3 in
+  `restoreModelFromSession` (in-memory only, row untouched; the resolution
+  note prints before the resumed line — implementation choice); the four
+  copy constants + `noModelText()` (single source); the D6
+  configured-elsewhere note text; resumed-line copy picker.
+- `src/repl/commands.ts`: `loginSelectionTail()` (D4, all three REPL login
+  tails; the CLI `imp login` path needs nothing — auth precedes any
+  runner); `maybeNoteDefaultModelHint()` (D5, once per session, settings
+  source "default" only, suppressed while project settings are gated off
+  with a project settings file present, suppressed when the pick equals
+  the resolvable switchHint); the three inline "no model — /login" surfaces
+  (/resume note, legacy /model text, /status) use the copy picker.
+- `src/repl/repl.ts`: `hintState` lives on the ReplMachine (shared into
+  every per-line CommandContext); banner/footer/title/resume-line copy
+  picker; the two legacy constants re-export from the runner module.
+- Tests: `test/startup-model-resolution.test.ts` (17 cases, incl. two
+  CLI-spawn e2e: silent print resolution and the interactive pipe note);
+  `test/cli-model-explicit.test.ts` updated for the source-aware chain
+  (+1 provenance case); `test/fresh-install-hint.test.ts` updated for the
+  D6 note/print copy and the D3-resolved resume behavior (the F2 pin holds
+  in corrected form: no anthropic row — the resolved zai row is seeded).
+
+Implementation notes / deviations recorded:
+- D3 applies to interactive `/resume` as well (same function), not only
+  `-c`/`-r`.
+- `hintState` absent in a CommandContext → the D5 hint is suppressed
+  (dispatch fixtures stay byte-stable); production always wires it.
+- The D6 note lists `availability.configuredFamilies` (families, not
+  source-collapsed) — an env-only moonshot setup lists both.
+
+### 10.2 OPEN-5 pinned bytes
+
+```
+resolve note:  ▪ no startup model configured — using zai/glm-5.3 (only configured provider; /model to change, /settings defaultModel to keep)
+D3 note:       ▪ restored model zai/glm-4.7 has no credential — using deepseek/deepseek-v4-pro (only configured provider; /model to change)
+D4 note:       ▪ switched to zai/glm-5.3
+D5 note:       ▪ /settings defaultModel zai/glm-4.6 keeps this model for new sessions
+D6 note (>=2): ▪ claude-sonnet-4-5 (anthropic) has no credential — configured: zai, deepseek — /model to pick one, or /settings defaultModel <id>
+segments:      no model selected — /model to choose one  ·  no model — /model   (configured, unresolved)
+               no model available — run /login to connect one  ·  no model — /login   (zero credential sources, unchanged)
+print zero:    no model configured — export <FAMILY>_API_KEY (see `imp --help`) or run /login in an interactive session
+print multi:   no startup model — configured: zai, deepseek — pass -m zai/glm-5.3 (see `imp --help`), or set /settings defaultModel
+```
+
+### 10.3 Gates
+
+typecheck 0 · lint 0 · build ok · 119 files / 2278 tests passed
+(implementation review pending).

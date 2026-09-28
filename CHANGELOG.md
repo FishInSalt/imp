@@ -9,6 +9,25 @@ All notable changes to imp are documented here. The format follows
 
 ### Changed
 
+- **Startup model resolution (#startup-model-resolution).** A machine whose
+  only credential belongs to a non-anthropic family no longer demands a
+  manual `/model` in every new session:
+  - when the builtin startup default is unusable and exactly ONE credential
+    source exists (the shared-`MOONSHOT_API_KEY` pair counts once), imp
+    resolves that family's curated `switchHint` (`zai/glm-5.3`, …) — one
+    `▪` note, never written to settings, seeded as a non-explicit session
+    model, print mode resolves silently;
+  - `/login` auto-selects the family's switchHint when no usable model
+    exists (a usable model is never replaced);
+  - an explicit `/model` switch prints a one-time pointer:
+    `/settings defaultModel <id>` keeps it for new sessions;
+  - `imp -c`/`-r` re-resolves a stale restored model the same way (the
+    recorded `session_model` row is intentionally left as-is);
+  - copy: with a configured provider present, `no model available — run
+    /login` becomes `no model selected — /model` on the banner/footer/title,
+    the runner note lists the configured families, and print-mode failure
+    text names `-m <hint>` / the env-var family instead of the dead default.
+
 - **Fresh-install model honesty (#fresh-install-hint).** On a machine
   with no credentials anywhere, imp 0.1.0 displayed the hardcoded startup
   default (`claude-sonnet-4-5`) as if it were in use — banner, footer, and

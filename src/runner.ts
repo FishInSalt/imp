@@ -1180,8 +1180,11 @@ class RunnerImpl implements Runner {
 		if (mayResolve && !modelAvailability(prepared.ref.provider).usable) {
 			const fallback = resolveStartupModelFallback();
 			if (fallback !== undefined) {
+				// "restored model" only when a row was actually restored; the no-row
+				// fallback names the dead reference plainly (user review finding 6).
+				const subject = saved !== undefined ? `restored model ${prepared.reference}` : prepared.reference;
 				this.options.renderer.note(
-					`▪ restored model ${prepared.reference} has no credential — using ${fallback.reference} (only configured provider; /model to change)`,
+					`▪ ${subject} has no credential — using ${fallback.reference} (only configured provider; /model to change)`,
 				);
 				prepared = this.prepareModel(fallback.reference);
 			}

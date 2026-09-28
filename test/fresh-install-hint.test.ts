@@ -382,7 +382,11 @@ describe("#fresh-install-hint availability seam", () => {
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.stdout).not.toContain("no model available — sign in with /login ("); // F3: not on stdout
-		expect(err.stderr).toContain("No API key found"); // the provider's own error teaches (D3)
+		// #startup-model-resolution (user-review 2): --no-session -c counts as a
+		// fresh start — the pre-flight applies and fails fast with the
+		// zero-family text instead of the provider's own key error.
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("no model configured");
 	});
 
 	it("round-2 F4: -c + explicit -m still pre-flights the named family", async () => {

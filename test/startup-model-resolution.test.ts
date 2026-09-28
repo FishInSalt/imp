@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -604,7 +604,7 @@ describe("#startup-model-resolution", () => {
 			?.getEntries()
 			.find((candidate) => candidate.type === "message" && candidate.message.role === "assistant");
 		expect(entry?.type).toBe("message");
-		if (entry?.type === "message") {
+		if (entry?.type === "message" && entry.message.role === "assistant") {
 			expect(entry.message.modelReference).toBe("deepseek/deepseek-v4-pro");
 		}
 	});
@@ -681,5 +681,211 @@ describe("#startup-model-resolution", () => {
 		expect(runner.modelReference()).toBe("zai/glm-4.7");
 		expect(output()).not.toContain("has no credential");
 		expect(output()).not.toContain("using deepseek");
+	});
+
+	// ---- user-side review round (2026-09-28) ----
+
+	it("user-review 2: -c with NO resumable session resolves (print)", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(process.execPath, [BIN, "-c", "-p", "hello"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				ZAI_API_KEY: "dummy",
+				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
+			},
+		}).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		// the pre-flight resolved instead of skipping (-c had no session to restore)
+		expect(err.stderr).not.toContain("No API key found");
+		expect(err.stderr).not.toContain("ANTHROPIC_API_KEY");
+		const files: string[] = [];
+		const walk = (dir: string): void => {
+			if (!existsSync(dir)) return;
+			for (const entry of readdirSync(dir)) {
+				const full = path.join(dir, entry);
+				if (existsSync(full) && statSync(full).isDirectory()) walk(full);
+				else files.push(full);
+			}
+		};
+		walk(path.join(home, ".imp", "sessions"));
+		expect(files.length).toBeGreaterThan(0); // the run proceeded
+	});
+
+	it("user-review 2: -c with no session resolves in the interactive (pipe) path too", async () => {
+		const { spawn } = await import("node:child_process");
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const child = spawn(process.execPath, [BIN, "-c"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				ZAI_API_KEY: "dummy",
+				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
+			},
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		let stdout = "";
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf8");
+		});
+		child.stdin.end("hello\n");
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(() => {
+				child.kill("SIGKILL");
+				resolve();
+			}, 20_000);
+			timer.unref();
+			child.on("close", () => {
+				clearTimeout(timer);
+				resolve();
+			});
+		});
+		expect(stdout).toContain("no startup model configured — using zai/glm-5.3");
+		expect(stdout).not.toContain("no model available — run /login to connect one");
+	});
+
+	it("D2 e2e: a stored key (IMP_AUTH_PATH) resolves like the env variant", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
+		await writeFile(
+			path.join(home, "auth.json"),
+			JSON.stringify({ version: 1, apiKeys: { zai: "stored-key" } }),
+		);
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
+			},
+		}).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.stderr).not.toContain("has no credential");
+		expect(err.stderr).not.toContain("no model configured");
+	});
+
+	it("user-review 3: -c -p prints the D3 note and the resumed line (stdout pin)", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		// realpath: the child's process.cwd() is canonical (/private/var vs /var
+		// on macOS) and the session-dir slug is derived from it.
+		const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-")));
+		const { createSession } = await import("../src/core/session/manager.js");
+		const session = createSession(cwd, path.join(home, ".imp", "sessions"));
+		session.appendMessage({ role: "user", content: "old" });
+		session.setModel({ provider: "zai", modelId: "glm-4.7" });
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(process.execPath, [BIN, "-c", "-p", "hello"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				DEEPSEEK_API_KEY: "dummy",
+				DEEPSEEK_BASE_URL: "http://127.0.0.1:1/v1",
+			},
+		}).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.stdout).toContain(
+			"▪ restored model zai/glm-4.7 has no credential — using deepseek/deepseek-v4-pro",
+		);
+		expect(err.stdout).toContain("▪ resumed");
+	});
+
+	it("D6 surfaces: multi-family state shows /model on legacy /model text and /status", async () => {
+		process.env.ZAI_API_KEY = "k";
+		process.env.DEEPSEEK_API_KEY = "k";
+		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd: path.join(root, "proj"),
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: true,
+			renderer,
+		});
+		const { COMMANDS } = await import("../src/repl/commands.js");
+		const ctx = {
+			runner,
+			renderer,
+			isActive: () => false,
+			requestExit: () => {},
+			abortActive: () => false,
+			replay: () => 0,
+			submitPrompt: () => {},
+		};
+		await COMMANDS.find((c) => c.name === "model")?.run("", ctx);
+		expect(output()).toContain("model: no model — /model");
+		const statusOut = makeRenderer();
+		await COMMANDS.find((c) => c.name === "status")?.run("", { ...ctx, renderer: statusOut.renderer });
+		expect(statusOut.output()).toContain("▪ model no model — /model");
+	});
+
+	it("D6 surfaces: the banner identity line carries the /model pointer in the multi state", async () => {
+		const { noModelText, NO_MODEL_SELECTED_SEGMENT } = await import("../src/runner.js");
+		const { welcomeLines } = await import("../src/repl/repl.js");
+		expect(noModelText(true)).toBe(NO_MODEL_SELECTED_SEGMENT);
+		const lines = welcomeLines("deadbeef", noModelText(true), false);
+		expect(lines[lines.length - 1]).toBe(`imp 0.1.0 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
+	});
+
+	it("D6 surfaces: the resumed line shows the /model pointer in the multi state", async () => {
+		const { spawn } = await import("node:child_process");
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-")));
+		const { createSession } = await import("../src/core/session/manager.js");
+		const session = createSession(cwd, path.join(home, ".imp", "sessions"));
+		session.appendMessage({ role: "user", content: "old" }); // model-less
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const child = spawn(process.execPath, [BIN, "-c"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				ZAI_API_KEY: "k",
+				DEEPSEEK_API_KEY: "k",
+			},
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		let stdout = "";
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf8");
+		});
+		child.stdin.end("hello\n");
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(() => {
+				child.kill("SIGKILL");
+				resolve();
+			}, 20_000);
+			timer.unref();
+			child.on("close", () => {
+				clearTimeout(timer);
+				resolve();
+			});
+		});
+		expect(stdout).toContain("no model — /model");
+		expect(stdout).not.toContain("no model — /login");
 	});
 });

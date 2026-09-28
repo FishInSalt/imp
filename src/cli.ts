@@ -3,7 +3,7 @@ import { loadMdCommands } from "./core/commands-md.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { killTrackedDetachedChildren } from "./core/process-tree.js";
-import { listSessions } from "./core/session/manager.js";
+import { listSessions, resolveSession } from "./core/session/manager.js";
 import { effectiveSettings, loadProjectSettings, loadSettings } from "./core/settings.js";
 import { buildSkillCommands, loadSkills, type Skill } from "./core/skills.js";
 import {
@@ -28,12 +28,7 @@ import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { LOGIN_TARGETS } from "./provider/login-targets.js";
 import { configuredFamilies, modelAvailability } from "./provider/model-availability.js";
 import { parseModelRef } from "./provider/resolve.js";
-import {
-	credentialSourceFamilies,
-	decideStartupModel,
-	type ModelSource,
-	type StartupModelDecision,
-} from "./provider/startup-model.js";
+import { decideStartupModel, type ModelSource, type StartupModelDecision } from "./provider/startup-model.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
@@ -744,6 +739,23 @@ function loadSkillSetup(
 	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
 }
 
+/** #startup-model-resolution (D2, user-review finding 2): does `-c`/`-r`
+ *  actually have a session to restore? With none (or --no-session) the start
+ *  is effectively fresh — the D2 decision applies — otherwise the dead
+ *  builtin default survives on that path. A found session is D3's domain
+ *  (the saved row outranks opts.model). Unreadable/ambiguous stores return
+ *  true: the runner's own resolve path reports them. */
+function resumingExistingSession(opts: CliOptions): boolean {
+	if ((opts.resume === undefined && !opts.continueRecent) || opts.noSession) return false;
+	try {
+		return (
+			resolveSession(process.cwd(), { resume: opts.resume, continueRecent: opts.continueRecent }) !== null
+		);
+	} catch {
+		return true;
+	}
+}
+
 /** #startup-model-resolution D2: the shared decision table
  *  (provider/startup-model.ts) wired to the live credential probe.
  *  Callers apply `resolve` by rewriting opts.model — interactive announces
@@ -753,7 +765,7 @@ function decideStartupResolution(opts: CliOptions): StartupModelDecision {
 		model: opts.model,
 		source: opts.modelSource,
 		explicit: opts.modelExplicit,
-		resuming: opts.resume !== undefined || opts.continueRecent,
+		resuming: resumingExistingSession(opts),
 		isUsable: (model) => modelAvailability(parseModelRef(model).provider).usable,
 	});
 }
@@ -766,8 +778,10 @@ function decideStartupResolution(opts: CliOptions): StartupModelDecision {
  *  pair has one source but two families, and claiming "no model configured"
  *  would be false. */
 function printNoModelText(): string {
-	const sources = credentialSourceFamilies();
-	const families = sources.length > 0 ? sources : configuredFamilies();
+	// The copy counts FAMILIES (first review F1; second review finding 5):
+	// the source-collapsed set hides the env-only moonshot pair, and a mixed
+	// zai + env-only-moonshot machine would lose the pair from the list.
+	const families = configuredFamilies();
 	if (families.length === 0) {
 		return "no model configured — export <FAMILY>_API_KEY (see `imp --help`) or run /login in an interactive session";
 	}
@@ -788,7 +802,7 @@ function printNoModelText(): string {
  *  resolves it inside the runner). An EXPLICIT -m outranks the saved model,
  *  so the pre-flight applies again: the user just named a family. */
 function printModelUnusable(opts: CliOptions): string | undefined {
-	if (opts.modelExplicit !== true && (opts.resume !== undefined || opts.continueRecent)) return undefined;
+	if (opts.modelExplicit !== true && resumingExistingSession(opts)) return undefined;
 	if (opts.model.trim() === "") return undefined; // F7e: a blank id is a parse matter, not a credential one
 	const ref = parseModelRef(opts.model);
 	if (modelAvailability(ref.provider).usable) return undefined;

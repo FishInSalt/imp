@@ -1,11 +1,10 @@
 # Startup model resolution (#startup-model-resolution)
 
-Status: rev3 APPROVED (round 3) — IMPLEMENTED (commit `5f0d56f`); implementation review pending
+Status: rev3 APPROVED — IMPLEMENTED; design rounds 1–3, implementation rounds 1–2 and the user-side review folded; gates green (see §10.6)
 Branch: `fix/startup-model-resolution` (worktree, base main `bae428e`)
 Date: 2026-09-28
-Review log: §9 (round 1: two independent tracks, both FIX-FIRST — folded in rev2)
+Review log: §9 (design) · §10.4–10.6 (implementation + user-side reviews)
 Implementation log: §10
-Implementation log: §10 (empty)
 
 ## 1. Problem
 
@@ -216,6 +215,12 @@ intentional, not accidental:
 
 Note:
 
+Print-mode wording (F3 decision): the D3 note prints in print mode too,
+alongside the already-printing `▪ resumed` line (warmup runs deferred in
+print mode, after the run starts). D2's resolution remains silent in print
+mode (§3.2); "resolution is silent" never covered D3. Pinned end-to-end by
+the `-c -p` spawn test.
+
 ```
 ▪ restored model zai/glm-5.3 has no credential — using deepseek/deepseek-v4-pro
   (only configured provider; /model to change)
@@ -360,6 +365,8 @@ else:
 
 print mode: identical decision; resolution is silent; only "teach" fails
 fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
+D3's restore note is NOT covered by "silent": it prints with the warmup
+notes (`▪ resumed` precedent).
 ```
 
 ## 5. Edge cases
@@ -604,3 +611,40 @@ folded: the F2 fix's changed direction (gated-off file WITHOUT defaultModel
 the F4b stamp test exercises the resolved-STYLE reference through the
 scripted-provider path (not a literal D2/D3 state) — recorded, no action.
 Gates: typecheck 0 · lint 0 · build ok · 119 files / 2281 tests.
+(Correction, user-side review F1: the typecheck claim was produced with the
+app-config tsc only — `tsconfig.test.json` failed at the time; corrected
+and re-run in §10.6.)
+
+### 10.6 User-side review (2026-09-28) — findings folded
+
+Independent review of the whole branch against main returned FIX-FIRST.
+All findings handled; final gates: `npm run typecheck` (BOTH configs) 0 ·
+lint 0 · build ok · 119 files / 2288 tests.
+
+- F1 (BLOCKING, fixed): `test/startup-model-resolution.test.ts` failed
+  `npm run typecheck` — the assistant-message narrowing lacked the role
+  check (tsconfig.test.json; the earlier gate claim had used the app
+  config's tsc alone). Fixed; gate rule recorded: both configs are the gate.
+- F2 (fixed): `-c`/`-r` with NO resumable session skipped the CLI decision
+  and fell back to the dead builtin — the exact wrong-family pointer this
+  milestone removes. `resumingExistingSession()` now consults
+  `resolveSession` (and treats `--no-session` as a fresh start), so D2
+  applies when nothing is restored; D3 keeps owning real restores. Pinned
+  by print + interactive-pipe spawn tests. Expectation moved in
+  `test/fresh-install-hint.test.ts` (round-2 F3 test): `-c --no-session -p`
+  now fails fast with the zero-family text instead of the provider error.
+- F3 (decided + pinned): the D3 note prints in print mode (see §3.3 note);
+  `-c -p` pinned end-to-end.
+- F4 (coverage, closed): stored-key e2e, `-c`-no-session e2e (print +
+  pipe), `-c -p` pin, multi-state legacy `/model` text + `/status` + banner
+  composition + resumed-line pins added. Residual (recorded): the TUI
+  footer/title call sites share the identical `noModelText(…, true)`
+  expression and have no surface test (the TUI harness is heavy); the pure
+  mapping + runner probe tests stand in.
+- F5 (fixed): `printNoModelText` now counts `configuredFamilies()` outright —
+  the mixed zai + env-only-moonshot case lists all three families.
+- F6 (fixed): the D3 note says "restored model …" only when a row was
+  restored; the no-row fallback names the dead reference plainly. The no-row
+  pending seed is the documented, intended divergence corner.
+- F7 (fixed): stale header/log lines and the incorrect gate claim corrected
+  (above).

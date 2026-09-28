@@ -25,6 +25,9 @@ import { discoverMcpConfig } from "./mcp/config.js";
 import { McpManager } from "./mcp/manager.js";
 import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
+import { LOGIN_TARGETS } from "./provider/login-targets.js";
+import { modelAvailability } from "./provider/model-availability.js";
+import { parseModelRef } from "./provider/resolve.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
@@ -703,6 +706,28 @@ function loadSkillSetup(
 	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
 }
 
+/** #fresh-install-hint (D3): print-mode pre-flight. Returns undefined
+ *  when the resolved model's family holds a credential; otherwise the
+ *  error text. Reuses LOGIN_TARGETS for the family→env-var mapping (no
+ *  hand table). The D7 seam does not apply here: the CLI entry never
+ *  injects a provider (tests exercise this via env scrubbing). */
+function printModelUnusable(opts: CliOptions): string | undefined {
+	const ref = parseModelRef(opts.model);
+	if (modelAvailability(ref.provider).usable) return undefined;
+	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);
+	if (ref.provider === "openai-codex") {
+		return (
+			`${opts.model} (openai-codex) has no credential — run \`imp login\` (ChatGPT plan OAuth), ` +
+			`then re-run with -m ${opts.model}`
+		);
+	}
+	if (target === undefined) return undefined; // unknown family — the provider's own error teaches
+	return (
+		`${opts.model} (${ref.provider}) has no credential — export ${target.envVar} (see \`imp --help\`), ` +
+		`or start an interactive session and run /login`
+	);
+}
+
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {
 	return {
 		cwd: process.cwd(),
@@ -834,6 +859,19 @@ function broadAncestorWarning(cwd: string, trusted: boolean): string {
 }
 
 async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
+	// #fresh-install-hint (D3, round-1 F1/N8): fail-fast BEFORE any runner
+	// construction — createRunner creates the run logger AND the session
+	// store (the dead default would otherwise be persisted, and the error
+	// would surface only after those side effects). Print mode has no
+	// /login, so the error teaches the env var + the interactive path.
+	// (The trust store MAY be written earlier by --trust/--no-trust — the
+	// recorded exception, design D3 side-effect scope.)
+	const unavailable = printModelUnusable(opts);
+	if (unavailable !== undefined) {
+		process.stderr.write(red(`imp: ${unavailable}\n`));
+		process.exitCode = 1;
+		return;
+	}
 	const renderer = new Renderer({
 		write: (text) => process.stdout.write(text),
 		ansi: process.stdout.isTTY === true,

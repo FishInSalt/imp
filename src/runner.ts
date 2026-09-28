@@ -583,7 +583,12 @@ class RunnerImpl implements Runner {
 				}
 			}
 			this.sessionStore ??= createSession(options.cwd, options.sessionBaseDir);
-			this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
+			// #fresh-install-hint (D4, round-1 F2 — site 1/3): never persist a
+			// model whose family holds no credential; the session stays
+			// model-less until the user picks/logs in. resume keeps working —
+			// restoreModelFromSession's `saved ? … : options.model` chain
+			// resolves the startup default without a stored row.
+			if (this.modelUsable()) this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 		}
 		this.noteModelCredential(`${this.providerName}/${this.model}`, this.providerName);
 		for (const warning of this.agents.warnings) {
@@ -699,7 +704,10 @@ class RunnerImpl implements Runner {
 		const previous = this.sessionStore;
 		if (previous) {
 			this.sessionStore = createSession(this.options.cwd, this.options.sessionBaseDir);
-			this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
+			// #fresh-install-hint (D4, round-1 F2 — site 2/3): /new must not
+			// resurrect the dead default on a fresh install.
+			if (this.modelUsable())
+					this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 			const id8 = this.sessionStore.header.id.slice(0, 8);
 			const old8 = previous.header.id.slice(0, 8);
 			this.options.renderer.note(
@@ -1004,7 +1012,12 @@ class RunnerImpl implements Runner {
 		const reference = !explicit && saved ? `${saved.provider}/${saved.modelId}` : this.options.model;
 		const prepared = this.prepareModel(reference);
 		if (explicit) store.setModel(prepared.ref);
-		else store.seedModel(prepared.ref);
+		// #fresh-install-hint (D4, round-1 F2 — site 3/3): the resume path must
+		// not re-seed a dead default either — this is the line that made the
+		// warmup gate pointless one `imp -c` later. The in-memory model still
+		// applies (the turn can run and fail with the provider's key error);
+		// only the PERSISTENCE is gated.
+		else if (this.modelUsable()) store.seedModel(prepared.ref);
 		const level = startup
 			? (this.options.thinking ?? this.effectiveSettings().defaultThinkingLevel ?? "medium")
 			: this.level;

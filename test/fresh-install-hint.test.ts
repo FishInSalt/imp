@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -167,5 +168,89 @@ describe("#fresh-install-hint availability seam", () => {
 		expect(runner.modelUsable()).toBe(true);
 		expect(output()).not.toContain("no model");
 		expect(output()).not.toContain("/login");
+	});
+
+	// ---- M2: D4 seed gating (design tests 6, 7, 9) ----
+
+	it("test 6: warmup + resume skip the seed while unusable — the session file has no model row", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const cwd = path.join(root, "proj");
+		mkdirSync(cwd);
+		const baseDir = path.join(root, "sessions");
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+		});
+		expect(runner.session?.getModel()).toBeUndefined(); // no seed while unusable
+		// a message turn persists messages but STILL no model row
+		await runner.runTurn({ userMessage: "hi" }).catch(() => undefined); // provider throws — expected
+		const onDisk = runner.session?.filePath;
+		expect(onDisk !== undefined && existsSync(onDisk)).toBe(true);
+		if (onDisk !== undefined) {
+			const rows = readFileSync(onDisk, "utf8").trim().split("\n");
+			expect(rows.some((r) => r.includes('"type":"session_model"'))).toBe(false);
+			expect(rows.some((r) => r.includes('"role":"user"'))).toBe(true); // messages persist
+		}
+		expect(runner.session?.getModel()).toBeUndefined(); // test 9: stays model-less after the failed turn
+	});
+
+	it("test 7: /new while unusable seeds nothing (third D4 site)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const cwd = path.join(root, "proj");
+		mkdirSync(cwd);
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: path.join(root, "sessions"),
+			renderer,
+		});
+		runner.newSession();
+		expect(runner.session?.getModel()).toBeUndefined();
+	});
+
+	it("test 8: resume of a 0.1.0-shaped session (seeded dead model) does not rewrite the file", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const cwd = path.join(root, "proj");
+		mkdirSync(cwd);
+		const baseDir = path.join(root, "sessions");
+		// Build a 0.1.0-shaped store: explicit:false seed + one message.
+		const { createSession } = await import("../src/core/session/manager.js");
+		const store = createSession(cwd, baseDir);
+		store.seedModel({ provider: "anthropic", modelId: "claude-sonnet-4-5" });
+		store.appendMessage({ role: "user", content: "old" });
+		const bytes = readFileSync(store.filePath, "utf8");
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+			resume: store.header.id,
+		});
+		// resumed line renders the /login pointer, not the dead id (D1/N3)
+		expect(output()).toContain("no model — /login");
+		expect(output()).not.toContain("· claude-sonnet-4-5 ·");
+		// before any turn: byte-identical file
+		expect(readFileSync(store.filePath, "utf8")).toBe(bytes);
+		expect(runner.modelReference()).toBe("claude-sonnet-4-5"); // in-memory still resolves
 	});
 });

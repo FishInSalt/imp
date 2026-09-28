@@ -237,6 +237,15 @@ describe("runner per-session model restoration", () => {
 	});
 
 	it("legacy files use the original startup model, not the previous live session model", async () => {
+		// #fresh-install-hint: pins the persistence contract (seed on first
+		// message), not credential UX — both touched families get env keys so
+		// the D4 gates stay open (the unusable variants live in
+		// fresh-install-hint.test.ts).
+		const prevOpen = process.env.OPENAI_API_KEY;
+		const prevZai = process.env.ZAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		process.env.ZAI_API_KEY = "test-key-zai";
+		try {
 		const legacy = saved();
 		const modern = saved(other);
 		const before = snapshot(legacy);
@@ -249,9 +258,20 @@ describe("runner per-session model restoration", () => {
 		expect(reopen(legacy).getModel()).toBeUndefined();
 		await live.runTurn({ userMessage: "capture legacy seed" });
 		expect(reopen(legacy).getModel()).toEqual(initial);
+		} finally {
+			if (prevOpen === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevOpen;
+			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevZai;
+		}
 	});
 
 	it("/new preserves the live model while remaining lazy until a message", async () => {
+		// #fresh-install-hint: pins laziness, not credential UX — env key so
+		// the D4 gate stays open.
+		const prevOpen = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		try {
 		const live = await runner();
 		live.setModel(qualified(other));
 		const previous = live.session!;
@@ -268,6 +288,10 @@ describe("runner per-session model restoration", () => {
 		await live.runTurn({ userMessage: "new conversation" });
 		expect(reopen(fresh).getModel()).toEqual(other);
 		expect(snapshot(previous)).toEqual(before);
+		} finally {
+			if (prevOpen === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevOpen;
+		}
 	});
 
 	it("preserves anthropic/glm-5.3 versus zai/glm-5.3 across cross-provider restores", async () => {

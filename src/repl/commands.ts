@@ -869,6 +869,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 				},
 			});
 			ctx.renderer.status(`Logged in to ${target.name}`); // pi's wording
+			ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 			const current = ctx.runner.modelReference();
 			const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
 			if (currentFamily !== target.family) {
@@ -896,6 +897,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	if (key === null || key.trim() === "") return; // cancelled/blank — silent, like pi's "Login cancelled"
 	saveApiKey(target.family, key, ctx.authStorePath);
 	ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
+	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 	// pi switches the model only when none was selected; imp always has one,
 	// so the pointer takes pi's place when the login changed the available
 	// family.
@@ -952,6 +954,7 @@ async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise
 	} else {
 		ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
 	}
+	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 	const current = ctx.runner.modelReference();
 	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
 	if (currentFamily !== target.family) {
@@ -1499,6 +1502,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					description: "stored token",
 					act: () => {
 						logoutCodex(ctx.authStorePath);
+						ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): a lost credential may flip the footer back to the /login pointer
 						return `Logged out of ${codexTarget?.name ?? "OpenAI (ChatGPT plan)"}`; // pi's wording
 					},
 				});
@@ -1510,6 +1514,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					description: "stored key",
 					act: () => {
 						clearApiKey(family, ctx.authStorePath);
+						ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): a lost credential may flip the footer back to the /login pointer
 						// pi's wording, adapted (imp has no models.json)
 						return `Removed stored API key for ${target?.name ?? family}. Environment variables are unchanged.`;
 					},

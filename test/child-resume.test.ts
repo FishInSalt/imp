@@ -235,6 +235,26 @@ describe("SA-07 resume", () => {
 		expect(finalStore.getEntries().filter((entry) => entry.type === "message")).toHaveLength(1);
 	});
 
+	it("R2c: a torn tail that parses as JSON but is not a valid entry is TRUNCATED", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn3-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-3");
+		store.appendMessage(user("first"));
+		// A complete outer JSON object whose bytes fail ENTRY validation —
+		// terminating it would leave an interior invalid line after the next
+		// append, and interior corruption is fatal on open.
+		writeFileSync(filePath, `${readFileSync(filePath, "utf8")}{"type":"message","id":"deadbeef"}`);
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true);
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("truncated");
+		// Repair + append + reopen must be clean.
+		const finalStore = SessionStore.open(filePath);
+		finalStore.appendMessage(user("after"));
+		const check = SessionStore.open(filePath);
+		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
 	it("R3: the task schema exposes the resume parameter", async () => {
 		const { base, cwd, parent } = await fixture();
 		const { task } = harness({ session: parent, baseDir: base, cwd });

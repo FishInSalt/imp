@@ -524,10 +524,18 @@ export class SessionStore {
 		}
 		const lastNewline = raw.lastIndexOf("\n");
 		const tail = raw.slice(lastNewline + 1);
+		// "Complete" must mean: the line open() would ACCEPT as a record — a
+		// valid JSON blob that fails entry validation must be truncated, or
+		// the next append would turn it into an interior (fatal) line.
 		let parses = false;
 		try {
-			JSON.parse(tail);
-			parses = true;
+			const probe = JSON.parse(tail) as { type?: unknown; leafId?: unknown; explicit?: unknown };
+			if (probe.type === "position") parses = probe.leafId === null || typeof probe.leafId === "string";
+			else if (probe.type === "session_model") parses = typeof probe.explicit === "boolean";
+			else {
+				parseEntryLine(tail, 0);
+				parses = true;
+			}
 		} catch {
 			parses = false;
 		}

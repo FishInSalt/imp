@@ -7,6 +7,30 @@ All notable changes to imp are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Fresh-install model honesty (#fresh-install-hint).** On a machine
+  with no credentials anywhere, imp 0.1.0 displayed the hardcoded startup
+  default (`claude-sonnet-4-5`) as if it were in use — banner, footer, and
+  session seed — and only failed on the first message. Now:
+  - the banner identity line, footer, and resumed-session lines render
+    `no model available — run /login to connect one` / `no model — /login`
+    instead of the unusable model id (the think segment is dropped while
+    unusable);
+  - one startup `▪` note teaches `/login` (all seven families listed) or
+    the env var — a configured-elsewhere machine gets the targeted
+    `run /login <family>` form;
+  - print mode (`imp -p …`) fails fast BEFORE any session/log write with a
+    family-targeted error (`@file` argument errors still win the exit);
+  - the dead default is never persisted: all three `seedModel` sites
+    (startup, `/new`, resume restore) are gated on live usability, so
+    `imp -c` can no longer resurrect it; sessions written by 0.1.0 resume
+    unchanged (no migration, nothing rewritten);
+  - `/login` and `/logout` repaint the footer, so the model segment flips
+    immediately after a credential change;
+  - the anthropic "No API key found" error now also teaches
+    `/login anthropic`.
+
 ## [0.1.0] - 2026-09-27
 
 Initial public release: imp is a small coding agent that runs in your

@@ -286,4 +286,29 @@ describe("#fresh-install-hint availability seam", () => {
 		walk(path.join(home, ".imp"));
 		expect(written.filter((f) => f.includes("/sessions/") || f.includes("/logs/"))).toEqual([]); // P4
 	});
+
+	// ---- M3: D5 anthropic error teaching (design test 13) ----
+
+	it("test 13: anthropic key error teaches /login anthropic", async () => {
+		const { createAnthropicProvider } = await import("../src/provider/anthropic.js");
+		const provider = createAnthropicProvider();
+		const events: unknown[] = [];
+		try {
+			for await (const event of provider.stream({
+				model: "claude-sonnet-4-5",
+				maxTokens: 64,
+				system: "",
+				tools: [],
+				messages: [{ role: "user", content: "hi" }],
+			})) {
+				events.push(event);
+			}
+			expect.unreachable("must throw without a key");
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			expect(message).toContain("No API key found");
+			expect(message).toContain("/login anthropic  (interactive — stores the key in ~/.imp/auth.json)");
+		}
+		expect(events).toEqual([]);
+	});
 });

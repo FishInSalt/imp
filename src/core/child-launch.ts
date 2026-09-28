@@ -627,7 +627,9 @@ function messageProblem(value: unknown, where: string): string | null {
 			if (
 				!isRecord(usage) ||
 				typeof usage.inputTokens !== "number" ||
+				!Number.isFinite(usage.inputTokens) ||
 				typeof usage.outputTokens !== "number" ||
+				!Number.isFinite(usage.outputTokens) ||
 				!isOptionalNumber(usage.cacheReadTokens) ||
 				!isOptionalNumber(usage.cacheWriteTokens)
 			) {

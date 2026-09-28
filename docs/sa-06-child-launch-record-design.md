@@ -701,6 +701,14 @@ added; the normal-compaction suites and the torn-final-line tolerance test
 stay green. `buildContext()` remains as a catch-all probe after the
 explicit checks.
 
+Delta-review notes folded: the per-role usage check now also rejects
+non-finite token values (cosmetic consistency), and a **recorded
+pre-existing gap** (NOT fixed here, provider-side): `anthropic.ts` casts a
+raw wire `stop_reason` to the `StopReason` union without a runtime check, so
+a transcript could hold a value outside the union (e.g. `refusal`) and the
+structural validator would conservatively refuse `malformed`. Faithful to
+the declared type; a future provider-side normalization closes it.
+
 ## 12. Implementation record
 
 Landed on `feat/sa-06-child-launch-record` after the red-evidence commit

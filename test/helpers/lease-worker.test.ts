@@ -25,11 +25,13 @@ describe("lease multiprocess worker", () => {
 		const logFile = `${dir}/log`;
 		const steps = Number(roundsRaw);
 		let acquired = 0;
+		let refused = 0;
 		for (let step = 0; step < steps; step += 1) {
 			// Production defaults (no pid/host/machineId/nonce seams): the real
 			// cross-process protocol runs, including machine-id initialization.
 			const result = acquireChildLease(childFile, `${tag}-${step}`);
 			if (!result.ok) {
+				refused += 1;
 				await new Promise((resolve) => setTimeout(resolve, 2));
 				continue;
 			}
@@ -43,7 +45,7 @@ describe("lease multiprocess worker", () => {
 			// it and the test would prove nothing about mutual exclusion.
 			await new Promise((resolve) => setTimeout(resolve, 2 + Math.floor(Math.random() * 4)));
 		}
-		appendFileSync(logFile, `D ${tag} ${acquired}\n`);
+		appendFileSync(logFile, `D ${tag} ${acquired} ${refused}\n`);
 		expect(acquired).toBeGreaterThan(0);
 	}, 90_000);
 });

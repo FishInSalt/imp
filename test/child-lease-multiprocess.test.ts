@@ -37,19 +37,32 @@ describe("child lease — real two-process mutual exclusion", () => {
 		expect(raw.length).toBeGreaterThan(0);
 		let current: string | null = null;
 		let acquisitions = 0;
+		let refusals = 0;
+		let switches = 0;
+		let lastTag: string | undefined;
 		for (const line of raw.split("\n")) {
-			const [kind, tag, round] = line.split(" ");
+			const [kind, tag, round, refusedRaw] = line.split(" ");
 			if (kind === "S") {
 				// No holder may be active when a new critical section starts.
 				expect(current).toBeNull();
 				current = `${tag} ${round}`;
 				acquisitions += 1;
+				if (lastTag !== undefined && lastTag !== tag) switches += 1;
+				lastTag = tag;
 			} else if (kind === "E") {
 				expect(current).toBe(`${tag} ${round}`);
 				current = null;
+			} else if (kind === "D") {
+				refusals += Number(refusedRaw ?? 0);
 			}
 		}
 		expect(current).toBeNull();
 		expect(acquisitions).toBeGreaterThan(0);
+		// Contention is a CHECKED precondition: at least one worker was refused
+		// while the other held the lease. A run with temporal separation (no
+		// real overlap) must not pass as evidence of mutual exclusion
+		// (re-review F2).
+		expect(refusals).toBeGreaterThan(0);
+		expect(switches).toBeGreaterThan(0);
 	}, 120_000);
 });

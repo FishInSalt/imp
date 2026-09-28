@@ -930,3 +930,29 @@ Owner re-verification confirmed 6 findings; all fixed before resubmission:
 Per the owner's instruction, a focused adversarial re-review of the
 revised lease protocol (plus the repair and text-isolation changes)
 precedes the resubmission.
+
+### Focused adversarial re-review (revised lease + repair + text isolation)
+
+Verdict APPROVE WITH CORRECTIONS; both LOW findings folded:
+
+- F1: `acceptsAsSessionLine` diverged from open() on a `position` marker
+  with a bad `leafId` — open() keeps ANY position line (a bad leafId simply
+  never moves the write head), while the helper returned false and the
+  repair truncated it. The helper now mirrors open() exactly; R2h pins
+  terminate-not-truncate.
+- F2: the two-process test did not CHECK contention — a temporally
+  separated run would also look clean. The workers now log refusal counts
+  and the parent asserts `refusals > 0` and at least one tag switch, making
+  real overlap a tested precondition (the reviewer measured 38 tag
+  switches across 45–56 acquisitions in their probe).
+
+Reviewer probes confirmed: byte-space repair across 14 tail shapes ×
+{newline, no-newline} (append + reopen each) with no case where a kept
+entry was truncated or a dropped record terminated; text isolation through
+both splice paths (session and no-session); lease interleavings (live/
+same-pid-foreign-nonce/dead+grace/dead+stale), third-holder restore never
+clobbered, identical-bytes recreation proceeds, machine-id convergence
+across 6 concurrent processes with no debris. UNVERIFIED by the reviewer:
+real-time grace elapse after a hard crash; heartbeat-to-completion against
+a killed holder; cross-machine refusal on real shared storage
+(seam-verified only).

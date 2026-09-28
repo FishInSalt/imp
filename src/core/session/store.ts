@@ -261,7 +261,10 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 function acceptsAsSessionLine(line: string): boolean {
 	try {
 		const probe = JSON.parse(line) as { type?: unknown; leafId?: unknown; explicit?: unknown };
-		if (probe.type === "position") return probe.leafId === null || typeof probe.leafId === "string";
+		// open() keeps ANY position marker — a bad leafId simply does not move
+		// the write head (reopen rule) and is never an error. The repair must
+		// mirror that exactly (re-review F1).
+		if (probe.type === "position") return true;
 		if (probe.type === "session_model") {
 			if (typeof probe.explicit !== "boolean") return false;
 			parseModel(probe, "session line");

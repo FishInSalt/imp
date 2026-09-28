@@ -318,6 +318,22 @@ describe("SA-07 resume", () => {
 		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
 	});
 
+	it("R2h: a position marker with a bad leafId is KEPT (open ignores it; repair must not truncate)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn8-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-8");
+		store.appendMessage(user("first"));
+		appendFileSync(filePath, '{"type":"position","leafId":5}');
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true); // no trailing newline
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("terminated"); // open() keeps this line
+		const finalStore = SessionStore.open(filePath);
+		finalStore.appendMessage(user("after"));
+		const check = SessionStore.open(filePath);
+		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
 	it("R2d: a header-only file without a trailing newline is TERMINATED (never zeroed)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-torn4-"));
 		const filePath = path.join(base, "torn.jsonl");

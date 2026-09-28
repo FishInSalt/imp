@@ -367,11 +367,10 @@ describe("#fresh-install-hint availability seam", () => {
 		const prior = createSession(cwd, path.join(home, "sessions"));
 		prior.appendMessage({ role: "user", content: "old" });
 		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
-		const result: unknown = await run(
-			process.execPath,
-			[BIN, "-p", "hi", "-c", "--no-session"],
-			{ cwd, env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") } },
-		).catch((err: unknown) => err);
+		const result: unknown = await run(process.execPath, [BIN, "-p", "hi", "-c", "--no-session"], {
+			cwd,
+			env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") },
+		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.stdout).not.toContain("no model available — sign in with /login ("); // F3: not on stdout
 		expect(err.stderr).toContain("No API key found"); // the provider's own error teaches (D3)
@@ -384,34 +383,45 @@ describe("#fresh-install-hint availability seam", () => {
 		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
 		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
 		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
-		const result: unknown = await run(
-			process.execPath,
-			[BIN, "-p", "hi", "-c", "-m", "glm-4.6"],
-			{ cwd, env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") } },
-		).catch((err: unknown) => err);
+		const result: unknown = await run(process.execPath, [BIN, "-p", "hi", "-c", "-m", "glm-4.6"], {
+			cwd,
+			env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") },
+		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.code).toBe(1);
 		expect(err.stderr).toContain("glm-4.6 (zai) has no credential"); // explicit -m wins over the -c skip
 	});
 
-	it("round-2 F5: /status shows the /login pointer while unusable", async () => {
+	it("round-2 F5: /status and legacy /model show the /login pointer while unusable (real dispatch)", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const cwd = path.join(root, "proj");
+		mkdirSync(cwd);
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
-			cwd: path.join(root, "proj"),
+			cwd,
 			argv: [],
-			model: "claude-sonnet-4-5",
+			model: "claude-sonnet-4-5", // startup default — keyless in this scrubbed world
 			maxTokens: 1024,
 			maxTurns: 3,
 			noContextFiles: true,
 			noSession: true,
 			renderer,
+			// NO provider injection — the D7 seam must not mask the gate
 		});
-		expect(runner.modelSelectedExplicitly()).toBe(false); // startup default
-		// the /status surface (commands.ts) renders the same gate
-		const note = `▪ model ${runner.modelUsable() ? runner.model : "no model — /login"}`;
-		expect(note).toContain("no model — /login");
-		runner.setModel("glm-4.6"); // explicit pick flips the F5 title/pick flag
-		expect(runner.modelSelectedExplicitly()).toBe(true);
+		expect(runner.modelSelectedExplicitly()).toBe(false);
+		// The REAL /status body (commands.ts) — same shape as its run fn: the
+		// note goes through the renderer, so output() must carry the pointer.
+		const { COMMANDS } = await import("../src/repl/commands.js");
+		const status = COMMANDS.find((c) => c.name === "status");
+		expect(status).toBeDefined();
+		const ctx = {
+			runner,
+			renderer,
+			isActive: () => false,
+			requestExit: () => {},
+		};
+		await status?.run("", ctx as Parameters<typeof status.run>[1]);
+		expect(output()).toContain("\u25aa model no model \u2014 /login"); // ▪ model no model — /login
+		expect(output()).not.toContain("\u25aa model claude-sonnet-4-5");
 	});
 });

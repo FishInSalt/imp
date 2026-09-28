@@ -943,8 +943,7 @@ class ReplMachine {
 		// user's PICK, not "in use" — an explicit /model or -m shows the id
 		// even before a credential exists; only the startup default on a
 		// keyless machine shows the /login pointer.
-		const titleModel =
-			usable || this.runner.modelSelectedExplicitly() ? this.runner.model : NO_MODEL_SHORT;
+		const titleModel = usable || this.runner.modelSelectedExplicitly() ? this.runner.model : NO_MODEL_SHORT;
 		this.input.setTitle?.(`imp — ${titleModel}`);
 	}
 

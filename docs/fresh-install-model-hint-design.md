@@ -445,6 +445,24 @@ A second independent review of the merged batch returned F1(P2)+F2–F5(P3)+F6�
   (parse matter, not credential).
 
 Gates after fixes: 2168/2168 tests (16 in the batch suite: +F2/F3/F4/F5
-pins), typecheck, biome (216 files) clean; tarball smoke re-verified
-(stdout clean on -c, pre-flight fires for -c+-m, F2 repro writes only
-the explicit selection).
+pins), typecheck, tarball smoke re-verified (stdout clean on -c,
+pre-flight fires for -c+-m, F2 repro writes only the explicit
+selection).
+
+### Round-3 verification follow-up (2026-09-28)
+
+The round-3 re-review found the F1 lint fix incomplete (2 new format
+errors + 1 unused-variable warning — the previous gate had run
+`biome check src/ test/`, not the repo-root `.` scope) and the F5 pin
+still self-proving. Both closed:
+
+- F1: `npx biome check .` now exits clean (216 files, zero findings).
+  Root cause recorded: gate scope drift — the merge message claimed the
+  broader check while only the narrower one ran.
+- F5: the /status test now drives the REAL command body (COMMANDS
+  dispatch through the runner's renderer) and the terminal-title pin
+  asserts the OSC 2 bytes in the raw stream (shell.setTitle writes them
+  directly; FakeTerminal.setTitle is not on that path) — both a revert
+  of the gating code now fails tests.
+
+Gates: 2169/2169 tests, typecheck, `biome check .` clean.

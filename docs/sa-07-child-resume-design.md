@@ -643,6 +643,11 @@ only dead+aged candidates, never a live one.
   cost.
 - Cross-machine `machineId` semantics: the id is per DIRECTORY; a directory
   shared across machines is refused on first contact (`owned-elsewhere`).
+- Provider endpoint identity is FAMILY-NAME based (SA-08 track A, A-2): the
+  launch record does not capture the resolved base URL, so switching
+  `ANTHROPIC_BASE_URL`-style endpoints between attempts passes the provider
+  gate (the same family name). Recorded limit; a future revision could
+  capture and compare the endpoint URL in the launch record.
 
 ## 8. Execution
 
@@ -1230,3 +1235,31 @@ Verdict APPROVE WITH CORRECTIONS; all findings folded:
   write and link -> re-stage; retired after link -> harmless, the candidate
   is an independent hard link; link EEXIST never touches the target).
   UNVERIFIED: real-NFS errno behaviour; exotic-filesystem link semantics.
+
+### SA-08 independent integration review (delivery gate)
+
+Three fresh-context read-only tracks over the integrated main (4a2976b):
+
+- Track A (cleanup safety + model/provider/pricing/wire agreement):
+  APPROVE WITH CORRECTIONS. A-1 (major): `isBinding` accepted a persisted
+  model triple whose `reference` did not derive from its provider/wire id —
+  on resume the three fields drive different subsystems (wire request vs
+  pricing metadata vs endpoint gate), so a tampered/corrupt record could
+  run one model on the wire while pricing another. FIXED: `isBinding` now
+  enforces `reference === providerName + "/" + wireModelId`; regression in
+  test/child-launch.test.ts (`invalid-launch`). A-2 (minor): provider
+  endpoint identity is family-name only — recorded as a known limit above.
+  Cleanup safety re-verified intact (SA-01 rules survive the SA-06/SA-07
+  additions; resume never auto-removes).
+- Track B (status/identity/usage/accounting): PASS — exactly-once
+  across fresh+resumed attempts verified by probe (tracker dedupes by
+  attemptId; lifetime line sums records only), rebuild == incremental,
+  isError/status taxonomy and unknown-stays-unknown all confirmed. F5
+  (test-only): the record-carried `incomplete` flag had no tracker-level
+  pin — test added (test/usage-totals.test.ts) alongside the existing
+  summarizer-missing and outcome->record pieces.
+- Track C (permissions/contract restoration, single-writer, non-goals):
+  PASS — every recorded field validated before execution, live permission
+  gate only, shared tool-pool selection, lease guarantees held under
+  adversarial probing, no background framework / retry loop / provider
+  migration introduced.

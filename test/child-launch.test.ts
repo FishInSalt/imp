@@ -262,6 +262,23 @@ describe("child launch — managed lookup", () => {
 		}
 	});
 
+	it("SA-08/A-1: refuses a launch record whose model triple does not derive consistently", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const launch = buildChildLaunch({
+			...buildInput(),
+			parentSessionId: parent.header.id,
+			childId: "tampered",
+		});
+		// reference must be providerName/wireModelId: a disagreeing triple would
+		// run one model on the wire while pricing it as another.
+		launch.model = { ...launch.model, reference: "zai/glm-4.6" };
+		writeChild(parent, "tampered", launch);
+		const found = findChildByLaunch(parent, "tampered");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("invalid-launch");
+	});
+
 	it("does not resolve a child of another parent (foreign-parent copy refused)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
 		const parent = makeParent(base);

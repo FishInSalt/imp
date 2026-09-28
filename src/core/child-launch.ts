@@ -234,7 +234,15 @@ function isHash(value: unknown): value is string {
 
 function isBinding(value: unknown): boolean {
 	if (!isRecord(value)) return false;
-	return isName(value.providerName) && isName(value.wireModelId) && isName(value.reference);
+	if (!isName(value.providerName) || !isName(value.wireModelId) || !isName(value.reference)) {
+		return false;
+	}
+	// SA-08 integration review A-1: the three fields drive DIFFERENT
+	// subsystems on resume (wireModelId -> the request, reference -> pricing/
+	// compaction metadata, providerName -> the endpoint gate). A record whose
+	// reference does not derive from the other two would run one model on the
+	// wire while pricing it as another — reject at this read boundary.
+	return value.reference === `${value.providerName}/${value.wireModelId}`;
 }
 
 function isAgent(value: unknown): boolean {

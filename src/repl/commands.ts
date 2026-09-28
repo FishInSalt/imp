@@ -784,7 +784,11 @@ function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 		const session = ctx.runner.session;
 		if (session !== null && messages > 0) ctx.replay(session);
 		ctx.renderer.note(
-			`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored · ${ctx.runner.modelReference()}`,
+			// #fresh-install-hint (round-2 review F5): the third resumed surface —
+			// N3 covered startup only.
+			`▪ resumed ${id8} — ${messages} message${messages === 1 ? "" : "s"} restored · ${
+				ctx.runner.modelUsable() ? ctx.runner.modelReference() : "no model — /login"
+			}`,
 		);
 	} catch (err) {
 		ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
@@ -1406,7 +1410,11 @@ export const COMMANDS: readonly SlashCommand[] = [
 				const select = ctx.select;
 				if (select === undefined) {
 					// Legacy readline shell: the text flow, byte-for-byte.
-					ctx.renderer.writeLine(`model: ${ctx.runner.modelReference()}`);
+					// #fresh-install-hint (round-2 review F5): same rule on the legacy
+					// text path — no unusable id rendered as current.
+					ctx.renderer.writeLine(
+						`model: ${ctx.runner.modelUsable() ? ctx.runner.modelReference() : "no model — /login"}`,
+					);
 					ctx.renderer.writeLine(
 						"switch with: /model <id> — e.g. claude-sonnet-4-5, zai/glm-5.3 (any id your endpoint accepts)",
 					);
@@ -1694,7 +1702,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 		// want to ask while a long turn streams (M11 #7).
 		run: (_args, ctx): CommandOutcome => {
 			const runner = ctx.runner;
-			ctx.renderer.note(`▪ model ${runner.model}`);
+			// #fresh-install-hint (round-2 review F5): /status is a display
+			// surface — an unusable model shows the /login pointer instead.
+			ctx.renderer.note(`▪ model ${runner.modelUsable() ? runner.model : "no model — /login"}`);
 			const session = runner.session;
 			if (session === null) {
 				ctx.renderer.note("▪ session none (--no-session)");

@@ -2,12 +2,13 @@
 // liveness, e2e through bin/imp.js (task-timer design §4.6 and the §8 item 11
 // dogfood, automated for print mode).
 //
-// The hermetic world has NO credentials, so the run fails inside runTurn —
-// AFTER run_start has fired (that is the design §3.3 crash path: run_end
-// never comes). With task-timer installed its tick interval is then leaked
-// by design; the unref (§4.5) is what lets the process exit anyway. If that
-// regresses, this test hangs until the execFile timeout kills the child —
-// and fails on the `killed` assertion.
+// A DUMMY ANTHROPIC_API_KEY (#fresh-install-hint) keeps the print pre-flight
+// open, so the run fails inside runTurn — AFTER run_start has fired (that
+// is the design §3.3 crash path: run_end never comes; the provider rejects
+// the dummy key with 401). With task-timer installed its tick interval is
+// then leaked by design; the unref (§4.5) is what lets the process exit
+// anyway. If that regresses, this test hangs until the execFile timeout
+// kills the child — and fails on the `killed` assertion.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";

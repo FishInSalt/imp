@@ -30,12 +30,19 @@ const CREDENTIAL_ENV = [
 
 describe("#fresh-install-hint availability seam", () => {
 	const saved: Record<string, string | undefined> = {};
+	// Monotonic counter (round-2 review, same class as F6): two tests inside
+	// the same millisecond would otherwise share one IMP_AUTH_PATH — a key
+	// stored by an earlier test leaks into the next one's probe.
+	let authSeq = 0;
 	beforeEach(() => {
 		for (const key of CREDENTIAL_ENV) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-auth-${process.pid}-${Date.now()}.json`);
+		process.env.IMP_AUTH_PATH = path.join(
+			tmpdir(),
+			`imp-fresh-auth-${process.pid}-${Date.now()}-${authSeq++}.json`,
+		);
 	});
 	afterEach(() => {
 		for (const key of CREDENTIAL_ENV) {
@@ -308,5 +315,103 @@ describe("#fresh-install-hint availability seam", () => {
 			expect(message).toContain("/login anthropic  (interactive — stores the key in ~/.imp/auth.json)");
 		}
 		expect(events).toEqual([]);
+	});
+	// ---- round-2 review: F2/F3/F4/F5 behavior pins ----
+
+	it("round-2 F2: slash /resume to a model-less session never seeds a stale-family verdict", async () => {
+		// The review's repro shape: startup default = anthropic (KEYLESS in
+		// this scrubbed world), the user then switches the LIVE model to zai
+		// (keyed via env), and /resume lands on a model-less session. The seed
+		// gate must probe the model BEING persisted (anthropic → keyless →
+		// NO seed) — not the pre-switch live family (zai → keyed → seed,
+		// writing an unusable anthropic row, the pre-F2 bug).
+		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const cwd = path.join(root, "proj");
+		mkdirSync(cwd);
+		const baseDir = path.join(root, "sessions");
+		const { createSession } = await import("../src/core/session/manager.js");
+		const legacy = createSession(cwd, baseDir);
+		legacy.appendMessage({ role: "user", content: "old" }); // model-less 0.1.0 shape
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "claude-sonnet-4-5", // startup default — anthropic, keyless here
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+		});
+		process.env.ZAI_API_KEY = "k"; // zai becomes configured AFTER construction
+		try {
+			runner.setModel("zai/glm-4.6"); // live family switches (and the pick becomes explicit)
+			runner.resumeSession(legacy.header.id); // model-less target: options.model = anthropic (keyless)
+			expect(runner.session?.getModel()).toBeUndefined(); // the F2 pin: NO anthropic row
+			const onDisk = readFileSync(legacy.filePath, "utf8");
+			expect(onDisk).not.toContain('"type":"session_model"');
+		} finally {
+			delete process.env.ZAI_API_KEY;
+		}
+	});
+
+	it("round-2 F3: print mode emits NO generic D2 note on stdout", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
+		// seed one prior session so -c works
+		const { createSession } = await import("../src/core/session/manager.js");
+		const prior = createSession(cwd, path.join(home, "sessions"));
+		prior.appendMessage({ role: "user", content: "old" });
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(
+			process.execPath,
+			[BIN, "-p", "hi", "-c", "--no-session"],
+			{ cwd, env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") } },
+		).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.stdout).not.toContain("no model available — sign in with /login ("); // F3: not on stdout
+		expect(err.stderr).toContain("No API key found"); // the provider's own error teaches (D3)
+	});
+
+	it("round-2 F4: -c + explicit -m still pre-flights the named family", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(
+			process.execPath,
+			[BIN, "-p", "hi", "-c", "-m", "glm-4.6"],
+			{ cwd, env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") } },
+		).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("glm-4.6 (zai) has no credential"); // explicit -m wins over the -c skip
+	});
+
+	it("round-2 F5: /status shows the /login pointer while unusable", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd: path.join(root, "proj"),
+			argv: [],
+			model: "claude-sonnet-4-5",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: true,
+			renderer,
+		});
+		expect(runner.modelSelectedExplicitly()).toBe(false); // startup default
+		// the /status surface (commands.ts) renders the same gate
+		const note = `▪ model ${runner.modelUsable() ? runner.model : "no model — /login"}`;
+		expect(note).toContain("no model — /login");
+		runner.setModel("glm-4.6"); // explicit pick flips the F5 title/pick flag
+		expect(runner.modelSelectedExplicitly()).toBe(true);
 	});
 });

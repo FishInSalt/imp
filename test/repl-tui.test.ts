@@ -1283,8 +1283,8 @@ describe("runRepl with shell:tui", () => {
 			for (const message of options.seed) store.appendMessage(message);
 		}
 		const requests: LLMRequest[] = [];
-		const provider: LLMProvider | undefined = options?.provider ??
-			(options?.realProvider === true ? undefined : scriptedProvider(scripts, requests));
+		const provider: LLMProvider | undefined =
+			options?.provider ?? (options?.realProvider === true ? undefined : scriptedProvider(scripts, requests));
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({
@@ -1467,7 +1467,7 @@ describe("runRepl with shell:tui", () => {
 		// must NOT mask the gating). claude-sonnet-4-5 HAS a thinking meta, so
 		// a missing think segment is the F7 pin (a reverted `usable &&` gate
 		// would render `no model — /login think:medium` and fail this).
-		const saved: Record<string, string | undefined> = {};
+		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
@@ -1495,7 +1495,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("#fresh-install-hint test 11: /model to an unconfigured family mid-session flips the footer back", async () => {
-		const saved: Record<string, string | undefined> = {};
+		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
@@ -1525,7 +1525,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("#fresh-install-hint test 10: /login success repaints the footer (credential change flips the segment)", async () => {
-		const saved: Record<string, string | undefined> = {};
+		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];

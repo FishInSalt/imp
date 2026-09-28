@@ -9,6 +9,7 @@ Review round 3: APPROVE (fold-ins verified; one P3 line nit — legacy codex
 OAuth success tail is commands.ts:936, not :941 — fixed at M2)
 Implementation review: FIX-FIRST (6 findings) → fixes folded, APPROVE
 (see §9)
+Round-2 implementation review (post-merge): F1–F7 all fixed (see §10)
 
 ## 1. Problem
 
@@ -406,3 +407,44 @@ record-or-fix. Disposition:
 
 Gates after fixes: 2164/2164 tests (3 new footer pins), typecheck clean,
 biome clean (214 files), tarball smoke re-verified.
+
+## 10. Round-2 implementation review record (2026-09-28)
+
+A second independent review of the merged batch returned F1(P2)+F2–F5(P3)+F6–F7(P4). All fixed on the branch; dispositions:
+
+- F1 (P2) biome format on the realProvider ternary → fixed.
+- F2 (P3) the resume seed gate probed the PRE-switch live family —
+  live=zai(keyed) + /resume of a model-less session wrote an unusable
+  anthropic row. Gate now probes `prepared.ref.provider` (the model BEING
+  persisted), D7 fake-provider exemption kept. The unit test that pinned
+  the old verdict ("legacy seed lands as the startup default") was
+  asserting the pre-F2 bug — re-pinned to the model-less contract, with a
+  repro-shaped test of its own.
+- F3 (P3) the D2 note leaked onto PRINT stdout on the -c/-r path → new
+  RunnerOptions.interactive seam (print passes false; default true), the
+  note gates on it; the zai-specific 0.1.0 note keeps its reach. Pinned by
+  a subprocess test (stdout clean, provider error on stderr).
+- F4 (P3) -c/-r + explicit -m skipped the pre-flight → skip now applies
+  only when `!modelExplicit` (explicit -m outranks the saved model in
+  restoreModelFromSession, so the pre-flight applies again). Pinned.
+- F5 (P3) four more surfaces rendered an unusable id as current: TUI
+  terminal title, /status `▪ model`, legacy /model `model:`, and the
+  mid-session /resume note. Title semantics refined: it mirrors the
+  user's PICK (explicit -m or /model → new `modelSelectedExplicitly()`
+  flag shows the id even keyless), while in-use surfaces keep the
+  /login pointer. /status//model//resume use the strict gate.
+- F6 (P4) the three new footer tests leaked IMP_AUTH_PATH (never
+  restored) → saved/restored like the file's existing pattern; the unit
+  suite's auth-path generator also gained a monotonic counter (two tests
+  in one millisecond shared a path — a stored zai key from the targeted
+  test leaked into the F5-suppression test; same defect class).
+- F7 (P4) dead `configuredFamilies()` API removed; `noteModelCredential`
+  probes once instead of twice; ALL_FAMILIES derived from LOGIN_TARGETS
+  (a future family can no longer be silently missing); cli-run-start
+  header comment updated (dummy key); blank `-m ""` skips the pre-flight
+  (parse matter, not credential).
+
+Gates after fixes: 2168/2168 tests (16 in the batch suite: +F2/F3/F4/F5
+pins), typecheck, biome (216 files) clean; tarball smoke re-verified
+(stdout clean on -c, pre-flight fires for -c+-m, F2 repro writes only
+the explicit selection).

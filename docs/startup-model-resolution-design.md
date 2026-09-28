@@ -1,9 +1,9 @@
 # Startup model resolution (#startup-model-resolution)
 
-Status: rev1 DRAFT — awaiting independent review; implementation not started
+Status: rev2 — round-1 findings folded; awaiting round-2 verification; implementation not started
 Branch: `fix/startup-model-resolution` (worktree, base main `bae428e`)
 Date: 2026-09-28
-Review log: §9 (round 1 pending)
+Review log: §9 (round 1: two independent tracks, both FIX-FIRST — folded in rev2)
 Implementation log: §10 (empty)
 
 ## 1. Problem
@@ -101,8 +101,9 @@ is session-only (`persist: false`), never silent config mutation.
   not move.
 - P7 **Forward-compatible seam.** The resolver's input contract accepts
   "no requested model" (`undefined`), not merely "requested model
-  unusable", so the eventual removal of the builtin default is a deletion
-  plus a semantic flip, not a rewrite (see §8).
+  unusable", so the eventual removal of the builtin default reduces the
+  rewrite at the CLI boundary; runner-side tolerance sites are listed in
+  §3.7 (see §8).
 
 ## 3. Detailed design
 
@@ -124,7 +125,13 @@ Rule (new helper, name TBD, e.g. `credentialSourceFamilies()`):
    stored `moonshotai` only → drop `moonshotai-cn`; stored
    `moonshotai-cn` only → drop `moonshotai`; neither or both stored →
    drop **both** (env-only or doubly stored is ambiguous: do not resolve).
-3. Result length 1 → resolvable; otherwise → not (§3.2 step 3b/3c).
+3. Result length 1 → resolvable; otherwise → not (§3.2 cases c/d).
+4. Determinism statements (R1-A-F4): an unreadable/corrupt auth store
+   behaves as empty (`auth-store.ts:50-62` catch → `{}`), so env-only
+   determination applies and a shared-env moonshot pair is dropped (no
+   resolution) — correct, but now stated. A *stored* key is authoritative
+   over the shared env var: when exactly one moonshot family has a stored
+   key, that family decides regardless of the env var.
 
 ### 3.2 D2 — Startup resolution
 
@@ -140,8 +147,8 @@ returning `{ model: string | undefined; source: "cli" | "env" | "project" | "glo
 — P7's seam: the builtin rung is the only "nobody asked" source, and the
 shape already tolerates `model: undefined` for the post-removal world.
 
-Resolution step (shared by both shells; runs after the chain, after
-`-c`/`-r` session-model precedence is known):
+Resolution step (D2 runs at the CLI boundary before runner
+construction; D3 runs inside the runner after restore — R1-A-F1):
 
 ```
 a. effective model's family usable?           → use it            (P3: no change)
@@ -151,11 +158,15 @@ c. source is builtin, families (D1) == 1      → use that family's switchHint
 d. source is builtin, families == 0 or >= 2   → no resolution; copy per D6
 ```
 
-Wiring: resolve in `cli.ts` **before** runner construction (both
-`runInteractive` and the print path call `runnerOptions()` with
-`opts.model`; rewriting `opts.model` there keeps the runner type surface
-untouched). `modelExplicit` stays false. The resolved model then flows
-through warmup's existing gates naturally:
+Wiring (R1-A-F1): the CLI-level rewrite covers the NON-resume path only.
+Resolve in `cli.ts` **before** runner construction (both `runInteractive`
+and the print path call `runnerOptions()` with `opts.model`; rewriting
+`opts.model` there keeps the runner type surface untouched).
+`modelExplicit` stays false. The resume path (`-c`/`-r`) is decided
+inside the runner, because the saved `session_model` row outranks
+`opts.model` (`restoreModelFromSession`, `runner.ts:1134-1135`) — the CLI
+cannot know it. The resolved model then flows through warmup's existing
+gates naturally:
 
 - `modelUsable()` true → banner/footer/renderers show it; `seedModel`
   (sites `runner.ts:644`, `:806`, `:1147`) proceeds as for any usable
@@ -182,9 +193,23 @@ message fails at the provider (`restoreModelFromSession`,
 
 **Recommended [REC]:** apply the same D1/D2 resolution when the *restored*
 model is unusable and one credential-source family exists; apply
-in-memory only (`applyModel`-style), do **not** rewrite the session's
-`session_model` row (that row records what the session actually used;
-re-deriving on each startup is deterministic). Note:
+in-memory only, do **not** rewrite the session's `session_model` row
+(that row records what the session actually used; re-deriving on each
+startup is deterministic).
+
+Implementation requirement (R1-A-F2): no existing store call achieves
+"apply in memory without writing" — `seedModel` no-ops once a model row
+exists (`store.ts:297-298`), `setModel` always writes an
+`explicit:true` record (`store.ts:301-305`). The runner needs an
+apply-only internals path (the `prepareModel`/`applyModel` pair invoked
+without the store call) and this divergence contract must be stated as
+intentional, not accidental:
+- the session file keeps the recorded (now-unusable) model;
+- each startup re-derives the resolved model deterministically;
+- `imp sessions` may show the recorded (stale) model for such sessions;
+- `-c` re-derivation is the behavior (no one-shot row rewrite).
+
+Note:
 
 ```
 ▪ restored model zai/glm-5.3 has no credential — using deepseek/deepseek-v4-pro
@@ -207,18 +232,26 @@ ctx.refreshFooter?.();
 if (currentFamily !== target.family) ctx.renderer.note(`▪ switch with /model ${target.switchHint}`);
 ```
 
-New behavior: after the credential is saved and the footer refreshed, if
+New behavior: after the credential is saved, if
 `!ctx.runner.modelUsable()` — imp's analog of pi's `isUnknownModel` —
-switch instead of teaching:
+switch instead of teaching, and refresh the footer AFTER the switch
+(R1-A-F5: the tails currently refresh first at `:877/:905/:959`; keep
+exactly one refresh, after `setModel`, so the footer never renders the
+pre-switch state):
 
 ```ts
-ctx.runner.setModel(target.switchHint);   // session_model explicit:true
-ctx.renderer.note(`▪ switched to ${target.switchHint}`);
+if (!ctx.runner.modelUsable()) {
+  ctx.runner.setModel(target.switchHint);   // session_model explicit:true
+  ctx.renderer.note(`▪ switched to ${target.switchHint}`);
+}
+ctx.refreshFooter?.();                      // single refresh, post-switch
 ```
 
 If a usable model already exists, behavior is unchanged (status + the
 `switch with /model` hint when families differ) — same "only when none is
-selected" rule pi uses.
+selected" rule pi uses. The fourth login surface — the CLI `imp login`
+(codex OAuth, `cli.ts:410`) — runs before any runner exists and needs no
+switch; it is enumerated here as intentionally untouched (R1-A-F5).
 
 **OPEN-3:** mark the row `explicit:true` (recommended: the login act is an
 explicit family choice, the id is the curated switchHint, and title /
@@ -232,18 +265,28 @@ Explicit `/model` switches stay session-only. After a successful switch
 
 1. `settingSource(ctx, "defaultModel") === "default"` — reuse the existing
    settings-source helper (`commands.ts:315–330`): no `IMP_MODEL`, no
-   project/global `defaultModel` is pinning future sessions;
+   project/global `defaultModel` is pinning future sessions.
+   Untrusted-project caveat (R1-B-F5): `settingSource` reads project
+   settings only when `projectSettingsAllowed` is true
+   (`commands.ts:325`), so with `--no-trust` an existing project
+   `defaultModel` is invisible and the condition would wrongly pass —
+   suppress the hint when project settings are gated off.
 2. the picked reference differs from what D2 would resolve anyway (single
    family and ref === its switchHint → suppress; future sessions get it
    regardless);
-3. at most once per session (OPEN-4).
+3. at most once per session: the flag lives on `ReplMachine` (R1-B-F4),
+   not `CommandContext` (test fixtures build ad-hoc literal contexts that
+   would silently omit a new field and disable the guard) and not module
+   state (leaks across tests).
 
 ```
 ▪ /settings defaultModel zai/glm-4.7 keeps this model for new sessions
 ```
 
-Both shells share `switchModel`, so the note renders through the shared
-renderer in either.
+Reachability (R1-B-F3): the hint fires only from `switchModel`
+(`commands.ts:773`) — `/model <id>` on both shells and picker picks in
+the TUI; the legacy shell's no-args `/model` is a text flow and never
+reaches it. The note renders through the shared renderer either way.
 
 ### 3.6 D6 — Copy corrections
 
@@ -263,13 +306,25 @@ action, and naming the missing credential is the useful part. Exact
 bytes to pin at review (OPEN-5). Resolution-success adds no print-mode
 output.
 
+Surface precision (R1-B-F2): footer (`repl.ts:861`) and title
+(`repl.ts:946`) exist in the TUI shell only — `setFooter`/`setTitle` are
+optional (`line-input.ts:102/:137`) and the legacy readline shell renders
+neither. Legacy users see the banner (`repl.ts:1578`) and resumed line
+(`repl.ts:1594`) plus `▪` notes; the copy matrix and tests must assert
+per-shell surfaces accordingly.
+
 ### 3.7 D7 — Seams and forward compatibility
 
 - `credentialSourceFamilies()` lives beside `modelAvailability()`
   (`provider/`) and is probed live like it (one auth-store read + env).
 - The resolution helper takes `{ requested?: string; source; … }` and
-  returns a resolution or `null` — usable as-is when the builtin rung is
-  later removed (P7).
+  returns a resolution or `null`. This is CLI-boundary tolerance only
+  (R1-A-F6): a later builtin removal still needs runner-side changes —
+  `resolveModel(options.model)` / `parseModelRef(options.model)`
+  (`runner.ts:342/:345/:440`), `RunnerOptions.model: string`
+  (`cli.ts:90`), and the warmup no-model branches (`runner.ts:629/:643`).
+  Listed here so the later milestone budgets them; P7's claim is narrowed
+  to match.
 - No new env vars, no new files, no settings writes.
 - `modelExplicit` untouched; `modelSelectedExplicitly()` false for
   D2/D3-resolved models (title shows the id via the usable branch,
@@ -278,13 +333,15 @@ output.
 ## 4. Resolution summary (pseudocode)
 
 ```
-req = sourceAwareChain()        // {model, source}
-eff = (resume ? restore(saved) ?? req : req)
-if usable(eff)                  -> eff                                   # P3
-else if req.source != "builtin" -> teach (D6 explicit-source copy)       # P5
+req = sourceAwareChain()        // {model, source}   (undefined-tolerant: P7)
+resumeRef = resume ? restore(saved) : undefined       // runner-side (D3)
+eff = resumeRef ?? req
+if usable(eff)                     -> eff                                # P3
+else if resumeRef != undefined      -> D3: resolve-or-teach              # OPEN-1
+else if req.source != "builtin"     -> teach (D6 explicit-source copy)   # P5
 else:
-   fams = credentialSourceFamilies()                                     # D1
-   if fams.length == 1          -> switchHint(fams[0]); announce; seed    # D2
+   fams = credentialSourceFamilies()                                    # D1
+   if fams.length == 1          -> switchHint(fams[0]); announce; seed   # D2
    else                         -> teach (D6 unresolved copy)
 
 print mode: identical decision; resolution is silent; only "teach" fails
@@ -293,8 +350,12 @@ fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
 
 ## 5. Edge cases
 
-- `-m ""` / blank ids: parse-level errors win over resolution (mirror
-  `printModelUnusable`'s F7e skip).
+- Blank ids (`-m ""`, `IMP_MODEL=""`, blank settings values): resolution
+  never rewrites them and never treats them as resolvable (R1-A-F3 —
+  the earlier "parse-level error" claim was wrong: `cli.ts:722` skips
+  only the credential pre-flight, and the sole blank guard is
+  `prepareModel`'s runtime throw at `runner.ts:1109`, reached on the
+  restore/setModel paths). Existing blank-id behavior is unchanged.
 - `--no-trust` (`cli.ts:54`): chain skips project settings as today;
   source accounting follows.
 - `--no-session`: resolution still applies (credential-based, not
@@ -338,8 +399,31 @@ fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
     session row NOT rewritten; usable restore → unchanged.
 15. Title segment: auto-resolved model shows the id despite
     `modelSelectedExplicitly() === false`.
-16. Copy matrix: all three states × banner/footer/title/resume-line
-    bytes pinned in the interactive harness (legacy and TUI shells).
+16. Copy matrix (R1-B-F2): three states × surfaces, pinned per shell —
+    TUI: banner / footer / title / resumed line; legacy: banner /
+    resumed line / notes only (no footer or title).
+
+Added in rev2 (round-1 findings):
+- Blank-id cases stay on the existing path; resolution no-ops — see §5.
+- R1-B-F7 extras: resolved-model session listing in `imp sessions`
+  (title / `(model: …)` behavior); subagent child-model binding inherits
+  the resolved model (cross-family override rejection unchanged);
+  usage/pricing identity for a D2-resolved model (`modelReference` =
+  resolved `provider/modelId`); print `-p` with `-c` (pre-flight skip
+  rule unchanged) and with `--no-session`; openai / openai-codex family
+  variants of D2; D5 suppression under `IMP_MODEL` (env shadow) and
+  with project settings gated off (R1-B-F5).
+
+Existing tests whose pinned bytes move (R1-B-F1; line refs at base
+`bae428e`):
+- `test/fresh-install-hint.test.ts:88, 111, 113, 130, 148, 153, 256,
+  278, 375, 392, 427`
+- `test/repl-tui.test.ts:1548, 1567, 1599, 1624, 1651, 3592`
+- `test/repl-commands.test.ts:1708, 1760`
+- `test/login-dialog.test.ts` pins none of the moving strings — D4
+  coverage there is additive.
+These are the acknowledged update surface; anything else that moves is a
+regression the implementation must catch with a knowingly-diffed suite.
 
 ## 7. Docs to update on implementation
 
@@ -347,8 +431,11 @@ fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
   resolution behavior in one sentence.
 - `docs/fresh-install-model-hint-design.md` — D2 note text superseded for
   the configured-elsewhere case; D3 print text variants.
-- `docs/session-model-restore-design.md` — if OPEN-1 adopted, add the
-  narrow exception to the "no credential-driven fallback" clause.
+- `docs/session-model-restore-design.md:15-16` ("No model discovery or
+  credential-driven fallback occurs") — amended **regardless of OPEN-1**
+  (R1-B-F6): D2 is itself a credential-driven resolution; the amendment
+  narrows the clause to "no *invented* model; resolution only under the
+  §3.1/§3.2 uniqueness and source rules".
 - `CHANGELOG.md` under `[Unreleased] → Changed`.
 
 ## 8. Out of scope (explicitly deferred)
@@ -372,8 +459,8 @@ fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
 - OPEN-2 (§3.1): moonshot disambiguation as specified (stored key
   disambiguates; env-only ambiguous)? [REC: yes]
 - OPEN-3 (§3.4): login selection marks explicit:true? [REC: yes]
-- OPEN-4 (§3.5): once-per-session hint state — where should it live
-  (CommandContext vs ReplMachine)?
+- OPEN-4 (§3.5): RESOLVED in rev2 — the flag lives on `ReplMachine`
+  (R1-B-F4); round 2 to verify.
 - OPEN-5 (§3.6): exact copy bytes for all new strings (pin table before
   implementation).
 - OPEN-6 (§3.2): resolution note once per process (yes) and its exact
@@ -381,7 +468,17 @@ fast (exit 1, zero session/log writes — fresh-install D3 contract retained).
 - OPEN-7 (§3.2): source-aware chain shape — extend `defaultModel()` or a
   new `resolveRequestedModel(argv)` in `cli.ts`.
 
-Review round 1: pending.
+Review round 1 (2026-09-28, two independent fresh-context tracks, both
+FIX-FIRST — all findings folded into rev2):
+- Technical track F1–F6: resume wiring must live in the runner (F1);
+  apply-only path underspecified (F2); blank-env misclassification (F3);
+  moonshot corrupt-store/authority statements (F4); login footer ordering
+  + fourth login surface (F5); P7 overstatement (F6).
+- Copy/tests track F1–F7: existing-pinned-bytes inventory (F1); legacy
+  shell surface precision (F2); D5 reachability (F3); once-per-session
+  state host (F4); untrusted-project suppression (F5);
+  session-restore amendment wording (F6); missing test cases (F7).
+Round 2 (verification of the fold-ins): pending.
 
 ## 10. Implementation log
 

@@ -22,6 +22,10 @@ export type AgentEvent =
 export interface RunAgentLoopOptions {
 	provider: LLMProvider;
 	model: string;
+	/** SA-05: the FULLY QUALIFIED producer reference (`provider/modelId`), the
+	 *  pricing identity stamped onto assistant messages as `modelReference`
+	 *  (distinct from `model`, the wire id). Omitted → no stamp → unpriced. */
+	modelReference?: string;
 	system: string;
 	tools: Tool[];
 	/** Conversation history. Appended in place with new messages from this run. */
@@ -101,6 +105,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 	const {
 		provider,
 		model,
+		modelReference,
 		system,
 		tools,
 		history,
@@ -175,6 +180,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			onEvent,
 			usage,
 			ledger: usageLedger,
+			modelReference,
 		});
 		if (assistant === null) return { stopReason: "aborted", turns, usage };
 
@@ -305,8 +311,10 @@ async function streamAssistant(args: {
 	onEvent?: (event: AgentEvent) => void;
 	usage: Usage;
 	ledger?: AttemptUsage;
+	/** SA-05: fully qualified producer reference stamped on the message. */
+	modelReference?: string;
 }): Promise<AssistantMessage | null> {
-	const { provider, request, onEvent, usage, ledger } = args;
+	const { provider, request, onEvent, usage, ledger, modelReference } = args;
 	// SA-04 (design §3.1/F2): account for a `message_end` BEFORE the observer
 	// runs — a throwing observer must not turn a received report into a
 	// phantom. Any exit without a report (abort, throw, protocol error) marks
@@ -325,7 +333,12 @@ async function streamAssistant(args: {
 				if (event.message.usageMissing === true) recordMissingUsageReport(ledger);
 				onEvent?.(event);
 				// stamp the producer model for cost attribution (footer $ segment)
-				return { ...event.message, model: request.model };
+				return {
+					...event.message,
+					model: request.model,
+					// SA-05: the fully qualified pricing identity (when supplied).
+					...(modelReference !== undefined && { modelReference }),
+				};
 			}
 			onEvent?.(event);
 		}

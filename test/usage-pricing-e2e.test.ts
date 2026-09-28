@@ -74,7 +74,10 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 		const provider = scriptedProvider(
 			[
 				assistant([{ type: "text", text: "first" }], "end_turn", { inputTokens: 1_000_000, outputTokens: 0 }),
-				assistant([{ type: "text", text: "second" }], "end_turn", { inputTokens: 1_000_000, outputTokens: 0 }),
+				assistant([{ type: "text", text: "second" }], "end_turn", {
+					inputTokens: 1_000_000,
+					outputTokens: 0,
+				}),
 				assistant([{ type: "text", text: "## Goal\nsummary" }], "end_turn", {
 					inputTokens: 1_000_000,
 					outputTokens: 0,
@@ -117,7 +120,9 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 		);
 		expect(assistants).toHaveLength(2);
 		for (const entry of assistants) {
-			expect((entry.message as { modelReference?: string }).modelReference).toBe("openai/review-shared-model");
+			expect((entry.message as { modelReference?: string }).modelReference).toBe(
+				"openai/review-shared-model",
+			);
 		}
 		const compaction = entries.find((e) => e.type === "compaction");
 		expect((compaction as { model?: string } | undefined)?.model).toBe("openai/review-shared-model");

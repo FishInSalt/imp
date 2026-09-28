@@ -67,7 +67,13 @@ import { formatTokens, shorten, usageMoneySegment } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
 import { contextWindowFor } from "./provider/models.js";
-import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
+import {
+	createProviderFor,
+	type ProviderName,
+	parseModelRef,
+	qualifiedReference,
+	resolveModel,
+} from "./provider/resolve.js";
 import {
 	clampThinkingLevel,
 	THINKING_LEVELS,
@@ -800,7 +806,8 @@ class RunnerImpl implements Runner {
 		// branchSummary entry (producing model captured BEFORE the await).
 		let summaryUsage: Usage | undefined;
 		let summaryUsageMissing = false;
-		const summaryModel = this.model; // stamp the producing model, not the post-await current one
+		const summaryModel = this.model; // the producing model, not the post-await current one
+		const summaryReference = qualifiedReference(this.providerName, summaryModel);
 		if (opts?.summarize !== true || !this.branchSummaryEnabled) {
 			// no summary wanted or IMP_BRANCH_SUMMARY=0
 		} else {
@@ -848,7 +855,7 @@ class RunnerImpl implements Runner {
 			store.appendBranchSummary(
 				summary,
 				summaryUsage,
-				summaryUsageMissing ? { model: summaryModel, usageMissing: true } : { model: summaryModel },
+				summaryUsageMissing ? { model: summaryReference, usageMissing: true } : { model: summaryReference },
 			); // parentId = newLeaf — heads the new position
 			outcome = "written";
 		}
@@ -1043,7 +1050,12 @@ class RunnerImpl implements Runner {
 			this.options.renderer.note("▪ context over the model's window — compacting once and retrying…");
 			let compacted = false;
 			try {
-				compacted = await this.compactAndSplice(provider, settings, model);
+				compacted = await this.compactAndSplice(
+					provider,
+					settings,
+					model,
+					qualifiedReference(this.providerName, model),
+				);
 			} catch (compactErr) {
 				const compactCause = compactErr instanceof Error ? compactErr.message : String(compactErr);
 				this.logger.log("run_error", { source: "compaction", message: compactCause });
@@ -1099,6 +1111,8 @@ class RunnerImpl implements Runner {
 			const result = await runAgentLoop({
 				provider,
 				model,
+				// SA-05 round 2: the persisted pricing identity (fully qualified).
+				modelReference: qualifiedReference(this.providerName, model),
 				system: this.system,
 				tools: this.tools,
 				history: this.history,
@@ -1137,7 +1151,12 @@ class RunnerImpl implements Runner {
 							// the 1M→272k switch-down deadlock: the summarization request
 							// itself can exceed the new model's input window).
 							try {
-								await this.compactAndSplice(provider, settings, model);
+								await this.compactAndSplice(
+									provider,
+									settings,
+									model,
+									qualifiedReference(this.providerName, model),
+								);
 							} catch (err) {
 								const cause = err instanceof Error ? err.message : String(err);
 								this.logger.log("run_error", { source: "compaction", message: cause });
@@ -1193,7 +1212,13 @@ class RunnerImpl implements Runner {
 		// Same channel /tree has used since its review (P1-3).
 		if (!this.sessionStore) return "no-session";
 		try {
-			const compacted = await this.compactAndSplice(this.provider, this.settings, this.model, signal);
+			const compacted = await this.compactAndSplice(
+				this.provider,
+				this.settings,
+				this.model,
+				qualifiedReference(this.providerName, this.model),
+				signal,
+			);
 			return compacted ? "compacted" : "nothing-to-compact";
 		} catch (err) {
 			// Classify by the ERROR, not the signal's current state (review
@@ -1211,6 +1236,9 @@ class RunnerImpl implements Runner {
 		provider: LLMProvider,
 		settings: CompactionSettings,
 		model: string,
+		/** SA-05 round 2: the FULLY QUALIFIED producer reference for the entry
+		 *  stamp; `model` stays the wire id. */
+		modelReference: string,
 		signal?: AbortSignal,
 	): Promise<boolean> {
 		const session = this.sessionStore;
@@ -1219,6 +1247,7 @@ class RunnerImpl implements Runner {
 			session,
 			provider,
 			model,
+			modelReference,
 			signal,
 			settings,
 			// #derived-budget: the model reference resolves to the runner's live

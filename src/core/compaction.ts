@@ -693,6 +693,10 @@ export async function compactSession(args: {
 	thinking?: ThinkingLevel;
 	/** SA-04: attempt ledger (see runSummarizer). */
 	usageLedger?: AttemptUsage;
+	/** SA-05 round 2 (§11.2 R1): the FULLY QUALIFIED producer reference for
+	 *  the entry stamp — `model` stays the wire id (it feeds the provider
+	 *  call); absent → no stamp → the entry prices as unknown. */
+	modelReference?: string;
 }): Promise<CompactResult | null> {
 	const { messages } = args.session.buildContext();
 	const result = await compactHistory({
@@ -707,13 +711,17 @@ export async function compactSession(args: {
 	});
 	if (result === null) return null;
 
+	// SA-05 round 2 stamps: the FULLY QUALIFIED producer reference (never the
+	// wire id) + the missing-report flag; absent reference → field omitted.
+	const stamps: { model?: string; usageMissing?: true } = {};
+	if (args.modelReference !== undefined) stamps.model = args.modelReference;
+	if (result.usageMissing) stamps.usageMissing = true;
 	args.session.appendCompaction(
 		result.summary,
 		result.retainedTail,
 		result.tokensBefore,
 		result.usage,
-		// SA-05 stamps: producing model reference + missing-report flag.
-		result.usageMissing ? { model: args.model, usageMissing: true } : { model: args.model },
+		stamps,
 	);
 	return {
 		summary: result.summary,

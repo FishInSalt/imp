@@ -142,7 +142,10 @@ function applyEntry(
 		if (message.role === "assistant") {
 			addUsage(state.parent, message.usage);
 			if (message.usageMissing === true) state.incomplete.parent = true;
-			addToModel(state, message.model ?? null, message.usage);
+			// SA-05 round 2: the pricing identity is the fully qualified
+			// reference; a legacy bare `model` value is never inferred (the
+			// rate lookup refuses it — shown unpriced).
+			addToModel(state, message.modelReference ?? message.model ?? null, message.usage);
 		} else if (message.role === "toolResult") {
 			for (const result of message.results) {
 				const record = parseTaskRecord(result.taskRecord);

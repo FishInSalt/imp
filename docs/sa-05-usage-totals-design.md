@@ -626,11 +626,13 @@ subscription traffic.
   unreleased; entries written by the acceptance build degrade to unpriced
   (§11.5).
 - **`model` must stay the wire model at every summarizer seam** (it feeds
-  `provider.stream({ model: args.model })`, `compaction.ts:420`): the new
-  `modelReference` is a SEPARATE optional argument on `compactSession`,
-  `compactHistory`, and `summarizeBranchSegment` — never an overload of the
-  existing one; likewise a separate param threaded through
-  `compactAndSplice`.
+  `provider.stream({ model: args.model })`, `compaction.ts:420`); the new
+  `modelReference` is a SEPARATE optional argument — never an overload.
+  Implementation note (recorded): the argument was needed only on
+  `compactSession` (the only persisting consumer) and as a separate param on
+  `compactAndSplice`; `compactHistory`/`summarizeBranchSegment` produce no
+  persisted fact, and the runner owns the branchSummary stamp with its own
+  reference. Fewer seams than sketched, same behavior.
 - Sources of the qualified reference at the write sites (all verified as the
   only writers):
   - main runner: `runTurnInner` computes it for the run's model
@@ -668,6 +670,11 @@ to end.**
   (subscription iff provider ∈ `SUBSCRIPTION_FAMILIES`), then the static
   section under `(provider, modelId)` (subscription from the entry as
   authored); otherwise `undefined`. No cross-provider lookup, ever.
+  Implementation note (recorded): `moonshotai-cn` is an EXPLICIT alias section
+  sharing `KIMI_COSTS` with `moonshotai` — the pre-existing pi-snapshot
+  static-floor test (`test/moonshotai.test.ts` §7) pins that both families
+  price from the floor, and the section comment already records the CNY
+  display divergence. Authored data, not a runtime cross-provider fallback.
 - Pinned consequences: `openai/claude-sonnet-4-6` → undefined;
   `openai/gpt-5.4` → undefined (NOT subscription); `anthropic/glm-5.3` →
   undefined (the anthropic section has no glm entry — a documented change

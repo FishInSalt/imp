@@ -288,14 +288,15 @@ describe("compactSession", () => {
 		const result = await compactSession({
 			session,
 			provider: summarizerProvider("## Goal\nsummary"),
-			model: "test-sum-model",
+			model: "test-sum-model", // wire id — feeds the provider call
+			modelReference: "test-provider/test-sum-model", // SA-05 round 2: the stamp
 			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
 		});
 		expect(result).not.toBeNull();
 		const entry = session.getEntries().find((e) => e.type === "compaction") as
 			| { model?: string; usage?: unknown; usageMissing?: true }
 			| undefined;
-		expect(entry?.model).toBe("test-sum-model");
+		expect(entry?.model).toBe("test-provider/test-sum-model");
 		expect(entry?.usage).toEqual({
 			inputTokens: 1,
 			outputTokens: 1,
@@ -333,6 +334,7 @@ describe("compactSession", () => {
 			session: session2,
 			provider: noUsage,
 			model: "test-sum-model",
+			modelReference: "test-provider/test-sum-model",
 			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
 		});
 		expect(result2?.usageMissing).toBe(true);
@@ -340,7 +342,7 @@ describe("compactSession", () => {
 			| { model?: string; usageMissing?: true }
 			| undefined;
 		expect(entry2?.usageMissing).toBe(true);
-		expect(entry2?.model).toBe("test-sum-model");
+		expect(entry2?.model).toBe("test-provider/test-sum-model");
 	});
 });
 

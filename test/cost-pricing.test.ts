@@ -102,7 +102,11 @@ describe("SA-05 round 2: the aggregate prices qualified stamps only", () => {
 							turns: 1,
 							textPresent: true,
 							usage: { inputTokens, outputTokens: 0 },
-							binding: { providerName: "anthropic", wireModelId: "claude-sonnet-4-5", reference: "anthropic/claude-sonnet-4-5" },
+							binding: {
+								providerName: "anthropic",
+								wireModelId: "claude-sonnet-4-5",
+								reference: "anthropic/claude-sonnet-4-5",
+							},
 						}),
 					},
 				],

@@ -432,16 +432,21 @@ describe("M14 consult wiring", () => {
 			"utf-8",
 		);
 		loadCatalogCache();
-		expect(costFor("glm-5.3")).toEqual({
+		expect(costFor("zai/glm-5.3")).toEqual({
 			input: 1.4,
 			output: 4.4,
 			cacheRead: 0.26,
 			cacheWrite: 0,
 			subscription: true,
 		});
-		expect(costFor("claude-sonnet-5")).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+		expect(costFor("anthropic/claude-sonnet-5")).toEqual({
+			input: 2,
+			output: 10,
+			cacheRead: 0.2,
+			cacheWrite: 2.5,
+		});
 		// static floor intact for unknown ids
-		expect(costFor("glm-5.2")?.subscription).toBe(true);
+		expect(costFor("zai/glm-5.2")?.subscription).toBe(true);
 	});
 
 	it("catalog thinking map beats MODEL_RULES; reasoning:false means no knob", () => {

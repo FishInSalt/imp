@@ -812,3 +812,6 @@ Regression assertions (owner-requested):
 6. (review) writers emit BOTH fields post-fix (`model` = wire id,
    `modelReference` = identity) — asserted at the `compactSession` and
    `appendBranchSummary` seams.
+7. (delta review) a `compactSession` WITHOUT a declared reference writes the
+   wire id only and prices as unknown — pinned end to end (entry fields +
+   aggregate `usd`/`unpriced`).

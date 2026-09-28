@@ -16,6 +16,8 @@ import {
 import { type AgentMessage, type AssistantMessage, contentText } from "../src/core/messages.js";
 import { SessionStore, summaryToMessage } from "../src/core/session/store.js";
 import { createAttemptUsage } from "../src/core/usage-ledger.js";
+import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.js";
+import { costFor } from "../src/provider/models.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
 
@@ -345,6 +347,34 @@ describe("compactSession", () => {
 		expect(entry2?.usageMissing).toBe(true);
 		expect(entry2?.model).toBe("test-sum-model"); // WIRE id
 		expect(entry2?.modelReference).toBe("test-provider/test-sum-model"); // declared identity
+	});
+
+	it("SA-05 §11.7: a compaction without a declared reference writes the wire id only and prices as unknown", async () => {
+		const dir3 = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const session3 = SessionStore.create(path.join(dir3, "s.jsonl"), "/p");
+		session3.appendMessage(user("old question one"));
+		session3.appendMessage(assistantText("old answer one"));
+		session3.appendMessage(user("old question two"));
+		session3.appendMessage(assistantText("old answer two"));
+		session3.appendMessage(user("recent question"));
+		session3.appendMessage(assistantText("recent answer"));
+		const result3 = await compactSession({
+			session: session3,
+			provider: summarizerProvider("## Goal\nno identity"),
+			model: "test-sum-model", // no modelReference — the wire id must never be priced
+			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
+		});
+		expect(result3).not.toBeNull();
+		const entry3 = session3.getEntries().find((e) => e.type === "compaction") as
+			| { model?: string; modelReference?: string }
+			| undefined;
+		expect(entry3?.model).toBe("test-sum-model");
+		expect(entry3?.modelReference).toBeUndefined();
+		const priced = priceUsageTotals(usageTotalsTracker(session3.getEntries()).view(), costFor);
+		expect(priced.usd).toBe(0); // no declared identity → never priced
+		// 3 seeded assistant messages (100 input each, no identity) + the
+		// summarizer's 1 — counted, all unpriced.
+		expect(priced.unpriced.inputTokens).toBe(301);
 	});
 });
 

@@ -121,9 +121,10 @@ describe("runner.navigateTree (#tree)", () => {
 		// SA-05 round 2: the branchSummary entry carries the fully qualified
 		// producer reference + the summarizer call's usage (pricing identity).
 		const summaryEntry = store.getEntries().find((e) => e.type === "branchSummary") as
-			| { model?: string; usage?: unknown }
+			| { model?: string; modelReference?: string; usage?: unknown }
 			| undefined;
-		expect(summaryEntry?.model).toBe("anthropic/claude-sonnet-4-5");
+		expect(summaryEntry?.model).toBe("claude-sonnet-4-5"); // WIRE id
+		expect(summaryEntry?.modelReference).toBe("anthropic/claude-sonnet-4-5"); // declared identity
 		expect(summaryEntry?.usage).toBeDefined();
 	});
 

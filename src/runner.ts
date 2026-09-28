@@ -857,7 +857,9 @@ class RunnerImpl implements Runner {
 			store.appendBranchSummary(
 				summary,
 				summaryUsage,
-				summaryUsageMissing ? { model: summaryReference, usageMissing: true } : { model: summaryReference },
+				summaryUsageMissing
+					? { model: summaryModel, modelReference: summaryReference, usageMissing: true }
+					: { model: summaryModel, modelReference: summaryReference },
 			); // parentId = newLeaf — heads the new position
 			outcome = "written";
 		}

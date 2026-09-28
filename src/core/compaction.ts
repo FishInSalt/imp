@@ -711,10 +711,12 @@ export async function compactSession(args: {
 	});
 	if (result === null) return null;
 
-	// SA-05 round 2 stamps: the FULLY QUALIFIED producer reference (never the
-	// wire id) + the missing-report flag; absent reference → field omitted.
-	const stamps: { model?: string; usageMissing?: true } = {};
-	if (args.modelReference !== undefined) stamps.model = args.modelReference;
+	// SA-05 §11.7 stamps: the wire id under `model`, the DECLARED pricing
+	// identity under `modelReference` + the missing-report flag; absent
+	// reference → the identity field is omitted (the entry prices as unknown).
+	const stamps: { model?: string; modelReference?: string; usageMissing?: true } = {};
+	stamps.model = args.model;
+	if (args.modelReference !== undefined) stamps.modelReference = args.modelReference;
 	if (result.usageMissing) stamps.usageMissing = true;
 	args.session.appendCompaction(
 		result.summary,

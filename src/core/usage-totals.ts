@@ -35,9 +35,9 @@ export interface UsageBucket {
 }
 
 export interface ModelUsage {
-	/** Producer reference as stamped (`message.model` /
-	 *  `record.binding.reference` / summary `entry.model`); null = legacy
-	 *  entry without a stamp. */
+	/** DECLARED producer identity (`message.modelReference` /
+	 *  `record.binding.reference` / summary `entry.modelReference`); null =
+	 *  legacy entry without a declared identity — unpriced, never inferred. */
 	reference: string | null;
 	bucket: UsageBucket;
 }
@@ -142,10 +142,11 @@ function applyEntry(
 		if (message.role === "assistant") {
 			addUsage(state.parent, message.usage);
 			if (message.usageMissing === true) state.incomplete.parent = true;
-			// SA-05 round 2: the pricing identity is the fully qualified
-			// reference; a legacy bare `model` value is never inferred (the
-			// rate lookup refuses it — shown unpriced).
-			addToModel(state, message.modelReference ?? message.model ?? null, message.usage);
+			// SA-05 §11.7: the DECLARED identity field is the only pricing
+			// source — the wire `model` is never consulted (a legacy wire id
+			// can itself contain '/', so the field, not the string shape,
+			// distinguishes an identity). Absent → unpriced.
+			addToModel(state, message.modelReference ?? null, message.usage);
 		} else if (message.role === "toolResult") {
 			for (const result of message.results) {
 				const record = parseTaskRecord(result.taskRecord);
@@ -181,7 +182,10 @@ function applyEntry(
 		if (entry.usage === undefined) return; // legacy entry without a report field (L1)
 		addUsage(state.summarizer, entry.usage);
 		if (entry.usageMissing === true) state.incomplete.summarizer = true;
-		addToModel(state, entry.model ?? null, entry.usage);
+		// SA-05 §11.7: entries price by their DECLARED identity field only
+		// (`model` holds the wire id for debugging; pre-fix entries — either
+		// cohort — have no modelReference and price as unknown).
+		addToModel(state, entry.modelReference ?? null, entry.usage);
 	}
 }
 

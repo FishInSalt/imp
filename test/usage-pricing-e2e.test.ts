@@ -124,8 +124,11 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 				"openai/review-shared-model",
 			);
 		}
-		const compaction = entries.find((e) => e.type === "compaction");
-		expect((compaction as { model?: string } | undefined)?.model).toBe("openai/review-shared-model");
+		const compaction = entries.find((e) => e.type === "compaction") as
+			| { model?: string; modelReference?: string }
+			| undefined;
+		expect(compaction?.model).toBe("review-shared-model"); // WIRE id (debugging)
+		expect(compaction?.modelReference).toBe("openai/review-shared-model"); // declared identity
 	});
 
 	it("a legacy persisted format (modelReference stripped) stays unpriced after reopen", async () => {
@@ -185,5 +188,4 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 		expect(priced.usd).toBe(0);
 		expect(priced.unpriced.inputTokens).toBe(1_000_000);
 	});
-
 });

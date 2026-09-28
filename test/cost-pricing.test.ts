@@ -2,14 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runAgentLoop } from "../src/core/loop.js";
+import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
 import type { SessionEntry } from "../src/core/session/store.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
-import { assistant, scriptedProvider } from "./helpers/fakes.js";
 import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.js";
-import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
-import { runAgentLoop } from "../src/core/loop.js";
 import { resetCatalogForTest } from "../src/provider/catalog.js";
 import { costFor } from "../src/provider/models.js";
+import { assistant, scriptedProvider } from "./helpers/fakes.js";
 
 /**
  * SA-05 round 2 (owner acceptance P2): pricing identity is the fully qualified
@@ -103,7 +103,10 @@ describe("SA-05 round 2: the aggregate prices qualified stamps only", () => {
 			model: "test-wire-id", // wire id — never a pricing identity
 			modelReference: "anthropic/claude-sonnet-4-5",
 		};
-		const priced = priceUsageTotals(usageTotalsTracker([legacyAssistant, preFixEntry, declared]).view(), costFor);
+		const priced = priceUsageTotals(
+			usageTotalsTracker([legacyAssistant, preFixEntry, declared]).view(),
+			costFor,
+		);
 		expect(priced.usd).toBeCloseTo(3, 10); // the DECLARED entry only
 		expect(priced.unpriced.inputTokens).toBe(2_000_000); // the slashed legacy wire id + the pre-fix entry
 	});
@@ -122,7 +125,13 @@ describe("SA-05 round 2: the aggregate prices qualified stamps only", () => {
 		});
 		const message = history.find((m) => m.role === "assistant") as AssistantMessage;
 		expect(message.modelReference).toBeUndefined();
-		const entry: SessionEntry = { type: "message", id: "a1", parentId: null, timestamp: "2026-09-27T00:00:00.000Z", message };
+		const entry: SessionEntry = {
+			type: "message",
+			id: "a1",
+			parentId: null,
+			timestamp: "2026-09-27T00:00:00.000Z",
+			message,
+		};
 		const priced = priceUsageTotals(usageTotalsTracker([entry]).view(), costFor);
 		expect(priced.usd).toBe(0);
 		expect(priced.unpriced.inputTokens).toBe(1_000_000);

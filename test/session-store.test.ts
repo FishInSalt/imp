@@ -279,18 +279,27 @@ describe("SessionStore", () => {
 			[],
 			100,
 			{ inputTokens: 8, outputTokens: 2 },
-			{ model: "test-model", usageMissing: true },
+			{ model: "test-wire-id", modelReference: "test-provider/test-model", usageMissing: true },
 		);
-		store.appendBranchSummary("branch", { inputTokens: 3, outputTokens: 1 }, { model: "test-model" });
+		store.appendBranchSummary(
+			"branch",
+			{ inputTokens: 3, outputTokens: 1 },
+			{ model: "test-wire-id", modelReference: "test-provider/test-model" },
+		);
 		const reopened = SessionStore.open(store.filePath);
 		const compaction = reopened.getEntries().find((e) => e.type === "compaction");
 		expect(compaction).toMatchObject({
 			usage: { inputTokens: 8, outputTokens: 2 },
-			model: "test-model",
+			model: "test-wire-id", // WIRE id
+			modelReference: "test-provider/test-model", // declared identity
 			usageMissing: true,
 		});
 		const branch = reopened.getEntries().find((e) => e.type === "branchSummary");
-		expect(branch).toMatchObject({ usage: { inputTokens: 3, outputTokens: 1 }, model: "test-model" });
+		expect(branch).toMatchObject({
+			usage: { inputTokens: 3, outputTokens: 1 },
+			model: "test-wire-id",
+			modelReference: "test-provider/test-model",
+		});
 	});
 
 	it("position markers: a fork or switch survives a restart (review P1-2)", async () => {

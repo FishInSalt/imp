@@ -784,10 +784,14 @@ fallback, on all three sources.**
   `message.model`);
 - compaction / branchSummary entries: `entry.modelReference ?? null`. The
   entries' identity MOVES to its own field, mirroring AssistantMessage:
-  writers stamp BOTH `model` (wire id — the 763cfbc-era meaning, kept for
-  debugging/compat) and `modelReference` (the qualified identity). Entries
-  written by the pre-fix SA-05 builds (model = wire, no modelReference) price
-  as unknown — including ones whose wire id contains `/`;
+  writers stamp BOTH `model` (the WIRE id, kept for debugging/compat — the
+  65cf954-era meaning) and `modelReference` (the qualified identity). Cohort
+  note (review correction): `entry.model` held the wire id at 65cf954/763cfbc
+  and the qualified identity at 5669ba3..a1ed2d3, with no version marker — so
+  EVERY entry written before this fix (both cohorts, slashed ids included)
+  prices as unknown on reopen. That is the documented L1 direction: a field
+  whose meaning changed is not a declared identity, and the field — not the
+  string shape — is what makes an identity;
 - task records: `record.binding.reference` (a CONSTRUCTED identity since
   SA-02 — `provider/wireModelId`, exactly one provider prefix; the modelId
   may itself contain slashes, which parses back correctly — unchanged).
@@ -796,7 +800,15 @@ Regression assertions (owner-requested):
 
 1. a legacy wire id containing `/` (assistant message AND compaction entry,
    no modelReference) → unpriced after a persist/reopen;
-2. a `runAgentLoop` call that omits the optional `modelReference` → the
-   message carries no stamp → unpriced;
+2. a `runAgentLoop` call that omits the optional `modelReference` (with a
+   slashed wire model) → the message carries no stamp → unpriced;
 3. the new-format counterpart (declared `modelReference`) still prices at the
-   declared provider's rates.
+   declared provider's rates;
+4. (review) an entry carrying BOTH fields where `model` is a slashed legacy
+   wire id and `modelReference` is absent → unpriced (pins that the reader
+   never consults `model`);
+5. (review) a 5669ba3-format entry (identity in `model`, no `modelReference`)
+   → unpriced on reopen;
+6. (review) writers emit BOTH fields post-fix (`model` = wire id,
+   `modelReference` = identity) — asserted at the `compactSession` and
+   `appendBranchSummary` seams.

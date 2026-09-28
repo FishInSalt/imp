@@ -294,9 +294,10 @@ describe("compactSession", () => {
 		});
 		expect(result).not.toBeNull();
 		const entry = session.getEntries().find((e) => e.type === "compaction") as
-			| { model?: string; usage?: unknown; usageMissing?: true }
+			| { model?: string; modelReference?: string; usage?: unknown; usageMissing?: true }
 			| undefined;
-		expect(entry?.model).toBe("test-provider/test-sum-model");
+		expect(entry?.model).toBe("test-sum-model"); // WIRE id
+		expect(entry?.modelReference).toBe("test-provider/test-sum-model"); // declared identity
 		expect(entry?.usage).toEqual({
 			inputTokens: 1,
 			outputTokens: 1,
@@ -339,10 +340,11 @@ describe("compactSession", () => {
 		});
 		expect(result2?.usageMissing).toBe(true);
 		const entry2 = session2.getEntries().find((e) => e.type === "compaction") as
-			| { model?: string; usageMissing?: true }
+			| { model?: string; modelReference?: string; usageMissing?: true }
 			| undefined;
 		expect(entry2?.usageMissing).toBe(true);
-		expect(entry2?.model).toBe("test-provider/test-sum-model");
+		expect(entry2?.model).toBe("test-sum-model"); // WIRE id
+		expect(entry2?.modelReference).toBe("test-provider/test-sum-model"); // declared identity
 	});
 });
 

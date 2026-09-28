@@ -114,7 +114,7 @@ describe("SA-05 usage totals", () => {
 	it("sums parent, child and summarizer usage exactly once (R3 anchor)", () => {
 		const entries: SessionEntry[] = [
 			userEntry("u1", null),
-			assistantEntry("a1", "u1", 100, 10, { model: "test-parent" }),
+			assistantEntry("a1", "u1", 100, 10, { modelReference: "test-parent" }),
 			taskResultEntry("t1", "a1", taskRecord({ inputTokens: 50, outputTokens: 7 })),
 			compactionEntry("c1", "t1", { inputTokens: 20, outputTokens: 5 }, "test-sum"),
 		];
@@ -148,9 +148,9 @@ describe("SA-05 usage totals", () => {
 	it("counts entries on abandoned branches and stays idempotent under repeated views", () => {
 		const entries: SessionEntry[] = [
 			userEntry("u1", null),
-			assistantEntry("a1", "u1", 10, 1, { model: "test-parent" }),
+			assistantEntry("a1", "u1", 10, 1, { modelReference: "test-parent" }),
 			// abandoned branch: a sibling assistant carried different leaf history
-			assistantEntry("a2", "u1", 20, 2, { model: "test-parent" }),
+			assistantEntry("a2", "u1", 20, 2, { modelReference: "test-parent" }),
 			compactionEntry("c1", "a1"),
 		];
 		const tracker = usageTotalsTracker(entries);
@@ -162,8 +162,8 @@ describe("SA-05 usage totals", () => {
 
 	it("prices per producer reference; unknown references are unpriced, never fallback-priced", () => {
 		const entries: SessionEntry[] = [
-			assistantEntry("a1", null, 1_000_000, 0, { model: "known/model-a" }),
-			assistantEntry("a2", "a1", 1_000_000, 0), // legacy: no model stamp
+			assistantEntry("a1", null, 1_000_000, 0, { modelReference: "known/model-a" }),
+			assistantEntry("a2", "a1", 1_000_000, 0), // legacy: no declared identity
 			taskResultEntry("t1", "a2", taskRecord({ inputTokens: 500_000, outputTokens: 0 })),
 		];
 		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), (reference) =>
@@ -180,11 +180,11 @@ describe("SA-05 usage totals", () => {
 	it("rebuild == incremental: a fresh tracker over the grown entries agrees", () => {
 		const entries: SessionEntry[] = [
 			userEntry("u1", null),
-			assistantEntry("a1", "u1", 10, 1, { model: "test-parent" }),
+			assistantEntry("a1", "u1", 10, 1, { modelReference: "test-parent" }),
 		];
 		const tracker = usageTotalsTracker(entries);
 		expect(tracker.view().parent.calls).toBe(1);
-		entries.push(assistantEntry("a2", "a1", 7, 3, { model: "test-parent" }));
+		entries.push(assistantEntry("a2", "a1", 7, 3, { modelReference: "test-parent" }));
 		const incremented = tracker.view();
 		const rebuilt = usageTotalsTracker(entries).view();
 		expect(incremented).toEqual(rebuilt);
@@ -251,7 +251,7 @@ describe("SA-05 usage totals", () => {
 
 	it("prices each producer independently: an unknown child reference stays unpriced beside a priced parent", () => {
 		const entries: SessionEntry[] = [
-			assistantEntry("a1", null, 1_000_000, 0, { model: "known/model-a" }),
+			assistantEntry("a1", null, 1_000_000, 0, { modelReference: "known/model-a" }),
 			taskResultEntry(
 				"t1",
 				"a1",
@@ -270,7 +270,7 @@ describe("SA-05 usage totals", () => {
 	});
 
 	it("tags subscription-backed priced usage (the (sub) semantics)", () => {
-		const entries: SessionEntry[] = [assistantEntry("a1", null, 100, 0, { model: "zai/glm-5.3" })];
+		const entries: SessionEntry[] = [assistantEntry("a1", null, 100, 0, { modelReference: "zai/glm-5.3" })];
 		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), () => ({
 			input: 0,
 			output: 0,
@@ -306,8 +306,8 @@ describe("SA-05 usage totals", () => {
 
 	it("a shrinking entry array rebuilds instead of serving stale totals", () => {
 		const entries: SessionEntry[] = [
-			assistantEntry("a1", null, 10, 1, { model: "test-parent" }),
-			assistantEntry("a2", "a1", 20, 2, { model: "test-parent" }),
+			assistantEntry("a1", null, 10, 1, { modelReference: "test-parent" }),
+			assistantEntry("a2", "a1", 20, 2, { modelReference: "test-parent" }),
 		];
 		const tracker = usageTotalsTracker(entries);
 		expect(tracker.view().parent.calls).toBe(2);
@@ -322,7 +322,7 @@ describe("SA-05 usage totals", () => {
 
 	it("a record without a binding reference stays unpriced even when the parent model is priced (no fallback)", () => {
 		const entries: SessionEntry[] = [
-			assistantEntry("a1", null, 1_000_000, 0, { model: "known/model-a" }),
+			assistantEntry("a1", null, 1_000_000, 0, { modelReference: "known/model-a" }),
 			taskResultEntry(
 				"t1",
 				"a1",

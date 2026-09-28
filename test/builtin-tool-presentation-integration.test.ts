@@ -229,7 +229,19 @@ describe("actual builtin presentation integration", () => {
 		for (const status of ["completed", "timeout", "aborted", "crash", "max_iterations"] as const)
 			for (const text of [undefined, "partial", `${"x".repeat(60000)}TAIL`]) {
 				const result = taskResult(
-					{ status, text, turns: 2, usage: { inputTokens: 10, outputTokens: 5 }, reason: "test" },
+					{
+						status,
+						text,
+						turns: 2,
+						usage: { inputTokens: 10, outputTokens: 5 },
+						usageDetail: {
+							task: { inputTokens: 10, outputTokens: 5 },
+							summarizer: { inputTokens: 0, outputTokens: 0 },
+							summarizerCalls: 0,
+							incomplete: false,
+						},
+						reason: "test",
+					},
 					null,
 				);
 				unchanged(tool, { prompt: "original" }, result);

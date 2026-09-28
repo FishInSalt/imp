@@ -4,7 +4,7 @@ import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
 import type { Tool } from "../src/core/tools/types.js";
-import type { LLMRequest } from "../src/provider/types.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
 
 /** A tool that settles when the gate opens OR its signal aborts — the loop
@@ -178,13 +178,17 @@ describe("runSubagent", () => {
 		expect(outcome.status).toBe("crash");
 		expect(outcome.reason).toBe("endpoint exploded");
 		expect(outcome.text).toBe("partial answer"); // survived the crash
-		expect(outcome.turns).toBe(1); // recomputed from history, not lost with the throw
+		expect(outcome.turns).toBe(1); // counted from reports, not lost with the throw
 		expect(outcome.usage).toEqual({
 			inputTokens: 100,
 			outputTokens: 7,
 			cacheReadTokens: 0,
 			cacheWriteTokens: 0,
 		});
+		// SA-04: the second stream started and threw without a report
+		expect(outcome.usageDetail.incomplete).toBe(true);
+		expect(outcome.usageDetail.task).toEqual(outcome.usage);
+		expect(outcome.usageDetail.summarizer).toEqual({ inputTokens: 0, outputTokens: 0 });
 	});
 
 	it("crash on the first request: zero turns, no text", async () => {
@@ -204,6 +208,10 @@ describe("runSubagent", () => {
 		expect(outcome.turns).toBe(0);
 		expect(outcome.text).toBeUndefined();
 		expect(outcome.reason).toBe("connection refused");
+		// SA-04/A: a started stream threw before any report — disclosed, never
+		// guessed (the flag says "not captured", not "not billed").
+		expect(outcome.usageDetail.incomplete).toBe(true);
+		expect(outcome.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
 	});
 });
 
@@ -271,6 +279,22 @@ describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagin
 			cacheReadTokens: 0,
 			cacheWriteTokens: 0,
 		});
+		// SA-04 split: 100+50 task in / 7+5 task out, plus the summarizer 10/5;
+		// the overflowed request started and threw, so incompleteness is disclosed.
+		expect(outcome.usageDetail.task).toEqual({
+			inputTokens: 150,
+			outputTokens: 12,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizer).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizerCalls).toBe(1);
+		expect(outcome.usageDetail.incomplete).toBe(true);
 	});
 
 	it("second overflow → crash with the guidance text; exactly one real summarizer call", async () => {
@@ -591,5 +615,90 @@ describe("child clock — rev 4 semantics", () => {
 		expect(outcome.status).toBe("completed");
 		controller.abort(); // must not throw (dangling relay would only warn; pin cleanliness)
 		expect(controller.signal.aborted).toBe(true);
+	});
+});
+
+describe("SA-04 accounting (red evidence on baseline)", () => {
+	it("R3: a mid-stream abort keeps known totals and discloses incomplete", async () => {
+		const controller = new AbortController();
+		let call = 0;
+		const provider: LLMProvider = {
+			name: "r3-abort",
+			async *stream() {
+				call++;
+				if (call === 1) {
+					yield {
+						type: "message_end",
+						message: assistant(
+							[{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }],
+							"tool_use",
+							{ inputTokens: 100, outputTokens: 7 },
+						),
+					};
+					return;
+				}
+				yield { type: "text_delta", text: "partial answer" };
+				controller.abort(); // the caller aborts while the request is in flight
+				return; // abortSafe shape: the stream ends without a message_end
+			},
+		};
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [echo],
+			prompt: "go",
+			signal: controller.signal,
+		});
+		expect(outcome.status).toBe("aborted");
+		expect(outcome.turns).toBe(1);
+		expect(outcome.usage).toEqual({
+			inputTokens: 100,
+			outputTokens: 7,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.incomplete).toBe(true);
+		expect(outcome.usageDetail.task).toEqual({
+			inputTokens: 100,
+			outputTokens: 7,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+	});
+
+	it("R3b: a clean completed attempt has a zero summarizer bucket and carries no incompleteness", async () => {
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])]);
+		const outcome = await runSubagent({ provider, model: "m", system: "", tools: [], prompt: "go" });
+		expect(outcome.status).toBe("completed");
+		expect(outcome.usageDetail.summarizer).toEqual({ inputTokens: 0, outputTokens: 0 });
+		expect(outcome.usageDetail.summarizerCalls).toBe(0);
+		expect(outcome.usageDetail.incomplete).toBe(false);
+		expect(outcome.usage).toEqual(outcome.usageDetail.task);
+	});
+
+	it("R3c: a timeout mid-stream is disclosed as incomplete with preserved totals", async () => {
+		const provider: LLMProvider = {
+			name: "hold",
+			async *stream(request) {
+				yield { type: "text_delta", text: "partial" };
+				await new Promise<void>((resolve) => {
+					if (request.signal?.aborted) return resolve();
+					request.signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+				return; // abortSafe shape: the clock fired, no message_end
+			},
+		};
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [],
+			prompt: "go",
+			timeoutMs: 40,
+		});
+		expect(outcome.status).toBe("timeout");
+		expect(outcome.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+		expect(outcome.usageDetail.incomplete).toBe(true);
 	});
 });

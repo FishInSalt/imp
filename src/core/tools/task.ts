@@ -492,7 +492,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				reason: outcome.reason,
 				turns: outcome.turns,
 				textPresent: outcome.text !== undefined,
-				usage: outcome.usage,
+				// SA-04: totals + the reserved incompleteness flag (shape frozen by
+				// SA-03; the flag appears only when a started request never reported).
+				usage: outcome.usageDetail.incomplete ? { ...outcome.usage, incomplete: true } : outcome.usage,
 			};
 			const base = taskResult(outcome, session, effectiveTimeout, String(args.prompt));
 			if (cleanup === undefined || cleanup.state === "removed") return finish(base, terminal);

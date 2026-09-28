@@ -62,6 +62,13 @@ export interface AssistantMessage {
 	 *  attribution reads it so a session that switched models prices each
 	 *  response at its own rates; entries from older imp versions lack it. */
 	model?: string;
+	/** SA-04: true when the adapter observed NO mapped usage counter on the
+	 *  wire for this response (absent/null/empty/null-valued containers). The
+	 *  numbers beside it are then initialization zeros, not a report — the
+	 *  attempt ledger must flag incompleteness instead of asserting zero use.
+	 *  Never inferred from the counters themselves; set structurally by the
+	 *  adapter, absent for explicit reports (including explicit zeros). */
+	usageMissing?: true;
 }
 
 import type { TaskRecord } from "./task-record.js";

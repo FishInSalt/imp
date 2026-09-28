@@ -368,6 +368,94 @@ describe("openai-completions provider", () => {
 		expect(body).not.toContain("taskRecord");
 		expect(body).not.toContain("attempt-evil");
 	});
+
+	it("SA-04: no usage container on the wire → usageMissing, never an asserted zero", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: { content: "hi" } }] }),
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				"data: [DONE]\n\n",
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.2", [{ role: "user", content: "hi" }])));
+		const msg = lastMessage(events);
+		expect(msg.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+		expect(msg.usageMissing).toBe(true);
+	});
+
+	it("SA-04: an explicit zero report is complete — no flag, even with unmapped decoration", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: { content: "hi" } }] }),
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				sse({
+					choices: [],
+					usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+					system_fingerprint: "fp_x",
+				}),
+				"data: [DONE]\n\n",
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.2", [{ role: "user", content: "hi" }])));
+		const msg = lastMessage(events);
+		expect(msg.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+		expect(msg.usageMissing).toBeUndefined();
+	});
+
+	it("SA-04: finish, then a trailing usage:null chunk (DeepSeek interim shape) is still no data", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: { content: "hi" } }] }),
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				sse({ choices: [], usage: null }),
+				"data: [DONE]\n\n",
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.2", [{ role: "user", content: "hi" }])));
+		expect(lastMessage(events).usageMissing).toBe(true);
+	});
+
+	it("SA-04: a real report keeps its values and carries no flag", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: { content: "hi" } }] }),
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				sse({ choices: [], usage: { prompt_tokens: 31, completion_tokens: 7 } }),
+				"data: [DONE]\n\n",
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.2", [{ role: "user", content: "hi" }])));
+		const msg = lastMessage(events);
+		expect(msg.usage).toEqual({ inputTokens: 31, outputTokens: 7 });
+		expect(msg.usageMissing).toBeUndefined();
+	});
+
+	it("SA-04: the flag never leaks into a request body (history round-trip)", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+				sse({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+				"data: [DONE]\n\n",
+			],
+		};
+		const history = [
+			{
+				role: "assistant" as const,
+				blocks: [{ type: "text" as const, text: "prior" }],
+				usage: { inputTokens: 0, outputTokens: 0 },
+				stopReason: "end_turn" as const,
+				usageMissing: true as const,
+			},
+			{ role: "user" as const, content: "next" },
+		];
+		await collect(provider().stream(REQ("gpt-5.2", history)));
+		expect(JSON.stringify(captured.at(-1)?.body)).not.toContain("usageMissing");
+	});
 });
 
 describe("parseModelRef routing", () => {

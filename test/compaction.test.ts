@@ -15,6 +15,7 @@ import {
 } from "../src/core/compaction.js";
 import { type AgentMessage, type AssistantMessage, contentText } from "../src/core/messages.js";
 import { SessionStore, summaryToMessage } from "../src/core/session/store.js";
+import { createAttemptUsage } from "../src/core/usage-ledger.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
 
@@ -365,6 +366,101 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		).rejects.toThrow(/token cap.*cap=12.*both capped/);
 		expect(requests).toHaveLength(2);
 		expect(requests[1]?.thinking).toBeUndefined(); // off -> omitted, intervention-free
+	});
+
+	it("SA-04: both hops capped — both reports retained though the summary is rejected", async () => {
+		// scriptedProvider repeats its last step: hop 2 is capped as well
+		const provider = scriptedProvider([assistant([{ type: "text", text: "half" }], "max_tokens")]);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const ledger = createAttemptUsage();
+		await expect(
+			compactHistory({
+				messages: overflowishHistory(6),
+				provider,
+				model: "m",
+				settings,
+				thinking: "max",
+				usageLedger: ledger,
+			}),
+		).rejects.toThrow(/token cap.*both capped/);
+		expect(ledger.summarizerCalls).toBe(2);
+		// each hop reported the default 10/5 — rejection must not erase paid work
+		expect(ledger.summarizer).toEqual({
+			inputTokens: 20,
+			outputTokens: 10,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.incomplete).toBe(false); // both streams reported; nothing was missing
+	});
+
+	it("SA-04: first hop reports, the retry hop throws — report kept, incompleteness disclosed", async () => {
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "text", text: "half" }], "max_tokens", { inputTokens: 7, outputTokens: 1 }),
+				() => {
+					throw new Error("summary endpoint down");
+				},
+			],
+			undefined,
+			"moonshotai",
+		);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const ledger = createAttemptUsage();
+		await expect(
+			compactHistory({
+				messages: overflowishHistory(6),
+				provider,
+				model: "kimi-k2.7-code",
+				settings,
+				thinking: "high",
+				usageLedger: ledger,
+			}),
+		).rejects.toThrow("summary endpoint down");
+		expect(ledger.summarizerCalls).toBe(2);
+		expect(ledger.summarizer).toEqual({
+			inputTokens: 7,
+			outputTokens: 1,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.incomplete).toBe(true);
+	});
+
+	it("SA-04: a summarizer that never saw usage data keeps the summary but flags the attempt", async () => {
+		const provider: LLMProvider = {
+			name: "no-usage",
+			async *stream() {
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text: "## Goal\nsummary without usage" }],
+						usage: { inputTokens: 0, outputTokens: 0 },
+						stopReason: "end_turn",
+						usageMissing: true,
+					},
+				};
+			},
+		};
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const ledger = createAttemptUsage();
+		const result = await compactHistory({
+			messages: overflowishHistory(6),
+			provider,
+			model: "m",
+			settings,
+			usageLedger: ledger,
+		});
+		expect(result?.summary).toContain("summary without usage"); // the text is valid — only accounting is flagged
+		expect(ledger.summarizer).toEqual({
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.summarizerCalls).toBe(1);
+		expect(ledger.incomplete).toBe(true);
 	});
 
 	it("#compaction-thinking-retry: no retry when no lower level exists", async () => {

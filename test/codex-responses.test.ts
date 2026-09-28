@@ -43,6 +43,7 @@ function lastMessage(events: Array<{ type: string } & Record<string, unknown>>) 
 		blocks: Array<Record<string, unknown>>;
 		usage: Record<string, unknown>;
 		stopReason: string | null;
+		usageMissing?: true;
 	};
 }
 
@@ -401,6 +402,36 @@ describe("codex-responses provider", () => {
 		expect(body.length).toBeGreaterThan(0);
 		expect(body).not.toContain("taskRecord");
 		expect(body).not.toContain("attempt-evil");
+	});
+
+	it("SA-04: response.completed without usage → usageMissing on the message", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse("response.output_text.delta", { output_index: 0, delta: "hi" }),
+				sse("response.completed", { response: { status: "completed" } }),
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
+		const msg = lastMessage(events);
+		expect(msg.usage).toEqual({ inputTokens: 0, outputTokens: 0, cacheReadTokens: undefined });
+		expect(msg.usageMissing).toBe(true);
+	});
+
+	it("SA-04: a completed response with numeric counters carries no flag", async () => {
+		script = {
+			status: 200,
+			chunks: [
+				sse("response.output_text.delta", { output_index: 0, delta: "hi" }),
+				sse("response.completed", {
+					response: { status: "completed", usage: { input_tokens: 31, output_tokens: 7 } },
+				}),
+			],
+		};
+		const events = await collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }])));
+		const msg = lastMessage(events);
+		expect(msg.usage).toEqual({ inputTokens: 31, outputTokens: 7, cacheReadTokens: undefined });
+		expect(msg.usageMissing).toBeUndefined();
 	});
 });
 

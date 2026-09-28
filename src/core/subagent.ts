@@ -15,9 +15,10 @@ import {
 } from "./compaction.js";
 import { CHILD_MAX_TURNS } from "./constants.js";
 import { type RunAgentLoopOptions, type RunAgentLoopResult, runAgentLoop } from "./loop.js";
-import { type AgentMessage, addUsage, type Usage } from "./messages.js";
+import type { AgentMessage, Usage } from "./messages.js";
 import { type SessionStore, summaryToMessage } from "./session/store.js";
 import type { Tool } from "./tools/types.js";
+import { attemptUsageSnapshot, createAttemptUsage } from "./usage-ledger.js";
 
 /**
  * Subagent engine (M5 design §4): a child agent loop with fresh context,
@@ -92,6 +93,20 @@ export type SubagentStatus =
 	| "timeout" // the child's own clock fired; parent signal still live
 	| "crash"; // provider/protocol error; partial recovery applies
 
+/** SA-04: the attempt's usage split — engine-level facts for tests and
+ *  SA-05. Never persisted as such: the SA-03 record carries the totals +
+ *  `incomplete` (shape frozen). */
+export interface SubagentUsageDetail {
+	/** Reports of task-assistant responses (the child loop). */
+	task: Usage;
+	/** Reports of summarizer calls (history compaction). */
+	summarizer: Usage;
+	/** Summarizer provider streams started (reported or not). */
+	summarizerCalls: number;
+	/** A started stream produced no captured usage report. */
+	incomplete: boolean;
+}
+
 export interface SubagentOutcome {
 	status: SubagentStatus;
 	/** Last assistant text (backward scan); undefined when the child said nothing. */
@@ -99,7 +114,10 @@ export interface SubagentOutcome {
 	/** Crash reason (status === "crash" only). */
 	reason?: string;
 	turns: number;
+	/** Attempt totals: task + summarizer reports received (SA-04). */
 	usage: Usage;
+	/** SA-04 split (see SubagentUsageDetail). */
+	usageDetail: SubagentUsageDetail;
 }
 
 /**
@@ -116,46 +134,6 @@ export function finalAssistantText(messages: AgentMessage[]): string | undefined
 		}
 	}
 	return undefined;
-}
-
-/** Componentwise before−after usage delta (clamped at 0) — the cost carried
- *  away by a history splice. Valid because the retained tail is a subset of
- *  the pre-splice messages with identical usage entries. */
-function usageDelta(before: Usage, after: Usage): Usage {
-	const clamp = (n: number) => Math.max(0, n);
-	return {
-		inputTokens: clamp(before.inputTokens - after.inputTokens),
-		outputTokens: clamp(before.outputTokens - after.outputTokens),
-		cacheReadTokens: clamp((before.cacheReadTokens ?? 0) - (after.cacheReadTokens ?? 0)),
-		cacheWriteTokens: clamp((before.cacheWriteTokens ?? 0) - (after.cacheWriteTokens ?? 0)),
-	};
-}
-
-/** usage + carried-away stats as a fresh object (addUsage mutates its target). */
-function addUsageIntoNew(base: Usage, extra: Usage): Usage {
-	const sum: Usage = {
-		...base,
-		cacheReadTokens: base.cacheReadTokens ?? 0,
-		cacheWriteTokens: base.cacheWriteTokens ?? 0,
-	};
-	addUsage(sum, extra);
-	return sum;
-}
-
-function historyStats(messages: AgentMessage[]): { turns: number; usage: Usage } {
-	// Recomputable from history — the loop's counters are unreachable when it
-	// throws mid-run (crash path), so derive from what actually happened.
-	const usage: Usage = { inputTokens: 0, outputTokens: 0 };
-	let turns = 0;
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		turns++;
-		usage.inputTokens += message.usage.inputTokens;
-		usage.outputTokens += message.usage.outputTokens;
-		usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (message.usage.cacheReadTokens ?? 0);
-		usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (message.usage.cacheWriteTokens ?? 0);
-	}
-	return { turns, usage };
 }
 
 /** SA-02 D4: the model-metadata decisions for one child run — both the
@@ -183,6 +161,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// this module only honors the resolved value.
 	const timeoutMs = options.timeoutMs;
 	const history: AgentMessage[] = [];
+	// SA-04 (design §3.3): one exactly-once attempt ledger. Created here, fed by
+	// the two provider-stream seams (task loop + summarizer), snapshotted into
+	// the outcome. Replaces the history-recomputation compensation — a replayed
+	// history (SA-06/07) can never leak into this attempt's delta.
+	const ledger = createAttemptUsage();
 	// SA-02 D4: settings AND the summarizer output cap come from the SAME
 	// canonical reference — one lookup helper, consumed below.
 	const { settings, modelMaxTokens } = childModelMetadata(options);
@@ -200,19 +183,12 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// disabled for the rest of the run (one stderr note) — a persistent auth
 	// failure must not buy 40 silent paid retry calls.
 	let consecutiveFailures = 0;
-	let compactionDisabled = false;
 	// #compaction-ux F1: the child's local estimate floor — set when the
 	// child history is spliced by compaction, so the next boundary's
 	// shouldCompact check reads the new shape, not a stale pre-compaction
 	// anchor (main-loop estimateFloor parity; the child has no store).
 	let childFloor = 0;
-	// Stats carried away by compaction splices: on crash the trailer reports
-	// historyStats(history), which only sees the post-splice history — the
-	// summarized-away turns/usage are added back through this accumulator so
-	// cost accounting stays truthful.
-	let summarizedTurns = 0;
-	let summarizedAny = false;
-	const summarizedUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+	let compactionDisabled = false;
 	const onBeforeTurn: RunAgentLoopOptions["onBeforeTurn"] | undefined = autoCompact
 		? async (history) => {
 				if (compactionDisabled) return;
@@ -240,7 +216,6 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			// deliberately waits): children may carry a caller-set wall clock,
 			// and persistence only happens after a fully streamed summary — an
 			// aborted stream throws here, is caught below, and nothing is persisted.
-			const beforeStats = historyStats(history);
 			let compacted: CompactHistoryResult | CompactResult | null;
 			if (options.session) {
 				// Session path = runner.compactAndSplice verbatim: the compaction
@@ -253,6 +228,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					signal: child.signal,
 					settings,
 					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
+					usageLedger: ledger, // SA-04: every summarizer stream lands here
 				});
 				if (compacted) {
 					history.splice(0, history.length, ...options.session.buildContext().messages);
@@ -269,6 +245,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					signal: child.signal,
 					settings,
 					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
+					usageLedger: ledger, // SA-04: every summarizer stream lands here
 				});
 				if (compacted) {
 					history.splice(0, history.length, summaryToMessage(compacted.summary), ...compacted.retainedTail);
@@ -277,15 +254,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			}
 			if (compacted) {
 				consecutiveFailures = 0;
-				// Carry the summarized-away assistant stats into the crash-path
-				// accumulator: removed = before-splice − after-splice (the retained
-				// tail survives with identical usage, so the componentwise delta is
-				// exact), plus the summarizer's own call cost.
-				const afterStats = historyStats(history);
-				addUsage(summarizedUsage, usageDelta(beforeStats.usage, afterStats.usage));
-				addUsage(summarizedUsage, compacted.usage);
-				summarizedTurns += beforeStats.turns - afterStats.turns;
-				summarizedAny = true;
+				// SA-04: no splice compensation needed — the ledger counted each
+				// report at production; the entry's `usage` stays checkpoint data.
 				return { compacted: true };
 			}
 			return { compacted: false }; // keepRecent swallowed everything (cut <= 0)
@@ -346,16 +316,26 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			onEvent: options.onEvent,
 			onBeforeTurn,
 			signal: child.signal,
+			usageLedger: ledger, // SA-04: every task report lands here
 		});
 
-	/** Accounting from history + the summarized accumulator — shared by the
-	 *  crash path and the recovered path (both rounds' real cost lives in
-	 *  history; a second runAgentLoop's own counters only cover the retry). */
-	const statsFromHistory = () => {
-		const { turns, usage } = historyStats(history);
+	/** SA-04 (design §3.3): every path settles from the attempt ledger — reports
+	 *  are counted at production, so splices, aborts and crashes are facts, not
+	 *  recomputations. `turns` stays the task-turn count (reports observed). */
+	const settled = (status: SubagentStatus, reason?: string): SubagentOutcome => {
+		const snapshot = attemptUsageSnapshot(ledger);
 		return {
-			turns: turns + summarizedTurns,
-			usage: summarizedAny ? addUsageIntoNew(usage, summarizedUsage) : usage,
+			status,
+			...(reason !== undefined ? { reason } : {}),
+			text: finalAssistantText(history),
+			turns: snapshot.taskReports,
+			usage: snapshot.totals,
+			usageDetail: {
+				task: snapshot.task,
+				summarizer: snapshot.summarizer,
+				summarizerCalls: snapshot.summarizerCalls,
+				incomplete: snapshot.incomplete,
+			},
 		};
 	};
 
@@ -363,26 +343,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		const result = await launchLoop(options.prompt);
 		if (result.stopReason === "aborted") {
 			const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
-			return {
-				status: timedOut ? "timeout" : "aborted",
-				text: finalAssistantText(history),
-				turns: result.turns,
-				usage: result.usage,
-			};
+			return settled(timedOut ? "timeout" : "aborted");
 		}
-		return {
-			status: result.stopReason,
-			text: finalAssistantText(history),
-			turns: result.turns,
-			usage: result.usage,
-		};
+		return settled(result.stopReason);
 	} catch (err) {
-		const crashWith = (reason: string): SubagentOutcome => ({
-			status: "crash",
-			reason,
-			text: finalAssistantText(history),
-			...statsFromHistory(),
-		});
+		const crashWith = (reason: string): SubagentOutcome => settled("crash", reason);
 		const rawMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 		// #overflow-recovery (child): a live context-overflow error gets ONE
@@ -408,11 +373,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			// re-detect it here so the clock is not misreported as a crash.
 			if (child.signal.aborted) {
 				const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
-				return {
-					status: timedOut ? "timeout" : "aborted",
-					text: finalAssistantText(history),
-					...statsFromHistory(),
-				};
+				return settled(timedOut ? "timeout" : "aborted");
 			}
 			return crashWith(overflowGuidance(guidanceTokens(), settings, error ?? "nothing safe to compact"));
 		}
@@ -420,18 +381,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			const result = await launchLoop(undefined);
 			if (result.stopReason === "aborted") {
 				const timedOut = clock !== undefined && !(options.signal?.aborted ?? false) && clock.aborted;
-				return {
-					status: timedOut ? "timeout" : "aborted",
-					text: finalAssistantText(history),
-					...statsFromHistory(),
-				};
+				return settled(timedOut ? "timeout" : "aborted");
 			}
-			// D3: retry-success accounting from history (both rounds' cost).
-			return {
-				status: result.stopReason,
-				text: finalAssistantText(history),
-				...statsFromHistory(),
-			};
+			// SA-04: both rounds' reports were counted at production.
+			return settled(result.stopReason);
 		} catch (retryErr) {
 			// Review P1-2: a NON-overflow retry failure (401/500/network) keeps its
 			// raw message — never mislabeled as overflow (runner.ts:775 parity).

@@ -236,6 +236,16 @@ describe("runSubagent between-turn compaction (no session — sessions disabled)
 		expect(messageCounts(routed.loopRequests)).toEqual([1, 3, 5, 3]);
 		const final = routed.loopRequests[3]?.messages as Array<{ role: string; content?: string }>;
 		expect(final[0]?.content).toContain("SUMMARY-ON-RETRY");
+		// SA-04: the failed attempt started and never reported — the successful
+		// retry's 3/2 is counted, the failure is disclosed, not invented.
+		expect(outcome.usageDetail.summarizerCalls).toBe(2);
+		expect(outcome.usageDetail.summarizer).toEqual({
+			inputTokens: 3,
+			outputTokens: 2,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.incomplete).toBe(true);
 	});
 
 	it("over threshold but nothing safe to cut: compactHistory null → no splice, loop continues", async () => {
@@ -456,6 +466,18 @@ describe("M7 review coverage: repeat compactions, session-path retry, failure ca
 		let splices = 0;
 		for (let i = 1; i < counts.length; i++) if ((counts[i] ?? 0) <= (counts[i - 1] ?? 0)) splices++;
 		expect(splices).toBeGreaterThanOrEqual(2);
+		// SA-04: multiple compactions sum exactly — one 3/2 report per summarizer
+		// stream, task bucket untouched by the splices, totals the componentwise sum.
+		expect(outcome.usageDetail.summarizerCalls).toBe(routed.summaryRequests.length);
+		expect(outcome.usageDetail.summarizer.inputTokens).toBe(3 * routed.summaryRequests.length);
+		expect(outcome.usageDetail.summarizer.outputTokens).toBe(2 * routed.summaryRequests.length);
+		expect(outcome.usage.inputTokens).toBe(
+			outcome.usageDetail.task.inputTokens + outcome.usageDetail.summarizer.inputTokens,
+		);
+		expect(outcome.usage.outputTokens).toBe(
+			outcome.usageDetail.task.outputTokens + outcome.usageDetail.summarizer.outputTokens,
+		);
+		expect(outcome.usageDetail.incomplete).toBe(false);
 	});
 
 	it("SESSION path: a failing summarizer retries at the next boundary and persists (mirror of the no-session test)", async () => {
@@ -563,5 +585,93 @@ describe("M7 review coverage: repeat compactions, session-path retry, failure ca
 		//      + the summarizer call itself (3 in / 2 out)
 		expect(outcome.usage.inputTokens).toBe(1500 + 500 + 3);
 		expect(outcome.usage.outputTokens).toBe(5 + 5 + 2);
+		// SA-04: the split pins where the numbers came from; the crashing
+		// third stream started without a report, so incompleteness is disclosed.
+		expect(outcome.usageDetail.task.inputTokens).toBe(1500 + 500);
+		expect(outcome.usageDetail.summarizer).toEqual({
+			inputTokens: 3,
+			outputTokens: 2,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizerCalls).toBe(1);
+		expect(outcome.usageDetail.incomplete).toBe(true);
+	});
+});
+
+describe("SA-04 accounting: exactly-once attempt usage (red evidence on baseline)", () => {
+	it("R1: success + one compaction — totals are task reports + the summarizer report, exactly once", async () => {
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1000),
+				toolTurn("c3", "three", 1500),
+				assistant([{ type: "text", text: "all done" }]), // default usage 10 in / 5 out
+			],
+			"SUMMARY-TEXT",
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+		});
+		expect(routed.summaryRequests).toHaveLength(1);
+		// task: 500 + 1000 + 1500 + 10 in, 5*4 out; summarizer: 3 in / 2 out
+		expect(outcome.usage).toEqual({
+			inputTokens: 3010 + 3,
+			outputTokens: 20 + 2,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.task).toEqual({
+			inputTokens: 3010,
+			outputTokens: 20,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizer).toEqual({
+			inputTokens: 3,
+			outputTokens: 2,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizerCalls).toBe(1);
+		expect(outcome.usageDetail.incomplete).toBe(false);
+		expect(outcome.turns).toBe(4);
+	});
+
+	it("R2: a rejected (empty) summary still counts the paid summarizer reports", async () => {
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1000),
+				toolTurn("c3", "three", 1500),
+				assistant([{ type: "text", text: "all done" }]),
+			],
+			"", // summarizer produces nothing usable → compactHistory rejects it
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+		});
+		expect(outcome.status).toBe("completed");
+		expect(outcome.text).toBe("all done");
+		const attempts = routed.summaryRequests.length;
+		expect(attempts).toBe(1);
+		expect(outcome.usage).toEqual({
+			inputTokens: 3010 + 3 * attempts,
+			outputTokens: 20 + 2 * attempts,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(outcome.usageDetail.summarizerCalls).toBe(attempts);
+		expect(outcome.usageDetail.incomplete).toBe(false);
 	});
 });

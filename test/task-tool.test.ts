@@ -61,6 +61,12 @@ function outcome(overrides: Partial<SubagentOutcome>): SubagentOutcome {
 		text: "answer text",
 		turns: 2,
 		usage: { inputTokens: 10, outputTokens: 5 },
+		usageDetail: {
+			task: { inputTokens: 10, outputTokens: 5 },
+			summarizer: { inputTokens: 0, outputTokens: 0 },
+			summarizerCalls: 0,
+			incomplete: false,
+		},
 		...overrides,
 	};
 }
@@ -2308,6 +2314,69 @@ describe("task record (SA-03)", () => {
 		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
 		expect(transcript.writeFailed).toBeUndefined();
 	}, 30000);
+
+	it("SA-04: an interrupted request persists usage.incomplete; a clean attempt carries no flag", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-inc-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-inc-cwd-"));
+		const parent = createSession(cwd, base);
+		const controller = new AbortController();
+		let call = 0;
+		const provider: LLMProvider = {
+			name: "interrupted",
+			async *stream() {
+				call++;
+				if (call === 1) {
+					yield {
+						type: "message_end",
+						message: assistant(
+							[{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } }],
+							"tool_use",
+							{ inputTokens: 30, outputTokens: 4 },
+						),
+					};
+					return;
+				}
+				yield { type: "text_delta", text: "partial" };
+				controller.abort();
+				return; // abortSafe shape: the stream ends without a message_end
+			},
+		};
+		const { task } = recordHarness({
+			session: parent,
+			childSessions: true,
+			sessionBaseDir: base,
+			cwd,
+			tools: [echo],
+			overrides: { getProvider: () => provider },
+		});
+		const result = await task.execute({ prompt: "go" }, controller.signal);
+		expect(result.taskRecord).toMatchObject({ status: "aborted", launched: true, turns: 1 });
+		expect(result.taskRecord?.binding?.reference).toBe("anthropic/parent-wire");
+		// Totals preserved, incompleteness disclosed — the reserved SA-03 field,
+		// filled by SA-04, never guessed.
+		expect(result.taskRecord?.usage).toEqual({
+			inputTokens: 30,
+			outputTokens: 4,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			incomplete: true,
+		});
+
+		// Clean sibling: the same engine path without interruption carries no key.
+		const { task: clean } = recordHarness({
+			session: parent,
+			childSessions: true,
+			sessionBaseDir: base,
+			cwd,
+		});
+		const cleanResult = await clean.execute({ prompt: "go" }, new AbortController().signal);
+		expect(cleanResult.taskRecord?.usage).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+	});
 
 	it("T21: the loop persists the record with the message and carries it on tool_end", async () => {
 		const { task } = recordHarness({ tools: [echo] });

@@ -16,6 +16,8 @@ import {
 	type Usage,
 } from "./messages.js";
 import { type SessionStore, SUMMARY_MARK } from "./session/store.js";
+import type { AttemptUsage } from "./usage-ledger.js";
+import { recordMissingUsageReport, recordSummarizerCall, recordUsageReport } from "./usage-ledger.js";
 
 /**
  * Context compaction: when the conversation nears the model's context window,
@@ -396,29 +398,44 @@ async function runSummarizer(args: {
 	maxTokens: number;
 	thinking?: ThinkingLevel;
 	signal?: AbortSignal;
+	/** SA-04: records every summarizer stream at the seam — reported usage,
+	 *  started calls, and started streams that never reported. */
+	usageLedger?: AttemptUsage;
 }): Promise<SummarizerRun> {
 	const usage = emptyUsage();
 	let summary = "";
 	let finalText: string | undefined;
 	let stopReason: string | null | undefined;
-	for await (const event of args.provider.stream({
-		system: args.system,
-		messages: [{ role: "user", content: args.userContent }],
-		tools: [],
-		model: args.model,
-		maxTokens: args.maxTokens,
-		signal: args.signal,
-		thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
-	})) {
-		if (event.type === "text_delta") summary += event.text;
-		if (event.type === "message_end") {
-			addUsage(usage, event.message.usage);
-			stopReason = event.message.stopReason;
-			finalText = event.message.blocks
-				.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
-				.map((b) => b.text)
-				.join("");
+	recordSummarizerCall(args.usageLedger);
+	let reported = false;
+	try {
+		for await (const event of args.provider.stream({
+			system: args.system,
+			messages: [{ role: "user", content: args.userContent }],
+			tools: [],
+			model: args.model,
+			maxTokens: args.maxTokens,
+			signal: args.signal,
+			thinking: args.thinking !== undefined && args.thinking !== "off" ? args.thinking : undefined,
+		})) {
+			if (event.type === "text_delta") summary += event.text;
+			if (event.type === "message_end") {
+				reported = true;
+				addUsage(usage, event.message.usage);
+				recordUsageReport(args.usageLedger, "summarizer", event.message.usage);
+				// SA-04 round 2: message said it never saw usage data.
+				if (event.message.usageMissing === true) recordMissingUsageReport(args.usageLedger);
+				stopReason = event.message.stopReason;
+				finalText = event.message.blocks
+					.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+					.map((b) => b.text)
+					.join("");
+			}
 		}
+	} finally {
+		// SA-04: an aborted/thrown stream still counts as a started call whose
+		// report never arrived — disclosed, never guessed.
+		if (!reported) recordMissingUsageReport(args.usageLedger);
 	}
 	return { summary, finalText, usage, stopReason };
 }
@@ -451,6 +468,10 @@ async function summarizeWithRetry(args: {
 	signal?: AbortSignal;
 	tokenCapMessage: string;
 	abortedMessage: string;
+	/** SA-04: threaded to both hops — per-stream recording makes the ledger
+	 *  immune to retry/rejection throws; the merged return value stays for the
+	 *  compaction entry (never both summed). */
+	usageLedger?: AttemptUsage;
 }): Promise<SummarizerRun> {
 	const first = await runSummarizer(args);
 	// Abort gate is UNCONDITIONAL (pre-refactor parity): abortSafe streams end
@@ -565,6 +586,8 @@ export async function compactHistory(args: {
 	modelMaxTokens?: number;
 	/** #thinking-levels: pi's summarizer rides the session's level. */
 	thinking?: ThinkingLevel;
+	/** SA-04: attempt ledger (see runSummarizer). */
+	usageLedger?: AttemptUsage;
 }): Promise<CompactHistoryResult | null> {
 	const settings = args.settings ?? DEFAULT_COMPACTION_SETTINGS;
 	const tokensBefore = estimateContextTokens(args.messages).tokens;
@@ -611,6 +634,7 @@ export async function compactHistory(args: {
 		maxTokens: summarizerMaxTokens(settings.reserveTokens, args.modelMaxTokens),
 		thinking: args.thinking,
 		signal: args.signal,
+		usageLedger: args.usageLedger,
 		tokenCapMessage: "compaction: summary hit the token cap — incomplete, rejected",
 		abortedMessage: "compaction: summarizer aborted — incomplete, rejected",
 	});
@@ -645,6 +669,8 @@ export async function compactSession(args: {
 	modelMaxTokens?: number;
 	/** #thinking-levels: pi's summarizer rides the session's level. */
 	thinking?: ThinkingLevel;
+	/** SA-04: attempt ledger (see runSummarizer). */
+	usageLedger?: AttemptUsage;
 }): Promise<CompactResult | null> {
 	const { messages } = args.session.buildContext();
 	const result = await compactHistory({
@@ -655,6 +681,7 @@ export async function compactSession(args: {
 		settings: args.settings,
 		modelMaxTokens: args.modelMaxTokens,
 		thinking: args.thinking,
+		usageLedger: args.usageLedger,
 	});
 	if (result === null) return null;
 

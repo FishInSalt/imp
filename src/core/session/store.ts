@@ -82,6 +82,18 @@ export interface MessageEntry extends EntryBase {
 export interface BranchSummaryEntry extends EntryBase {
 	type: "branchSummary";
 	summary: string;
+	/** SA-05: usage of the summarizer call(s) that produced this summary — the
+	 *  sum of arrived reports (zeros when none arrived), plus the SA-04
+	 *  round-2 missing flag and the producing identity. Absent on entries
+	 *  written by earlier versions (legacy rule L1). */
+	usage?: Usage;
+	/** The WIRE model id that produced this summary (debugging/compat) — never
+	 *  a pricing identity (§11.7). */
+	model?: string;
+	/** SA-05 §11.7: the DECLARED pricing identity (fully qualified
+	 *  `provider/modelId`). The only field the aggregate prices. */
+	modelReference?: string;
+	usageMissing?: true;
 }
 
 export interface CompactionEntry extends EntryBase {
@@ -93,6 +105,13 @@ export interface CompactionEntry extends EntryBase {
 	tokensBefore: number;
 	/** Usage of the LLM call that produced the summary, if known. */
 	usage?: Usage;
+	/** The WIRE model id that produced this summary (debugging/compat) — never
+	 *  a pricing identity (§11.7). */
+	model?: string;
+	/** SA-05 §11.7: the DECLARED pricing identity (fully qualified
+	 *  `provider/modelId`). The only field the aggregate prices. */
+	modelReference?: string;
+	usageMissing?: true;
 }
 
 /** #thinking-levels: a level change (pi's ThinkingLevelChangeEntry). Tree
@@ -506,6 +525,9 @@ export class SessionStore {
 		retainedTail: AgentMessage[],
 		tokensBefore: number,
 		usage?: Usage,
+		/** SA-05: wire `model` + declared `modelReference` + SA-04 round-2
+		 *  missing flag (omitted when absent, never set to undefined). */
+		stamps?: { model?: string; modelReference?: string; usageMissing?: true },
 	): string {
 		const entry: CompactionEntry = {
 			type: "compaction",
@@ -516,6 +538,9 @@ export class SessionStore {
 			retainedTail,
 			tokensBefore,
 			usage,
+			...(stamps?.model !== undefined && { model: stamps.model }),
+			...(stamps?.modelReference !== undefined && { modelReference: stamps.modelReference }),
+			...(stamps?.usageMissing === true && { usageMissing: true }),
 		};
 		this.append(entry);
 		return entry.id;
@@ -696,13 +721,22 @@ export class SessionStore {
 
 	/** Append a branch summary at the current leaf (#10): the memory of the
 	 *  branch just left, carried into the new one's context. */
-	appendBranchSummary(summary: string): string {
+	appendBranchSummary(
+		summary: string,
+		/** SA-05: summarizer usage + stamps — see BranchSummaryEntry. */
+		usage?: Usage,
+		stamps?: { model?: string; modelReference?: string; usageMissing?: true },
+	): string {
 		const entry: BranchSummaryEntry = {
 			type: "branchSummary",
 			id: this.nextId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			summary,
+			...(usage !== undefined && { usage }),
+			...(stamps?.model !== undefined && { model: stamps.model }),
+			...(stamps?.modelReference !== undefined && { modelReference: stamps.modelReference }),
+			...(stamps?.usageMissing === true && { usageMissing: true }),
 		};
 		this.append(entry);
 		return entry.id;

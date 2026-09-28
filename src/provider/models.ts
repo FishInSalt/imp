@@ -13,9 +13,9 @@
  * IMP_CONTEXT_WINDOW still wins over everything, as before.
  */
 
-import { catalogEntryForReference } from "./catalog.js";
+import { catalogEntryFor, catalogEntryForReference } from "./catalog.js";
 import { discoveredWindowFor } from "./discover.js";
-import { parseModelRef } from "./resolve.js";
+import { type ProviderName, parseModelRef } from "./resolve.js";
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	// Anthropic (pi anthropic.json catalog)
@@ -59,13 +59,15 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
 
-/** Per-million-token USD rates for the footer's cost segment (pi's
- *  ModelCostRates). Sourced from the same pi provider catalogs as the context
- *  windows above; `subscription: true` marks plans that bill the subscription
- *  rather than the token meter (z.ai Coding Plan, ChatGPT-backed codex) —
- *  their rates are what the traffic WOULD cost at API pricing, shown with a
- *  "(sub)" tag like pi. Request-wide tiered pricing (>272k input) is not
- *  modeled; long sessions on tiered models slightly undercount. */
+/** Per-million-token USD rates (pi's ModelCostRates), keyed by PROVIDER then
+ *  model id — SA-05 §11.2 R3: the static floor is provider-scoped and a
+ *  lookup may never cross providers. Sourced from the same pi provider
+ *  catalogs as the context windows above; `subscription: true` marks plans
+ *  that bill the subscription rather than the token meter (z.ai Coding Plan,
+ *  ChatGPT-backed codex) — their rates are what the traffic WOULD cost at API
+ *  pricing, shown with a "(sub)" tag like pi. Request-wide tiered pricing
+ *  (>272k input) is not modeled; long sessions on tiered models slightly
+ *  undercount. */
 export interface ModelCost {
 	input: number;
 	output: number;
@@ -74,43 +76,61 @@ export interface ModelCost {
 	subscription?: boolean;
 }
 
-const MODEL_COSTS: Record<string, ModelCost> = {
-	// Anthropic API (pi anthropic.json)
-	"claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-	"claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-	"claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-	"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-	"claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-	"claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-	"claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-	// Z.ai GLM — Coding Plan: token meter is $0, tag as subscription (pi zai.json)
-	"glm-4.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-4.6": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5-turbo": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5.2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5.2-highspeed": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5.3": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5.3-flash": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"glm-5.3-highspeed": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	// DeepSeek official API (pi.dev deepseek catalog, 2026-09-25)
-	"deepseek-flash": { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
-	"deepseek-v4-pro": { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
-	// Moonshot / Kimi official API (pi.dev moonshotai catalog, 2026-09-26;
-	// USD display convention — the CN platform bills CNY, recorded divergence)
+/** Moonshot / Kimi official API (pi.dev moonshotai catalog, 2026-09-26; USD
+ *  display convention — the CN platform bills CNY, recorded divergence).
+ *  Shared by the moonshotai and moonshotai-cn sections (same snapshot ids). */
+const KIMI_COSTS: Record<string, ModelCost> = {
 	"kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
 	"kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
 	"kimi-k2.7-code-highspeed": { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
 	"kimi-k3": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-	// OpenAI Codex — ChatGPT subscription; rates mirror the API list (pi openai-codex.json)
-	"gpt-6-astra": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
-	"gpt-5.3-codex-spark": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0, subscription: true },
-	"gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0, subscription: true },
-	"gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0, subscription: true },
-	"gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, subscription: true },
-	"gpt-5.6-luna": { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, subscription: true },
-	"gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, subscription: true },
-	"gpt-5.6-terra": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, subscription: true },
+};
+
+const MODEL_COSTS: Partial<Record<ProviderName, Record<string, ModelCost>>> = {
+	anthropic: {
+		// Anthropic API (pi anthropic.json)
+		"claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		"claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		"claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+		"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+		"claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		"claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		"claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+	},
+	zai: {
+		// Z.ai GLM — Coding Plan: token meter is $0, tag as subscription (pi zai.json)
+		"glm-4.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-4.6": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5-turbo": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5.2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5.2-highspeed": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5.3": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5.3-flash": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"glm-5.3-highspeed": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+	},
+	deepseek: {
+		// DeepSeek official API (pi.dev deepseek catalog, 2026-09-25)
+		"deepseek-flash": { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
+		"deepseek-v4-pro": { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
+	},
+	moonshotai: KIMI_COSTS,
+	// SA-05 round 2: the CN platform shares the same pi.dev snapshot ids; the
+	// static floor was authored for both families (recorded CNY divergence in
+	// KIMI_COSTS). An EXPLICIT alias section keeps provider-scoped lookups
+	// honest — authored data, not a runtime cross-provider fallback.
+	"moonshotai-cn": KIMI_COSTS,
+	"openai-codex": {
+		// OpenAI Codex — ChatGPT subscription; rates mirror the API list (pi openai-codex.json)
+		"gpt-6-astra": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subscription: true },
+		"gpt-5.3-codex-spark": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0, subscription: true },
+		"gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0, subscription: true },
+		"gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0, subscription: true },
+		"gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, subscription: true },
+		"gpt-5.6-luna": { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, subscription: true },
+		"gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, subscription: true },
+		"gpt-5.6-terra": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, subscription: true },
+	},
 };
 
 // circular-safe: discover.js owns the runtime map; import lazily via type-only + accessor
@@ -138,19 +158,24 @@ function envInt(name: string): number | undefined {
  *  openai are metered API). Static tables encode the same per-model. */
 const SUBSCRIPTION_FAMILIES = new Set(["zai", "openai-codex"]);
 
-/** Cost rates for a model reference (canonical or bare); undefined = unknown,
- *  0-cost-models included so subscriptions can be tagged.
- *  M14: the pi.dev catalog wins; the static table is the floor. */
+/** Cost rates for a FULLY QUALIFIED reference (`provider/modelId`); undefined
+ *  = unknown, 0-cost models included so subscriptions can be tagged.
+ *  SA-05 §11.2 R2/R3: a bare id carries no provider and is never inferred
+ *  (legacy wire stamps price as unknown); lookups never cross providers —
+ *  catalog first (M14: pi.dev wins), then the provider's static section.
+ *  `openai/gpt-5.4` is NOT the codex subscription entry, and
+ *  `openai/claude-sonnet-4-6` is NOT Anthropic-priced. */
 export function costFor(reference: string): ModelCost | undefined {
-	const entry = catalogEntryForReference(reference);
+	const trimmed = reference.trim();
+	if (!trimmed.includes("/")) return undefined; // legacy bare id: no provider, no rate
+	const ref = parseModelRef(trimmed);
+	const entry = catalogEntryFor(ref.provider, ref.modelId);
 	if (entry?.cost !== undefined) {
 		const cost: ModelCost = { ...entry.cost };
-		if (SUBSCRIPTION_FAMILIES.has(parseModelRef(reference).provider)) cost.subscription = true;
+		if (SUBSCRIPTION_FAMILIES.has(ref.provider)) cost.subscription = true;
 		return cost;
 	}
-	const slash = reference.indexOf("/");
-	const modelId = slash === -1 ? reference : reference.slice(slash + 1);
-	return MODEL_COSTS[modelId];
+	return MODEL_COSTS[ref.provider]?.[ref.modelId];
 }
 
 export interface ContextWindowInfo {

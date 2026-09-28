@@ -150,13 +150,25 @@ export function collectTaskRecords(entries: readonly SessionEntry[]): TaskRecord
 	const seen = new Set<string>();
 	const out: TaskRecord[] = [];
 	for (const entry of entries) {
-		if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-		for (const result of entry.message.results) {
-			const record = parseTaskRecord((result as { taskRecord?: unknown }).taskRecord);
-			if (record === null || seen.has(record.attemptId)) continue;
+		for (const record of taskRecordsInEntry(entry)) {
+			if (seen.has(record.attemptId)) continue;
 			seen.add(record.attemptId);
 			out.push(record);
 		}
+	}
+	return out;
+}
+
+/** The validated records carried by ONE entry, in result order — no dedupe
+ *  (the cross-entry `seen` set stays with the caller: `collectTaskRecords`
+ *  globally, the SA-05 tracker incrementally). Behavior of
+ *  `collectTaskRecords` is unchanged by the extraction. */
+export function taskRecordsInEntry(entry: SessionEntry): TaskRecord[] {
+	if (entry.type !== "message" || entry.message.role !== "toolResult") return [];
+	const out: TaskRecord[] = [];
+	for (const result of entry.message.results) {
+		const record = parseTaskRecord((result as { taskRecord?: unknown }).taskRecord);
+		if (record !== null) out.push(record);
 	}
 	return out;
 }
@@ -233,7 +245,7 @@ function isUsage(v: unknown): boolean {
 	return u.incomplete === undefined || u.incomplete === true;
 }
 
-function parseTaskRecord(value: unknown): TaskRecord | null {
+export function parseTaskRecord(value: unknown): TaskRecord | null {
 	if (typeof value !== "object" || value === null) return null;
 	const r = value as Record<string, unknown>;
 	if (r.version !== TASK_RECORD_VERSION) return null; // greater versions: skipped

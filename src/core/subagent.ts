@@ -169,6 +169,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// SA-02 D4: settings AND the summarizer output cap come from the SAME
 	// canonical reference — one lookup helper, consumed below.
 	const { settings, modelMaxTokens } = childModelMetadata(options);
+	// SA-05 round 2 (§11.2 R1): the child's persisted pricing identity — the
+	// caller's DECLARED reference (task.ts always supplies the binding's
+	// qualified form). Absent → no stamp: the bare wire id is never persisted
+	// as if it were a priced identity (delta review F2).
+	const childReference = options.modelReference;
 
 	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
 	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.
@@ -225,6 +230,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					session: options.session,
 					provider: options.provider,
 					model: options.model,
+					...(childReference !== undefined && { modelReference: childReference }),
 					signal: child.signal,
 					settings,
 					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
@@ -303,6 +309,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		runAgentLoop({
 			provider: options.provider,
 			model: options.model,
+			...(childReference !== undefined && { modelReference: childReference }),
 			system:
 				options.system +
 				CHILD_SUFFIX +

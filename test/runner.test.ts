@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { createSession, SessionNotFoundError } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { buildTaskRecord } from "../src/core/task-record.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
@@ -177,6 +178,44 @@ describe("createRunner", () => {
 		);
 	});
 
+	it("SA-05 R2: session totals include child (task record) usage", async () => {
+		const { baseDir, cwd } = await setup();
+		const store = createSession(cwd, baseDir);
+		store.appendMessage(userMsg("hello"));
+		store.appendMessage({
+			role: "toolResult",
+			results: [
+				{
+					toolCallId: "t1",
+					toolName: "task",
+					content: "done",
+					isError: false,
+					taskRecord: buildTaskRecord({
+						attemptId: "att-r2",
+						sourceId: "src-r2",
+						launched: true,
+						cwd,
+						status: "completed",
+						turns: 3,
+						textPresent: true,
+						usage: { inputTokens: 50, outputTokens: 7 },
+						binding: { providerName: "zai", wireModelId: "glm-5.3", reference: "zai/glm-5.3" },
+					}),
+				},
+			],
+		});
+		const runner = (await makeRunner({
+			provider: scriptedProvider([]),
+			cwd,
+			baseDir,
+			resume: store.header.id,
+		})) as RunnerWithOutput;
+		runner.printSessionStats();
+		const out = runner.capturedOutput();
+		expect(out).toContain("↑50"); // the child's tokens are part of the session's work
+		expect(out).toContain("↓7");
+	});
+
 	it("-c with no prior session prints the starting-fresh banner", async () => {
 		const { baseDir, cwd } = await setup();
 		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])]);
@@ -310,7 +349,10 @@ describe("Runner.runTurn", () => {
 		const id8 = runner.session?.header.id.slice(0, 8);
 		const expected =
 			`— test-model · 1 turns · in 1.2k / out 56 tokens · cache↓789\n` +
-			`— session ${id8} · 2 msgs total · in 1.2k / out 56 cumulative\n`;
+			// SA-05: work totals are the durable whole-session aggregate; the
+			// message count stays the active-branch context fact; test-model
+			// has no rates -> `$?` (unpriced, never fallback-priced).
+			`— session ${id8} · 2 msgs (active branch) · work ↑1.2k ↓56 $?\n`;
 		expect((runner as RunnerWithOutput).capturedOutput().endsWith(expected)).toBe(true);
 
 		// and without cache tokens: no cache note at all

@@ -304,15 +304,16 @@ describe("familyConfigured via IMP_AUTH_PATH", () => {
 });
 
 describe("costFor (footer cost table)", () => {
-	it("resolves canonical and bare references; flags subscriptions; unknown → undefined", async () => {
+	it("resolves fully qualified references; bare ids and unknown → undefined", async () => {
 		const { costFor } = await import("../src/provider/models.js");
 		const gpt = costFor("openai-codex/gpt-5.5");
 		expect(gpt).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, subscription: true });
-		expect(costFor("gpt-5.5")).toBe(gpt);
-		const glm = costFor("glm-5.3");
+		// SA-05 round 2: a bare id carries no provider — never inferred.
+		expect(costFor("gpt-5.5")).toBeUndefined();
+		const glm = costFor("zai/glm-5.3");
 		expect(glm?.subscription).toBe(true);
 		expect(glm?.input).toBe(0);
-		expect(costFor("claude-sonnet-4-5")?.subscription).toBeUndefined();
+		expect(costFor("anthropic/claude-sonnet-4-5")?.subscription).toBeUndefined();
 		expect(costFor("totally-unknown")).toBeUndefined();
 	});
 });

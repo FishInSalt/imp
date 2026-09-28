@@ -676,7 +676,9 @@ Reused verbatim from print mode:
 ▪ compacted: ~<a> → ~<b> tokens (<n> msgs kept verbatim)
 ▪ nothing safe to compact yet — continuing
 — <model> · <n> turns · in <i> / out <o> tokens[ · cache↓<c>]      (run stats)
-— session <id8> · <n> msgs total · in <i> / out <o> cumulative     (session stats)
+— session <id8> · <n> msgs (active branch) · work ↑<i> ↓<o>[ <$>]   (session stats;
+                                            SA-05: work = whole-session
+                                            aggregate, priced with markers)
 (aborted)                                                          (dim)
 (stopped: reached max turns (<n>))                                 (red)
 ```

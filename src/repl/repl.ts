@@ -1,16 +1,17 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
-import { type AgentMessage, type AssistantMessage, contentText, type Usage } from "../core/messages.js";
+import { type AgentMessage, contentText, type Usage } from "../core/messages.js";
 import { killTrackedDetachedChildren } from "../core/process-tree.js";
 import type { SessionStore } from "../core/session/store.js";
 import { type QueueMode, saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
+import { priceUsageTotals } from "../core/usage-totals.js";
 import type { ExtensionRegistry } from "../extensions/registry.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
-import { dim, formatTokens, shorten, summarizeResult, VERSION } from "../format.js";
+import { dim, formatTokens, shorten, summarizeResult, usageMoneySegment, VERSION } from "../format.js";
 import type { McpManager } from "../mcp/manager.js";
 import { costFor } from "../provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.js";
@@ -865,58 +866,49 @@ class ReplMachine {
 		const session = this.runner.session;
 		if (session !== null) parts.push(session.header.id.slice(0, 8));
 
-		// Session-wide usage segments (pi footer semantics), all from the live
-		// history: cumulative ↑/↓, cache read R / write W, the LATEST cache hit
-		// rate CH (= cacheRead / full prompt of the last response that reported
-		// cache data), and $ cost priced per message at its producer model's
-		// rates — messages from before the model field existed (or models not
-		// in the cost table) fall back to the current model's rates, so a
-		// mid-session /model switch prices each turn correctly.
-		const assistants = this.runner.history.filter((m): m is AssistantMessage => m.role === "assistant");
-		let inputTokens = 0;
-		let outputTokens = 0;
-		let cacheRead = 0;
-		let cacheWrite = 0;
+		// Session-wide work-usage segments (pi footer semantics) now come from
+		// the SA-05 durable aggregate (#sa-05-usage-totals): WHOLE-session totals
+		// — children and summarization included; compaction cannot erase them —
+		// priced per producer model at the CURRENT catalog rates (an estimate,
+		// not an invoice). Missing pricing shows as `~`, known-missing usage as
+		// `!`, and `$?` when nothing could be priced; unstamped legacy usage is
+		// never repriced at the current model. CH (cache hit of the LAST
+		// response) stays a live-history fact; ctx% is untouched.
+		const totals = this.runner.usageTotals();
 		let lastCacheUsage: Usage | undefined;
-		let cost = 0;
-		let subscription = costFor(this.runner.model)?.subscription ?? false;
-		for (const m of assistants) {
-			inputTokens += m.usage.inputTokens;
-			outputTokens += m.usage.outputTokens;
-			cacheRead += m.usage.cacheReadTokens ?? 0;
-			cacheWrite += m.usage.cacheWriteTokens ?? 0;
-			if (m.usage.cacheReadTokens !== undefined) lastCacheUsage = m.usage;
-			const rates = costFor(m.model ?? this.runner.model);
-			if (rates) {
-				cost +=
-					(m.usage.inputTokens * rates.input +
-						m.usage.outputTokens * rates.output +
-						(m.usage.cacheReadTokens ?? 0) * rates.cacheRead +
-						(m.usage.cacheWriteTokens ?? 0) * rates.cacheWrite) /
-					1_000_000;
-				if (rates.subscription) subscription = true;
-			}
+		for (const m of this.runner.history) {
+			if (m.role === "assistant" && m.usage.cacheReadTokens !== undefined) lastCacheUsage = m.usage;
 		}
-		if (inputTokens > 0 || outputTokens > 0 || cacheRead > 0 || cacheWrite > 0) {
-			const usageParts = [`↑${formatTokens(inputTokens)}`, `↓${formatTokens(outputTokens)}`];
-			if (cacheRead > 0) usageParts.push(`R${formatTokens(cacheRead)}`);
-			if (cacheWrite > 0) usageParts.push(`W${formatTokens(cacheWrite)}`);
-			if (lastCacheUsage) {
-				// pi's CH: hit share of the FULL prompt (input + cache read + write)
-				const denom =
-					lastCacheUsage.inputTokens +
-					(lastCacheUsage.cacheReadTokens ?? 0) +
-					(lastCacheUsage.cacheWriteTokens ?? 0);
-				if (denom > 0) {
-					usageParts.push(`CH${(((lastCacheUsage.cacheReadTokens ?? 0) / denom) * 100).toFixed(1)}%`);
+		if (totals !== null) {
+			const t = totals.total;
+			if (t.inputTokens > 0 || t.outputTokens > 0 || t.cacheReadTokens > 0 || t.cacheWriteTokens > 0) {
+				const usageParts = [`\u2191${formatTokens(t.inputTokens)}`, `\u2193${formatTokens(t.outputTokens)}`];
+				if (t.cacheReadTokens > 0) usageParts.push(`R${formatTokens(t.cacheReadTokens)}`);
+				if (t.cacheWriteTokens > 0) usageParts.push(`W${formatTokens(t.cacheWriteTokens)}`);
+				if (lastCacheUsage) {
+					// pi's CH: hit share of the FULL prompt (input + cache read + write)
+					const denom =
+						lastCacheUsage.inputTokens +
+						(lastCacheUsage.cacheReadTokens ?? 0) +
+						(lastCacheUsage.cacheWriteTokens ?? 0);
+					if (denom > 0) {
+						usageParts.push(`CH${(((lastCacheUsage.cacheReadTokens ?? 0) / denom) * 100).toFixed(1)}%`);
+					}
 				}
+				parts.push(usageParts.join(" "));
 			}
-			parts.push(usageParts.join(" "));
-		}
-		// Subscription-backed models still show $0.000 (sub) — the traffic is
-		// covered by the plan, the number is what it would cost at API rates.
-		if (cost > 0 || subscription) {
-			parts.push(`$${cost.toFixed(3)}${subscription ? " (sub)" : ""}`);
+			const priced = priceUsageTotals(totals, costFor);
+			const money = usageMoneySegment({
+				usd: priced.usd,
+				subscription: priced.subscription,
+				unpricedTokens:
+					priced.unpriced.inputTokens +
+					priced.unpriced.outputTokens +
+					priced.unpriced.cacheReadTokens +
+					priced.unpriced.cacheWriteTokens,
+				incomplete: totals.incomplete.parent || totals.incomplete.child || totals.incomplete.summarizer,
+			});
+			if (money !== null) parts.push(money);
 		}
 
 		// Context fill from the same live history the loop and auto-compaction

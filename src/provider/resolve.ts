@@ -90,6 +90,15 @@ export function parseModelRef(reference: string): ModelRef {
 	return { provider: "anthropic", modelId: reference };
 }
 
+/** SA-05: the FULLY QUALIFIED canonical reference for a producer identity —
+ *  always `provider/modelId`, anthropic included. This is the persisted
+ *  pricing identity; it is intentionally distinct from the display/routing
+ *  convention (bare ids route as anthropic, glm-* as zai — a ROUTING rule,
+ *  not an identity claim). See docs/sa-05-usage-totals-design.md §11.2 R1. */
+export function qualifiedReference(provider: ProviderName, modelId: string): string {
+	return `${provider}/${modelId}`;
+}
+
 export function createProviderFor(provider: ProviderName): LLMProvider {
 	switch (provider) {
 		case "anthropic":

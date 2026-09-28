@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, AssistantMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
+import type { SessionStore } from "../src/core/session/store.js";
 import { buildSkillCommands, expandSkillBlock, loadSkills } from "../src/core/skills.js";
+import { buildTaskRecord } from "../src/core/task-record.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -1259,6 +1261,83 @@ describe("runRepl with shell:tui", () => {
 		stopReason: "end_turn",
 	});
 
+	it("SA-05: child-only usage never moves the context segment", async () => {
+		const ctxOf = async (withChild: boolean): Promise<string | undefined> => {
+			const env = await startTuiRepl([reply("ok")], {
+				seedSession: (store) => {
+					store.appendMessage({ role: "user", content: "hello" });
+					store.appendMessage({
+						role: "assistant",
+						blocks: [{ type: "text", text: "hi" }],
+						usage: { inputTokens: 100, outputTokens: 10 },
+						model: "test-model",
+						stopReason: "end_turn",
+					});
+					// identical content either way — only the record differs
+					store.appendMessage({
+						role: "toolResult",
+						results: [
+							{
+								toolCallId: "t1",
+								toolName: "task",
+								content: "",
+								isError: false,
+								...(withChild && {
+									taskRecord: buildTaskRecord({
+										attemptId: "att-ctx",
+										sourceId: "src-ctx",
+										launched: true,
+										cwd: "/tmp",
+										status: "completed",
+										turns: 2,
+										textPresent: true,
+										usage: { inputTokens: 50, outputTokens: 7 },
+										binding: { providerName: "zai", wireModelId: "glm-5.3", reference: "zai/glm-5.3" },
+									}),
+								}),
+							},
+						],
+					});
+				},
+			});
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			env.terminal.data("/exit\r");
+			await env.repl;
+			return /\d+\.\d%\/[0-9.]+[km]?/.exec(frame)?.[0];
+		};
+		const control = await ctxOf(false);
+		const withChild = await ctxOf(true);
+		expect(control).toBeDefined();
+		expect(withChild).toBe(control); // child usage feeds work totals only — never ctx%
+	});
+
+	it("SA-05 R1: the footer keeps compacted-away usage (whole-session totals)", async () => {
+		const usageAssistant = (text: string, inputTokens: number, outputTokens: number): AssistantMessage => ({
+			role: "assistant",
+			blocks: [{ type: "text", text }],
+			usage: { inputTokens, outputTokens },
+			model: "test-model",
+			stopReason: "end_turn",
+		});
+		const env = await startTuiRepl([reply("ok")], {
+			seedSession: (store) => {
+				store.appendMessage({ role: "user", content: "long analysis please" });
+				store.appendMessage(usageAssistant("long analysis", 100, 10));
+				store.appendCompaction("## Goal\nsummary", [], 500);
+				store.appendMessage(usageAssistant("after", 5, 5));
+			},
+		});
+		await settle();
+		// The live history is post-compaction (summary + "after") — the footer
+		// must still count the compacted-away 100/10 call.
+		const frame = env.terminal.frameSince(0);
+		expect(frame).toContain("↑105");
+		expect(frame).toContain("↓15");
+		env.terminal.data("/exit\r");
+		await env.repl;
+	});
+
 	async function startTuiRepl(
 		scripts: ScriptStep[],
 		options?: {
@@ -1273,14 +1352,18 @@ describe("runRepl with shell:tui", () => {
 			realProvider?: boolean;
 			model?: string; // default test-model is knob-less; Claude opts into thinking
 			seed?: AgentMessage[]; // pre-written session history (replayed at startup)
+			seedSession?: (store: SessionStore) => void; // raw seeding (entries incl. compaction)
 			noSession?: boolean;
 			markdown?: boolean;
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
-		if (options?.seed !== undefined && options.seed.length > 0) {
+		const seeded =
+			options?.seedSession !== undefined || (options?.seed !== undefined && options.seed.length > 0);
+		if (seeded) {
 			const store = createSession(baseDir, baseDir); // runner cwd is baseDir — same bucket
-			for (const message of options.seed) store.appendMessage(message);
+			options?.seedSession?.(store);
+			for (const message of options?.seed ?? []) store.appendMessage(message);
 		}
 		const requests: LLMRequest[] = [];
 		const provider: LLMProvider | undefined =
@@ -1306,7 +1389,7 @@ describe("runRepl with shell:tui", () => {
 			maxTurns: 10,
 			noContextFiles: true,
 			noSession: options?.noSession ?? false,
-			continueRecent: options?.seed !== undefined && options.seed.length > 0 ? true : undefined,
+			continueRecent: seeded ? true : undefined,
 			sessionBaseDir: baseDir,
 			settingsPath: path.join(baseDir, "settings.json"),
 			renderer,

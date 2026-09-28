@@ -62,6 +62,11 @@ export interface AssistantMessage {
 	 *  attribution reads it so a session that switched models prices each
 	 *  response at its own rates; entries from older imp versions lack it. */
 	model?: string;
+	/** SA-05: the FULLY QUALIFIED producer reference (`provider/modelId`) —
+	 *  the pricing identity. Stamped by the loop when the caller supplies
+	 *  one; distinct from `model` (the wire id, kept for debugging/compat).
+	 *  Pre-fix entries lack it and are unpriced, never inferred. */
+	modelReference?: string;
 	/** SA-04: true when the adapter observed NO mapped usage counter on the
 	 *  wire for this response (absent/null/empty/null-valued containers). The
 	 *  numbers beside it are then initialization zeros, not a report — the

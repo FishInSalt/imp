@@ -570,3 +570,133 @@ that synthesize positional tool-call ids (`call_${index}` —
 `openai-completions.ts:420`, `codex-responses.ts:267`) could, in a relay
 scenario that drops ids, reuse an id for a distinct call and mask that
 call's record-less rule-2b signal. Not reproduced in normal use.
+
+## 11. Round 2 (owner acceptance blockers: canonical attribution + provider-aware static rates)
+
+Owner acceptance of `763cfbc` reported two P2 pricing-accuracy blockers with
+independent repros (§11.1). Both are confirmed in source; this supplement
+freezes the correction rules before implementation.
+
+### 11.1 Problem (acceptance-verified)
+
+**A. Parent and summary writes persist a bare wire model id, losing the
+producer's provider.** Write sites:
+- `loop.ts:328` — assistant `model` = `request.model` (the wire id; the
+  runner passes `this.model`, which is prefix-stripped for every family
+  except anthropic: `runner.modelReference()` = `providerName === "anthropic"
+  ? model : provider/model`, `runner.ts:990-992`);
+- `compaction.ts:688` (via `compactSession`) — entry `model` = `args.model`
+  (wire);
+- `runner.ts` branch-summary stamp — `summaryModel` (wire).
+`usage-totals.ts` then prices `message.model` / `entry.model` as if they were
+references. Repro (owner): two providers publish the same model id at $1
+(anthropic) vs $7 (openai); an OpenAI runner makes two parent calls + one
+compaction + one branch summary at 1M input tokens each → persisted model
+`review-shared-model`; expected $28, actual $4 (`anthropic/review-shared-model`
+rates); a reopen still shows $4.
+
+**B. `costFor`'s static fallback ignores the provider.** `models.ts:144-153`
+strips the provider prefix after a catalog miss and matches a bare-keyed
+static table (`MODEL_COSTS`, `models.ts:77`). Consequences (owner repro):
+`openai/claude-sonnet-4-6` (no catalog entry) priced with Anthropic rates
+($3.000 instead of unpriced); `openai/gpt-5.4` resolves to the *openai-codex*
+section entry (`subscription: true`) and mislabels metered OpenAI traffic as
+subscription traffic. The static table's sections (anthropic / zai / deepseek
+/ moonshotai / openai-codex, by comment) encode the provider but the lookup
+ignores it.
+
+### 11.2 Rules (frozen)
+
+**R1 — canonical producer identity is what gets persisted.**
+- `AssistantMessage` gains `modelReference?: string` (canonical). The loop
+  stamps it from a new optional `modelReference` argument to `runAgentLoop`
+  (same shape as the SA-04 `usageLedger` seam); `model` (wire id) stays
+  untouched for debugging/compat. Absent argument → field absent.
+- `CompactionEntry.model` and `BranchSummaryEntry.model` mean a **canonical
+  reference**, not a wire id. Both fields were introduced by SA-05 and are
+  unreleased; entries written by the acceptance build degrade to unpriced
+  (documented, §11.5).
+- Sources of the canonical reference at the write sites:
+  - main runner: a private `referenceFor(model)` helper with exactly
+    `modelReference()`'s formula (`runner.ts:990-992`); `runTurnInner` passes
+    it to `runAgentLoop` and to `compactAndSplice` → `compactSession`
+    (`modelReference` arg); the branch-summary path passes
+    `referenceFor(summaryModel)`.
+  - child engine (`subagent.ts`): the already-existing
+    `options.modelReference ?? options.model` (`childModelMetadata`,
+    `subagent.ts:144-149`) is threaded to the child `runAgentLoop` and to the
+    child `compactSession`.
+- `usage-totals.ts` prices the **canonical reference**; the wire `model`
+  field is never inspected for pricing when a reference exists.
+
+**R2 — reference grammar for legacy bare stamps (explicit compat rule).**
+Pre-fix assistant/summary entries carry only the wire id. A reference without
+a `/` denotes the anthropic family (`glm-*` → zai) — the established
+codebase-wide reference grammar (`parseModelRef`, `resolve.ts:64-85`, applied
+by routing, catalog, windows, thinking alike). Pricing identity is therefore
+`message.modelReference ?? message.model` (and `entry.model` as-is): bare
+stamps resolve ONLY within that grammar (anthropic/glm) — a bare `gpt-5.4`
+never picks up openai-codex rates, a bare `deepseek-flash`/`kimi-*` is
+unpriced. This is a *documented legacy rule*, not an inference of "another
+provider"; the owner's rule ("不能用于推断其他 provider 的价格") is satisfied
+by construction: no lookup may cross from the parsed provider to a different
+section.
+- Considered and rejected: resolving bare stamps via the session header's
+  provider (`seedModel`) — the header records only the *current* model and
+  would misprice sessions that switched providers.
+
+**R3 — `costFor` becomes provider-scoped, end to end.**
+- `MODEL_COSTS` is restructured into `Record<ProviderName-section, Record<modelId,
+  ModelCost>>` (anthropic / zai / deepseek / moonshotai / openai-codex — the
+  current sections; ids do not collide across sections today).
+- Ladder: `parseModelRef(reference)` → provider + modelId; catalog first
+  (`catalogEntryFor(provider, modelId)`; subscription iff provider ∈
+  `SUBSCRIPTION_FAMILIES`), then the static table under `(provider, modelId)`
+  (subscription from the entry as authored); otherwise `undefined`
+  (**unpriced** — no cross-provider fallback, ever).
+- Consequences (pinned by tests): `openai/claude-sonnet-4-6` → undefined;
+  `openai/gpt-5.4` → undefined (NOT subscription); bare `gpt-5.4` → undefined;
+  bare `claude-*` → anthropic rates; bare `glm-*` → zai + subscription;
+  `openai-codex/gpt-5.4` → codex rates + subscription; canonical anthropic
+  (`claude-sonnet-4-5`, bare by the grammar) → anthropic rates.
+
+### 11.3 Visible consequences (documented)
+
+- New sessions price every producer at its own provider's rates (A fixed),
+  including identical ids under different providers.
+- Pre-fix sessions (bare stamps): anthropic and glm usage keeps its previous
+  pricing; deepseek / moonshotai / codex / other bare stamps become
+  **unpriced** (`$?`/`~$`) instead of being priced under a possibly-wrong
+  section — the honest direction already agreed for unknowns.
+- Summarizer/main-session pricing follows the same ladder; no display-format
+  change.
+
+### 11.4 Tests (acceptance-grade regressions)
+
+- **`test/cost-pricing.test.ts` (new, unit)**: the R3 matrix above, including
+  both owner repros (cross-provider canonical → unpriced; `openai/gpt-5.4` →
+  no subscription mislabel).
+- **Runner → persistence → reopen → pricing (owner repro A, end to end)**:
+  a stubbed catalog (`IMP_CATALOG_PATH`, the `compaction-wiring.test.ts`
+  pattern) with `anthropic/review-shared-model` ($1) and
+  `openai/review-shared-model` ($7); runner on `openai/review-shared-model`;
+  two scripted parent turns reporting 1M input tokens each + `compactNow()`
+  → reopen the session file → `usageTotals()` + `priceUsageTotals(totals,
+  costFor)` → **$21** (three producer calls at $7; the acceptance build shows
+  $3); assert the persisted assistant entries and the compaction entry carry
+  `openai/review-shared-model` as the reference. Red on `763cfbc`.
+- **Branch-summary stamp**: extend a `test/tree-nav.test.ts` navigate case to
+  assert the `branchSummary` entry's `model` is the canonical reference and
+  its usage is priced accordingly (also red on `763cfbc`).
+- **Legacy pin**: a bare `gpt-5.4` stamp (no reference) is unpriced; a bare
+  `glm-5.3` stamp is priced + subscription.
+- Existing suites updated only where they pinned the old semantics.
+
+### 11.5 Limitations (explicit)
+
+- Entries written by the pre-fix SA-05 builds (acceptance experiments) carry
+  bare `model` values; they show as unpriced rather than being reinterpreted.
+- The `modelReference` field is additive; old readers ignore it (header-field
+  precedent).
+- Provider-awareness ends at the static table: a provider absent from both
+  catalog and static table stays unpriced (never guessed).

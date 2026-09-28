@@ -1,9 +1,10 @@
 # Fresh-install model availability UX (#fresh-install-hint)
 
-Status: rev2 — review findings F1–F8 folded in; awaiting re-review
+Status: rev3 — round-2 findings N1–N8 folded in; awaiting re-review
 Branch: `fix/fresh-install-model-hint` (worktree, base main `8115822`)
 Date: 2026-09-28
-Review round 1: FIX-FIRST (8 findings, all verified against source; see §8)
+Review round 1: FIX-FIRST (F1–F8, folded in rev2; all verified correct in round 2)
+Review round 2: FIX-FIRST (N1–N8; fold-ins clean, new-in-rev2 issues)
 
 ## 1. Problem
 
@@ -100,14 +101,17 @@ reachability probe — a configured family whose endpoint is down still
 counts as usable. Correct semantics here: the problem is "no credential
 anywhere", not "endpoint down".
 
-**Test-seam rule (P6, new D6):** when `RunnerOptions.provider` is
-injected (the existing test seam — a fake provider REPLACES resolution
-entirely in `createRunner`), availability is reported `usable: true`
-without probing. This keeps the 2000+ existing tests byte-stable on any
-host (a developer with `~/.imp/auth.json` or `ANTHROPIC_API_KEY` set
-must not flip pinned banner/footer bytes). Tests FOR the unusable path
-scrub env (`delete ANTHROPIC_API_KEY` …) and point `IMP_AUTH_PATH` at a
-temp empty file — both levers already exist and are used by
+**Test-seam rule (P6, D7):** the seam tracks the LIVE provider
+instance, not `RunnerOptions`: `usable = (this.provider is the injected
+fake) || familyConfigured(currentFamily)`. `createRunner` knows
+injection (`options.provider ?? resolved.provider`, `runner.ts:298`);
+`prepareModel` swaps to a REAL provider on a runtime `/model` switch, at
+which point probing applies (round-2 N2 — otherwise test 11 could never
+pass). This keeps the 2000+ existing tests byte-stable on any host (a
+developer with `~/.imp/auth.json` or `ANTHROPIC_API_KEY` set must not
+flip pinned banner/footer bytes). Tests FOR the unusable path scrub env
+(`delete ANTHROPIC_API_KEY` …) and point `IMP_AUTH_PATH` at a temp empty
+file — both levers already exist and are used by
 `test/login-dialog.test.ts:38`.
 
 ### 3.2 Startup display: usable vs unusable
@@ -130,6 +134,12 @@ imp 0.1.0 · session 1a2b3c4d · no model available — run /login to connect on
 - Identity line suffix: `no model available — run /login to connect one`.
   The dead model id never renders as the session's model; it appears by
   name only inside the teaching note (D2).
+- **Resumed-session surfaces too (round-2 N3):** a resumed session never
+  shows `welcomeLines` — it renders the warmup note
+  `▪ resumed <id> · <model> · … msgs · ~… tokens` (`runner.ts:555`) and
+  the REPL line `▪ session <id> · model <id>` (`repl.ts:1572`). While
+  unusable both show `no model — /login` in place of the model segment
+  (same P1 rule — no dead id rendered as in use).
 - Footer while unusable: the model segment becomes `no model — /login`
   and **the think segment is dropped** (round-1 F7: `claude-sonnet-4-5`
   HAS a thinking meta — `anthropic-budget` — so keeping it renders the
@@ -137,6 +147,9 @@ imp 0.1.0 · session 1a2b3c4d · no model available — run /login to connect on
   meaningless without a credential; it returns with the model segment
   once usable.
 - Byte-identical to today whenever usable (P3).
+- **Wording (round-2 N7):** banner/footer use the one canonical short
+  form `run /login` / `no model — /login`; the longer per-family detail
+  lives only in the D2 note and D3 print error.
 
 **Decision D2 — the startup teaching note (interactive):**
 
@@ -175,6 +188,15 @@ imp: <model-id> (<family>) has no credential — export <FAMILY>_API_KEY (see `i
 - Exit code 1; stderr only; stdout stays empty (byte contract).
 - `-m <explicit id>` with no credential: same fail-fast — the user named
   a family without a credential; the error names family + env var.
+- **The pre-flight honors the D7 seam** (round-2 N1): if
+  `runnerOptions` carries an injected provider (tests), the check is
+  skipped — existing print-mode tests with fake providers keep passing
+  on keyless hosts; test 5 exercises the real path with scrubbed env.
+- **Side-effect scope (round-2 N8):** "no session/log write" means the
+  session dir and log dir (both first touched inside `createRunner`:
+  `createRunLogger` at its entry). The trust store MAY be written earlier
+  by `--trust`/`--no-trust` (`cli.ts resolveProjectTrust`) — recorded
+  exception; test 5 asserts session dir + log dir only.
 
 **Decision D4 — the dead default must not stick (round-1 F2, expanded).**
 
@@ -222,13 +244,16 @@ Consequences:
 Other families' providers already teach their env var; their in-REPL
 `/login` pointers arrive with #login-dialog polish, out of scope.
 
-**Decision D6 — `/login` mid-session footer refresh (round-1 F3):**
+**Decision D6 — `/login` `/logout` footer refresh (round-1 F3, sites
+enumerated per round-2 N6):**
 
-`/login` and `/logout` success paths call `ctx.refreshFooter?.()`.
-With the live probe (3.1) the footer then flips
-`no model — /login` → the model id on the very next repaint. Today
-`refreshFooter` is only invoked from `/think` (`commands.ts:1622,1635`)
-— the login paths never repaint.
+With the live probe (3.1) a footer repaint picks up any credential
+change; today only `/think` repaints (`commands.ts:1622,1635`). Add
+`ctx.refreshFooter?.()` on ALL FIVE success paths: legacy api-key login
+(`commands.ts:962`), legacy codex OAuth (`:941`), dialog api-key
+(`:1001`), dialog OAuth tail, and `/logout`'s two `act()` closures
+(`:1566`, `:1577` — these run inside the picker callback, so the call
+sits inside each closure, not the command body).
 
 ### 3.3 Which surfaces change
 
@@ -256,11 +281,11 @@ the documented fallback.
 5. Print pre-flight: unusable `-p` run → stderr text, exit 1, ZERO files under the session dir AND the log dir (P4).
 6. `imp -c` after a model-less fresh-install session → resolves startup chain; the session file gains NO model row.
 7. `/new` while unusable → new session also gains no model row (F2 third site).
-8. Resume a 0.1.0-shaped session (seeded dead model, explicit:false) without credential → banner shows unusable, session file NOT rewritten (byte-compare).
+8. Resume a 0.1.0-shaped session (seeded dead model, explicit:false) without credential → the RESUMED line (`▪ session <id> · …`, repl.ts:1572 — not the banner, which fresh sessions only render) shows unusable; immediately after startup, before any turn, the session file is NOT rewritten (byte-compare).
 9. Interactive submit while unusable (D4 consequence, round-1 F8): turn fails with provider key error, message rows persist, `getModel()` stays `undefined`, footer still `no model — /login`.
 10. `/login <family>` success → footer flips to the model segment (D6; scripted secret input via existing login-test harness).
-11. `/model` switch mid-session to an unconfigured family → footer `no model — /login` (live probe).
-12. Test-seam determinism (D6/P6): injected provider + host env with `ANTHROPIC_API_KEY` set → footer shows the model (usable), banner unchanged.
+11. `/model` switch mid-session to an unconfigured family → footer `no model — /login` (live probe; the D7 seam no longer applies once the provider instance is real — N2).
+12. Test-seam determinism (D7/P6): injected provider + host env with `ANTHROPIC_API_KEY` set → footer shows the model (usable), banner unchanged.
 13. D5: anthropic error text contains `/login anthropic` (provider unit test).
 
 ## 4. Reviewer questions (round 1) — resolutions folded in
@@ -304,13 +329,13 @@ M3; merge `--no-ff` to main.
 - `src/runner.ts noteMissingZaiCredential` — the note pattern generalized.
 - `docs/login-dialog-design.md` — #login-dialog scope boundary.
 
-## 8. Round-1 review record (2026-09-28)
+## 8. Review record
 
-Verdict FIX-FIRST, 8 findings — all verified against source before
-folding:
+### Round 1 (2026-09-28) — FIX-FIRST, F1–F8 (all verified against source
+before folding into rev2; round 2 re-verified all 8 fold-ins correct)
 
-- F1 (P3) line-citation drift (anthropic throw 146 not 120; zai note 909
-  not 905; `getModel()` undefined not null) → fixed in §1/§3.2.
+- F1 (P3) line-citation drift → fixed (anthropic throw :146, zai note
+  :909, `getModel()` undefined not null).
 - F2 (P0) resume path re-seeds dead default (`runner.ts:944`) → D4 gates
   all THREE seed sites (560/676/944).
 - F3 (P1) /login never repaints footer → D6 adds refreshFooter calls.
@@ -320,3 +345,25 @@ folding:
 - F6 (P2) 0.1.0 session migration unstated → explicit no-migration (D4).
 - F7 (P2) `think:medium` beside `no model` → think segment dropped (D1).
 - F8 (P3) missing submit-while-unusable test → test 9.
+
+### Round 2 (2026-09-28) — FIX-FIRST, N1–N8 (fold-ins all correct; new
+issues in rev2's own decisions, folded into rev3)
+
+- N1 (P1) print pre-flight vs the test seam undefined → D3 states the
+  pre-flight honors the D7 seam (skip when provider injected).
+- N2 (P1) seam ambiguity after mid-session `/model` switch (test 11
+  contradiction) → D7 restated: usable = live-provider-instance is the
+  injected fake OR familyConfigured(current family); post-switch real
+  providers probe.
+- N3 (P2) resumed-session surfaces (`runner.ts:555` note, `repl.ts:1572`
+  line) still render the dead id → D1 extended to both.
+- N4 (P3) test 8 pinned the wrong surface (banner vs resumed line) and
+  lacked the before-any-turn precondition → reworded.
+- N5 (P3) duplicate "D6" label → seam renamed D7.
+- N6 (P3) refreshFooter path list incomplete → D6 enumerates all five
+  call sites incl. logout act() closures.
+- N7 (P3) wording drift D1/D2/D3 → canonical `run /login` short form in
+  D1; long forms only in note/print error.
+- N8 (P3) trust-store write precedes createRunner under
+  `--trust`/`--no-trust` → recorded as explicit exception; test 5 scope
+  fixed to session dir + log dir.

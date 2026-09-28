@@ -38,9 +38,11 @@ export default function (api) {
 		try {
 			await run(process.execPath, [BIN, "-p", "hi", "-e", probe, "-e", TASK_TIMER], {
 				cwd: dir, // neutral cwd — the repo's trust/settings must not interfere
-				// Only PATH and HOME: every credential env is absent, so the run
-				// fails AFTER run_start (missing API key), never reaching a model.
-				env: { PATH: process.env.PATH, HOME: dir },
+				// #fresh-install-hint: a DUMMY key keeps the D3 pre-flight open so
+				// the run reaches runTurn and fails INSIDE the provider (401) —
+				// run_start has fired by then; that is the crash-liveness path
+				// under test.
+				env: { PATH: process.env.PATH, HOME: dir, ANTHROPIC_API_KEY: "dummy-key-for-runstart" },
 				timeout: 60_000,
 			});
 			expect.unreachable("the run must fail — hermetic world has no credentials");

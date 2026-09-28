@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -252,5 +252,38 @@ describe("#fresh-install-hint availability seam", () => {
 		// before any turn: byte-identical file
 		expect(readFileSync(store.filePath, "utf8")).toBe(bytes);
 		expect(runner.modelReference()).toBe("claude-sonnet-4-5"); // in-memory still resolves
+	});
+
+	// ---- M2: D3 print pre-flight (design test 5) ----
+
+	it("test 5: print pre-flight — stderr text, exit 1, ZERO session/log files", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(
+			process.execPath,
+			[BIN, "-p", "hello"],
+			{ cwd, env: { PATH: process.env.PATH, HOME: home } },
+		).catch((err: unknown) => err);
+		const err = result as { stderr: string; code?: number; stdout: string };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("claude-sonnet-4-5 (anthropic) has no credential");
+		expect(err.stderr).toContain("export ANTHROPIC_API_KEY");
+		expect(err.stderr).toContain("run /login");
+		expect(err.stdout).toBe(""); // print byte contract — stdout stays empty
+		const written: string[] = [];
+		const walk = (dir: string): void => {
+			if (!existsSync(dir)) return;
+			for (const entry of readdirSync(dir)) {
+				const full = path.join(dir, entry);
+				if (existsSync(full) && statSync(full).isDirectory()) walk(full);
+				else written.push(full);
+			}
+		};
+		walk(path.join(home, ".imp"));
+		expect(written.filter((f) => f.includes("/sessions/") || f.includes("/logs/"))).toEqual([]); // P4
 	});
 });

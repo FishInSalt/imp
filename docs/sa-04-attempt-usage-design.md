@@ -470,3 +470,106 @@ CORRECTIONS**. All findings closed in this revision:
   (§2.1/§4).
 - **F6 (LOW)** — R4 stays as a disclosed capability anchor, now marked as a
   type-level red (§6.1).
+
+## 10. Round 2 (acceptance P1): usage presence must survive the adapter boundary
+
+### 10.1 Problem (acceptance-verified)
+
+The acceptance run (local HTTP server + real `openai-completions` adapter, task
+tool) showed that the seams treat "response ended with `message_end`" as "a
+usage report arrived". The adapters synthesize `message_end` with their
+initialized `{inputTokens: 0, outputTokens: 0}` when the wire carried NO usage
+data at all:
+
+| Server response | Recorded before this fix |
+| --- | --- |
+| ends normally, no `usage` field anywhere | `completed`, all-zero usage, NO `incomplete` |
+| explicitly reports zero tokens | `completed`, all-zero usage, no `incomplete` |
+| reports 31 in / 7 out | correct values |
+
+Case 1 and case 2 are indistinguishable to `loop.ts:streamAssistant` and
+`compaction.ts:runSummarizer` — exactly the "do not treat unknown usage as
+zero" violation SA-04 must not have. The fact was observable at the adapter
+(the wire had no usage) and was dropped when building the internal event; this
+is not the documented adapter-internal-retry boundary.
+
+Sites: `openai-completions.ts:382` (`const usage = {0,0}`), `:449-487`
+(`rawUsage = chunk.usage ?? choice?.usage`, `rawUsage != null`); the analogous
+synthesis in `anthropic.ts:226/237-240/308-317/355` and
+`codex-responses.ts:148-157/246/301/344`; consumers `loop.ts` `streamAssistant`
+and `compaction.ts` `runSummarizer`.
+
+### 10.2 Rule: an explicit usage container is a report; absence is not
+
+`AssistantMessage` gains `usageMissing?: true` (`src/core/messages.ts`, next to
+the `model` stamp). An adapter sets it on the emitted `message_end` message iff
+it observed NO non-empty usage container on the wire for that response:
+
+- **report** — at least one non-empty usage container was seen
+  (`chunk.usage`/`choice.usage`, `message.usage`/`data.usage`,
+  `response.usage`), regardless of the values. Explicit zeros are a complete
+  report.
+- **no data** — the container was absent, `null`, or empty at every
+  observation point. The emitted usage values are then zeros by
+  initialization, and the message must carry `usageMissing: true`.
+
+The flag and the numbers are orthogonal: adapters still emit the known values
+(zeros when nothing was reported); the flag states whether those values came
+from the wire.
+
+### 10.3 Seam consumption
+
+In `loop.ts:streamAssistant` and `compaction.ts:runSummarizer`, a
+`message_end` continues to record its numbers **and** additionally calls
+`recordMissingUsageReport(ledger)` when `message.usageMissing === true`:
+
+- The message is still a produced turn: `taskReports`/turns increment and the
+  (zero) numbers are added — the invariant `turns == taskReports` holds.
+- The attempt is disclosed as `incomplete` — "known totals preserved, unknown
+  usage never asserted as free".
+- Summarizer streams with the flag are still accepted for compaction: the
+  summary text is valid; only its usage accounting is flagged.
+
+### 10.4 Adapter audit and tracking points
+
+| Adapter | Synthesis site | Track `sawUsage` when… |
+| --- | --- | --- |
+| openai-completions | `:382` init, yield `:486` | `rawUsage != null` and `Object.keys(rawUsage).length > 0` |
+| anthropic | `:226` init, yield `:355` | `message.usage` (message_start) or `data.usage` (message_delta) is a non-empty object |
+| codex-responses | `:246` init, yield `:344` | `responseObj.usage` is a non-empty object on `response.completed`/`response.incomplete` |
+
+Emitted as `...(sawUsage ? {} : { usageMissing: true })` so existing fixtures
+with usage stay byte-identical.
+
+### 10.5 Compatibility
+
+- The flag rides assistant messages: session message entries validate only the
+  envelope + role (old readers ignore and preserve unknown fields — SA-03
+  verified against v0.1.0), same lifecycle as the existing `model` stamp.
+- Wire converters build assistant payloads field-by-field (no spread over the
+  message — re-verified during implementation); the flag cannot leak to any
+  provider.
+- `assistantUsage()` (compaction anchor) requires `total > 0`, so flagged
+  all-zero messages are not anchors — unchanged.
+- The runner path reads neither the flag nor a ledger — unchanged.
+
+### 10.6 Tests
+
+- Adapter regressions (three files, local-server SSE): normal end with no
+  usage container → `usageMissing: true`; explicit zero container → absent
+  flag; real numbers → absent flag and correct values.
+- Seams: loop-level `message_end` with the flag → `incomplete: true`, totals
+  preserved, `taskReports` incremented; summarizer-level (via `compactHistory`
+  + ledger) with the flag → summary accepted, `summarizer` bucket zeroed,
+  `incomplete: true`.
+- Acceptance non-blocking cases moved into the repo suite
+  (`test/compaction.test.ts` hosts the cap machinery; no separate
+  thinking-retry file):
+  1. both summarizer hops capped → both reports retained, `incomplete: false`;
+  2. first hop reports, second hop throws → first report retained,
+     `incomplete: true`;
+  3. `message_end` observer throws → the received report is retained by the
+     ledger even though the loop invocation crashes (F2 regression).
+- Full-suite gate re-run; the acceptance-verified pass list (success includes
+  compaction usage; multi-compaction sums; resume delta; interruption
+  disclosure; cap-retry/observer retention) must stay green.

@@ -486,6 +486,99 @@ describe("child launch — managed lookup", () => {
 		if (!found.ok) expect(found.code).toBe("not-owned");
 	});
 
+	it("refuses a string retainedTail (spreadable garbage) as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const filePath = childPathFor(parent, "bad-tail-string.jsonl");
+		const header = {
+			type: "session",
+			version: 1,
+			id: "bad-tail-string",
+			timestamp: new Date().toISOString(),
+			cwd: parent.header.cwd,
+			parent: parent.header.id,
+		};
+		const message = {
+			type: "message",
+			id: "aaaaaaaa",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "x" },
+		};
+		const compaction = {
+			type: "compaction",
+			id: "bbbbbbbb",
+			parentId: "aaaaaaaa",
+			timestamp: new Date().toISOString(),
+			summary: "s",
+			retainedTail: "bad",
+		};
+		writeRaw(filePath, [JSON.stringify(header), JSON.stringify(message), JSON.stringify(compaction)]);
+		// buildContext() spreads the string into "b","a","d" without throwing —
+		// only the explicit structural check refuses this.
+		const found = findChildByLaunch(parent, "bad-tail-string");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("malformed");
+	});
+
+	it("refuses a null entry inside retainedTail as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const filePath = childPathFor(parent, "bad-tail-null.jsonl");
+		const header = {
+			type: "session",
+			version: 1,
+			id: "bad-tail-null",
+			timestamp: new Date().toISOString(),
+			cwd: parent.header.cwd,
+			parent: parent.header.id,
+		};
+		const message = {
+			type: "message",
+			id: "aaaaaaaa",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "x" },
+		};
+		const compaction = {
+			type: "compaction",
+			id: "bbbbbbbb",
+			parentId: "aaaaaaaa",
+			timestamp: new Date().toISOString(),
+			summary: "s",
+			retainedTail: [null],
+		};
+		writeRaw(filePath, [JSON.stringify(header), JSON.stringify(message), JSON.stringify(compaction)]);
+		const found = findChildByLaunch(parent, "bad-tail-null");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("malformed");
+	});
+
+	it("refuses a user message without content as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const filePath = childPathFor(parent, "no-content.jsonl");
+		const header = {
+			type: "session",
+			version: 1,
+			id: "no-content",
+			timestamp: new Date().toISOString(),
+			cwd: parent.header.cwd,
+			parent: parent.header.id,
+		};
+		const message = {
+			type: "message",
+			id: "aaaaaaaa",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user" },
+		};
+		writeRaw(filePath, [JSON.stringify(header), JSON.stringify(message)]);
+		const found = findChildByLaunch(parent, "no-content");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("malformed");
+	});
+
 	it("refuses a cyclic parentId chain without hanging, as malformed", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
 		const parent = makeParent(base);

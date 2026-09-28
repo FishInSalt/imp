@@ -229,11 +229,16 @@ Field requirements (all enforced by the parser):
    record for a different child or parent can never donate its settled
    status (acceptance round 1: this check was specified but missing).
 4. Full `SessionStore.open` (validates the entry stream), then **corruption
-   probes**: `getBranch()` (a broken parent chain OR a parentId cycle —
-   guarded in the store's walk since acceptance round 1, where a cycle used
-   to hang forever — is `malformed`) and `buildContext()` (a structurally
-   unusable entry, e.g. a compaction without `retainedTail`, refuses here
-   as `malformed` instead of crashing SA-07 later); then
+   probes** scoped to this boundary: an **explicit structural validation**
+   of the effective branch (acceptance round 2 — every message checked per
+   role for its required fields/types, `retainedTail` must be an array of
+   valid messages, compaction/branchSummary summaries must be strings; a
+   `buildContext()` success is NOT proof — a string `retainedTail` spreads
+   into garbage without throwing), the traversal guard (`getBranch()`:
+   a broken parent chain OR a parentId cycle — guarded in the store's walk
+   since acceptance round 1, where a cycle used to hang forever — is
+   `malformed`) and `buildContext()` as a catch-all; ordinary history reads
+   keep their lenient rules. Then
    `parseChildLaunch(header.launch)` (`missing-launch`
    when absent — L2; `invalid-launch` when off-schema).
 5. Result: `{ filePath, header, launch, store, messageCount }` — `store` is
@@ -676,6 +681,25 @@ green) returned 4 blocking findings; all fixed with rejection tests:
   `git reset --hard`; the scenario now repoints the branch with
   `update-ref` (equivalent, non-destructive), so every test can run
   unattended.
+
+### Acceptance round 2 — fixes (2026-09-29)
+
+Owner re-verification confirmed the four round-1 fixes and found one
+remaining P2: `buildContext()` succeeding does not prove structural
+validity. Three owner repros passed through: `retainedTail: "bad"` (spread
+into single-character "messages"), `retainedTail: [null]` (crash occurs
+later in estimation), and a user message with only `{role:"user"}`
+(`content is not iterable`). Fixed by an explicit structural validator at
+the continuation boundary (`effectiveHistoryProblem`): every message is
+checked per role for its required fields and types (user content must be a
+string or content-block array; assistant blocks/usage/stopReason;
+toolResult results), `retainedTail` must be an array of structurally valid
+messages, summaries must be strings. The check is scoped to the managed
+lookup / continuation boundary — ordinary history reads keep their lenient
+compatibility rules (per the owner's guidance). Three regression tests
+added; the normal-compaction suites and the torn-final-line tolerance test
+stay green. `buildContext()` remains as a catch-all probe after the
+explicit checks.
 
 ## 12. Implementation record
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ChildModelBinding } from "./child-model.js";
-import { type SessionHeader, SessionStore } from "./session/store.js";
+import { type SessionEntry, type SessionHeader, SessionStore } from "./session/store.js";
 import { collectTaskRecords, type TaskRecordStatus, taskRecordsInEntry } from "./task-record.js";
 import { probeWorktreeIdentity } from "./worktree.js";
 
@@ -477,11 +477,21 @@ export function findChildByLaunch(parent: SessionStore, childId: string): ChildL
 	let messageCount: number;
 	try {
 		store = SessionStore.open(match.filePath);
-		// Corruption probes: a broken parent chain, a parentId cycle (guarded
-		// in getBranch) or a structurally unusable entry (e.g. a compaction
-		// without retainedTail, which only buildContext touches) must refuse
-		// here — never hang, never defer the failure to SA-07.
-		store.getBranch();
+		// Corruption probes. Explicit structural validation comes first — a
+		// string retainedTail spreads into garbage, [null] and content-less
+		// messages only explode downstream, so buildContext() succeeding is
+		// NOT proof of validity. Then the traversal guard (broken chain /
+		// parentId cycle, guarded in getBranch) and buildContext as a
+		// catch-all. Scoped to this continuation boundary on purpose:
+		// ordinary history reads keep their lenient compatibility rules.
+		const structural = effectiveHistoryProblem(store.getBranch());
+		if (structural !== null) {
+			return {
+				ok: false,
+				code: "malformed",
+				message: `child session ${match.filePath} is structurally unusable for continuation: ${structural}`,
+			};
+		}
 		store.buildContext();
 		messageCount = store.getEntries().filter((entry) => entry.type === "message").length;
 	} catch (err) {
@@ -527,6 +537,135 @@ export function findChildByLaunch(parent: SessionStore, childId: string): ChildL
 		ok: true,
 		file: { filePath: match.filePath, header: match.header, launch: parsed.launch, store, messageCount },
 	};
+}
+
+// --- effective-history structure (continuation boundary only) --------------
+
+/**
+ * Strict structural validation of the branch a continuation would rebuild
+ * from (acceptance round 2). buildContext() succeeding is not proof: a
+ * string `retainedTail` spreads into garbage "messages", `[null]` and
+ * content-less messages only throw later in estimation. Returns a
+ * human-readable problem or null; deliberately NOT wired into ordinary
+ * history reads (their compatibility rules stay untouched).
+ */
+function effectiveHistoryProblem(entries: readonly SessionEntry[]): string | null {
+	for (const entry of entries) {
+		if (entry.type === "message") {
+			const problem = messageProblem(entry.message, `entry ${entry.id}`);
+			if (problem !== null) return problem;
+			continue;
+		}
+		if (entry.type === "compaction") {
+			if (typeof entry.summary !== "string") {
+				return `compaction entry ${entry.id} has no summary text`;
+			}
+			if (!Array.isArray(entry.retainedTail)) {
+				return `compaction entry ${entry.id}: retainedTail is not an array`;
+			}
+			for (let i = 0; i < entry.retainedTail.length; i++) {
+				const problem = messageProblem(entry.retainedTail[i], `compaction ${entry.id} retainedTail[${i}]`);
+				if (problem !== null) return problem;
+			}
+			continue;
+		}
+		if (entry.type === "branchSummary" && typeof entry.summary !== "string") {
+			return `branchSummary entry ${entry.id} has no summary text`;
+		}
+	}
+	return null;
+}
+
+function isContent(value: unknown): boolean {
+	if (typeof value === "string") return true;
+	if (!Array.isArray(value)) return false;
+	return value.every((block) => {
+		if (!isRecord(block) || typeof block.type !== "string") return false;
+		if (block.type === "text") return typeof block.text === "string";
+		if (block.type === "image") return typeof block.data === "string" && typeof block.mimeType === "string";
+		return false;
+	});
+}
+
+function assistantBlockProblem(block: unknown): string | null {
+	if (!isRecord(block) || typeof block.type !== "string") return "a block is not an object with a type";
+	switch (block.type) {
+		case "text":
+			return typeof block.text === "string" ? null : "a text block has no text string";
+		case "toolCall":
+			return typeof block.id === "string" && typeof block.name === "string" && "arguments" in block
+				? null
+				: "a toolCall block is missing id, name or arguments";
+		case "thinking":
+			return typeof block.thinking === "string" &&
+				(block.signature === undefined || typeof block.signature === "string")
+				? null
+				: "a thinking block has no thinking string";
+		default:
+			return `unknown block type ${JSON.stringify(block.type)}`;
+	}
+}
+
+function isOptionalNumber(value: unknown): boolean {
+	return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function messageProblem(value: unknown, where: string): string | null {
+	if (!isRecord(value)) return `${where}: not a message object`;
+	switch (value.role) {
+		case "user":
+			return isContent(value.content)
+				? null
+				: `${where}: user message content is not a string or content-block array`;
+		case "assistant": {
+			if (!Array.isArray(value.blocks)) return `${where}: assistant message has no blocks array`;
+			for (const block of value.blocks) {
+				const problem = assistantBlockProblem(block);
+				if (problem !== null) return `${where}: ${problem}`;
+			}
+			const usage = value.usage;
+			if (
+				!isRecord(usage) ||
+				typeof usage.inputTokens !== "number" ||
+				typeof usage.outputTokens !== "number" ||
+				!isOptionalNumber(usage.cacheReadTokens) ||
+				!isOptionalNumber(usage.cacheWriteTokens)
+			) {
+				return `${where}: assistant message usage is invalid`;
+			}
+			const stop = value.stopReason;
+			if (
+				!(
+					stop === null ||
+					stop === "end_turn" ||
+					stop === "tool_use" ||
+					stop === "max_tokens" ||
+					stop === "stop_sequence"
+				)
+			) {
+				return `${where}: assistant message stopReason is invalid`;
+			}
+			return null;
+		}
+		case "toolResult": {
+			if (!Array.isArray(value.results)) return `${where}: toolResult message has no results array`;
+			for (let i = 0; i < value.results.length; i++) {
+				const result = value.results[i];
+				if (
+					!isRecord(result) ||
+					typeof result.toolCallId !== "string" ||
+					typeof result.toolName !== "string" ||
+					!isContent(result.content) ||
+					typeof result.isError !== "boolean"
+				) {
+					return `${where}: toolResult entry ${i} is structurally invalid`;
+				}
+			}
+			return null;
+		}
+		default:
+			return `${where}: unknown message role ${JSON.stringify(value.role)}`;
+	}
 }
 
 /** Enumerate this parent's children with per-file classifications (SA-07's

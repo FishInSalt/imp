@@ -763,3 +763,40 @@ to end.**
   live-pair sites rely on their `allowedDuringRun:false` gates — guarded by
   comments; and `childModelMetadata`'s settings fallback (`modelReference ??
   model`) remains, which is metadata-only (never persisted pricing).
+
+### 11.7 Owner re-verification P2 — the pricing identity field is the ONLY source
+
+Owner re-verification of `a1ed2d3` confirmed A and B fixed and reported one
+remaining P2: `usage-totals.ts:148` still read
+`message.modelReference ?? message.model ?? null`, so a LEGACY wire id that
+itself contains `/` (a run configured `openai/anthropic/claude-sonnet-4-5`
+has the wire id `anthropic/claude-sonnet-4-5`) was parsed as a canonical
+reference and priced at Anthropic rates ($3 instead of unpriced, 1M input
+tokens; the same result is reachable by calling `runAgentLoop` without the
+optional `modelReference`). `costFor` cannot distinguish "declared identity"
+from "wire id that happens to contain a slash" — the distinction lives in the
+FIELD, not in the string.
+
+**Rule (frozen): the pricing identity is the declared field only — no
+fallback, on all three sources.**
+
+- assistant messages: `message.modelReference ?? null` (never
+  `message.model`);
+- compaction / branchSummary entries: `entry.modelReference ?? null`. The
+  entries' identity MOVES to its own field, mirroring AssistantMessage:
+  writers stamp BOTH `model` (wire id — the 763cfbc-era meaning, kept for
+  debugging/compat) and `modelReference` (the qualified identity). Entries
+  written by the pre-fix SA-05 builds (model = wire, no modelReference) price
+  as unknown — including ones whose wire id contains `/`;
+- task records: `record.binding.reference` (a CONSTRUCTED identity since
+  SA-02 — `provider/wireModelId`, exactly one provider prefix; the modelId
+  may itself contain slashes, which parses back correctly — unchanged).
+
+Regression assertions (owner-requested):
+
+1. a legacy wire id containing `/` (assistant message AND compaction entry,
+   no modelReference) → unpriced after a persist/reopen;
+2. a `runAgentLoop` call that omits the optional `modelReference` → the
+   message carries no stamp → unpriced;
+3. the new-format counterpart (declared `modelReference`) still prices at the
+   declared provider's rates.

@@ -807,6 +807,8 @@ class RunnerImpl implements Runner {
 		let summaryUsage: Usage | undefined;
 		let summaryUsageMissing = false;
 		const summaryModel = this.model; // the producing model, not the post-await current one
+		// SA-05 round 2: live pair — safe only because /tree and /fork are
+		// allowedDuringRun:false. A mid-run gate change must snapshot instead.
 		const summaryReference = qualifiedReference(this.providerName, summaryModel);
 		if (opts?.summarize !== true || !this.branchSummaryEnabled) {
 			// no summary wanted or IMP_BRANCH_SUMMARY=0
@@ -1204,6 +1206,9 @@ class RunnerImpl implements Runner {
 	}
 
 	async compactNow(signal?: AbortSignal): Promise<CompactOutcome> {
+		// SA-05 round 2: this reads a LIVE providerName/model pair — safe only
+		// because /compact is allowedDuringRun:false (no switch can land
+		// mid-call). If that gate ever changes, thread a snapshot like runTurn.
 		// #compaction-ux F3: the signal IS forwarded now. The old "never
 		// forward" rule (superseded design §7.4) assumed an aborted stream
 		// would persist a half checkpoint — the abort quality gate added later

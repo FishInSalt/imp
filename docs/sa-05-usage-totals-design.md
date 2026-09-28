@@ -737,3 +737,29 @@ to end.**
   field's encoding.
 - Provider-awareness ends at the static table: a provider absent from both
   catalog and static table stays unpriced (never guessed).
+
+### 11.6 Review record (round 2)
+
+- **Design review (fresh context): APPROVE WITH CORRECTIONS** — F1 (bare
+  `glm-*` would mis-resolve `anthropic/glm-5.3`; the parseModelRef grammar is
+  a routing rule, not an identity claim) → R2 became strict unpriced; the
+  stamp became ALWAYS fully qualified (F1/F4). F2 (tree-nav assertion was not
+  discriminating on anthropic) → the assertion pins the qualified value.
+  F3/F5 doc corrections folded in.
+- **Implementation delta review 1: REJECT** — F1 (HIGH): the three in-turn
+  reference derivations paired the SNAPSHOT model with the LIVE
+  `this.providerName`; a mid-run family switch fabricated the identity
+  (probe: summarizer ran at $1 but the entry billed $7 → session $9 instead
+  of $3). F2 (LOW): subagent's bare-wire fallback.
+- **Fix `56bb2a9`** — `runTurn` captures `modelReference` with the same
+  snapshot (the invariant `runner.ts:1010-1017` already documents for
+  provider/settings) and threads it to every in-run consumer; `compactNow`
+  and `navigateTree` keep live pairs with guard comments (both are
+  `allowedDuringRun:false`). Subagent stamps only declared references.
+- **Implementation delta review 2: APPROVE** — threading verified consumer
+  by consumer; the new mid-run-switch test reproduces the rejection
+  (`expected 'openai/review-shared-model' to be 'anthropic/review-shared-model'`)
+  on `5669ba3` and passes on `56bb2a9`. Residual (LOW, accepted): the two
+  live-pair sites rely on their `allowedDuringRun:false` gates — guarded by
+  comments; and `childModelMetadata`'s settings fallback (`modelReference ??
+  model`) remains, which is metadata-only (never persisted pricing).

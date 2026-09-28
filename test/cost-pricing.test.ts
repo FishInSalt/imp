@@ -2,10 +2,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../src/core/messages.js";
 import type { SessionEntry } from "../src/core/session/store.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
+import { assistant, scriptedProvider } from "./helpers/fakes.js";
 import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.js";
+import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
+import { runAgentLoop } from "../src/core/loop.js";
 import { resetCatalogForTest } from "../src/provider/catalog.js";
 import { costFor } from "../src/provider/models.js";
 
@@ -63,6 +65,69 @@ describe("SA-05 round 2: costFor is provider-scoped and fully-qualified only", (
 });
 
 describe("SA-05 round 2: the aggregate prices qualified stamps only", () => {
+	it("a declared modelReference is the ONLY pricing source (slashed wire ids, pre-fix entries)", () => {
+		const legacyAssistant: SessionEntry = {
+			type: "message",
+			id: "a-legacy",
+			parentId: null,
+			timestamp: "2026-09-27T00:00:00.000Z",
+			message: {
+				role: "assistant",
+				blocks: [{ type: "text", text: "legacy" }],
+				usage: { inputTokens: 1_000_000, outputTokens: 0 },
+				stopReason: "end_turn",
+				// 763cfbc-format wire id that HAPPENS to look like a reference
+				model: "anthropic/claude-sonnet-4-5",
+			} as AssistantMessage,
+		};
+		const preFixEntry: SessionEntry = {
+			type: "compaction",
+			id: "c-prefix",
+			parentId: "a-legacy",
+			timestamp: "2026-09-27T00:00:01.000Z",
+			summary: "s",
+			retainedTail: [],
+			tokensBefore: 1,
+			usage: { inputTokens: 1_000_000, outputTokens: 0 },
+			model: "zai/glm-5.3", // 5669ba3-format: identity in `model`, no modelReference
+		};
+		const declared: SessionEntry = {
+			type: "compaction",
+			id: "c-declared",
+			parentId: "c-prefix",
+			timestamp: "2026-09-27T00:00:02.000Z",
+			summary: "s",
+			retainedTail: [],
+			tokensBefore: 1,
+			usage: { inputTokens: 1_000_000, outputTokens: 0 },
+			model: "test-wire-id", // wire id — never a pricing identity
+			modelReference: "anthropic/claude-sonnet-4-5",
+		};
+		const priced = priceUsageTotals(usageTotalsTracker([legacyAssistant, preFixEntry, declared]).view(), costFor);
+		expect(priced.usd).toBeCloseTo(3, 10); // the DECLARED entry only
+		expect(priced.unpriced.inputTokens).toBe(2_000_000); // the slashed legacy wire id + the pre-fix entry
+	});
+
+	it("a direct runAgentLoop call without modelReference stamps nothing and prices as unpriced", async () => {
+		const history: AgentMessage[] = [];
+		await runAgentLoop({
+			provider: scriptedProvider([
+				assistant([{ type: "text", text: "hi" }], "end_turn", { inputTokens: 1_000_000, outputTokens: 0 }),
+			]),
+			model: "anthropic/claude-sonnet-4-5", // a wire id that LOOKS like a reference
+			system: "",
+			tools: [],
+			history,
+			userMessage: "go",
+		});
+		const message = history.find((m) => m.role === "assistant") as AssistantMessage;
+		expect(message.modelReference).toBeUndefined();
+		const entry: SessionEntry = { type: "message", id: "a1", parentId: null, timestamp: "2026-09-27T00:00:00.000Z", message };
+		const priced = priceUsageTotals(usageTotalsTracker([entry]).view(), costFor);
+		expect(priced.usd).toBe(0);
+		expect(priced.unpriced.inputTokens).toBe(1_000_000);
+	});
+
 	function legacyAssistant(inputTokens: number): SessionEntry {
 		return {
 			type: "message",

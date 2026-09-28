@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -128,9 +128,7 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 		expect((compaction as { model?: string } | undefined)?.model).toBe("openai/review-shared-model");
 	});
 
-	it("a mid-run family switch does not fabricate the stamp (delta review F1)", async () => {
-		vi.stubEnv("IMP_AUTOCOMPACT", "1"); // the in-run compaction seam must fire
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "4000"); // ...small window, 1M-token turns
+	it("a legacy persisted format (modelReference stripped) stays unpriced after reopen", async () => {
 		const { createRunner } = await import("../src/runner.js");
 		const { SessionStore } = await import("../src/core/session/store.js");
 		const { usageTotalsTracker, priceUsageTotals } = await import("../src/core/usage-totals.js");
@@ -138,60 +136,15 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 		const { costFor } = await import("../src/provider/models.js");
 		loadCatalogCache(path.join(base, "catalog.json"));
 
-		let runnerRef: { setModel(reference: string): void } | null = null;
-		let calls = 0;
 		const { renderer } = makeRenderer();
-		const provider = {
-			name: "fake",
-			async *stream(request: LLMRequest) {
-				calls += 1;
-				const isSummary = request.tools.length === 0;
-				if (isSummary) {
-					yield { type: "text_delta" as const, text: "## Goal\nsummary" };
-					yield {
-						type: "message_end" as const,
-						message: {
-							role: "assistant" as const,
-							blocks: [{ type: "text" as const, text: "## Goal\nsummary" }],
-							usage: { inputTokens: 1_000_000, outputTokens: 0 },
-							stopReason: "end_turn" as const,
-						},
-					};
-					return;
-				}
-				if (calls === 1) {
-					// the live family switch lands MID-TURN (allowedDuringRun);
-					// the next loop turn's compaction still runs on the snapshot
-					runnerRef?.setModel("openai/review-shared-model");
-					yield { type: "tool_call_start" as const, id: "t1", name: "bash" };
-					yield {
-						type: "message_end" as const,
-						message: {
-							role: "assistant" as const,
-							blocks: [{ type: "toolCall" as const, id: "t1", name: "bash", arguments: { command: "true" } }],
-							usage: { inputTokens: 1_000_000, outputTokens: 0 },
-							stopReason: "tool_use" as const,
-						},
-					};
-					return;
-				}
-				yield { type: "text_delta" as const, text: "done" };
-				yield {
-					type: "message_end" as const,
-					message: {
-						role: "assistant" as const,
-						blocks: [{ type: "text" as const, text: "done" }],
-						usage: { inputTokens: 1_000_000, outputTokens: 0 },
-						stopReason: "end_turn" as const,
-					},
-				};
-			},
-		};
+		const provider = scriptedProvider([
+			assistant([{ type: "text", text: "answer" }], "end_turn", { inputTokens: 1_000_000, outputTokens: 0 }),
+		]);
 		const runner = await createRunner({
-			cwd: path.join(base, "proj2"),
+			cwd: path.join(base, "proj3"),
 			argv: [],
-			settingsPath: path.join(base, "settings2.json"),
-			model: "anthropic/review-shared-model", // the run snapshot's family
+			settingsPath: path.join(base, "settings3.json"),
+			model: "openai/anthropic/claude-sonnet-4-5", // provider openai; the WIRE id contains '/'
 			maxTokens: 1024,
 			maxTurns: 4,
 			noContextFiles: true,
@@ -200,19 +153,37 @@ describe("SA-05 round 2: runner -> persistence -> reopen -> pricing", () => {
 			renderer,
 			provider,
 		});
-		runnerRef = runner;
-		await runner.runTurn({ userMessage: "one" }); // tool round -> turn 2 compacts AFTER the switch
+		await runner.runTurn({ userMessage: "one" });
+		const filePath = runner.session?.filePath ?? "";
 
-		const reopened = SessionStore.open(runner.session?.filePath ?? "");
-		const entries = reopened.getEntries();
-		// Every producer call ran on the SNAPSHOT pair (anthropic, $1) — the
-		// compaction must NOT be stamped openai/... just because providerName
-		// moved mid-run.
-		const compaction = entries.find((e) => e.type === "compaction");
-		expect(compaction).toBeDefined();
-		expect((compaction as { model?: string } | undefined)?.model).toBe("anthropic/review-shared-model");
-		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), costFor);
-		expect(priced.usd).toBeCloseTo(3, 10); // 3 calls x 1M @ $1 — not $9
-		expect(priced.unpriced.inputTokens).toBe(0);
+		// New format: the declared identity is the openai-side reference (this
+		// table prices no such openai id) → unpriced.
+		const fresh = SessionStore.open(filePath);
+		const freshPriced = priceUsageTotals(usageTotalsTracker(fresh.getEntries()).view(), costFor);
+		expect(freshPriced.usd).toBe(0);
+		expect(freshPriced.unpriced.inputTokens).toBe(1_000_000);
+
+		// Legacy format (the owner's repro table): strip modelReference — the
+		// leftover wire id "anthropic/claude-sonnet-4-5" must NOT be parsed as
+		// an anthropic identity ($3 before this fix).
+		const lines = readFileSync(filePath, "utf-8").trim().split("\n");
+		const rewritten = lines
+			.map((line) => {
+				const parsed = JSON.parse(line) as {
+					type?: string;
+					message?: { role?: string; modelReference?: string };
+				};
+				if (parsed.type === "message" && parsed.message?.role === "assistant") {
+					delete parsed.message.modelReference;
+				}
+				return JSON.stringify(parsed);
+			})
+			.join("\n");
+		writeFileSync(filePath, `${rewritten}\n`);
+		const reopened = SessionStore.open(filePath);
+		const priced = priceUsageTotals(usageTotalsTracker(reopened.getEntries()).view(), costFor);
+		expect(priced.usd).toBe(0);
+		expect(priced.unpriced.inputTokens).toBe(1_000_000);
 	});
+
 });

@@ -446,8 +446,9 @@ Content (one JSON line): `{ "pid": <number>, "host": "<os.hostname()>",
 files never contend on a path.
 
 Candidates are PUBLISHED ATOMICALLY (owner round 4, P1): the payload is
-written to a `.staging-<pid>-<nonce8>-<attemptId>` file that scanners never
-read as a claim, then linked into the candidate name with a no-clobber hard
+written to a `.staging-<pid>-<nonce8>-<attemptId>-<rand8>` file (the random
+component makes the staging name unique by construction — post-hoc review
+F2) that scanners never read as a claim, then linked into the candidate name with a no-clobber hard
 link (`linkSync`). The candidate name therefore never exists in an
 incomplete state — a scanner cannot observe a half-written claim, retire it
 once aged, while its writer still completes the write through the old file
@@ -495,6 +496,13 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
    verify content and attemptId. If a scanner retired the aged staging
    first, the link fails ENOENT and the publisher RE-STAGES (bounded 3
    rounds) — it can never end up holding an unpublished claim.
+   PUBLICATION FAILURE SEMANTICS (round 5, P2): once a round's `linkSync`
+   SUCCEEDED, every subsequent verification failure — including the
+   read-back itself THROWING — must first remove the publisher's OWN
+   candidate before the acquire fails; anything else leaves a live-pid
+   claim the failed attempt does not hold, blocking every later acquire
+   until the process exits. When `linkSync` fails (EEXIST / IO), this round
+   did NOT publish: the target is NEVER unlinked. T35 pins the rule.
 6. VERIFY by scan (the load-bearing step): readdir the lease directory and
    inspect every OTHER `lease-*` entry (non-candidate names are never
    claims; an aged `.staging-*` file is retired as our own pause/crash
@@ -1180,3 +1188,45 @@ Regressions: T34 (unit) and T30c(iv) (real three-process replay of the
 owner's sequence: A paused pre-publication, aged staging, B retires +
 acquires + releases, A must re-stage and be VISIBLE while holding, C
 refused).
+
+Process note (disclosed): this revision shipped design and implementation
+together in one commit — unlike rounds 1-3 it had NO recorded
+pre-implementation independent design review. The missing review was run
+after the fact (post-hoc, fresh context) and its findings are recorded
+below.
+
+### Acceptance round 5 (owner review of e4639af) — publication failure cleanup
+
+Owner finding (P2): with the read-back `readFileSync` throwing (single
+injected EIO), acquire returned `io-error`, the in-process registry was
+cleared, but the ALREADY PUBLISHED candidate stayed behind with this
+process's live pid — every later acquire refused `busy` at that pid until
+the process exited (waiting out the grace period does not help against a
+live owner). Fixed: `publishCandidate` tracks the round's publication;
+after a successful link, ALL verification failures (read-back throw AND
+content mismatch) unlink the OWN candidate and the staging before failing,
+while a link EEXIST (nothing published this round) never touches the
+target. Regression T35: one injected verification failure leaves no
+candidate/staging file and the next attempt acquires immediately.
+
+### Post-hoc independent design review of the round-4/5 revision
+
+Verdict APPROVE WITH CORRECTIONS; all findings folded:
+
+- F1: `onAfterCreate` fired OUTSIDE the publication cleanup — a throw from
+  that seam leaked a live-pid candidate (the round-5 symptom). The create
+  notification now fires INSIDE the post-link verification guard;
+  regression T35c pins the throw path.
+- F2: the staging name was deterministic (pid+nonce+attemptId) and the
+  staging write did not use `wx` — two callers sharing an attemptId could
+  truncate each other's staging. A per-acquire random component restores
+  "unique by construction"; §7.1 updated.
+- F3 (test strength): T35b now forces the READ-BACK itself to throw (the
+  candidate is deleted after the link), and T34 asserts a FRESH staging
+  file survives a scan (the aged-only rule).
+- F4 (doc): the staging name in §7.1 now matches the implementation.
+- Reviewer verdict on the mechanism: the staging+link design is airtight
+  for the owner's round-4 repro and its neighbours (staging retired between
+  write and link -> re-stage; retired after link -> harmless, the candidate
+  is an independent hard link; link EEXIST never touches the target).
+  UNVERIFIED: real-NFS errno behaviour; exotic-filesystem link semantics.

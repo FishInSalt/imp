@@ -83,6 +83,10 @@ export interface ChildLeaseOptions {
 	/** Test seam: fires immediately before the candidate's link publication
 	 *  (the staging file is complete; the final name does not exist yet). */
 	onBeforeCandidatePublish?: () => void;
+	/** Test seam: fires AFTER a successful link, BEFORE the read-back
+	 *  verification; throwing simulates a post-publication verification
+	 *  failure (which must not leave a blocking candidate behind). */
+	onAfterCandidateLink?: () => void;
 	/** Test seam: fires immediately before an ABSENT machine-id link
 	 *  publish. */
 	onBeforeMachineIdPublish?: () => void;
@@ -236,6 +240,8 @@ function publishCandidate(config: {
 	serialized: string;
 	attemptId: string;
 	onBeforeCandidatePublish?: () => void;
+	onAfterCandidateLink?: () => void;
+	onAfterCreate?: () => void;
 }): string {
 	const ownPath = path.join(config.leaseDir, config.ownName);
 	const stagingPath = path.join(config.leaseDir, config.stagingName);
@@ -248,17 +254,36 @@ function publishCandidate(config: {
 			linkSync(stagingPath, ownPath); // no-clobber atomic publication
 		} catch (err) {
 			if (errnoCode(err) === "ENOENT") continue; // staging retired by a scanner: re-stage
+			// EEXIST or an IO failure: WE DID NOT PUBLISH in this round — never
+			// blindly unlink the target (owner round 5, P2).
 			throw err;
 		}
-		// Verify by reading back (complete content, ours).
-		const written = parsePayload(readFileSync(ownPath));
-		if (written === undefined || written.attemptId !== config.attemptId) {
+		// We published ownPath in this round: from here EVERY failure must
+		// first remove OUR OWN published candidate, or a live-pid claim would
+		// block every later acquire until this process exits (owner round 5,
+		// P2 — a read-back throw must be cleaned up like a content mismatch).
+		try {
+			config.onAfterCandidateLink?.();
+			const written = parsePayload(readFileSync(ownPath));
+			if (written === undefined || written.attemptId !== config.attemptId) {
+				throw new Error(`the published lease candidate ${ownPath} did not verify`);
+			}
+			// The create notification lives INSIDE this guard: a throw from it
+			// must clean up like any other post-publication failure (post-hoc
+			// design review, F1).
+			config.onAfterCreate?.();
+		} catch (err) {
 			try {
 				unlinkSync(ownPath);
 			} catch {
+				// best effort; a failed unlink still cannot make this round succeed
+			}
+			try {
+				unlinkSync(stagingPath);
+			} catch {
 				// best effort
 			}
-			throw new Error(`the published lease candidate ${ownPath} did not verify`);
+			throw err;
 		}
 		try {
 			unlinkSync(stagingPath);
@@ -411,7 +436,10 @@ export function acquireChildLease(
 	};
 	const serialized = `${JSON.stringify(payload)}\n`;
 	const ownName = `lease-${pid}-${nonce.slice(0, 8)}-${attemptId}`;
-	const stagingName = `.staging-${pid}-${nonce.slice(0, 8)}-${attemptId}`;
+	// A random per-acquire component makes the staging name genuinely unique
+	// by construction even if two callers ever share pid+nonce+attemptId
+	// (post-hoc design review, F2).
+	const stagingName = `.staging-${pid}-${nonce.slice(0, 8)}-${attemptId}-${randomUUID().slice(0, 8)}`;
 
 	try {
 		for (let round = 0; round < maxAttempts; round++) {
@@ -442,6 +470,10 @@ export function acquireChildLease(
 					...(options.onBeforeCandidatePublish === undefined
 						? {}
 						: { onBeforeCandidatePublish: options.onBeforeCandidatePublish }),
+					...(options.onAfterCandidateLink === undefined
+						? {}
+						: { onAfterCandidateLink: options.onAfterCandidateLink }),
+					...(options.onAfterCreate === undefined ? {} : { onAfterCreate: options.onAfterCreate }),
 				});
 			} catch (err) {
 				return failWith(
@@ -449,7 +481,6 @@ export function acquireChildLease(
 					`cannot publish the lease candidate for ${childFilePath}: ${String(err)}`,
 				);
 			}
-			options.onAfterCreate?.();
 
 			let blocker: { code: "busy" | "owned-elsewhere"; message: string } | undefined;
 			try {

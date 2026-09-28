@@ -258,6 +258,80 @@ describe("child lease (intent + verify)", () => {
 		expect(again.ok).toBe(true);
 		expect(existsSync(orphan)).toBe(false);
 		if (again.ok) again.lease.release();
+		// Aged-only rule: a FRESH staging file (a live publisher) survives a scan.
+		const freshStaging = path.join(leaseDirFor(child), ".staging-777-abcdef12-live");
+		writeFileSync(freshStaging, "live publisher staging");
+		const third = acquireChildLease(child, "stage3", { ...leaseOptions });
+		expect(third.ok).toBe(true);
+		expect(existsSync(freshStaging)).toBe(true);
+		if (third.ok) third.lease.release();
+	});
+
+	it("T35 (P2): a post-publication verification failure leaves no blocking candidate", async () => {
+		const { child } = await setup("imp-lease-verify-");
+		let injected = false;
+		const failed = acquireChildLease(child, "verify-1", {
+			...leaseOptions,
+			onAfterCandidateLink: () => {
+				if (!injected) {
+					injected = true;
+					throw new Error("injected post-publication verification failure");
+				}
+			},
+		});
+		expect(failed.ok).toBe(false);
+		if (!failed.ok) expect(failed.code).toBe("io-error");
+		// No blocking leftover: neither the published candidate nor its staging
+		// may remain (a live-pid claim would block every later acquire).
+		const leftovers = existsSync(leaseDirFor(child)) ? readdirSync(leaseDirFor(child)) : [];
+		expect(leftovers.filter((name) => name.startsWith("lease-"))).toHaveLength(0);
+		expect(leftovers.filter((name) => name.startsWith(".staging-"))).toHaveLength(0);
+		// A new attempt acquires immediately.
+		const next = acquireChildLease(child, "verify-2", { ...leaseOptions });
+		expect(next.ok).toBe(true);
+		if (next.ok) next.lease.release();
+	});
+
+	it("T35b (P2): a READ-BACK throw (not just a content mismatch) cleans up the published candidate", async () => {
+		const { child } = await setup("imp-lease-verify2-");
+		const failed = acquireChildLease(child, "verify-b", {
+			...leaseOptions,
+			// Delete the just-linked candidate: the read-back itself throws.
+			onAfterCandidateLink: () => {
+				rmSync(
+					path.join(leaseDirFor(child), candidateName(leaseOptions.pid, leaseOptions.nonce, "verify-b")),
+					{
+						force: true,
+					},
+				);
+			},
+		});
+		expect(failed.ok).toBe(false);
+		if (!failed.ok) expect(failed.code).toBe("io-error");
+		const leftovers = existsSync(leaseDirFor(child)) ? readdirSync(leaseDirFor(child)) : [];
+		expect(leftovers.filter((name) => name.startsWith("lease-"))).toHaveLength(0);
+		expect(leftovers.filter((name) => name.startsWith(".staging-"))).toHaveLength(0);
+		const next = acquireChildLease(child, "verify-b2", { ...leaseOptions });
+		expect(next.ok).toBe(true);
+		if (next.ok) next.lease.release();
+	});
+
+	it("T35c (F1): a throw from the create notification is cleaned up like any post-publication failure", async () => {
+		const { child } = await setup("imp-lease-verify3-");
+		const failed = acquireChildLease(child, "verify-c", {
+			...leaseOptions,
+			onAfterCreate: () => {
+				throw new Error("injected create-notification failure");
+			},
+		});
+		expect(failed.ok).toBe(false);
+		if (!failed.ok) expect(failed.code).toBe("io-error");
+		const leftovers = existsSync(leaseDirFor(child)) ? readdirSync(leaseDirFor(child)) : [];
+		expect(leftovers.filter((name) => name.startsWith("lease-"))).toHaveLength(0);
+		expect(leftovers.filter((name) => name.startsWith(".staging-"))).toHaveLength(0);
+		const next = acquireChildLease(child, "verify-c2", { ...leaseOptions });
+		expect(next.ok).toBe(true);
+		if (next.ok) next.lease.release();
 	});
 
 	it("T26-fairness: exclusive access holds when the heartbeat is never started", async () => {

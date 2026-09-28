@@ -11,6 +11,8 @@ import {
 	type Usage,
 } from "./messages.js";
 import type { Tool } from "./tools/types.js";
+import type { AttemptUsage } from "./usage-ledger.js";
+import { recordMissingUsageReport, recordUsageReport } from "./usage-ledger.js";
 
 export type AgentEvent =
 	| LLMEvent
@@ -55,6 +57,13 @@ export interface RunAgentLoopOptions {
 	) => ToolCallDecision | void | undefined | Promise<ToolCallDecision | void | undefined>;
 	onEvent?: (event: AgentEvent) => void;
 	signal?: AbortSignal;
+	/**
+	 * SA-04: optional attempt ledger. When present, every `message_end` report
+	 * is recorded for the attempt and a started stream that ends without one
+	 * marks the ledger incomplete — accounting that survives history splices,
+	 * aborts and crashes. The main runner never passes it (no behavior change).
+	 */
+	usageLedger?: AttemptUsage;
 }
 
 export interface RunAgentLoopResult {
@@ -110,6 +119,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		onToolCall,
 		onEvent,
 		signal,
+		usageLedger,
 	} = options;
 
 	if (userMessage !== undefined && userMessage !== "") {
@@ -164,6 +174,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			request: { system, messages: history, tools, model, maxTokens, thinking, signal },
 			onEvent,
 			usage,
+			ledger: usageLedger,
 		});
 		if (assistant === null) return { stopReason: "aborted", turns, usage };
 
@@ -293,21 +304,34 @@ async function streamAssistant(args: {
 	request: Parameters<LLMProvider["stream"]>[0];
 	onEvent?: (event: AgentEvent) => void;
 	usage: Usage;
+	ledger?: AttemptUsage;
 }): Promise<AssistantMessage | null> {
-	const { provider, request, onEvent, usage } = args;
-	for await (const event of provider.stream(request)) {
-		if (request.signal?.aborted) return null;
-		onEvent?.(event);
-		if (event.type === "message_end") {
-			addUsage(usage, event.message.usage);
-			// stamp the producer model for cost attribution (footer $ segment)
-			return { ...event.message, model: request.model };
+	const { provider, request, onEvent, usage, ledger } = args;
+	// SA-04 (design §3.1/F2): account for a `message_end` BEFORE the observer
+	// runs — a throwing observer must not turn a received report into a
+	// phantom. Any exit without a report (abort, throw, protocol error) marks
+	// the ledger incomplete: "started, not captured".
+	let reported = false;
+	try {
+		for await (const event of provider.stream(request)) {
+			if (request.signal?.aborted) return null;
+			if (event.type === "message_end") {
+				reported = true;
+				addUsage(usage, event.message.usage);
+				recordUsageReport(ledger, "task", event.message.usage);
+				onEvent?.(event);
+				// stamp the producer model for cost attribution (footer $ segment)
+				return { ...event.message, model: request.model };
+			}
+			onEvent?.(event);
 		}
+		// Stream ended without a message_end event: an abort ends the generator
+		// early (abortSafe) — report that as a clean abort, not a protocol error.
+		if (request.signal?.aborted) return null;
+		throw new Error("Provider stream ended without a message_end event");
+	} finally {
+		if (!reported) recordMissingUsageReport(ledger);
 	}
-	// Stream ended without a message_end event: an abort ends the generator
-	// early (abortSafe) — report that as a clean abort, not a protocol error.
-	if (request.signal?.aborted) return null;
-	throw new Error("Provider stream ended without a message_end event");
 }
 
 interface ToolCallRef {

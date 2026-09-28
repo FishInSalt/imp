@@ -5,6 +5,7 @@ import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
 import { contentText } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { createAttemptUsage } from "../src/core/usage-ledger.js";
 import type { LLMProvider } from "../src/provider/types.js";
 
 function assistant(
@@ -402,5 +403,61 @@ describe("tool result display channel (prompt-audit P1)", () => {
 		expect(toolEnd).toBeDefined();
 		expect(toolEnd?.result.display).toBe("display text with diff");
 		expect(contentText(toolEnd?.result.content ?? "")).toBe("one-liner for the model");
+	});
+});
+
+describe("SA-04 attempt ledger (red evidence on baseline)", () => {
+	it("R4: the ledger counts only reports produced during this invocation (resume delta fixture)", async () => {
+		const history: AgentMessage[] = [
+			assistant([{ type: "text", text: "prior attempt" }], "end_turn"), // usage 10/5 in history
+			{ role: "user", content: "continue" },
+		];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "new answer" }])]);
+		const ledger = createAttemptUsage();
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history,
+			userMessage: "go",
+			usageLedger: ledger,
+		});
+		expect(result.stopReason).toBe("completed");
+		// only the new turn (10/5) — replayed history's report must not count
+		expect(ledger.totals).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.taskReports).toBe(1);
+		expect(ledger.incomplete).toBe(false);
+	});
+
+	it("R4b: an interrupted stream with no message_end marks the ledger incomplete", async () => {
+		const controller = new AbortController();
+		const provider: LLMProvider = {
+			name: "interrupted",
+			async *stream() {
+				yield { type: "text_delta", text: "partial" };
+				controller.abort();
+				return; // no message_end — abortSafe shape
+			},
+		};
+		const ledger = createAttemptUsage();
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+			signal: controller.signal,
+			usageLedger: ledger,
+		});
+		expect(result.stopReason).toBe("aborted");
+		expect(ledger.incomplete).toBe(true);
+		expect(ledger.totals).toEqual({ inputTokens: 0, outputTokens: 0 });
 	});
 });

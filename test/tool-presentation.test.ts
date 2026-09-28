@@ -94,7 +94,19 @@ describe("semantic tool presentation", () => {
 			];
 			for (const [status, text, expected] of cases) {
 				const produced = taskResult(
-					{ status, text, turns: 4, usage: { inputTokens: 1, outputTokens: 1 }, reason: "disconnected" },
+					{
+						status,
+						text,
+						turns: 4,
+						usage: { inputTokens: 1, outputTokens: 1 },
+						usageDetail: {
+							task: { inputTokens: 1, outputTokens: 1 },
+							summarizer: { inputTokens: 0, outputTokens: 0 },
+							summarizerCalls: 0,
+							incomplete: false,
+						},
+						reason: "disconnected",
+					},
 					session,
 					5000,
 					"test task",

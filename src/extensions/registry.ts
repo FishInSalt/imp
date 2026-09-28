@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Value } from "typebox/value";
 import { BUILTIN_TOOL_NAMES, NAME_PATTERN } from "../core/constants.js";
 import type { ToolCallDecision } from "../core/loop.js";
@@ -7,8 +8,10 @@ import { COMMANDS, type SlashCommand } from "../repl/commands.js";
 import type {
 	ConfirmOptions,
 	ContextSection,
+	ExtensionContextIdentity,
 	ExtensionEventHandlerMap,
 	ExtensionEventName,
+	ExtensionModuleIdentity,
 	ExtensionOrigin,
 	ExtensionSummary,
 	MessageEndEvent,
@@ -73,6 +76,8 @@ interface OpenSection {
 	commands: RegisteredExtensionCommand[];
 	contexts: ContextSection[];
 	hooks: StoredHandler[];
+	/** SA-06: entry-module identity, when the loader could capture it. */
+	identity?: ExtensionModuleIdentity;
 }
 
 export interface ExtensionRegistryOptions {
@@ -123,6 +128,8 @@ export class ExtensionRegistry {
 	private section: OpenSection | null = null;
 	/** Status texts by extension bucket (`origin:name`) then author key. */
 	private readonly statuses = new Map<string, Map<string, string>>();
+	/** SA-06: module identities of committed extensions, in load order. */
+	private readonly moduleIdList: ExtensionModuleIdentity[] = [];
 	/** The one shell status renderer; null until a TUI machine binds (print
 	 *  mode and legacy shell: never — writes stay storage-only). */
 	private statusSink: ((line: string) => void) | null = null;
@@ -139,9 +146,27 @@ export class ExtensionRegistry {
 		return this.section !== null;
 	}
 
+	/** SA-06: per-extension module identities in load order (only extensions
+	 *  whose entry file could be hashed; a missing identity refuses resume
+	 *  conservatively through the set difference). */
+	moduleIdentities(): ExtensionModuleIdentity[] {
+		return this.moduleIdList.map((identity) => ({ ...identity }));
+	}
+
+	/** SA-06: registered context sections, content-hashed, in load order. */
+	contextSectionIdentities(): ExtensionContextIdentity[] {
+		return this.contextSections.map((section) => ({
+			id: section.id,
+			sha256: createHash("sha256").update(section.text).digest("hex"),
+		}));
+	}
+
 	/** Open a fresh per-extension section (design §7.1 step 3). */
-	beginExtension(name: string, origin: ExtensionOrigin): void {
-		this.section = { name, origin, tools: [], commands: [], contexts: [], hooks: [] };
+	beginExtension(name: string, origin: ExtensionOrigin, identity?: ExtensionModuleIdentity): void {
+		this.section =
+			identity === undefined
+				? { name, origin, tools: [], commands: [], contexts: [], hooks: [] }
+				: { name, origin, tools: [], commands: [], contexts: [], hooks: [], identity };
 	}
 
 	/** Merge the open section into the record; returns its banner summary. */
@@ -161,6 +186,7 @@ export class ExtensionRegistry {
 			this.contextOwners.set(context.id, section.name);
 		}
 		this.handlers.push(...section.hooks);
+		if (section.identity !== undefined) this.moduleIdList.push(section.identity);
 		const summary: ExtensionSummary = {
 			name: section.name,
 			origin: section.origin,
@@ -168,6 +194,9 @@ export class ExtensionRegistry {
 			commandCount: section.commands.length,
 			contextCount: section.contexts.length,
 			hookCount: section.hooks.length,
+			...(section.identity === undefined
+				? {}
+				: { sourcePath: section.identity.path, sha256: section.identity.sha256 }),
 		};
 		this.section = null;
 		return summary;

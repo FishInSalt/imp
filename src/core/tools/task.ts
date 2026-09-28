@@ -5,6 +5,7 @@ import { firstLine } from "../../format.js";
 import type { ProviderName } from "../../provider/resolve.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
+import { buildChildLaunch, type LaunchEnvironmentFacts } from "../child-launch.js";
 import { type ChildModelBinding, resolveChildModel } from "../child-model.js";
 import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
@@ -81,6 +82,10 @@ export interface TaskToolOptions {
 	getModelReference?: () => string;
 	/** Read at spawn: `/new`/`/resume` re-assemble the system prompt. */
 	getSystem: () => string;
+	/** SA-06: launch-environment facts read at spawn (retained assembly
+	 *  sources + extension identities). Absent → no launch block is written
+	 *  and the child is conservatively not resumable. */
+	getLaunchEnvironment?: () => LaunchEnvironmentFacts;
 	/** The parent's tool array; task itself is filtered out of the child pool. */
 	getTools: () => Tool[];
 	/** Project `.imp/agents` exists but was skipped by the trust gate — the
@@ -441,7 +446,41 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			let transcriptWriteFailed = false;
 			try {
 				if (childSessions && parentStore !== null) {
-					session = createChildSession(parentStore, options.sessionBaseDir);
+					session = createChildSession(parentStore, options.sessionBaseDir, (childId) => {
+						const env = options.getLaunchEnvironment?.();
+						if (env === undefined) return undefined;
+						return buildChildLaunch({
+							parentSessionId: parentStore.header.id,
+							childId,
+							impVersion: env.impVersion,
+							...(agent === undefined
+								? {}
+								: { agent: { name: agent.name, system: agent.system, source: agent.source } }),
+							model: binding,
+							cwd: childCwd,
+							...(wt === undefined || repo === undefined
+								? {}
+								: {
+										worktree: {
+											repoRoot: repo.root,
+											baseline: repo.head,
+											path: wt.path,
+											branch: wt.branch,
+											...(wt.creationReflog === undefined ? {} : { creationReflog: wt.creationReflog }),
+										},
+									}),
+							tools: tools.map((tool) =>
+								tool.mcpServer === undefined
+									? { name: tool.name }
+									: { name: tool.name, mcpServer: tool.mcpServer },
+							),
+							systemText: env.systemText,
+							contextFiles: env.contextFiles,
+							promptFiles: env.promptFiles,
+							extensionContexts: env.extensionContexts,
+							extensions: env.extensions,
+						});
+					});
 					observeSessionWrites(session, () => {
 						transcriptWriteFailed = true;
 					});

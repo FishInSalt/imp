@@ -44,6 +44,7 @@ export type NavigateTreeForkResult =
 	| { aborted: true }
 	| { editorText?: string; editorTextDroppedImages?: boolean; preview: string; messages: number };
 
+import type { LaunchContextFile, LaunchEnvironmentFacts, LaunchPromptFile } from "./core/child-launch.js";
 import { escapeXml, formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import {
 	buildSystemPrompt,
@@ -63,7 +64,7 @@ import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
-import { formatTokens, shorten, usageMoneySegment } from "./format.js";
+import { formatTokens, shorten, usageMoneySegment, VERSION } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
 import { LOGIN_TARGETS } from "./provider/login-targets.js";
@@ -198,6 +199,9 @@ export interface Runner {
 	readonly session: SessionStore | null;
 	/** The assembled system prompt (test/inspection seam). */
 	readonly system: string;
+	/** SA-06: launch-environment facts for the task tool (retained assembly
+	 *  sources + extension identities), read at child spawn. */
+	getLaunchEnvironment(): LaunchEnvironmentFacts;
 	/** prompt-audit P7: re-run system assembly (MCP tool-set syncs). */
 	refreshSystemPrompt(): void;
 	/** The live tool table (M18: the MCP manager splices bridged tools in at
@@ -391,6 +395,13 @@ class RunnerImpl implements Runner {
 	private readonly branchSummaryEnabled: boolean;
 	private settings: CompactionSettings;
 	private systemText: string;
+	/** SA-06: prompt-assembly inputs retained AT assembly time — the launch
+	 *  record fingerprints what actually produced `systemText`, never a
+	 *  re-read (files could change between assembly and spawn). */
+	private systemSources: {
+		contextFiles: LaunchContextFile[];
+		promptFiles: LaunchPromptFile[];
+	} = { contextFiles: [], promptFiles: [] };
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
@@ -495,6 +506,7 @@ class RunnerImpl implements Runner {
 				getModelReference: () => `${this.providerName}/${this.model}`,
 				getAutoCompact: () => this.autoCompact,
 				getSystem: () => this.system,
+				getLaunchEnvironment: () => this.getLaunchEnvironment(),
 				getTools: () => this.tools,
 				getSession: () => this.sessionStore,
 				sessionBaseDir: options.sessionBaseDir,
@@ -653,6 +665,22 @@ class RunnerImpl implements Runner {
 		return this.systemText;
 	}
 
+	/** SA-06: launch-environment facts as of THIS spawn — retained assembly
+	 *  sources plus the live extension identities (load order). */
+	getLaunchEnvironment(): LaunchEnvironmentFacts {
+		return {
+			impVersion: VERSION,
+			systemText: this.systemText,
+			contextFiles: this.systemSources.contextFiles.map((file) => ({ ...file })),
+			promptFiles: this.systemSources.promptFiles.map((file) => ({ ...file })),
+			extensions: this.options.extensions?.moduleIdentities() ?? [],
+			extensionContexts: (this.options.extensions?.contextSections ?? []).map((section) => ({
+				id: section.id,
+				text: section.text,
+			})),
+		};
+	}
+
 	/** Re-run system assembly (prompt-audit P7): the MCP manager calls this
 	 *  whenever the tool set syncs (handshake completion, run boundaries) —
 	 *  assembleSystem at warmup alone would never see late-arriving tools.
@@ -675,6 +703,29 @@ class RunnerImpl implements Runner {
 			this.options.systemPromptProjectAllowed ?? false,
 			this.options.systemPromptHomeDir ?? os.homedir(),
 		);
+		this.systemSources = {
+			contextFiles: [],
+			promptFiles: [
+				...(promptFiles.override === undefined
+					? []
+					: [
+							{
+								kind: "override" as const,
+								path: promptFiles.override.path,
+								text: promptFiles.override.text,
+							},
+						]),
+				...(promptFiles.append === undefined
+					? []
+					: [
+							{
+								kind: "append" as const,
+								path: promptFiles.append.path,
+								text: promptFiles.append.text,
+							},
+						]),
+			],
+		};
 		let system = buildSystemPrompt({ ...defaultSystemPromptContext(), cwd: this.options.cwd }, catalogTools, {
 			override: promptFiles.override?.text,
 			append: promptFiles.append?.text,
@@ -698,6 +749,10 @@ class RunnerImpl implements Runner {
 		}
 		if (!this.options.noContextFiles) {
 			const context = loadContextFiles(this.options.cwd);
+			this.systemSources.contextFiles =
+				context === null
+					? []
+					: context.sections.map((section) => ({ path: section.path, content: section.content }));
 			if (context) {
 				// prompt-audit P4: XML wrappers — markdown headers can be forged
 				// by file content; tags give the model a reliable boundary and

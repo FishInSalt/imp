@@ -401,122 +401,164 @@ result is the continuation's initial history — never a replay of raw JSONL
 entries (task-list requirement; SA-06 handoff: "reuses the already-opened
 store").
 
-## 7. Single-writer lease
+## 7. Single-writer lease (intent + verify)
 
-One active execution per child, enforced in-process and across processes on
-one machine. New module `src/core/child-lease.ts`; no existing lock mechanism
-exists anywhere in the codebase (verified).
+### 7.0 Why the single-file protocol was replaced (owner review, round 3)
+
+The v1 protocol kept the lease in ONE shared path and reclaimed stale leases
+by moving/replacing that path. On POSIX there is no compare-and-swap; the
+owner demonstrated with three synchronized processes that ANY
+move-away-then-recreate reclaim opens a pausable "vacuum" interval during
+which a third process's `wx` create succeeds — leaving two live holders
+whose qualification cannot be revoked (the mover's own refusal and the
+late heartbeat notice are both after the fact). The owner's requirements:
+no third-party acquisition window during reclaim; exclusion must not rest
+on post-hoc heartbeat discovery; a deterministic three-process regression,
+then an independent design review before implementation.
+
+Alternatives considered and rejected (recorded for the review):
+
+- rename-over replacement (never vacate the path): the path is never empty,
+  but a stealer acting on a stale read can still atomically REPLACE a fresh
+  live lease; the victim learns only from its next heartbeat — precisely
+  the post-hoc detection the owner rejected. No CAS exists to make the
+  replace conditional.
+- a recovery mutex guarding steals: the mutex file needs its own staleness
+  rule, the same class of race recurs one level down, and acquirers'
+  create path is still outside the mutex.
+- OS advisory locks (flock): no Node binding in this codebase's
+  dependency set; not an option (and would diverge across platforms).
+
+The chosen protocol removes the shared mutable path entirely: no rename, no
+replace, and no unlink of another process's claim is ever needed to
+acquire, so the vacuum class of race cannot exist.
 
 ### 7.1 Artifact
 
-`<childFilePath>.lease` beside the child session file. Content (one JSON
-line): `{ "pid": <number>, "host": "<os.hostname()>", "machineId":
-"<uuid>", "nonce": "<uuid>", "attemptId": "<uuid>", "startedAt": "<ISO>" }`.
-`nonce` is a per-process instance id (module-load UUID): a same-pid lease
-with a different nonce cannot be identified as this process's own
-(acceptance round 2, finding 5). The lease exists only while an attempt runs
-(created after validation, released in `finally`).
+A DIRECTORY `<childFilePath>.lease/` beside the child session file,
+containing one file per acquisition attempt:
 
-`machineId` is read-or-created at `<childrenDir>/.imp-machine-id`, published
-ATOMICALLY (tmp + rename — an empty file left by a crash between create and
-write is repaired, never fatal; acceptance round 2, finding 6). It exists
-because `os.hostname()` collides
-routinely across containers sharing a mounted sessions directory, and pid
-namespaces make cross-container pids meaningless — hostname + pid alone can
-neither detect the collision nor prove liveness.
+    lease-<pid>-<nonce8>-<attemptId>
+
+Content (one JSON line): `{ "pid": <number>, "host": "<os.hostname()>",
+"machineId": "<uuid>", "nonce": "<uuid>", "attemptId": "<uuid>",
+"startedAt": "<ISO>" }`. Names are unique by construction, so candidate
+files never contend on a path. `nonce` is a per-process instance id
+(module-load UUID): a same-pid candidate with a different nonce is a
+DIFFERENT instance (sibling pid namespace or a recycled pid) and is never
+treated as this process's own.
+
+A legacy single-FILE artifact `<childFilePath>.lease` (created by earlier
+commits of this unreleased branch) is handled on encounter: parse it; a
+live/uncertain owner refuses `busy`; a dead+aged or unparseable owner is
+unlinked (migration), then normal acquisition proceeds.
 
 ### 7.2 Protocol (pinned)
 
 In-process registry: `Map<childFilePath, attemptId>` — checked and set
-SYNCHRONOUSLY (no await between check and set), so same-process concurrency
-(two `task` calls in one turn targeting one child) cannot slip through even
-if the file is mangled.
+SYNCHRONOUSLY (no await between), so same-process concurrency cannot slip
+through even if the directory is mangled.
 
 Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
 
 1. Map hit → refuse `busy` ("already running in this process").
-2. Map miss → set the entry. All later failures delete it.
-3. `writeFileSync(leasePath, payload, { flag: "wx" })`:
-   - success → READ BACK and verify (`attemptId === mine`, payload parses);
-     mismatch/IO error → refuse `io-error` (never proceed on an unverified
-     lease).
-   - `EEXIST` → read the lease ONCE (acceptance round 2, finding 4: this
-     single read decides eligibility AND is the byte generation the steal
-     must move — separate reads can disagree under a concurrent writer).
-     From those bytes:
-     - `host` or `machineId` differs from mine → refuse `owned-elsewhere`
-       ("held on host X / by a different machine — shared-storage sessions
-       across machines are not supported").
-     - unparseable content → debris: steal path.
-     - `pid` equals mine AND `nonce` equals mine → this process's own
-       failed-release leftover: steal path.
-     - `pid` equals mine AND `nonce` DIFFERS → refuse `busy` ("a process
-       with pid N that this process cannot identify as its own (another
-       instance or pid namespace)") — plain pid equality never authorizes
-       a reclaim (finding 5).
-     - `isAlive(pid)` in MY namespace (injectable; default
-       `process.kill(pid, 0)`, EPERM = alive) → refuse `busy` with
-       pid/host/startedAt in the message.
-     - pid dead in my namespace AND lease mtime younger than the grace
-       window (`staleGraceMs`, default 60s) → refuse `busy` with a recovery
-       hint ("that process looks dead here but may be live in another pid
-       namespace; if it really crashed, retry in ~N s").
-     - pid dead AND mtime older than the grace → steal path.
-4. Steal path: `renameSync(leasePath, <lease>.steal-<attemptId>)` (UNIQUE
-   target per attempt — two stealers can never share an artifact and a
-   rename never clobbers another's claim; finding 4); `ENOENT` → retry from
-   step 3 (someone else won). After the rename, compare the moved bytes
-   against the SAME bytes the eligibility decision read:
-   - mismatch (a writer re-created the lease in the window) → restore
-     WITHOUT clobbering: `link(steal, lease)` fails EEXIST instead of
-     replacing, so a third holder is never overwritten; then unlink our
-     artifact (or drop it when EEXIST) → refuse `stale-contended`.
-   - match → best-effort remove our artifact; retry from step 3.
-   Bounded at 3 rounds → refuse `stale-contended`.
-5. Success returns `{ ok: true, lease }`.
+2. Map miss → set the entry; all refusal paths delete it.
+3. Resolve the machine id (publish-once; §7.4).
+4. `mkdirSync(leaseDir, { recursive: true })` (a legacy file at that path
+   is migrated per §7.1).
+5. CREATE own candidate: `writeFileSync(dir + "/" + ownName, payload,
+   { flag: "wx" })` — unique name, so this can only fail on real IO errors
+   (refuse `io-error`).
+6. VERIFY by scan (the load-bearing step): readdir the lease directory and
+   inspect every OTHER entry:
+   - unparseable content → UNKNOWN while its mtime is within the grace
+     window (a torn claim is not proof of absence), else stale debris;
+   - `host`/`machineId` differs → refuse `owned-elsewhere` (shared-storage
+     across machines is unsupported);
+   - parse == own name (impossible by uniqueness) → ignore;
+   - owner `pid` alive in MY namespace (injectable; `process.kill(pid, 0)`,
+     EPERM = alive) OR mtime within the grace window (`staleGraceMs`,
+     default 60s) → ANOTHER ACTIVE OR UNCERTAIN CANDIDATE → **refuse
+     `busy`** naming (pid, host, startedAt);
+   - owner dead in my namespace AND mtime older than the grace → STALE:
+     unlink it opportunistically (cleanup only — this grants nothing) and
+     ignore.
+7. No other active/uncertain candidate → HOLD. The heartbeat then touches
+   OWN candidate mtime every 20s (`utimesSync`, unref'd interval) and
+   re-reads it: missing or foreign content → **lease anomaly** (stderr note
+   + abort the attempt's AbortController). This is defense in depth only;
+   exclusion does NOT depend on heartbeat timing (§7.3).
+8. Refusal paths unlink OWN candidate before returning; `release()` unlinks
+   OWN candidate (unique name — no foreign-content checks needed) in
+   `finally`.
 
-Heartbeat: after acquire, the attempt touches the lease mtime every 20s
-(`utimesSync`; `setInterval(...).unref()` — the #task-timer liveness lesson;
-interval and grace are injectable seams). At each touch the holder re-reads
-the lease: content mine → touched, continue; content missing or foreign →
-**lease anomaly** — stderr note and ABORT the attempt (§8's attempt
-AbortController). Aborting is what makes the invariant "at most one attempt
-CONTINUES" hold even inside the residual race windows of §7.3.
+Bounded fairness: when two acquirers create candidates in the same window,
+each may see the other and both refuse. Acquire retries up to 3 rounds with
+5–25ms jitter before returning `busy`; the caller surfaces the refusal.
 
-Release (`lease.release()`, `finally`): clear the Map entry when it maps to
-my attemptId; read the lease back; unlink ONLY when it parses and
-`attemptId === mine`. Unlink failure → truncate the lease to zero bytes
-(best effort) + stderr note: an empty lease is debris, immediately
-stealable by the next acquire; a foreign or corrupt lease is left alone
-(stderr note).
+### 7.3 Mutual exclusion (argument, no heartbeat assumption)
 
-### 7.3 Residual races (recorded, not hidden)
+Claim: at most one acquire can return `{ ok: true }`.
 
-- The read→rename window in the steal path is not atomic. The single-read
-  decision, the unique steal target, the post-rename byte comparison and
-  the link-based (never replacing) restore together convert every
-  interleaving into a refusal for the stealer; the heartbeat anomaly check
-  converts "my live lease disappeared under me" into an abort for the
-  holder. Worst case: both stop and the winner of the next attempt
-  proceeds. A deterministic in-process injection tests the window (T21b);
-  a REAL two-process mutual-exclusion test (T30) hammers the same child
-  lease from two spawned processes and asserts the S/E markers never
-  interleave.
-- Same-pid, different-instance leases (acceptance round 2, finding 5) are
-  refused, not reclaimed: a recycled pid whose old process is gone stays
-  `busy` until this process exits (then the dead-pid + grace path frees it)
-  or the lease is removed manually — the conservative direction, recorded.
-- Crashed stealers can leave `<lease>.steal-<attemptId>` artifacts; they are
-  never read as leases and are removed when their own attempt retries.
-- Grace delay: after a hard crash the next resume refuses `busy` until the
-  lease mtime is older than `staleGraceMs` (~60s; three missed heartbeats).
-  That delay is the price of not trusting a dead-looking pid across pid
-  namespaces; it is documented, hint-texted, and seam-injectable in tests.
-- Sharing a sessions directory across machines is refused
-  (`owned-elsewhere`), not guessed about.
-- The lease protects WRITERS (attempt-vs-attempt). It does not freeze the
-  filesystem: external edits during an attempt are outside any promise
-  (TOCTOU note, §14).
+Let A and B both return ok. A proceeds only after creating C_A and then
+scanning; B likewise with C_B. Assume A created first (time t_A). B's scan
+happens after its own create, i.e. at s_B > t_B.
+
+- If s_B > t_A: C_A existed when B's scan ran (A never unlinks its own
+  candidate while holding), so B's scan saw a fresh, hence at least
+  UNCERTAIN, candidate → B refuses. Contradiction.
+- If s_B < t_A: then t_A < s_A (A scans after creating) and t_B < s_B <
+  t_A < s_A, so B's candidate existed when A's scan ran → A refuses.
+  Contradiction.
+
+The only assumptions are: a scan sees every candidate that was created in
+the same directory before the scan started (local-filesystem semantics;
+NFS-style delayed visibility is an unsupported scenario, §14), and a
+proceeding holder never unlinks its own candidate. The heartbeat is not
+part of this argument.
+
+Owner's round-3 repro maps to: A cannot "move a live lease away" (nothing
+is ever moved); a third process's create is never enough by itself (it must
+also pass step 6's scan, which sees the live holder). Stale cleanup unlinks
+only dead+aged candidates, never a live one.
+
+### 7.4 Machine id: publish-once (owner finding, round 3)
+
+`<childrenDir>/.imp-machine-id` must be immutable once a valid id SEES USE
+(leases reference it). Rules:
+
+- existing `valid` id → adopted as-is; **no path ever overwrites a valid
+  id**;
+- ABSENT → publish with `writeFileSync(tmp, id)` + `linkSync(tmp, file)`
+  (atomic no-clobber create). Exactly one publisher wins; every loser gets
+  `EEXIST`, re-reads, and adopts the winner's id. A late publisher can
+  therefore never replace an id a live lease already uses;
+- EMPTY (legacy crash artifact) → greenfield recovery: this is reachable
+  only while the file is empty or absent, and every recoverer (a) re-reads
+  after replacing and (b) adopts the settled value, so all parties converge
+  on ONE id before returning. A valid id cannot be overwritten by this
+  path: the only writers of valid ids are the link-publishers above, which
+  act only when the file is ABSENT — and nothing ever deletes a valid id
+  file, so no valid id can appear between a recoverer's empty-read and its
+  replace;
+- allocation is retried (≤5 rounds) on transient ENOENT/EEXIST races; a
+  permanent failure refuses `io-error`.
+
+### 7.5 Residual limits (recorded, not hidden)
+
+- Local-filesystem assumption: directory-scan visibility under NFS-style
+  caching is not guaranteed; shared-storage deployments across machines are
+  refused via `owned-elsewhere` when observed, and same-machine containers
+  sharing a directory are safe (same visibility domain).
+- A candidate whose owner died within the grace window keeps acquirers
+  `busy` until the window passes (crash recovery latency ≤ ~60s), the price
+  of not trusting a dead-looking pid across pid namespaces.
+- Crashed or tampered candidates linger until a later scan ages them out;
+  they are never read as leases and grant nothing.
+- Heartbeat anomaly handling aborts the attempt as defense in depth; it is
+  not required for correctness.
+- Cross-machine `machineId` semantics: the id is per DIRECTORY; a directory
+  shared across machines is refused on first contact (`owned-elsewhere`).
 
 ## 8. Execution
 
@@ -665,7 +707,10 @@ export interface ChildLeaseOptions {
   pid?: number; host?: string; machineId?: string; nonce?: string;
   isAlive?: (pid: number) => boolean;
   now?: () => number;
-  onBeforeStealRename?: () => void;  // test seam: inject the steal-window race
+  // test seams: deterministic interleavings for the multiprocess regressions
+  onAfterCreate?: () => void;
+  onBeforeScan?: () => void;
+  onBeforeMachineIdPublish?: () => void;
   staleGraceMs?: number;   // default 60_000
   heartbeatMs?: number;    // default 20_000
 }
@@ -714,16 +759,26 @@ lease heartbeat wiring.
 
 ## 13. Test plan (red evidence first)
 
-New `test/child-lease.test.ts` (clock/pid/host/liveness injectable): T18
-in-process double acquire; T19 stale rules — pid dead + mtime fresh refuses
-with the recovery hint, pid dead + mtime older than grace steals, own
-leftover (pid === self, no Map entry) steals; T20 live foreign pid refuses;
-`owned-elsewhere` (host/machineId mismatch) refuses; failed-release leftover
-(zero-byte lease) is debris-stealable; T21 unparseable debris recovery and
-`stale-contended` when the post-rename comparison finds a newer lease
-(injected interleaving); T25 release leaves foreign leases alone and notes
-failures; T28 heartbeat touches keep mtime fresh and a foreign/missing
-lease at a beat aborts the attempt via its signal.
+New `test/child-lease.test.ts` (clock/pid/host/liveness/seams injectable),
+round-3 protocol: T18 in-process double acquire; T19 active/uncertain
+candidate rules — live pid refuses, dead pid with fresh mtime refuses with
+the recovery hint, dead pid beyond grace is cleaned opportunistically and
+acquisition proceeds, same-pid different-nonce refuses; T20
+`owned-elsewhere` (host/machineId mismatch); T25 release/refusal unlink the
+OWN candidate only, never others; T28 heartbeat touches keep the candidate
+mtime fresh and a missing/foreign own candidate aborts via its signal;
+T29 production machine-id init; T33a–d machine-id stability: an established
+id is never rewritten, two concurrent publishers converge on one id via
+link (deterministic seam), empty-file recovery converges, and the owner's
+end-to-end repro (publish + acquire + exit + aged reclaim without
+`owned-elsewhere`) passes; T30 the REAL two-process hammer test (updated to
+candidate semantics, refusal counts asserted); T30b the DETERMINISTIC
+three-process regression: (i) A creates and pauses before scanning while B
+creates and scans → at most one proceeds; (ii) A pauses before scanning a
+stale candidate, B creates+scans+proceeds, A resumes and refuses; (iii)
+B and C create simultaneously against a stale candidate → both refuse or
+exactly one proceeds, and the stale candidate was cleaned without granting
+anything.
 
 New `test/child-resume.test.ts` (fake provider harness like
 `test/task-tool.test.ts`):
@@ -956,3 +1011,30 @@ across 6 concurrent processes with no debris. UNVERIFIED by the reviewer:
 real-time grace elapse after a hard crash; heartbeat-to-completion against
 a killed holder; cross-machine refusal on real shared storage
 (seam-verified only).
+
+### Acceptance round 3 (owner review of 34ceee9) — lease protocol revision
+
+Owner findings (both reproduced with synchronized real processes):
+
+1. P1 — the steal moved a LIVE lease away and the resulting vacuum let a
+   third process acquire: B and C each held a successful handle while A's
+   refusal and the late heartbeat could not revoke either. Root cause: on
+   POSIX there is no compare-and-swap, so any move-away-then-recreate
+   reclaim has a pausable window. Fixed by replacing the single-file
+   protocol with intent + verify (§7.0–§7.3): acquisition writes a uniquely
+   named candidate into a lease DIRECTORY, and holds only after a
+   post-create scan sees no other active/uncertain candidate. No operation
+   ever moves, replaces or unlinks a live claim; exclusion is proven
+   without heartbeat timing. A deterministic three-process regression
+   (T30b) plus the updated two-process hammer test (T30) are in the plan.
+2. P2 — concurrent machine-id initialization rewrote an id already
+   referenced by live leases (a late publisher's rename clobbered the
+   winner), and the stale lease became permanently `owned-elsewhere`.
+   Fixed by publish-once (§7.4): link-based no-clobber publication,
+   adopt-on-EEXIST, and a convergence path only for the legacy empty file;
+   a valid id is never replaced. T33a–d pin the stability requirement
+   ("an id referenced by existing leases stays stable") and the owner's
+   end-to-end repro.
+
+Per the owner's instruction, the revised protocol must pass an independent
+pre-implementation design review before implementation resumes.

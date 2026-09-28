@@ -120,20 +120,31 @@ function saved(model?: SessionModel, text = "saved history") {
 
 describe("runner per-session model restoration", () => {
 	it.each(["resume", "continue"])("startup %s restores model before making any request", async (mode) => {
-		const store = saved(other);
-		const before = snapshot(store);
-		const live = await runner(mode === "resume" ? { resume: store.header.id } : { continueRecent: true });
-		expect(live.session?.header.id).toBe(store.header.id);
-		expect(live.modelReference()).toBe(qualified(other));
-		expect(live.providerName).toBe(other.provider);
-		expect(live.history).toEqual(store.buildContext().messages);
-		expect(live.output()).toContain(qualified(other));
-		expect(snapshot(store)).toEqual(before);
-		expect(calls).toEqual([]);
-		await live.runTurn({ userMessage: "next" });
-		expect(calls.map(({ family, request }) => [family, request.model])).toEqual([
-			[other.provider, other.modelId],
-		]);
+		// #fresh-install-hint: the resumed-model rendering assertion below
+		// pins the USABLE path — give the saved family a credential (env var,
+		// scrubbed around the test) so the banner is not the new
+		// "no model — /login" segment (that path has its own suite).
+		const prevKey = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		try {
+			const store = saved(other);
+			const before = snapshot(store);
+			const live = await runner(mode === "resume" ? { resume: store.header.id } : { continueRecent: true });
+			expect(live.session?.header.id).toBe(store.header.id);
+			expect(live.modelReference()).toBe(qualified(other));
+			expect(live.providerName).toBe(other.provider);
+			expect(live.history).toEqual(store.buildContext().messages);
+			expect(live.output()).toContain(qualified(other));
+			expect(snapshot(store)).toEqual(before);
+			expect(calls).toEqual([]);
+			await live.runTurn({ userMessage: "next" });
+			expect(calls.map(({ family, request }) => [family, request.model])).toEqual([
+				[other.provider, other.modelId],
+			]);
+		} finally {
+			if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevKey;
+		}
 	});
 
 	it("slash resume restores independent selections and history without writing either file", async () => {

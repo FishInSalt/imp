@@ -97,6 +97,13 @@ type ReplState = "idle" | "running" | "compacting" | "exited";
  *  already — this only bounds pathological results). */
 const FOLD_LINE_CAP = 2000; // ≥ every tool's own cap (bash 500, read 2000)
 
+/** #fresh-install-hint (D1, round-2 N7): the canonical unusable-model
+ *  segments — short forms only (banner identity line; footer; resumed
+ *  session line). The per-family detail lives in the D2 startup note and
+ *  the D3 print error, never here. */
+export const NO_MODEL_SEGMENT = "no model available — run /login to connect one";
+export const NO_MODEL_SHORT = "no model — /login";
+
 /** Claude Code-style welcome panel for fresh TUI sessions: branding, a
  *  quick-reference of the commands people actually reach for, and the
  *  session's identity. Resumed sessions keep the compact banner — the
@@ -147,7 +154,11 @@ function gradientLine(line: string, ansi: boolean): string {
 }
 
 /** Gemini-CLI-style welcome: gradient pixel logo, numbered getting-started
- *  tips, dim identity line. No box — the logo is the greeting. */
+ *  tips, dim identity line. No box — the logo is the greeting.
+ *  #fresh-install-hint (D1): an unusable model (no credential in its
+ *  family — fresh install) renders `no model available — run /login to
+ *  connect one` in place of the model id; the dead id never renders as
+ *  the session's model. */
 export function welcomeLines(sessionId: string, modelReference: string, ansi: boolean): string[] {
 	return [
 		...IMP_LOGO.map((line) => gradientLine(line, ansi)),
@@ -841,11 +852,16 @@ class ReplMachine {
 	private refreshFooter(): void {
 		// modelReference() is the CONNECTION TELL (#zai-default): zai/glm-5.3
 		// vs a bare glm-5.3 distinguishes the coding endpoint from compat.
-		const parts: string[] = [this.runner.modelReference()];
+		// #fresh-install-hint (D1): while the family holds no credential the
+		// model segment becomes the /login pointer and the think segment is
+		// DROPPED (round-1 F7 — `no model — /login think:medium` renders a
+		// knob for a model that cannot run; it returns once usable).
+		const usable = this.runner.modelUsable();
+		const parts: string[] = [usable ? this.runner.modelReference() : NO_MODEL_SHORT];
 		// pi parity (#thinking-levels): the level segment sits beside the
 		// model whenever the model HAS a knob — "off" included, so the
 		// control is discoverable from the footer alone.
-		if (this.runner.supportsThinking()) parts.push(`think:${this.runner.thinkingLevel}`);
+		if (usable && this.runner.supportsThinking()) parts.push(`think:${this.runner.thinkingLevel}`);
 		const session = this.runner.session;
 		if (session !== null) parts.push(session.header.id.slice(0, 8));
 
@@ -1557,9 +1573,12 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			// fresh conversation → the welcome panel (whole box dim, like
 			// Claude Code); session identity rides inside it
 			// logo gradient + tips as-is; the identity line rides dim
+			// #fresh-install-hint (D1): the dead default never renders as the
+			// session's model — the identity line shows the /login pointer
+			// instead (welcomeLines' third arg is the DISPLAY segment).
 			const welcome = welcomeLines(
 				session.header.id.slice(0, 8),
-				runner.modelReference(),
+				runner.modelUsable() ? runner.modelReference() : NO_MODEL_SEGMENT,
 				renderer.ansiEnabled,
 			);
 			for (const line of welcome.slice(0, -1)) renderer.writeLine(line);
@@ -1572,7 +1591,11 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 		// deferred environment notes (extensions, context, trust) follow it
 		release?.();
 		if (!fresh && session) {
-			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${runner.model}`);
+			// #fresh-install-hint (D1, round-2 N3): same rule on the resumed
+			// line — `no model — /login` when the saved model's family holds
+			// no credential (resumed 0.1.0 sessions carry the dead default).
+			const modelSegment = runner.modelUsable() ? runner.model : NO_MODEL_SHORT;
+			renderer.note(`▪ session ${session.header.id.slice(0, 8)} · model ${modelSegment}`);
 			// Replay the resumed history so the user sees what the model sees
 			// (the crash-recovery loop's missing half).
 			const replayed = replay(session);

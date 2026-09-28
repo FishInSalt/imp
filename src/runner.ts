@@ -59,6 +59,8 @@ import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens, shorten } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
+import { LOGIN_TARGETS } from "./provider/login-targets.js";
+import { modelAvailability } from "./provider/model-availability.js";
 import { contextWindowFor } from "./provider/models.js";
 import { createProviderFor, type ProviderName, parseModelRef, resolveModel } from "./provider/resolve.js";
 import {
@@ -222,6 +224,17 @@ export interface Runner {
 	readonly autoCompactEnabled: boolean;
 	/** Canonical display reference — "openai-codex/gpt-5.4" vs bare "glm-4.6". */
 	modelReference(): string;
+	/** #fresh-install-hint: does the CURRENT model's family hold a
+	 *  credential (stored key or env var)? Live probe at call time — no
+	 *  cache; after /login the next read is correct. The D7 test seam:
+	 *  while the live provider instance is an injected fake, usable is
+	 *  true WITHOUT probing (host credentials must not flip pinned test
+	 *  bytes); a runtime /model switch swaps in a real provider and
+	 *  probing applies again (design §3.1). */
+	modelUsable(): boolean;
+	/** #fresh-install-hint: families holding a credential right now
+	 *  (drives the D2 startup note's "configured family" wording). */
+	configuredFamilies(): ProviderName[];
 	/** The renderer all status output flows through (shared with the REPL). */
 	readonly renderer: Renderer;
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult>;
@@ -306,6 +319,10 @@ class RunnerImpl implements Runner {
 	private readonly options: RunnerOptions;
 	private readonly logger: RunLogger;
 	private provider: LLMProvider; // wrapped with logging once; /model may swap it (multi-provider)
+	/** #fresh-install-hint (D7): true while the live provider instance is
+	 *  the RunnerOptions.provider test fake — modelUsable() reports true
+	 *  without probing; cleared when a real provider replaces it. */
+	private providerIsTestFake: boolean;
 	providerName: ProviderName; // implements Runner's public readonly tell
 	/** The live tool table (M18: public — the MCP manager splices its bridged
 	 *  tools in at run boundaries; the array identity is stable for the loop's
@@ -363,6 +380,12 @@ class RunnerImpl implements Runner {
 		this.options = options;
 		this.logger = logger;
 		this.provider = provider;
+		// #fresh-install-hint (D7): an injected fake provider marks the whole
+		// runner availability-usuable — modelUsable() then never probes host
+		// credentials. Cleared by applyModel when /model swaps in a real
+		// provider (prepareModel builds real ones; same-family reuse keeps
+		// this.provider, which stays the fake — and that IS usable).
+		this.providerIsTestFake = options.provider !== undefined;
 		this.providerName = options.provider !== undefined ? parseModelRef(options.model).provider : providerName;
 		this.model = initialModel;
 		// Multi-provider review P1-3: the compaction window must follow the
@@ -549,8 +572,11 @@ class RunnerImpl implements Runner {
 					this.restoreThinkingFromSession(resumed); // --resume/-c restore the branch's level too
 					const stats = resumed.stats();
 					const est = estimateContextTokens(this.history, this.estimateFloor);
+					// #fresh-install-hint (D1, round-2 N3): the resumed note never
+					// renders a model whose family holds no credential as in use.
+					const modelSegment = this.modelUsable() ? this.modelReference() : "no model — /login";
 					options.renderer.note(
-						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${this.modelReference()} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
+						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${modelSegment} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
 					);
 				} else {
 					options.renderer.note("▪ no previous session, starting fresh");
@@ -559,7 +585,7 @@ class RunnerImpl implements Runner {
 			this.sessionStore ??= createSession(options.cwd, options.sessionBaseDir);
 			this.sessionStore.seedModel({ provider: this.providerName, modelId: this.model });
 		}
-		this.noteMissingZaiCredential(`${this.providerName}/${this.model}`, this.providerName);
+		this.noteModelCredential(`${this.providerName}/${this.model}`, this.providerName);
 		for (const warning of this.agents.warnings) {
 			options.renderer.error(`imp: ${warning}`);
 		}
@@ -905,14 +931,44 @@ class RunnerImpl implements Runner {
 	/** Credential teaching (#glm-retire): a glm model on the zai family with
 	 *  NO credential gets a one-line sign-in note — the bare-id compat
 	 *  fallback is retired. Explicit anthropic/glm-* (the generic compat
-	 *  passthrough) stays silent — a deliberate choice needing no key here. */
-	private noteMissingZaiCredential(reference: string, provider: ProviderName): void {
-		if (provider !== "zai") return;
-		if (reference.trim().toLowerCase().startsWith("anthropic/")) return;
-		if (!reference.trim().toLowerCase().split("/").pop()?.startsWith("glm-")) return;
-		if (zaiApiKey() !== null) return; // signed in (stored > env) — nothing to teach
+	 *  passthrough) stays silent — a deliberate choice needing no key here.
+	 *  #fresh-install-hint (D2/F5): subsumed by noteModelCredential's
+	 *  suppression rule — the zai-specific line WINS when it fires, the
+	 *  generic note stays silent (one ▪ line per teaching). */
+	private noteMissingZaiCredential(reference: string, provider: ProviderName): boolean {
+		if (provider !== "zai") return false;
+		if (reference.trim().toLowerCase().startsWith("anthropic/")) return false;
+		if (!reference.trim().toLowerCase().split("/").pop()?.startsWith("glm-")) return false;
+		if (zaiApiKey() !== null) return false; // signed in (stored > env) — nothing to teach
 		this.options.renderer.note(
 			`▪ ${reference.trim()} is a Z.ai model — sign in with /login zai (or export ZAI_API_KEY); anthropic/${reference.trim().split("/").pop()} forces the compat endpoint`,
+		);
+		return true;
+	}
+
+	/** #fresh-install-hint (D2): the general startup teaching note — the
+	 *  model's family holds no credential. Fresh installs hit this with the
+	 *  hardcoded default; a configured-elsewhere user gets the targeted
+	 *  variant instead. The zai-specific note (above) wins when it fires —
+	 *  exactly one ▪ line (round-1 F5 suppression). Order matters: the
+	 *  zai note keeps its OWN pre-D7 trigger (zaiApiKey() directly —
+	 *  #glm-retire fires for injected providers too, pinned by its tests);
+	 *  the D7 seam then governs only the NEW generic note. */
+	private noteModelCredential(reference: string, provider: ProviderName): void {
+		if (this.noteMissingZaiCredential(reference, provider)) return; // specific note won
+		if (this.providerIsTestFake) return; // D7 seam — pinned test bytes
+		if (modelAvailability(provider).usable) return; // family holds a credential
+		const availability = modelAvailability(provider);
+		if (availability.configuredFamilies.length > 0) {
+			// some family IS signed in, just not this model's — target it
+			this.options.renderer.note(
+				`▪ ${this.model} (${provider}) has no credential — run /login ${provider} (or /model to pick a configured one)`,
+			);
+			return;
+		}
+		const families = LOGIN_TARGETS.map((t) => t.family).join(", ");
+		this.options.renderer.note(
+			`▪ no model available — sign in with /login (${families}) or export <FAMILY>_API_KEY`,
 		);
 	}
 
@@ -928,9 +984,16 @@ class RunnerImpl implements Runner {
 	}
 
 	private applyModel(prepared: ReturnType<RunnerImpl["prepareModel"]>, level = this.level): void {
+		// #fresh-install-hint (D7): a REAL provider built by prepareModel ends
+		// the injected-fake exemption — probing applies from here on. Note
+		// prepareModel REUSES this.provider for same-family switches (fake
+		// stays fake); only cross-family switches build a new provider. The
+		// comparison must precede the assignment below (identity compare).
+		const providerChanged = prepared.provider !== this.provider;
 		this.model = prepared.ref.modelId;
 		this.providerName = prepared.ref.provider;
 		this.provider = prepared.provider;
+		if (providerChanged) this.providerIsTestFake = false;
 		this.settings = compactionSettingsFor(prepared.reference);
 		this.level = clampThinkingLevel(thinkingMetaFor(this.providerName, this.model), level);
 	}
@@ -961,6 +1024,20 @@ class RunnerImpl implements Runner {
 	 *  (review P2-5: "gpt-5.4" alone is ambiguous across families). */
 	modelReference(): string {
 		return this.providerName === "anthropic" ? this.model : `${this.providerName}/${this.model}`;
+	}
+
+	/** #fresh-install-hint (design §3.1/D7): live availability probe.
+	 *  Injected-fake providers (the RunnerOptions.provider test seam)
+	 *  report usable without touching host credentials; a REAL provider —
+	 *  resolved at construction or swapped in by a /model switch — probes
+	 *  familyConfigured (stored key or env var, per family). */
+	modelUsable(): boolean {
+		if (this.providerIsTestFake) return true;
+		return modelAvailability(this.providerName).usable;
+	}
+
+	configuredFamilies(): ProviderName[] {
+		return modelAvailability(this.providerName).configuredFamilies;
 	}
 
 	get contextWindow(): number {

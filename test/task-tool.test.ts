@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { type AgentDefinition, formatAgentsForPrompt, parseAgentFile } from "../src/core/agents/registry.js";
+import type { CurrentChildEnvironment } from "../src/core/child-launch.js";
 import { type AgentEvent, runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import {
@@ -2411,5 +2412,146 @@ describe("task record (SA-03)", () => {
 		expect(result.taskRecord?.turns).toBe(1);
 		expect(result.taskRecord?.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
 		expect(result.taskRecord?.attemptId).not.toBe("evil");
+	});
+});
+
+describe("child launch record (SA-06)", () => {
+	const SYSTEM = "PARENT SYSTEM\n- Date: 2026-09-28";
+	function launchHarness(args: {
+		session: SessionStore;
+		sessionBaseDir: string;
+		cwd: string;
+		withEnv?: boolean;
+	}) {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "child done" }])], sink);
+		const task = createTaskTool({
+			getProvider: () => provider,
+			getModel: () => "parent-wire",
+			getSystem: () => SYSTEM,
+			getTools: () => [],
+			getSession: () => args.session,
+			childSessions: true,
+			sessionBaseDir: args.sessionBaseDir,
+			agents: [],
+			cwd: args.cwd,
+			...(args.withEnv === false
+				? {}
+				: {
+						getLaunchEnvironment: () => ({
+							impVersion: "9.9.9",
+							systemText: SYSTEM,
+							contextFiles: [{ path: "/p/AGENTS.md", content: "ctx" }],
+							promptFiles: [] as { kind: "override" | "append"; path: string; text: string }[],
+							extensionContexts: [] as { id: string; text: string }[],
+							extensions: [] as {
+								name: string;
+								origin: "cli" | "project" | "global";
+								path: string;
+								sha256: string;
+							}[],
+						}),
+					}),
+		});
+		return { task, sink };
+	}
+
+	function currentFor(launch: { cwd: string }): CurrentChildEnvironment {
+		return {
+			impVersion: "9.9.9",
+			systemText: SYSTEM,
+			cwd: launch.cwd,
+			agentResolver: () => undefined,
+			contextFiles: [{ path: "/p/AGENTS.md", content: "ctx" }],
+			promptFiles: [],
+			extensionContexts: [],
+			extensions: [],
+			childTools: [],
+			binding: { providerName: "anthropic", wireModelId: "parent-wire", reference: "anthropic/parent-wire" },
+		};
+	}
+
+	it("persists the launch block in the child header and resolves it after a parent restart", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-e2e-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-e2e-cwd-"));
+		const parent = createSession(cwd, base);
+		const { task } = launchHarness({ session: parent, sessionBaseDir: base, cwd });
+		const result = await task.execute({ prompt: "go" }, new AbortController().signal, {
+			toolCallId: "call-1",
+		});
+		expect(result.isError).toBe(false);
+		const rec = result.taskRecord;
+		if (rec === undefined || rec.transcript === undefined || rec.transcript.present === false) {
+			throw new Error("no transcript");
+		}
+		// RED today: the child header carries no launch block.
+		const child = SessionStore.open(rec.transcript.path);
+		const header = child.header as unknown as Record<string, unknown>;
+		expect(header.launch).toBeDefined();
+		const launch = header.launch as Record<string, unknown>;
+		expect(launch.version).toBe(1);
+		expect(launch.parentSessionId).toBe(parent.header.id);
+		expect(launch.childId).toBe(rec.childId);
+		expect(launch.impVersion).toBe("9.9.9");
+		expect((launch.model as { reference: string }).reference).toBe("anthropic/parent-wire");
+		expect(launch.cwd).toBe(cwd);
+		expect((launch.system as { contextFiles: unknown[] }).contextFiles).toHaveLength(1);
+
+		const { findChildByLaunch, validateChildContinuation } = await import("../src/core/child-launch.js");
+		// Persist the result like the loop does, then restart the parent.
+		parent.appendMessage({
+			role: "toolResult",
+			results: [
+				{ toolCallId: "call-1", toolName: "task", content: result.output, isError: false, taskRecord: rec },
+			],
+		});
+		const reopened = SessionStore.open(parent.filePath);
+		const found = findChildByLaunch(reopened, rec.childId as string);
+		expect(found.ok).toBe(true);
+		if (!found.ok) throw new Error(`${found.code}: ${found.message}`);
+		const verdict = await validateChildContinuation(found.file, reopened, currentFor({ cwd }));
+		expect(verdict.reasons).toEqual([]);
+		expect(verdict.resumable).toBe(true);
+	});
+
+	it("a first-write failure leaves nothing resumable behind (no advertised child)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-ro-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-ro-cwd-"));
+		const parent = createSession(cwd, base);
+		const childrenDir = path.join(sessionsDirFor(cwd, base), "children");
+		mkdirSync(childrenDir, { recursive: true });
+		chmodSync(childrenDir, 0o555);
+		try {
+			const { findChildByLaunch } = await import("../src/core/child-launch.js");
+			const { task, sink } = launchHarness({ session: parent, sessionBaseDir: base, cwd });
+			const result = await task.execute({ prompt: "go" }, new AbortController().signal);
+			expect(result.taskRecord?.transcript).toEqual({ present: false, why: "write-failed" });
+			expect(sink).toHaveLength(0);
+			const childId = result.taskRecord?.childId;
+			if (childId === undefined) throw new Error("no childId");
+			// No file was ever written, so the managed lookup must not produce
+			// a resumable child out of the failed attempt.
+			const found = findChildByLaunch(parent, childId);
+			expect(found.ok).toBe(false);
+			if (!found.ok) expect(found.code).toBe("not-found");
+		} finally {
+			chmodSync(childrenDir, 0o755);
+		}
+	});
+
+	it("a host without the environment getter writes no launch block (conservative non-resumable)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-noenv-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-noenv-cwd-"));
+		const parent = createSession(cwd, base);
+		const { findChildByLaunch } = await import("../src/core/child-launch.js");
+		const { task } = launchHarness({ session: parent, sessionBaseDir: base, cwd, withEnv: false });
+		const result = await task.execute({ prompt: "go" }, new AbortController().signal);
+		const rec = result.taskRecord;
+		if (rec?.transcript === undefined || rec.transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(rec.transcript.path);
+		expect((child.header as unknown as Record<string, unknown>).launch).toBeUndefined();
+		const found = findChildByLaunch(parent, rec.childId as string);
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("missing-launch");
 	});
 });

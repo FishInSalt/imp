@@ -120,20 +120,31 @@ function saved(model?: SessionModel, text = "saved history") {
 
 describe("runner per-session model restoration", () => {
 	it.each(["resume", "continue"])("startup %s restores model before making any request", async (mode) => {
-		const store = saved(other);
-		const before = snapshot(store);
-		const live = await runner(mode === "resume" ? { resume: store.header.id } : { continueRecent: true });
-		expect(live.session?.header.id).toBe(store.header.id);
-		expect(live.modelReference()).toBe(qualified(other));
-		expect(live.providerName).toBe(other.provider);
-		expect(live.history).toEqual(store.buildContext().messages);
-		expect(live.output()).toContain(qualified(other));
-		expect(snapshot(store)).toEqual(before);
-		expect(calls).toEqual([]);
-		await live.runTurn({ userMessage: "next" });
-		expect(calls.map(({ family, request }) => [family, request.model])).toEqual([
-			[other.provider, other.modelId],
-		]);
+		// #fresh-install-hint: the resumed-model rendering assertion below
+		// pins the USABLE path — give the saved family a credential (env var,
+		// scrubbed around the test) so the banner is not the new
+		// "no model — /login" segment (that path has its own suite).
+		const prevKey = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		try {
+			const store = saved(other);
+			const before = snapshot(store);
+			const live = await runner(mode === "resume" ? { resume: store.header.id } : { continueRecent: true });
+			expect(live.session?.header.id).toBe(store.header.id);
+			expect(live.modelReference()).toBe(qualified(other));
+			expect(live.providerName).toBe(other.provider);
+			expect(live.history).toEqual(store.buildContext().messages);
+			expect(live.output()).toContain(qualified(other));
+			expect(snapshot(store)).toEqual(before);
+			expect(calls).toEqual([]);
+			await live.runTurn({ userMessage: "next" });
+			expect(calls.map(({ family, request }) => [family, request.model])).toEqual([
+				[other.provider, other.modelId],
+			]);
+		} finally {
+			if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevKey;
+		}
 	});
 
 	it("slash resume restores independent selections and history without writing either file", async () => {
@@ -226,37 +237,61 @@ describe("runner per-session model restoration", () => {
 	});
 
 	it("legacy files use the original startup model, not the previous live session model", async () => {
-		const legacy = saved();
-		const modern = saved(other);
-		const before = snapshot(legacy);
-		const live = await runner({ resume: modern.header.id });
-		live.setModel(qualified(zai));
-		live.resumeSession(legacy.header.id);
-		expect(live.providerName).toBe(initial.provider);
-		expect(live.model).toBe(initial.modelId);
-		expect(snapshot(legacy)).toEqual(before);
-		expect(reopen(legacy).getModel()).toBeUndefined();
-		await live.runTurn({ userMessage: "capture legacy seed" });
-		expect(reopen(legacy).getModel()).toEqual(initial);
+		// #fresh-install-hint: pins the persistence contract (seed on first
+		// message), not credential UX — both touched families get env keys so
+		// the D4 gates stay open (the unusable variants live in
+		// fresh-install-hint.test.ts).
+		const prevOpen = process.env.OPENAI_API_KEY;
+		const prevZai = process.env.ZAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		process.env.ZAI_API_KEY = "test-key-zai";
+		try {
+			const legacy = saved();
+			const modern = saved(other);
+			const before = snapshot(legacy);
+			const live = await runner({ resume: modern.header.id });
+			live.setModel(qualified(zai));
+			live.resumeSession(legacy.header.id);
+			expect(live.providerName).toBe(initial.provider);
+			expect(live.model).toBe(initial.modelId);
+			expect(snapshot(legacy)).toEqual(before);
+			expect(reopen(legacy).getModel()).toBeUndefined();
+			await live.runTurn({ userMessage: "capture legacy seed" });
+			expect(reopen(legacy).getModel()).toEqual(initial);
+		} finally {
+			if (prevOpen === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevOpen;
+			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
+			else process.env.ZAI_API_KEY = prevZai;
+		}
 	});
 
 	it("/new preserves the live model while remaining lazy until a message", async () => {
-		const live = await runner();
-		live.setModel(qualified(other));
-		const previous = live.session!;
-		const before = snapshot(previous);
-		live.newSession();
-		const fresh = live.session!;
-		expect(fresh.header.id).not.toBe(previous.header.id);
-		expect(live.modelReference()).toBe(qualified(other));
-		expect(live.history).toEqual([]);
-		expect(fs.existsSync(fresh.filePath)).toBe(false);
-		live.setModel(qualified(other));
-		expect(fs.existsSync(fresh.filePath)).toBe(false);
-		expect(live.listSessions().map((item) => item.id)).toEqual([previous.header.id]);
-		await live.runTurn({ userMessage: "new conversation" });
-		expect(reopen(fresh).getModel()).toEqual(other);
-		expect(snapshot(previous)).toEqual(before);
+		// #fresh-install-hint: pins laziness, not credential UX — env key so
+		// the D4 gate stays open.
+		const prevOpen = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-openai";
+		try {
+			const live = await runner();
+			live.setModel(qualified(other));
+			const previous = live.session!;
+			const before = snapshot(previous);
+			live.newSession();
+			const fresh = live.session!;
+			expect(fresh.header.id).not.toBe(previous.header.id);
+			expect(live.modelReference()).toBe(qualified(other));
+			expect(live.history).toEqual([]);
+			expect(fs.existsSync(fresh.filePath)).toBe(false);
+			live.setModel(qualified(other));
+			expect(fs.existsSync(fresh.filePath)).toBe(false);
+			expect(live.listSessions().map((item) => item.id)).toEqual([previous.header.id]);
+			await live.runTurn({ userMessage: "new conversation" });
+			expect(reopen(fresh).getModel()).toEqual(other);
+			expect(snapshot(previous)).toEqual(before);
+		} finally {
+			if (prevOpen === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = prevOpen;
+		}
 	});
 
 	it("preserves anthropic/glm-5.3 versus zai/glm-5.3 across cross-provider restores", async () => {

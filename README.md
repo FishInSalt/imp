@@ -48,6 +48,11 @@ Then sign in with an API key (or `/login` inside a session):
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+No credentials yet? imp says so instead of pretending a default model
+is in use: fresh sessions show `no model available — run /login to
+connect one`, print mode fails fast with the family's env-var hint, and
+no unusable model is ever written into a session file.
+
 Working from a source checkout instead:
 
 ```bash

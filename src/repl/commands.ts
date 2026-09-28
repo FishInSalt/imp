@@ -22,16 +22,11 @@ import type { RegisteredExtensionCommand } from "../extensions/types.js";
 import { formatTokens } from "../format.js";
 import { mcpConfigPaths } from "../mcp/config.js";
 import type { McpManager } from "../mcp/manager.js";
-import {
-	type ApiKeyFamily,
-	clearApiKey,
-	loadApiKey,
-	saveApiKey,
-	storedApiKeyFamilies,
-} from "../provider/auth-store.js";
+import { clearApiKey, loadApiKey, saveApiKey, storedApiKeyFamilies } from "../provider/auth-store.js";
 import { catalogModelIds, refreshCatalog } from "../provider/catalog.js";
 import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
+import { LOGIN_TARGETS, type LoginTarget, loginTargetFor } from "../provider/login-targets.js";
 import {
 	supportedThinkingLevels,
 	THINKING_LEVELS,
@@ -804,66 +799,14 @@ function sessionRowDescription(modified: Date, messageCount: number, title: stri
 	return `${formatWhen(modified)} · ${messageCount} msgs · ${preview}`;
 }
 
-/** One /login row — pi's auth metadata table, scoped to imp's families.
- *  Every api-key family shows its status (pi's OAuthSelector rows show
- *  status.type + source the same way); codex is OAuth-only, bridged to the
- *  CLI flow until the in-REPL dialog lands. */
-interface LoginTarget {
-	family: ApiKeyFamily | "openai-codex";
-	/** pi's provider display name. */
-	name: string;
-	/** The env-var alternative (the description's source label). */
-	envVar: string;
-	method: "api_key" | "oauth";
-	/** Post-login /model hint when the current family differs. */
-	switchHint: string;
-}
-
-const LOGIN_TARGETS: readonly LoginTarget[] = [
-	{ family: "zai", name: "Z.AI", envVar: "ZAI_API_KEY", method: "api_key", switchHint: "zai/glm-5.3" },
-	{
-		family: "anthropic",
-		name: "Anthropic",
-		envVar: "ANTHROPIC_API_KEY",
-		method: "api_key",
-		switchHint: "claude-sonnet-4-5",
-	},
-	{
-		family: "openai",
-		name: "OpenAI",
-		envVar: "OPENAI_API_KEY",
-		method: "api_key",
-		switchHint: "openai/gpt-5.2",
-	},
-	{
-		family: "openai-codex",
-		name: "OpenAI (ChatGPT plan)",
-		envVar: "none — OAuth",
-		method: "oauth",
-		switchHint: "openai-codex/gpt-5.5",
-	},
-	{
-		family: "deepseek",
-		name: "DeepSeek",
-		envVar: "DEEPSEEK_API_KEY",
-		method: "api_key",
-		switchHint: "deepseek/deepseek-v4-pro",
-	},
-	{
-		family: "moonshotai",
-		name: "Moonshot AI",
-		envVar: "MOONSHOT_API_KEY",
-		method: "api_key",
-		switchHint: "moonshotai/kimi-k3",
-	},
-	{
-		family: "moonshotai-cn",
-		name: "Moonshot AI CN",
-		envVar: "MOONSHOT_API_KEY",
-		method: "api_key",
-		switchHint: "moonshotai-cn/kimi-k3",
-	},
-];
+// #fresh-install-hint: LoginTarget/LOGIN_TARGETS/loginTargetFor moved
+// to provider/login-targets.ts — the runner layer (startup teaching note)
+// and print pre-flight need the family→env-var table without depending on
+// the REPL. Import at the top of the file; /login's row rendering and the
+// display-name lookup are unchanged (single source of truth). The
+// re-export below keeps `loginTargetFor` importable from this module
+// (tests and external callers historically import it from here).
+export { loginTargetFor };
 
 /** A row's status line (pi: configured rows carry type + source). */
 function loginStatus(target: LoginTarget, authPath?: string): string {
@@ -873,14 +816,6 @@ function loginStatus(target: LoginTarget, authPath?: string): string {
 	if (loadApiKey(target.family, authPath) !== null) return "signed in — stored key";
 	if (process.env[target.envVar] !== undefined) return `env: ${target.envVar}`;
 	return "not signed in";
-}
-
-/** Resolve "/login <ref>" to its target — case-insensitive against family
- *  id AND display name (pi's findLoginProviderOptions). */
-export function loginTargetFor(ref: string): LoginTarget | undefined {
-	const needle = ref.trim().toLowerCase();
-	if (needle === "") return undefined;
-	return LOGIN_TARGETS.find((t) => t.family === needle || t.name.toLowerCase() === needle);
 }
 
 /** Whether a /login line needs the machine's guarded long-op state (the
@@ -934,6 +869,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 				},
 			});
 			ctx.renderer.status(`Logged in to ${target.name}`); // pi's wording
+			ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 			const current = ctx.runner.modelReference();
 			const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
 			if (currentFamily !== target.family) {
@@ -961,6 +897,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	if (key === null || key.trim() === "") return; // cancelled/blank — silent, like pi's "Login cancelled"
 	saveApiKey(target.family, key, ctx.authStorePath);
 	ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
+	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 	// pi switches the model only when none was selected; imp always has one,
 	// so the pointer takes pi's place when the login changed the available
 	// family.
@@ -1017,6 +954,7 @@ async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise
 	} else {
 		ctx.renderer.status(`Saved API key for ${target.name}`); // pi's wording
 	}
+	ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): the credential change flips the footer's model segment
 	const current = ctx.runner.modelReference();
 	const currentFamily = current.includes("/") ? current.slice(0, current.indexOf("/")) : "anthropic";
 	if (currentFamily !== target.family) {
@@ -1564,6 +1502,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					description: "stored token",
 					act: () => {
 						logoutCodex(ctx.authStorePath);
+						ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): a lost credential may flip the footer back to the /login pointer
 						return `Logged out of ${codexTarget?.name ?? "OpenAI (ChatGPT plan)"}`; // pi's wording
 					},
 				});
@@ -1575,6 +1514,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					description: "stored key",
 					act: () => {
 						clearApiKey(family, ctx.authStorePath);
+						ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): a lost credential may flip the footer back to the /login pointer
 						// pi's wording, adapted (imp has no models.json)
 						return `Removed stored API key for ${target?.name ?? family}. Environment variables are unchanged.`;
 					},

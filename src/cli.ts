@@ -25,6 +25,9 @@ import { discoverMcpConfig } from "./mcp/config.js";
 import { McpManager } from "./mcp/manager.js";
 import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
+import { LOGIN_TARGETS } from "./provider/login-targets.js";
+import { modelAvailability } from "./provider/model-availability.js";
+import { parseModelRef } from "./provider/resolve.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
 import { COMMANDS } from "./repl/commands.js";
@@ -703,6 +706,33 @@ function loadSkillSetup(
 	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
 }
 
+/** #fresh-install-hint (D3): print-mode pre-flight. Returns undefined
+ *  when the resolved model's family holds a credential; otherwise the
+ *  error text. Reuses LOGIN_TARGETS for the family→env-var mapping (no
+ *  hand table). The D7 seam does not apply here: the CLI entry never
+ *  injects a provider (tests exercise this via env scrubbing).
+ *  -c/-r SKIP the pre-flight entirely (implementation review F1): the
+ *  saved session model outranks opts.model there, and resolving it here
+ *  would duplicate restoreModelFromSession — the provider's own key
+ *  error teaches, exactly like 0.1.0. */
+function printModelUnusable(opts: CliOptions): string | undefined {
+	if (opts.resume !== undefined || opts.continueRecent) return undefined;
+	const ref = parseModelRef(opts.model);
+	if (modelAvailability(ref.provider).usable) return undefined;
+	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);
+	if (ref.provider === "openai-codex") {
+		return (
+			`${opts.model} (openai-codex) has no credential — run \`imp login\` (ChatGPT plan OAuth), ` +
+			`then re-run with -m ${opts.model}`
+		);
+	}
+	if (target === undefined) return undefined; // unknown family — the provider's own error teaches
+	return (
+		`${opts.model} (${ref.provider}) has no credential — export ${target.envVar} (see \`imp --help\`), ` +
+		`or start an interactive session and run /login`
+	);
+}
+
 function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): RunnerOptions {
 	return {
 		cwd: process.cwd(),
@@ -840,6 +870,36 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		liveTools: false,
 		toolStyle: "two-line",
 	});
+	// #fresh-install-hint (D3, round-1 F1/N8): the pre-flight runs BEFORE any
+	// runner construction — createRunner creates the run logger AND the
+	// session store — but AFTER @file argument validation (a missing file is
+	// the user's more immediate error and owns the exit). Print mode has no
+	// /login, so the error teaches the env var + the interactive path. (The
+	// trust store MAY be written earlier by --trust/--no-trust — the
+	// recorded exception, design D3 side-effect scope.)
+	let attachImages: ImageBlock[] | undefined;
+	if (opts.fileArgs.length > 0) {
+		const processed = await processFileArguments(opts.fileArgs);
+		if (processed.text !== "") {
+			opts.prompt =
+				opts.prompt === undefined || opts.prompt === ""
+					? processed.text.trimEnd()
+					: `${processed.text}${opts.prompt}`;
+		}
+		attachImages = processed.images.length > 0 ? processed.images : undefined;
+		// All files empty and no typed prompt: nothing to send — a provider
+		// request with an empty message list is a guaranteed 400 (review
+		// cosmetic).
+		if ((opts.prompt === "" || opts.prompt === undefined) && attachImages === undefined) {
+			opts.prompt = undefined;
+		}
+	}
+	const unavailable = printModelUnusable(opts);
+	if (unavailable !== undefined) {
+		process.stderr.write(red(`imp: ${unavailable}\n`));
+		process.exitCode = 1;
+		return;
+	}
 	let runner: Runner;
 	try {
 		const projectTrusted = await resolveProjectTrust(opts, renderer, false);
@@ -877,24 +937,6 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		}
 	};
 	process.on("SIGINT", onSigint);
-
-	let attachImages: ImageBlock[] | undefined;
-	if (opts.fileArgs.length > 0) {
-		const processed = await processFileArguments(opts.fileArgs);
-		if (processed.text !== "") {
-			opts.prompt =
-				opts.prompt === undefined || opts.prompt === ""
-					? processed.text.trimEnd()
-					: `${processed.text}${opts.prompt}`;
-		}
-		attachImages = processed.images.length > 0 ? processed.images : undefined;
-		// All files empty and no typed prompt: nothing to send — a provider
-		// request with an empty message list is a guaranteed 400 (review
-		// cosmetic).
-		if ((opts.prompt === "" || opts.prompt === undefined) && attachImages === undefined) {
-			opts.prompt = undefined;
-		}
-	}
 
 	try {
 		// M18: print mode gets MCP too — one fire-and-forget connectAll before

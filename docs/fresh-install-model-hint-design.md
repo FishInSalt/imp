@@ -1,10 +1,12 @@
 # Fresh-install model availability UX (#fresh-install-hint)
 
-Status: rev3 — round-2 findings N1–N8 folded in; awaiting re-review
+Status: rev3 APPROVED (round 3, 2026-09-28) — implementation may start
 Branch: `fix/fresh-install-model-hint` (worktree, base main `8115822`)
 Date: 2026-09-28
 Review round 1: FIX-FIRST (F1–F8, folded in rev2; all verified correct in round 2)
 Review round 2: FIX-FIRST (N1–N8; fold-ins clean, new-in-rev2 issues)
+Review round 3: APPROVE (fold-ins verified; one P3 line nit — legacy codex
+OAuth success tail is commands.ts:936, not :941 — fix in passing at M2)
 
 ## 1. Problem
 
@@ -250,10 +252,10 @@ enumerated per round-2 N6):**
 With the live probe (3.1) a footer repaint picks up any credential
 change; today only `/think` repaints (`commands.ts:1622,1635`). Add
 `ctx.refreshFooter?.()` on ALL FIVE success paths: legacy api-key login
-(`commands.ts:962`), legacy codex OAuth (`:941`), dialog api-key
-(`:1001`), dialog OAuth tail, and `/logout`'s two `act()` closures
-(`:1566`, `:1577` — these run inside the picker callback, so the call
-sits inside each closure, not the command body).
+(`commands.ts:962`), legacy codex OAuth success tail (`:936`), dialog
+api-key (`:1001`), dialog OAuth tail, and `/logout`'s two `act()`
+closures (`:1566`, `:1577` — these run inside the picker callback, so
+the call sits inside each closure, not the command body).
 
 ### 3.3 Which surfaces change
 

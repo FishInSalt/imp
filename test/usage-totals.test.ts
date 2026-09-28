@@ -213,6 +213,16 @@ describe("SA-05 usage totals", () => {
 		expect(view.incomplete).toEqual({ parent: false, child: true, summarizer: false });
 	});
 
+	it("SA-08/F5: a record-carried incomplete flag marks the child bucket without losing its totals", () => {
+		const entries: SessionEntry[] = [
+			taskResultEntry("t1", null, taskRecord({ inputTokens: 9, outputTokens: 4, incomplete: true })),
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.child.inputTokens).toBe(9);
+		expect(view.child.outputTokens).toBe(4);
+		expect(view.incomplete.child).toBe(true);
+	});
+
 	it("taxonomy: absent usage on a launched record is unknown; unlaunched records are silent", () => {
 		const entries: SessionEntry[] = [
 			taskResultEntry("t1", null, taskRecord(undefined)), // launched, no usage report

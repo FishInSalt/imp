@@ -6,7 +6,7 @@
  * a mutual-exclusion violation.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,11 +26,28 @@ function runWorker(dir: string, tag: string): Promise<number> {
 	});
 }
 
+async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Promise<void> {
+	const started = Date.now();
+	while (Date.now() - started < timeoutMs) {
+		if (existsSync(path.join(dir, name))) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`marker ${name} never appeared`);
+}
+
 describe("child lease — real two-process mutual exclusion", () => {
 	it("F4/T30: two live processes never hold one child lease concurrently", async () => {
 		const dir = await mkdtemp(path.join(tmpdir(), "imp-lease-mp-"));
 		mkdirSync(dir, { recursive: true });
-		const [codeA, codeB] = await Promise.all([runWorker(dir, "A"), runWorker(dir, "B")]);
+		const a = runWorker(dir, "A");
+		const b = runWorker(dir, "B");
+		// Guaranteed contention: both workers are live and waiting before the
+		// hammering starts (otherwise temporal separation could pass the S/E
+		// analysis without ever overlapping — review F2).
+		await waitForMarker(dir, "A-ready");
+		await waitForMarker(dir, "B-ready");
+		writeFileSync(path.join(dir, "go"), "");
+		const [codeA, codeB] = await Promise.all([a, b]);
 		expect(codeA).toBe(0);
 		expect(codeB).toBe(0);
 		const raw = readFileSync(path.join(dir, "log"), "utf8").trim();

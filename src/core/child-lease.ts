@@ -1,45 +1,43 @@
 /**
- * SA-07 single-writer lease (design §7, docs/sa-07-child-resume-design.md).
+ * SA-07 single-writer lease — INTENT + VERIFY protocol (design §7,
+ * docs/sa-07-child-resume-design.md; revised after owner round 3).
  *
- * One active execution per child, enforced in-process (a synchronous Map)
- * and across processes on one machine (a `<child>.jsonl.lease` file beside
- * the session file). A lease is JSON: { pid, host, machineId, nonce,
- * attemptId, startedAt }.
+ * There is no shared mutable lease path. The artifact is a DIRECTORY
+ * `<child>.jsonl.lease/` holding one candidate file per acquisition:
+ * `lease-<pid>-<nonce8>-<attemptId>`, content { pid, host, machineId,
+ * nonce, attemptId, startedAt }.
  *
- * Acceptance round 2 revisions (owner findings 4-6):
- *  - ONE read decides stealability AND is the byte generation the steal must
- *    move: a separate eligibility read and content read could disagree under
- *    a concurrent writer, letting a live lease be stolen.
- *  - Steal targets are UNIQUE per attempt (`.steal-<attemptId>`), so two
- *    stealers can never clobber each other's artifact.
- *  - Restore after a mismatch uses link() (fails EEXIST) instead of
- *    renameSync (which REPLACES on POSIX) — a third holder is never
- *    overwritten.
- *  - `nonce` is a per-process instance id: a same-pid lease with a DIFFERENT
- *    nonce (another process instance, possibly a sibling pid namespace
- *    sharing the sessions directory) is REFUSED, never reclaimed. Only this
- *    exact process's own failed-release leftover (same pid AND same nonce)
- *    is reclaimed immediately.
- *  - The machine id is published atomically (tmp + rename); an empty file
- *    left by a crash between create and write is repaired instead of
- *    blocking the directory forever.
+ * Acquire = create OWN candidate, then SCAN the directory; the caller holds
+ * only when no other ACTIVE or UNCERTAIN candidate is visible. Nothing ever
+ * moves, replaces or unlinks a live claim — the vacuum class of race that
+ * let a third process acquire during a stale-lease reclaim (owner round 3,
+ * P1) cannot exist. Mutual exclusion is proven in design §7.3 without any
+ * heartbeat assumption; the heartbeat is defense in depth.
  *
- * Stale recovery: a lease is stealable only when the recorded pid is not
- * alive in THIS pid namespace AND its mtime is older than the grace window
- * (default 60s, three missed heartbeats). The mtime requirement keeps a live
- * holder in a sibling pid namespace safe: it heartbeats every 20s.
+ * PINNED INVARIANT (§7.2, design review A1): the own candidate is never
+ * unlinked between its creation and the completion of the scan-and-decide;
+ * the only pre-hold unlink is the refusal cleanup, after the decision is
+ * final.
  *
- * The holder heartbeats (touch + re-verify). If its lease turns foreign or
- * vanishes, the holder reports an anomaly — the caller aborts the attempt.
+ * Machine id (design §7.4): published ONCE via a no-clobber link (absent
+ * file); an existing valid id is adopted and never rewritten; an EMPTY file
+ * (legacy interrupted initialization) refuses with actionable guidance and
+ * is never touched — concurrent non-clobbering recovery is impossible
+ * without CAS.
+ *
+ * Staleness: a candidate is retired only when its owner is dead in THIS pid
+ * namespace AND its mtime is older than the grace window (default 60s, three
+ * missed heartbeats) — the mtime rule protects live holders in sibling pid
+ * namespaces. Retiring removes only that dead+aged candidate file.
  */
 import { randomUUID } from "node:crypto";
 import {
 	linkSync,
+	mkdirSync,
+	readdirSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	statSync,
-	truncateSync,
 	unlinkSync,
 	utimesSync,
 	writeFileSync,
@@ -48,20 +46,22 @@ import { hostname } from "node:os";
 import path from "node:path";
 
 export interface ChildLeaseHandle {
+	/** The lease DIRECTORY (candidate files live inside). */
 	readonly path: string;
 	readonly attemptId: string;
-	/** Release the lease (finally). Safe to call twice; only unlinks a lease
-	 *  that still parses and belongs to this attempt. */
+	/** Release the lease (finally). Safe to call twice; unlinks OWN
+	 *  candidate only. */
 	release(): void;
-	/** Start the mtime heartbeat; `onAnomaly` fires when the lease no longer
-	 *  belongs to this attempt (missing or foreign) — the caller must abort
-	 *  the attempt. Idempotent. */
+	/** Start the mtime heartbeat; `onAnomaly` fires when the own candidate no
+	 *  longer exists or no longer parses as ours — the caller must abort the
+	 *  attempt. Defense in depth, never a correctness dependency.
+	 *  Idempotent. */
 	startHeartbeat(onAnomaly: () => void): void;
 }
 
 export type ChildLeaseResult =
 	| { ok: true; lease: ChildLeaseHandle }
-	| { ok: false; code: "busy" | "stale-contended" | "owned-elsewhere" | "io-error"; message: string };
+	| { ok: false; code: "busy" | "owned-elsewhere" | "io-error"; message: string };
 
 export interface ChildLeaseOptions {
 	/** Test seams; production defaults are process.pid / os.hostname() /
@@ -70,17 +70,24 @@ export interface ChildLeaseOptions {
 	pid?: number;
 	host?: string;
 	machineId?: string;
-	/** Per-process instance nonce (acceptance round 2, F5): distinguishes
-	 *  THIS process from other processes that happen to share its numeric
-	 *  pid across pid namespaces. Defaults to a module-load UUID. */
+	/** Per-process instance nonce: distinguishes THIS process from other
+	 *  processes sharing its numeric pid across pid namespaces. */
 	nonce?: string;
 	isAlive?: (pid: number) => boolean;
 	now?: () => number;
-	/** Test seam: invoked after the pre-steal read and before the rename, so
-	 *  a test can inject the "lease changed while being reclaimed" race. */
-	onBeforeStealRename?: () => void;
+	/** Test seam: fires after the own candidate is created and before the
+	 *  verify scan (deterministic interleaving scripts). */
+	onAfterCreate?: () => void;
+	/** Test seam: fires immediately before the verify scan. */
+	onBeforeScan?: () => void;
+	/** Test seam: fires immediately before an ABSENT machine-id link
+	 *  publish. */
+	onBeforeMachineIdPublish?: () => void;
 	staleGraceMs?: number;
 	heartbeatMs?: number;
+	/** Retry rounds when both contenders refuse each other (default 3;
+	 *  deterministic tests set 1). */
+	maxAttempts?: number;
 }
 
 interface LeasePayload {
@@ -94,14 +101,15 @@ interface LeasePayload {
 
 const DEFAULT_STALE_GRACE_MS = 60_000;
 const DEFAULT_HEARTBEAT_MS = 20_000;
-const MAX_STEAL_ROUNDS = 3;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const MACHINE_ID_ROUNDS = 5;
 
-/** This process's instance identity — written into every lease it holds. */
+/** This process's instance identity — part of every candidate name/payload. */
 const PROCESS_NONCE = randomUUID();
 
 /** In-process registry: child file path → holding attempt. Checked and set
  *  SYNCHRONOUSLY (no await between), so same-process concurrency cannot slip
- *  through even if the lease file is mangled. */
+ *  through. */
 const inProcess = new Map<string, string>();
 
 function isPayload(value: unknown): value is LeasePayload {
@@ -117,8 +125,7 @@ function isPayload(value: unknown): value is LeasePayload {
 	);
 }
 
-function parsePayload(bytes: Buffer | undefined): LeasePayload | undefined {
-	if (bytes === undefined) return undefined;
+function parsePayload(bytes: Buffer): LeasePayload | undefined {
 	try {
 		const parsed: unknown = JSON.parse(bytes.toString("utf8"));
 		return isPayload(parsed) ? parsed : undefined;
@@ -141,58 +148,161 @@ function errnoCode(err: unknown): string | undefined {
 	return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
 }
 
-/** Read-or-create the per-directory machine id, published ATOMICALLY (tmp +
- *  rename) so no process can ever observe a half-initialized file; an empty
- *  file (a crash between create and write in an older build) is repaired
- *  instead of blocking every child in the directory. */
-function resolveMachineId(dir: string): string {
-	const file = path.join(dir, ".imp-machine-id");
-	let existing: string | undefined;
+/** Small synchronous sleep for jittered retries (Atomics.wait works on
+ *  Node's main thread; busy-wait only as an impossible fallback). */
+function sleepSync(ms: number): void {
+	if (ms <= 0) return;
 	try {
-		existing = readFileSync(file, "utf8").trim();
-	} catch (err) {
-		if (errnoCode(err) !== "ENOENT") throw err;
-	}
-	if (existing !== undefined && existing !== "") return existing;
-	const fresh = randomUUID();
-	const tmp = `${file}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`;
-	writeFileSync(tmp, `${fresh}\n`, { encoding: "utf8" });
-	try {
-		renameSync(tmp, file);
-	} catch (err) {
-		try {
-			rmSync(tmp, { force: true });
-		} catch {
-			// leave the temporary artifact; it is never read as the machine id
-		}
-		throw err;
-	}
-	// Converge on whichever atomic publish landed last (a concurrent creator
-	// may have replaced ours — either value is a valid id for this machine).
-	try {
-		const settled = readFileSync(file, "utf8").trim();
-		if (settled !== "") return settled;
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 	} catch {
-		// fall through to our own value
+		const end = Date.now() + ms;
+		while (Date.now() < end) {
+			// fallback busy wait (bounded by the caller's retry budget)
+		}
 	}
-	return fresh;
 }
 
 /**
- * Acquire the single-writer lease for a child session file. Refusals:
- *  - busy: another attempt holds it (in-process, a live pid, a dead-looking
- *    pid whose lease is still fresh, or a SAME-PID lease this process cannot
- *    identify as its own leftover);
- *  - owned-elsewhere: another host or machine id (unsupported);
- *  - stale-contended: the stale-reclaim race repeated;
- *  - io-error: the lease could not be created or verified.
+ * Read-or-publish the machine id (design §7.4). Publish-once: a VALID id is
+ * adopted and never rewritten; an ABSENT id is published via a no-clobber
+ * link (one winner; losers adopt); an EMPTY file refuses with actionable
+ * guidance and is never touched.
+ */
+function resolveMachineId(dir: string, onBeforeMachineIdPublish?: () => void): string {
+	const file = path.join(dir, ".imp-machine-id");
+	for (let round = 0; round < MACHINE_ID_ROUNDS; round++) {
+		let content: string | undefined;
+		let exists = true;
+		try {
+			content = readFileSync(file, "utf8").trim();
+		} catch (err) {
+			if (errnoCode(err) === "ENOENT") exists = false;
+			else throw err;
+		}
+		if (exists && content !== undefined && content !== "") return content;
+		if (exists && content === "") {
+			throw new Error(
+				`the machine id file is empty (interrupted initialization under an earlier build); delete ${file} to reinitialize`,
+			);
+		}
+		const fresh = randomUUID();
+		const tmp = `${file}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`;
+		writeFileSync(tmp, `${fresh}\n`, { encoding: "utf8" });
+		onBeforeMachineIdPublish?.();
+		try {
+			linkSync(tmp, file); // no-clobber: exactly one publisher wins
+			rmSync(tmp, { force: true });
+			return fresh;
+		} catch (err) {
+			try {
+				rmSync(tmp, { force: true });
+			} catch {
+				// inert debris; never read as an id
+			}
+			if (errnoCode(err) !== "EEXIST") throw err;
+			// A concurrent publisher won — adopt on the next read.
+		}
+	}
+	throw new Error(`cannot initialize the machine id at ${file} after ${MACHINE_ID_ROUNDS} rounds`);
+}
+
+export interface ScanConfig {
+	leaseDir: string;
+	ownName: string;
+	host: string;
+	machineId: string;
+	now: () => number;
+	isAlive: (pid: number) => boolean;
+	staleGraceMs: number;
+	onBeforeScan?: () => void;
+}
+
+/**
+ * Scan the lease directory for any OTHER active or uncertain candidate.
+ * Returns a refusal (`busy` / `owned-elsewhere`) or undefined when the own
+ * candidate is the only active one. Dead+aged candidates are unlinked
+ * opportunistically (cleanup only — it grants nothing); unparseable
+ * entries count as UNCERTAIN while fresh.
+ */
+function scanForBlocker(
+	config: ScanConfig,
+): { code: "busy" | "owned-elsewhere"; message: string } | undefined {
+	config.onBeforeScan?.();
+	let entries: string[];
+	try {
+		entries = readdirSync(config.leaseDir);
+	} catch (err) {
+		if (errnoCode(err) === "ENOENT") entries = [];
+		else throw err;
+	}
+	for (const entry of entries) {
+		if (entry === config.ownName) continue;
+		const candidatePath = path.join(config.leaseDir, entry);
+		let bytes: Buffer;
+		try {
+			bytes = readFileSync(candidatePath);
+		} catch (err) {
+			if (errnoCode(err) === "ENOENT") continue; // retired concurrently
+			if (errnoCode(err) === "EISDIR") continue; // not a candidate
+			throw err;
+		}
+		let ageMs: number;
+		try {
+			ageMs = config.now() - statSync(candidatePath).mtimeMs;
+		} catch (err) {
+			if (errnoCode(err) === "ENOENT") continue;
+			throw err;
+		}
+		const existing = parsePayload(bytes);
+		if (existing === undefined) {
+			// A torn or foreign entry is not proof of absence: uncertain
+			// while fresh, debris once aged.
+			if (ageMs <= config.staleGraceMs) {
+				return {
+					code: "busy",
+					message: `child lease candidate ${entry} is unreadable and still fresh — refusing rather than guessing`,
+				};
+			}
+			try {
+				unlinkSync(candidatePath);
+			} catch {
+				// cleanup is best-effort; it grants nothing
+			}
+			continue;
+		}
+		if (existing.host !== config.host || existing.machineId !== config.machineId) {
+			return {
+				code: "owned-elsewhere",
+				message: `child lease ${config.leaseDir} is held on host "${existing.host}" (machine ${existing.machineId}) — shared-storage sessions across machines are not supported`,
+			};
+		}
+		if (config.isAlive(existing.pid) || ageMs <= config.staleGraceMs) {
+			return {
+				code: "busy",
+				message: `another attempt for this child is active or unresolved (pid ${existing.pid}, host ${existing.host}, started ${existing.startedAt})`,
+			};
+		}
+		try {
+			unlinkSync(candidatePath); // dead + aged: retire this generation only
+		} catch {
+			// cleanup is best-effort
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Acquire the single-writer lease (see the module comment for the
+ * protocol). Refusals: `busy` (another active/uncertain holder, or a legacy
+ * artifact judged live/uncertain), `owned-elsewhere` (another host/machine
+ * id), `io-error` (machine id, filesystem).
  */
 export function acquireChildLease(
 	childFilePath: string,
 	attemptId: string,
 	options: ChildLeaseOptions = {},
 ): ChildLeaseResult {
-	const leasePath = `${childFilePath}.lease`;
+	const leaseDir = `${childFilePath}.lease`;
 	if (inProcess.has(childFilePath)) {
 		return {
 			ok: false,
@@ -201,10 +311,7 @@ export function acquireChildLease(
 		};
 	}
 	inProcess.set(childFilePath, attemptId);
-	const failWith = (
-		code: "busy" | "stale-contended" | "owned-elsewhere" | "io-error",
-		message: string,
-	): ChildLeaseResult => {
+	const failWith = (code: "busy" | "owned-elsewhere" | "io-error", message: string): ChildLeaseResult => {
 		inProcess.delete(childFilePath);
 		return { ok: false, code, message };
 	};
@@ -216,10 +323,12 @@ export function acquireChildLease(
 	const isAlive = options.isAlive ?? defaultIsAlive;
 	const staleGraceMs = options.staleGraceMs ?? DEFAULT_STALE_GRACE_MS;
 	const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+	const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
 	let machineId: string;
 	try {
-		machineId = options.machineId ?? resolveMachineId(path.dirname(childFilePath));
+		machineId =
+			options.machineId ?? resolveMachineId(path.dirname(childFilePath), options.onBeforeMachineIdPublish);
 	} catch (err) {
 		return failWith("io-error", `cannot resolve the machine id beside ${childFilePath}: ${String(err)}`);
 	}
@@ -233,154 +342,98 @@ export function acquireChildLease(
 		startedAt: new Date(now()).toISOString(),
 	};
 	const serialized = `${JSON.stringify(payload)}\n`;
+	const ownName = `lease-${pid}-${nonce.slice(0, 8)}-${attemptId}`;
+	const ownPath = path.join(leaseDir, ownName);
 
 	try {
-		for (let round = 0; round < MAX_STEAL_ROUNDS; round++) {
-			try {
-				writeFileSync(leasePath, serialized, { encoding: "utf8", flag: "wx" });
-			} catch (err) {
-				if (errnoCode(err) !== "EEXIST") {
-					return failWith("io-error", `cannot create the lease at ${leasePath}: ${String(err)}`);
-				}
-				// Contended. ONE read decides eligibility AND is the byte
-				// generation the steal must move (F4a): if a writer re-creates
-				// the lease after this read, the post-rename comparison sees
-				// different bytes and refuses.
-				let beforeBytes: Buffer;
-				try {
-					beforeBytes = readFileSync(leasePath);
-				} catch (readErr) {
-					if (errnoCode(readErr) === "ENOENT") continue; // vanished; retry the create
-					return failWith("io-error", `cannot read the lease at ${leasePath}: ${String(readErr)}`);
-				}
-				const existing = parsePayload(beforeBytes);
-				if (existing !== undefined && (existing.host !== host || existing.machineId !== machineId)) {
-					return failWith(
-						"owned-elsewhere",
-						`child ${childFilePath} is owned by an attempt on host "${existing.host}" (machine ${existing.machineId}) — shared-storage sessions across machines are not supported`,
-					);
-				}
-				let stealable = false;
-				let busyMessage = "another attempt for this child is running";
-				if (existing === undefined) {
-					stealable = true; // unparseable debris
-				} else if (existing.pid === pid) {
-					if (existing.nonce === nonce) {
-						stealable = true; // this exact process's failed-release leftover
-					} else {
-						// Same numeric pid, different process instance/namespace
-						// (F5): cannot be told apart from a live holder — refuse,
-						// never reclaim a possibly-active lease.
-						busyMessage = `child ${childFilePath} already has a lease from a process with pid ${pid} that this process cannot identify as its own (another instance or pid namespace) — refused rather than reclaimed`;
-					}
-				} else if (isAlive(existing.pid)) {
-					busyMessage = `another attempt for this child is running (pid ${existing.pid}, host ${existing.host}, started ${existing.startedAt})`;
-				} else {
-					let ageMs: number;
-					try {
-						ageMs = now() - statSync(leasePath).mtimeMs;
-					} catch (statErr) {
-						if (errnoCode(statErr) === "ENOENT") continue;
-						return failWith("io-error", `cannot inspect the lease at ${leasePath}: ${String(statErr)}`);
-					}
-					if (ageMs <= staleGraceMs) {
-						const retryIn = Math.max(1, Math.ceil((staleGraceMs - ageMs) / 1000));
-						busyMessage = `another attempt for this child (pid ${existing.pid}) looks dead here but may be live in another pid namespace; if it really crashed, retry in ~${retryIn}s`;
-					} else {
-						stealable = true;
-					}
-				}
-				if (!stealable) return failWith("busy", busyMessage);
+		for (let round = 0; round < maxAttempts; round++) {
+			// Legacy single-FILE migration (design §7.1): classify from ONE
+			// read; live/uncertain refuses with NO directory created;
+			// dead+aged is unlinked (that generation only).
+			const legacy = migrateLegacyLeaseFile({
+				leaseDir,
+				host,
+				machineId,
+				pid,
+				nonce,
+				now,
+				isAlive,
+				staleGraceMs,
+			});
+			if (!legacy.ok) return failWith(legacy.code, legacy.message);
 
-				// Steal: a UNIQUE target per attempt — two stealers can never
-				// share an artifact, and a rename can never clobber another's
-				// claim (F4b).
-				options.onBeforeStealRename?.();
-				const stealPath = `${leasePath}.steal-${attemptId}`;
-				try {
-					renameSync(leasePath, stealPath);
-				} catch (renameErr) {
-					if (errnoCode(renameErr) === "ENOENT") continue; // someone else won; retry
-					return failWith("io-error", `cannot reclaim the stale lease at ${leasePath}: ${String(renameErr)}`);
-				}
-				let afterBytes: Buffer | undefined;
-				try {
-					afterBytes = readFileSync(stealPath);
-				} catch {
-					afterBytes = undefined;
-				}
-				if (afterBytes === undefined || !beforeBytes.equals(afterBytes)) {
-					// The moved bytes are not the generation we decided about:
-					// a writer re-created the lease in the window. Restore
-					// WITHOUT clobbering — link() fails EEXIST instead of
-					// replacing (F4b); a third holder's lease is never
-					// overwritten.
-					try {
-						linkSync(stealPath, leasePath);
-						unlinkSync(stealPath);
-					} catch (restoreErr) {
-						if (errnoCode(restoreErr) === "EEXIST") {
-							// A third holder re-created the lease; our moved
-							// artifact is obsolete — drop it.
-							try {
-								rmSync(stealPath, { force: true });
-							} catch {
-								// debris only
-							}
-						}
-						// Other restore failures: leave the artifact; the lease
-						// path itself was never touched in this branch.
-					}
-					return failWith(
-						"stale-contended",
-						`the lease for ${childFilePath} changed while being reclaimed — another attempt is active; retry`,
-					);
-				}
-				try {
-					rmSync(stealPath, { force: true });
-				} catch {
-					// debris only; the create below is what matters
-				}
-				continue; // retry the exclusive create
-			}
-			// Created: verify by reading back.
-			let written: LeasePayload | undefined;
+			mkdirSync(leaseDir, { recursive: true });
+			writeFileSync(ownPath, serialized, { encoding: "utf8", flag: "wx" });
+			options.onAfterCreate?.();
+
+			let blocker: { code: "busy" | "owned-elsewhere"; message: string } | undefined;
 			try {
-				written = parsePayload(readFileSync(leasePath));
-			} catch {
-				written = undefined;
+				blocker = scanForBlocker({
+					leaseDir,
+					ownName,
+					host,
+					machineId,
+					now,
+					isAlive,
+					staleGraceMs,
+					...(options.onBeforeScan === undefined ? {} : { onBeforeScan: options.onBeforeScan }),
+				});
+			} catch (err) {
+				// Refusal cleanup AFTER the decision is final (the pinned
+				// invariant allows the pre-hold unlink only here and in the
+				// blocker branch below).
+				try {
+					unlinkSync(ownPath);
+				} catch {
+					// best effort
+				}
+				return failWith("io-error", `lease scan failed for ${leaseDir}: ${String(err)}`);
 			}
-			if (written === undefined || written.attemptId !== attemptId) {
-				return failWith("io-error", `cannot verify the lease at ${leasePath} after creating it`);
+			if (blocker !== undefined) {
+				// Step-8 refusal cleanup: the scan-and-decide is complete.
+				try {
+					unlinkSync(ownPath);
+				} catch {
+					// best effort
+				}
+				if (blocker.code === "owned-elsewhere") return failWith("owned-elsewhere", blocker.message);
+				if (round + 1 < maxAttempts) {
+					// Both contenders may have refused each other; a jittered
+					// retry resolves the livelock (design §7.5 fairness).
+					sleepSync(5 + Math.floor(Math.random() * 20));
+					continue;
+				}
+				return failWith("busy", blocker.message);
 			}
+
+			// HOLD: the own candidate is the only active/uncertain one.
 			let timer: NodeJS.Timeout | undefined;
 			const handle: ChildLeaseHandle = {
-				path: leasePath,
+				path: leaseDir,
 				attemptId,
 				startHeartbeat(onAnomaly) {
 					if (timer !== undefined) return;
 					timer = setInterval(() => {
 						let current: LeasePayload | undefined;
 						try {
-							current = parsePayload(readFileSync(leasePath));
+							current = parsePayload(readFileSync(ownPath));
 						} catch {
 							current = undefined;
 						}
 						if (current === undefined || current.attemptId !== attemptId) {
-							// One report is enough — the caller aborts the attempt.
 							if (timer !== undefined) {
 								clearInterval(timer);
 								timer = undefined;
 							}
 							process.stderr.write(
-								`imp: child lease anomaly at ${leasePath} — the lease no longer belongs to this attempt\n`,
+								`imp: child lease anomaly at ${ownPath} — the candidate no longer belongs to this attempt\n`,
 							);
 							onAnomaly();
 							return;
 						}
 						try {
 							const stamp = new Date(now());
-							utimesSync(leasePath, stamp, stamp);
+							utimesSync(ownPath, stamp, stamp);
 						} catch {
 							onAnomaly();
 						}
@@ -393,36 +446,82 @@ export function acquireChildLease(
 						timer = undefined;
 					}
 					if (inProcess.get(childFilePath) === attemptId) inProcess.delete(childFilePath);
-					let current: LeasePayload | undefined;
 					try {
-						current = parsePayload(readFileSync(leasePath));
+						unlinkSync(ownPath); // unique name: it is ours or gone
 					} catch {
-						current = undefined;
-					}
-					if (current === undefined || current.attemptId !== attemptId) return; // gone or foreign: leave it
-					try {
-						unlinkSync(leasePath);
-					} catch {
-						// Truncate to a zero-byte artifact: debris, immediately
-						// stealable by the next acquire (never a live-looking lease).
-						try {
-							truncateSync(leasePath, 0);
-						} catch {
-							// best effort; the stale-self rule recovers it later
-						}
-						process.stderr.write(
-							`imp: could not remove the child lease at ${leasePath} — left an empty artifact\n`,
-						);
+						process.stderr.write(`imp: could not remove the child lease candidate ${ownPath}\n`);
 					}
 				},
 			};
 			return { ok: true, lease: handle };
 		}
-		return failWith(
-			"stale-contended",
-			`could not reclaim the stale lease for ${childFilePath} after ${MAX_STEAL_ROUNDS} rounds`,
-		);
+		return failWith("busy", "could not acquire the child lease within the retry budget");
 	} catch (err) {
 		return failWith("io-error", `lease acquisition failed for ${childFilePath}: ${String(err)}`);
 	}
+}
+
+/**
+ * Legacy single-FILE artifact migration (design §7.1): `mkdir` cannot
+ * replace a file, so the artifact must be classified and, only when THIS
+ * read proves it dead+aged or debris+aged, unlinked before the directory is
+ * created. Live or uncertain → `busy` with no directory created.
+ */
+function migrateLegacyLeaseFile(config: {
+	leaseDir: string;
+	host: string;
+	machineId: string;
+	pid: number;
+	nonce: string;
+	now: () => number;
+	isAlive: (pid: number) => boolean;
+	staleGraceMs: number;
+}): { ok: true } | { ok: false; code: "busy" | "owned-elsewhere"; message: string } {
+	let bytes: Buffer;
+	try {
+		bytes = readFileSync(config.leaseDir); // ONE read decides everything
+	} catch (err) {
+		if (errnoCode(err) === "ENOENT" || errnoCode(err) === "EISDIR") return { ok: true };
+		throw err;
+	}
+	let ageMs: number;
+	try {
+		ageMs = config.now() - statSync(config.leaseDir).mtimeMs;
+	} catch (err) {
+		if (errnoCode(err) === "ENOENT") return { ok: true };
+		throw err;
+	}
+	const existing = parsePayload(bytes);
+	if (existing === undefined) {
+		if (ageMs <= config.staleGraceMs) {
+			return {
+				ok: false,
+				code: "busy",
+				message: `legacy lease artifact at ${config.leaseDir} is unreadable and still fresh — refusing rather than guessing`,
+			};
+		}
+		unlinkSync(config.leaseDir);
+		return { ok: true };
+	}
+	if (existing.host !== config.host || existing.machineId !== config.machineId) {
+		return {
+			ok: false,
+			code: "owned-elsewhere",
+			message: `legacy lease at ${config.leaseDir} belongs to host "${existing.host}" (machine ${existing.machineId}) — shared-storage sessions across machines are not supported`,
+		};
+	}
+	const ownLeftover = existing.pid === config.pid && existing.nonce === config.nonce;
+	if (ownLeftover) {
+		unlinkSync(config.leaseDir); // this process's own failed-release leftover
+		return { ok: true };
+	}
+	if (config.isAlive(existing.pid) || ageMs <= config.staleGraceMs) {
+		return {
+			ok: false,
+			code: "busy",
+			message: `a legacy lease for this child is active or unresolved (pid ${existing.pid}, host ${existing.host}, started ${existing.startedAt})`,
+		};
+	}
+	unlinkSync(config.leaseDir); // dead + aged generation only
+	return { ok: true };
 }

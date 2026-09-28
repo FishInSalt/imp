@@ -8,11 +8,21 @@
  * around the critical section; the parent asserts no interleaving ever
  * occurs. Without the env (a normal suite run) this file is a no-op.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireChildLease } from "../../src/core/child-lease.js";
 
 const workerEnv = process.env.IMP_LEASE_WORKER;
+
+async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Promise<boolean> {
+	const started = Date.now();
+	while (Date.now() - started < timeoutMs) {
+		if (existsSync(path.join(dir, name))) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return false;
+}
 
 describe("lease multiprocess worker", () => {
 	it("runs the worker role when spawned by the multiprocess test", async () => {
@@ -24,6 +34,10 @@ describe("lease multiprocess worker", () => {
 		const childFile = `${dir}/child.jsonl`;
 		const logFile = `${dir}/log`;
 		const steps = Number(roundsRaw);
+		// Startup barrier: contention must be a GUARANTEED precondition, not a
+		// timing accident (review F2) — both workers wait for the parent's go.
+		writeFileSync(`${dir}/${tag}-ready`, "");
+		expect(await waitForMarker(dir, "go")).toBe(true);
 		let acquired = 0;
 		let refused = 0;
 		for (let step = 0; step < steps; step += 1) {

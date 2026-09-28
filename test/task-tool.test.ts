@@ -1381,7 +1381,10 @@ describe("cap-hit transcript handoff (e2e)", () => {
 			new AbortController().signal,
 		);
 		expect(result.output).toContain('the child\'s task was: "the original task words"');
-		expect(result.output).not.toContain("worktree"); // the notice must not leak into the excerpt
+		// SA-07: the result now also carries the resume handle line, which
+		// legitimately mentions "worktree" — scope the leak check to the
+		// notice's own marker instead of the word.
+		expect(result.output).not.toContain("[worktree]"); // the notice must not leak into the excerpt
 	}, 30000);
 
 	it("no-text max_iterations renders the REAL child file path and the file exists (15)", async () => {

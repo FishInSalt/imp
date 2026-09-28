@@ -624,6 +624,7 @@ export interface ChildLeaseOptions {
   pid?: number; host?: string; machineId?: string;
   isAlive?: (pid: number) => boolean;
   now?: () => number;
+  onBeforeStealRename?: () => void;  // test seam: inject the steal-window race
   staleGraceMs?: number;   // default 60_000
   heartbeatMs?: number;    // default 20_000
 }

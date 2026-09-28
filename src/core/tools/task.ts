@@ -5,8 +5,23 @@ import { firstLine } from "../../format.js";
 import type { ProviderName } from "../../provider/resolve.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
-import { buildChildLaunch, type LaunchEnvironmentFacts } from "../child-launch.js";
+import {
+	buildChildLaunch,
+	findChildByLaunch,
+	type LaunchEnvironmentFacts,
+	listChildLaunches,
+	validateChildContinuation,
+} from "../child-launch.js";
+import { acquireChildLease } from "../child-lease.js";
 import { type ChildModelBinding, resolveChildModel } from "../child-model.js";
+import {
+	assembleCurrentChildEnvironment,
+	buildContinuationHistory,
+	checkResumeArgs,
+	lifetimeUsageLine,
+	providerMismatch,
+	RESUME_REFUSAL_TAIL,
+} from "../child-resume.js";
 import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import type { AgentMessage } from "../messages.js";
@@ -15,6 +30,7 @@ import type { SessionStore } from "../session/store.js";
 import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagent.js";
 import {
 	buildTaskRecord,
+	collectTaskRecords,
 	type TaskRecordTerminal,
 	type TaskRecordTranscript,
 	type TaskRecordWorktree,
@@ -48,6 +64,12 @@ const taskSchema = Type.Object({
 		description:
 			"Complete, self-contained task for a fresh subagent. It sees nothing of this conversation; include all needed context (paths, what to return). Keep the prompt focused (~300 words max): the child re-reads files itself; pasting repo context into the prompt wastes its context window.",
 	}),
+	resume: Type.Optional(
+		Type.String({
+			description:
+				"Child session id from a previous task result — continue that settled child with this prompt as its next instruction. Role, model, cwd and worktree are immutable on resume.",
+		}),
+	),
 	agent: Type.Optional(
 		Type.String({
 			description:
@@ -246,6 +268,63 @@ function tailTruncate(text: string): { text: string; dropped: number } {
 	return { text: tail.subarray(start).toString("utf8"), dropped: total - kept };
 }
 
+/** SA-07: one tool-pool selection for fresh and resumed children — rebuild
+ *  the pool for the child's cwd/binding (a worktree child REQUIRES a
+ *  rebuilt pool; a shared-cwd child falls back to the parent pool), apply
+ *  the agent's `tools:` allowlist narrowing, and drop `task` itself. Fresh
+ *  dispatch and resume must share this: the launch record stores the
+ *  NARROWED array, so rebuilding without the allowlist would refuse every
+ *  allowlisted agent with a false tools-drift. */
+function selectChildToolPool(input: {
+	agent: AgentDefinition | undefined;
+	cwd: string;
+	binding: ChildModelBinding;
+	parentPool: Tool[];
+	requireRebuild: boolean;
+	rebuild: (cwd: string, binding: { providerName: ProviderName; modelId: string }) => Tool[] | undefined;
+}): Tool[] | { output: string; isError: true } {
+	const rebuilt = input.rebuild(input.cwd, {
+		providerName: input.binding.providerName,
+		modelId: input.binding.wireModelId,
+	});
+	const pool = rebuilt ?? (input.requireRebuild ? undefined : input.parentPool);
+	if (pool === undefined) {
+		return {
+			output:
+				"worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.",
+			isError: true,
+		};
+	}
+	const filtered = pool.filter((tool) => tool.name !== "task");
+	if (input.agent?.tools === undefined) return filtered;
+	const byName = new Map(filtered.map((tool) => [tool.name, tool] as const));
+	const unknown = input.agent.tools.filter((name) => !byName.has(name));
+	if (unknown.length > 0) {
+		return {
+			output: `agent "${input.agent.name}" lists unknown tools: ${unknown.join(", ")}. Available: ${filtered
+				.map((tool) => tool.name)
+				.join(", ")}.`,
+			isError: true,
+		};
+	}
+	return input.agent.tools.map((name) => byName.get(name)).filter((tool) => tool !== undefined);
+}
+
+/** SA-07 §4.3: the child's most recent recorded worktree disposition (for
+ *  the resume result's retention line — "deliberately kept" must not be
+ *  conflated with "kept because the assessment was uncertain/failed"). */
+function lastWorktreeDisposition(
+	parent: SessionStore,
+	childId: string,
+): TaskRecordWorktree["disposition"] | undefined {
+	const records = collectTaskRecords(parent.getEntries()).filter((record) => record.childId === childId);
+	for (let i = records.length - 1; i >= 0; i--) {
+		const worktree = records[i]?.worktree;
+		if (worktree !== undefined) return worktree.disposition;
+	}
+	return undefined;
+}
+
 export function createTaskTool(options: TaskToolOptions): Tool {
 	const childSessions = options.childSessions ?? process.env.IMP_CHILD_SESSIONS !== "0";
 	const timeoutMs = options.timeoutMs;
@@ -283,6 +362,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// the terminal facts explicitly (rejection paths included).
 			const rec: {
 				childId?: string;
+				agent?: string;
 				tools?: string[];
 				timeoutMs?: number;
 				binding?: ChildModelBinding;
@@ -308,7 +388,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					parentSessionId: parentStore?.header.id,
 					childId: rec.childId,
 					launched: rec.launched === true,
-					agent: agent?.name,
+					agent: rec.agent ?? agent?.name,
 					binding: rec.binding,
 					cwd: rec.launched === true ? childCwd : parentCwd,
 					tools: rec.tools,
@@ -322,6 +402,237 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					usage: terminal.usage,
 				}),
 			});
+
+			// --- SA-07: resume a settled child ---------------------------------
+			// Design: docs/sa-07-child-resume-design.md. Everything below runs
+			// BEFORE fresh-dispatch resolution (agent/model/tools/worktree), and
+			// every path either refuses with no side effect or runs the attempt.
+			if (args.resume !== undefined) {
+				const check = checkResumeArgs({
+					resume: args.resume,
+					agent: args.agent,
+					worktree: args.worktree,
+					prompt: args.prompt,
+					childSessions,
+					hasParentSession: parentStore !== null,
+				});
+				if (!check.ok) {
+					return finish({ output: check.message, isError: true }, rejectTerminal(check.message));
+				}
+				if (parentStore === null) {
+					const output = "resume requires an active parent session to resolve children against";
+					return finish({ output, isError: true }, rejectTerminal(output));
+				}
+				const refuse = (output: string): ToolExecuteResult =>
+					finish({ output, isError: true }, rejectTerminal(output));
+
+				// §4.1 step 2: managed lookup (SA-06).
+				const found = findChildByLaunch(parentStore, check.childId);
+				if (!found.ok) {
+					let output = `cannot resume child "${check.childId}": ${found.message}`;
+					if (found.code === "not-found") {
+						const candidates = listChildLaunches(parentStore).filter((entry) => entry.id !== undefined);
+						output +=
+							candidates.length > 0
+								? `\nthis session's children: ${candidates
+										.map((entry) => `${entry.id} (${entry.status})`)
+										.join(", ")}`
+								: "\nthis session has no recorded children";
+					}
+					return refuse(`${output}\n${RESUME_REFUSAL_TAIL}`);
+				}
+				const file = found.file;
+				const launch = file.launch;
+
+				// §4.1 step 3: current environment + provider-identity gate.
+				const env = options.getLaunchEnvironment?.();
+				if (env === undefined) {
+					return refuse(
+						`cannot resume child "${launch.childId}": this host does not expose the launch-environment facts needed to validate it.\n${RESUME_REFUSAL_TAIL}`,
+					);
+				}
+				const liveProvider = options.getProvider();
+				const mismatch = providerMismatch(launch.model.providerName, liveProvider.name);
+				if (mismatch !== undefined) {
+					return refuse(`cannot resume child "${launch.childId}": ${mismatch}`);
+				}
+				// §5.1: rebuild the tool pool with the SAME selection rules fresh
+				// dispatch uses (including the agent allowlist narrowing).
+				const resumeAgent = launch.agent === undefined ? undefined : agentsByName.get(launch.agent.name);
+				const parentPool = options.getTools().filter((tool) => tool.name !== "task");
+				const poolSelection = selectChildToolPool({
+					agent: resumeAgent,
+					cwd: launch.cwd,
+					binding: launch.model,
+					parentPool,
+					requireRebuild: launch.worktree !== undefined,
+					rebuild: (cwd, childBinding) =>
+						options.getToolsForChild?.(cwd, childBinding) ?? options.getToolsForCwd?.(cwd),
+				});
+				if ("isError" in poolSelection) {
+					return refuse(
+						`cannot resume child "${launch.childId}": ${poolSelection.output}\n${RESUME_REFUSAL_TAIL}`,
+					);
+				}
+				const tools = poolSelection;
+
+				// §4.1 step 4: SA-06 validation, AND-ed with the settled state.
+				const current = assembleCurrentChildEnvironment({
+					launch,
+					launchEnvironment: env,
+					cwd: options.cwd ?? process.cwd(),
+					agentResolver: (name) => {
+						const definition = agentsByName.get(name);
+						return definition === undefined ? undefined : { system: definition.system };
+					},
+					childTools: tools.map((tool) =>
+						tool.mcpServer === undefined
+							? { name: tool.name }
+							: { name: tool.name, mcpServer: tool.mcpServer },
+					),
+				});
+				const verdict = await validateChildContinuation(file, parentStore, current);
+				if (!verdict.resumable || verdict.executionState !== "settled") {
+					const reasonLines = verdict.reasons.map((reason) => `- ${reason.code}: ${reason.message}`);
+					const lead =
+						verdict.reasons.length > 0
+							? `resume validation refused (${verdict.reasons.length} reason(s)):`
+							: "it may still be running, or the process died before any parent-side write";
+					const output = `cannot resume child "${launch.childId}": ${lead}${
+						reasonLines.length > 0 ? `\n${reasonLines.join("\n")}` : ""
+					}\n${RESUME_REFUSAL_TAIL}`;
+					return refuse(output);
+				}
+
+				// §4.1 step 5: single-writer lease, AND-ed with resumable.
+				const acquired = acquireChildLease(file.filePath, attemptId);
+				if (!acquired.ok) {
+					return refuse(
+						`cannot resume child "${launch.childId}": ${acquired.message}\n${RESUME_REFUSAL_TAIL}`,
+					);
+				}
+				const lease = acquired.lease;
+				let leaseAnomaly = false;
+				const attemptAbort = new AbortController();
+				const relayAbort = () => attemptAbort.abort();
+				// The try opens the instant the lease is held: EVERY refusal or
+				// throw from here on releases it in finally.
+				try {
+					if (signal.aborted) attemptAbort.abort();
+					else signal.addEventListener("abort", relayAbort);
+					lease.startHeartbeat(() => {
+						leaseAnomaly = true;
+						attemptAbort.abort();
+					});
+
+					// §4.1 steps 6–7: repair + effective history (nothing mutates
+					// the child file before the repair's own append-safe step).
+					const history = buildContinuationHistory(file.store);
+					if (!history.ok) {
+						return refuse(`cannot resume child "${launch.childId}": ${history.problem}`);
+					}
+					let transcriptWriteFailed = false;
+					observeSessionWrites(file.store, () => {
+						transcriptWriteFailed = true;
+					});
+					const resumeTimeout =
+						(args.timeoutMs as number | undefined) ??
+						resumeAgent?.timeoutMs ??
+						timeoutMs ??
+						defaultChildTimeoutMs();
+					rec.launched = true;
+					rec.childId = launch.childId;
+					rec.agent = launch.agent?.name;
+					rec.binding = launch.model;
+					rec.tools = tools.map((tool) => tool.name);
+					rec.timeoutMs = resumeTimeout;
+					childCwd = launch.cwd;
+
+					// §4.1 step 8: the attempt — recorded contract, live gate,
+					// effective history seeded, ONE new instruction pushed by the loop.
+					const outcome = await runSubagent({
+						autoCompact: options.getAutoCompact?.(),
+						provider: liveProvider,
+						model: launch.model.wireModelId,
+						modelReference: launch.model.reference,
+						system: options.getSystem(),
+						extraSystem: resumeAgent?.system,
+						tools,
+						prompt: String(args.prompt),
+						signal: attemptAbort.signal,
+						timeoutMs: resumeTimeout,
+						session: file.store,
+						initialHistory: history.messages,
+						initialFloor: history.compactionBoundary,
+						onMessage: (message: AgentMessage) => file.store.appendMessage(message),
+						onToolCall: options.onToolCall
+							? (call) => options.onToolCall?.(call, { agent: launch.agent?.name, cwd: launch.cwd })
+							: undefined,
+						onEvent: options.onEvent
+							? (event) =>
+									options.onEvent?.(event, {
+										agent: launch.agent?.name,
+										cwd: launch.cwd,
+										sourceId,
+										...(taskToolCallId === undefined ? {} : { taskToolCallId }),
+									})
+							: undefined,
+					});
+					rec.transcript = transcriptFor(file.store, childSessions, transcriptWriteFailed);
+					if (launch.worktree !== undefined) {
+						rec.worktree = {
+							path: launch.worktree.path,
+							branch: launch.worktree.branch,
+							disposition: "kept-unknown",
+							detail: "resume attempt — worktrees are never auto-removed on resume",
+						};
+					}
+					const terminal: TaskRecordTerminal = {
+						status: outcome.status,
+						reason: outcome.reason,
+						turns: outcome.turns,
+						textPresent: outcome.text !== undefined,
+						usage: outcome.usageDetail.incomplete ? { ...outcome.usage, incomplete: true } : outcome.usage,
+					};
+
+					// §4.3: result composition (base classification + resume lines).
+					const base = taskResult(outcome, file.store, resumeTimeout, String(args.prompt));
+					const lines: string[] = [];
+					if (history.repairs.length > 0) {
+						lines.push(`transcript repaired: ${history.repairs.join("; ")}.`);
+					}
+					if (launch.worktree !== undefined) {
+						let line = `worktree kept at ${launch.worktree.path} (branch ${launch.worktree.branch}) — resume attempts do not remove it; merge ${launch.worktree.branch} when done.`;
+						const prior = lastWorktreeDisposition(parentStore, launch.childId);
+						if (prior === "kept-work" || prior === "removal-failed") {
+							line += ` (the previous attempt recorded: ${prior})`;
+						}
+						lines.push(line);
+					}
+					lines.push(
+						"files may have changed since the previous attempt — re-inspect before relying on earlier observations.",
+					);
+					if (leaseAnomaly) {
+						lines.push(
+							"attempt stopped: its lease was taken over (lease anomaly) — another attempt may be resuming this child.",
+						);
+					}
+					lines.push(
+						lifetimeUsageLine(
+							collectTaskRecords(parentStore.getEntries()).filter(
+								(record) => record.childId === launch.childId,
+							),
+							terminal.usage,
+						),
+					);
+					return finish({ ...base, output: `${base.output}\n${lines.join("\n")}` }, terminal);
+				} finally {
+					signal.removeEventListener("abort", relayAbort);
+					lease.release();
+				}
+			}
+			// --- end SA-07 resume ------------------------------------------
+
 			if (wanted !== undefined && agent === undefined) {
 				const available = agents.length
 					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .imp/agents/ and ~/.imp/agents/).`
@@ -350,18 +661,6 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// the filesystem — running it before worktree creation means no
 			// teaching error can leak a created worktree.
 			const parentPool = options.getTools().filter((tool) => tool.name !== "task");
-			const validateSubset = (pool: Tool[]): Tool[] | { output: string; isError: true } => {
-				if (agent?.tools === undefined) return pool;
-				const byName = new Map(pool.map((t) => [t.name, t] as const));
-				const unknown = agent.tools.filter((n) => !byName.has(n));
-				if (unknown.length > 0) {
-					return {
-						output: `agent "${agent.name}" lists unknown tools: ${unknown.join(", ")}. Available: ${pool.map((t) => t.name).join(", ")}.`,
-						isError: true,
-					};
-				}
-				return agent.tools.map((n) => byName.get(n)).filter((t) => t !== undefined);
-			};
 
 			// Worktree isolation (M6b): agent frontmatter default, call override.
 			const wantWorktree =
@@ -393,45 +692,41 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				// rooted at the PARENT cwd — silently violating the isolation
 				// this feature exists to provide. A missing function AND an
 				// undefined return both fail loudly (review nit 3).
-				const rebuilt =
-					options.getToolsForChild?.(agentCwd, {
-						providerName: binding.providerName,
-						modelId: binding.wireModelId,
-					}) ?? options.getToolsForCwd?.(agentCwd);
-				if (rebuilt === undefined) {
+				const selection = selectChildToolPool({
+					agent,
+					cwd: agentCwd,
+					binding,
+					parentPool,
+					requireRebuild: true,
+					rebuild: (cwd, childBinding) =>
+						options.getToolsForChild?.(cwd, childBinding) ?? options.getToolsForCwd?.(cwd),
+				});
+				if ("isError" in selection) {
 					// SA-01: the fresh worktree is rolled back only when it is
 					// positively clean; a failed check or a failed removal is
 					// reported instead of silently leaking or losing it.
 					const attempt = await attemptWorktreeCleanup(wt, repo);
 					rec.worktree = worktreeRecord(wt, attempt);
 					const note = cleanupOutcomeNote(attempt, wt);
-					const output = `worktree isolation is not available in this host (no per-directory tool pool wired) — retry the task without the worktree option.${note ? `\n${note}` : ""}`;
+					const output = note ? `${selection.output}\n${note}` : selection.output;
 					return finish({ output, isError: true }, rejectTerminal(output));
 				}
-				const narrowed = validateSubset(rebuilt);
-				if ("isError" in narrowed) {
-					const attempt = await attemptWorktreeCleanup(wt, repo);
-					rec.worktree = worktreeRecord(wt, attempt);
-					const note = cleanupOutcomeNote(attempt, wt);
-					const output = note ? `${narrowed.output}\n${note}` : narrowed.output;
-					return finish({ ...narrowed, output }, rejectTerminal(output));
-				}
-				tools = narrowed;
-				rec.tools = narrowed.map((tool) => tool.name);
+				tools = selection;
+				rec.tools = selection.map((tool) => tool.name);
 			} else {
 				// SA-02: prefer the child-bound pool; fall back to the parent pool
 				// (custom wirings that predate the seam keep their bindings).
-				const childPool =
-					options
-						.getToolsForChild?.(childCwd, {
-							providerName: binding.providerName,
-							modelId: binding.wireModelId,
-						})
-						?.filter((tool) => tool.name !== "task") ?? parentPool;
-				const narrowed = validateSubset(childPool);
-				if ("isError" in narrowed) return finish(narrowed, rejectTerminal(narrowed.output));
-				tools = narrowed;
-				rec.tools = narrowed.map((tool) => tool.name);
+				const selection = selectChildToolPool({
+					agent,
+					cwd: childCwd,
+					binding,
+					parentPool,
+					requireRebuild: false,
+					rebuild: (cwd, childBinding) => options.getToolsForChild?.(cwd, childBinding),
+				});
+				if ("isError" in selection) return finish(selection, rejectTerminal(selection.output));
+				tools = selection;
+				rec.tools = selection.map((tool) => tool.name);
 			}
 			// #subagent-softlanding rev 4 precedence: call args > agent
 			// frontmatter > mode default (TTY: undefined = unlimited).
@@ -574,6 +869,12 @@ export function taskResult(
 ): ToolExecuteResult {
 	// A lazy session object alone does not guarantee a transcript exists.
 	const where = session?.isPersisted ? session.filePath : undefined;
+	// SA-07 §3.3: the resume handle, stated as a handle (not a promise —
+	// resumability is decided at resume time by SA-06's validation rules).
+	const continueLine =
+		where === undefined || session === null
+			? undefined
+			: `child session id: ${session.header.id} — continue it later with task({resume: "${session.header.id}", prompt: "…"}) (resumable only while imp version, system/agent/tools, provider and the recorded cwd/worktree are unchanged)`;
 	const handoff = () => {
 		if (where === undefined) {
 			// No transcript to hand off: say so plainly (never a dangling
@@ -586,6 +887,7 @@ export function taskResult(
 			return lines.join("\n");
 		}
 		const lines = ["work is preserved in the full transcript:", `  ${where}`];
+		if (continueLine !== undefined) lines.push(continueLine);
 		if (originalPrompt !== undefined) {
 			lines.push(`the child's task was: "${excerpt(originalPrompt, 200)}"`);
 		}
@@ -642,6 +944,7 @@ export function taskResult(
 		parts.push(`[task] child failed after ${outcome.turns} turns: ${outcome.reason}; partial result above.`);
 	}
 	parts.push(childUsageTrailer(outcome.turns, outcome.usage));
+	if (continueLine !== undefined) parts.push(continueLine);
 	return { output: parts.join("\n\n"), isError: false };
 }
 

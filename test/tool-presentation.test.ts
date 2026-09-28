@@ -82,6 +82,7 @@ describe("semantic tool presentation", () => {
 					: ({
 							isPersisted: persistence === "persisted",
 							filePath: "/tmp/child.jsonl",
+							header: { id: "child-presentation" },
 						} as SessionStore);
 			const cases: [SubagentOutcome["status"], string | undefined, string][] = [
 				["max_iterations", undefined, "limited"],

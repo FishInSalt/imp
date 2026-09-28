@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	closeSync,
+	existsSync,
+	openSync,
+	readFileSync,
+	truncateSync,
+	writeFileSync,
+} from "node:fs";
 import { firstLine } from "../../format.js";
 import type { ChildLaunchRecord } from "../child-launch.js";
 import { type AgentMessage, contentText, type Usage } from "../messages.js";
@@ -254,6 +262,12 @@ export class SessionStore {
 	private explicitModelSelection = false;
 	private entries: SessionEntry[] = [];
 	private byId = new Map<string, SessionEntry>();
+	/** SA-07: set by open() when the persisted bytes do not end in a newline —
+	 *  the append hazard. A complete final record without its newline would
+	 *  merge with the next append (both entries lost on the following reopen);
+	 *  an unparseable fragment does the same. Structural only — the final line
+	 *  may parse (kept by open) or not (dropped in memory). */
+	tornFinalLine = false;
 	/** Current leaf = id of the last appended entry (tree position). */
 	private leafId: string | null = null;
 	/** #tree: labels by target entry id (file-level — replay is last-write-wins,
@@ -332,9 +346,8 @@ export class SessionStore {
 
 	static open(filePath: string): SessionStore {
 		if (!existsSync(filePath)) throw new SessionError(`session file not found: ${filePath}`);
-		const lines = readFileSync(filePath, "utf8")
-			.split("\n")
-			.filter((l) => l.trim() !== "");
+		const raw = readFileSync(filePath, "utf8");
+		const lines = raw.split("\n").filter((l) => l.trim() !== "");
 		if (lines.length === 0) throw new SessionError(`empty session file: ${filePath}`);
 
 		let header: SessionHeader;
@@ -397,6 +410,7 @@ export class SessionStore {
 		}
 		const store = new SessionStore(filePath, header, entries);
 		store.persisted = true;
+		store.tornFinalLine = !raw.endsWith("\n");
 		store.savedModel = model;
 		store.explicitModelSelection = explicitModelSelection;
 		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
@@ -491,6 +505,40 @@ export class SessionStore {
 		};
 		this.append(entry);
 		return entry.id;
+	}
+
+	/** SA-07: make the file append-safe after a crash mid-write. Shape a (the
+	 *  final line does not parse — open dropped it in memory): truncate the
+	 *  fragment at the last newline. Shape b (the final record parses and was
+	 *  kept by open): append the missing newline — truncating it would delete
+	 *  a recorded entry AND desync the in-memory leaf (a later append would
+	 *  chain to an id whose bytes no longer exist). Idempotent; undefined when
+	 *  the store never observed the condition. */
+	repairTornFinalLine(): { action: "truncated" | "terminated"; bytes: number } | undefined {
+		if (!this.persisted || !this.tornFinalLine) return undefined;
+		const raw = readFileSync(this.filePath, "utf8");
+		if (raw.endsWith("\n")) {
+			// Already repaired (or raced by another writer): nothing to do.
+			this.tornFinalLine = false;
+			return undefined;
+		}
+		const lastNewline = raw.lastIndexOf("\n");
+		const tail = raw.slice(lastNewline + 1);
+		let parses = false;
+		try {
+			JSON.parse(tail);
+			parses = true;
+		} catch {
+			parses = false;
+		}
+		if (parses) {
+			appendFileSync(this.filePath, "\n", { encoding: "utf8" });
+			this.tornFinalLine = false;
+			return { action: "terminated", bytes: 1 };
+		}
+		truncateSync(this.filePath, lastNewline + 1);
+		this.tornFinalLine = false;
+		return { action: "truncated", bytes: raw.length - (lastNewline + 1) };
 	}
 
 	/** M16 /name: append a session_info entry. The name is sanitized by

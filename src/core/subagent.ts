@@ -75,6 +75,14 @@ export interface SubagentOptions {
 	 *  Gates the between-turn
 	 *  auto-compaction hook only — never the child's own LLM calls. */
 	settings?: CompactionSettings;
+	/** SA-07: resumed children seed the live context with their effective
+	 *  history (summary + retained tail). The new instruction is pushed once
+	 *  by the loop as usual and persisted via onMessage. */
+	initialHistory?: AgentMessage[];
+	/** SA-07: estimate floor for the seeded history (the store's
+	 *  compactionBoundary) — mirrors the post-splice floor child compaction
+	 *  sets. Pair with initialHistory. */
+	initialFloor?: number;
 	/** The parent's permission gate, forwarded to the child loop (M6a): a
 	 * blocked call returns an isError tool result to the child, same semantics
 	 * as the main loop. Concurrent children may interleave gate invocations —
@@ -160,7 +168,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// the precedence chain (args.timeoutMs > agent frontmatter > mode default);
 	// this module only honors the resolved value.
 	const timeoutMs = options.timeoutMs;
-	const history: AgentMessage[] = [];
+	// SA-07: a resumed child starts from its effective history (the caller
+	// passes exactly what the store's buildContext rebuilt); a fresh child
+	// starts empty and the loop pushes its single instruction below.
+	const history: AgentMessage[] = options.initialHistory ? [...options.initialHistory] : [];
 	// SA-04 (design §3.3): one exactly-once attempt ledger. Created here, fed by
 	// the two provider-stream seams (task loop + summarizer), snapshotted into
 	// the outcome. Replaces the history-recomputation compensation — a replayed
@@ -191,8 +202,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// #compaction-ux F1: the child's local estimate floor — set when the
 	// child history is spliced by compaction, so the next boundary's
 	// shouldCompact check reads the new shape, not a stale pre-compaction
-	// anchor (main-loop estimateFloor parity; the child has no store).
-	let childFloor = 0;
+	// anchor (main-loop estimateFloor parity; the child has no store). SA-07:
+	// a seeded (compacted) history starts at its own boundary.
+	let childFloor = options.initialFloor ?? 0;
 	let compactionDisabled = false;
 	const onBeforeTurn: RunAgentLoopOptions["onBeforeTurn"] | undefined = autoCompact
 		? async (history) => {

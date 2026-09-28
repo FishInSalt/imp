@@ -1,8 +1,9 @@
 # Fresh-install model availability UX (#fresh-install-hint)
 
-Status: draft (awaiting independent design review)
+Status: rev2 — review findings F1–F8 folded in; awaiting re-review
 Branch: `fix/fresh-install-model-hint` (worktree, base main `8115822`)
 Date: 2026-09-28
+Review round 1: FIX-FIRST (8 findings, all verified against source; see §8)
 
 ## 1. Problem
 
@@ -23,14 +24,13 @@ Verified behavior chain (all paths in `src/`):
 2. Interactive banner (`repl.ts welcomeLines`, line 151) and footer
    (`repl.ts refreshFooter`, line 841) render `runner.modelReference()`
    unconditionally — the user sees `claude-sonnet-4-5` as if in use.
-3. The first message fails: anthropic provider throws "No API key found"
-   (`anthropic.ts:120`) which teaches only env vars — no `/login`, no
-   exit-code difference from any other provider error.
+3. The first message fails: the anthropic provider throws "No API key
+   found" (`anthropic.ts:146`) which teaches only env vars — no `/login`,
+   no exit-code difference from any other provider error.
 4. Session files persist the dead default (`seedModel`) — `imp -c` later
    resurrects it after the user has configured something else.
-5. Print mode (`imp -p hello`) errors after the banner-less startup; a
-   session file with the dead model was still created (observed:
-   `~/.imp/sessions/…` with `model: claude-sonnet-4-5`).
+5. Print mode (`imp -p hello`) errors after a session file with the dead
+   model was already created (observed on the published tarball).
 
 Existing machinery that ALREADY solves credential probing but is unused
 on the startup path:
@@ -39,28 +39,33 @@ on the startup path:
   OR env var, per family, including codex OAuth and the
   `ANTHROPIC_AUTH_TOKEN` bearer case.
 - `/login` supports 7 families (`commands.ts LOGIN_TARGETS`, line 822).
-- `noteMissingZaiCredential` (`runner.ts:905`) — the exact pattern this
+- `noteMissingZaiCredential` (`runner.ts:909`) — the note pattern this
   design generalizes (zai-only today).
 
 ## 2. Design principles
 
-P1 **No invented model.** imp never fabricates a working model when none
-   is resolvable. A model reference is only *displayed as in use* when its
-   family holds a credential (stored key or env var).          [F1]
+P1 **No invented model.** imp never presents a model as "in use" when its
+   family holds no credential (stored key or env var).            [F1]
 
 P2 **The teaching moment is startup, not first failure.** When no usable
-   model exists, the startup surface (banner/footer/print header) says so
-   in one line and points to `/login`.                          [F2]
+   model exists, the startup surface says so in one line and points to
+   `/login`.                                                      [F2]
 
 P3 **Least surprise for the configured majority.** Users with a working
    env var / stored key see zero new output (byte-identical startup).
 
-P4 **Resumability is never destroyed.** A dead default must not become a
-   sticky session default (`seedModel` writes it; `imp -c` resurrects it).
+P4 **Resumability is never destroyed — and the dead default never
+   sticks.** No `seedModel` write of an unusable model on ANY path
+   (fresh warmup, `/new`, resume/-c restore); message history still
+   persists; a model-less session stays resumable.
 
 P5 **Reuse, don't duplicate.** Credential probing reuses
-   `familyConfigured`; the note reuses the `noteMissingZaiCredential`
-   pattern; the banner line reuses `welcomeLines`' identity line.
+   `familyConfigured`; the note generalizes `noteMissingZaiCredential`;
+   the banner line reuses `welcomeLines`' identity line.
+
+P6 **Deterministic tests.** Credential state is observable state; both
+   the probe and every display surface must be controllable from tests
+   without host-env coupling.
 
 ## 3. Detailed design
 
@@ -70,27 +75,44 @@ New `src/provider/model-availability.ts`:
 
 ```ts
 export interface ModelAvailability {
-  /** true when the CURRENT model's family holds a credential. */
+  /** true when the CURRENT model's family holds a credential
+   *  (stored key or env var — familyConfigured semantics). */
   usable: boolean;
-  /** All families with a credential right now (stored or env). */
+  /** All families with a credential right now. */
   configuredFamilies: ProviderName[];
 }
 
-export function modelAvailability(reference: string): ModelAvailability;
-// usable = familyConfigured(parseModelRef(reference).provider)
+export function modelAvailability(providerName: ProviderName): ModelAvailability;
+// usable = familyConfigured(providerName)
 ```
 
-Rationale: `familyConfigured` reads the auth store + env per family; the
-runner calls it at the few state-change points (below), not per keystroke.
+**Live probe, not cached** (round-1 F4 resolved): callers probe at render
+time. `familyConfigured` reads one small JSON file (`~/.imp/auth.json`,
+already redirected by `IMP_AUTH_PATH` in tests) plus `process.env` — a
+per-footer-refresh read is bounded and negligible next to a turn's LLM
+call, and live probing makes staleness impossible: after `/login` the
+next footer repaint is automatically correct. No invalidation hooks, no
+cache coherency surface. (`refreshFooter` fires per turn and per command
+dispatch, `repl.ts:388,592,655` — never per keystroke.)
 
-Note on scope: `familyConfigured` is a *credential* probe, not a reachability
-probe — a configured family whose endpoint is down still counts as usable.
-That is the correct semantics for this UX: the problem being fixed is "no
-credential anywhere", not "endpoint down".
+Scope note: `familyConfigured` is a *credential* probe, not a
+reachability probe — a configured family whose endpoint is down still
+counts as usable. Correct semantics here: the problem is "no credential
+anywhere", not "endpoint down".
+
+**Test-seam rule (P6, new D6):** when `RunnerOptions.provider` is
+injected (the existing test seam — a fake provider REPLACES resolution
+entirely in `createRunner`), availability is reported `usable: true`
+without probing. This keeps the 2000+ existing tests byte-stable on any
+host (a developer with `~/.imp/auth.json` or `ANTHROPIC_API_KEY` set
+must not flip pinned banner/footer bytes). Tests FOR the unusable path
+scrub env (`delete ANTHROPIC_API_KEY` …) and point `IMP_AUTH_PATH` at a
+temp empty file — both levers already exist and are used by
+`test/login-dialog.test.ts:38`.
 
 ### 3.2 Startup display: usable vs unusable
 
-**Decision D1 — what the banner/footer shows when unusable:**
+**Decision D1 — banner/footer when unusable:**
 
 Interactive fresh install (`claude-sonnet-4-5`, no credential):
 
@@ -105,155 +127,196 @@ Tips for getting started:
 imp 0.1.0 · session 1a2b3c4d · no model available — run /login to connect one
 ```
 
-- The identity line gains a suffix segment: `no model available — run /login`.
-  The dead model id is NOT shown as "in use"; it appears, clearly named, only
-  in the teaching note (D2) — never rendered as the session's model.
-- Footer: `no model — /login` in place of the model segment while unusable
-  (byte-identical to today for usable models).
-- The banner text is NOT localized per provider — one string for all
-  families.
+- Identity line suffix: `no model available — run /login to connect one`.
+  The dead model id never renders as the session's model; it appears by
+  name only inside the teaching note (D2).
+- Footer while unusable: the model segment becomes `no model — /login`
+  and **the think segment is dropped** (round-1 F7: `claude-sonnet-4-5`
+  HAS a thinking meta — `anthropic-budget` — so keeping it renders the
+  contradictory `no model — /login think:medium`). The knob is
+  meaningless without a credential; it returns with the model segment
+  once usable.
+- Byte-identical to today whenever usable (P3).
 
 **Decision D2 — the startup teaching note (interactive):**
 
 One `▪` note printed after the banner (through the existing
-startup-notes deferral, `cli.ts runInteractive`), honoring the
-"one `▪` line per teaching" convention:
+startup-notes deferral, `cli.ts runInteractive`):
 
 ```
-▪ no model available — sign in with /login (zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn) or set IMP_MODEL/…_API_KEY
+▪ no model available — sign in with /login (zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn) or export <FAMILY>_API_KEY
 ```
 
-- The family list is derived from `LOGIN_TARGETS` (no hand-maintained
-  duplication — BUILTIN_COMMAND_NAMES precedent).
+- The family list derives from `LOGIN_TARGETS` (no hand list).
 - When `configuredFamilies.length > 0` but the CURRENT model's family is
-  unconfigured (e.g. IMP_MODEL=deepseek/… with no DEEPSEEK key but a zai
-  key stored), the note instead says: `▪ <model> has no credential — run
-  /login <that family> (or /model to pick a configured one)`.
+  unconfigured (e.g. `IMP_MODEL=deepseek/…`, no DeepSeek key, but a zai
+  key stored), the note instead targets:
+  `▪ <model-id> (deepseek) has no credential — run /login deepseek (or /model to pick a configured one)`.
+- **Suppression rule (round-1 F5):** when the current model is zai+glm
+  and the existing `noteMissingZaiCredential` fires, that MORE SPECIFIC
+  note wins and the generic D2 note is suppressed — one `▪` line per
+  teaching, no double note. (`noteMissingZaiCredential` already no-ops
+  when a credential exists, so the overlap is exactly the
+  zai-unusable case.)
 
 **Decision D3 — print mode:**
 
 Print mode has no `/login`. `imp -p …` with an unusable model errors
-BEFORE any session/log write (satisfies P4 for print runs):
+BEFORE `createRunner` (hence before any session/log write; the run
+logger and session store are both created inside it):
 
 ```
-imp: <model-id> (<family>) has no credential — export <FAMILY>_API_KEY (see `imp --help`), or start a session and run /login
+imp: <model-id> (<family>) has no credential — export <FAMILY>_API_KEY (see `imp --help`), or start an interactive session and run /login
 ```
 
-The family→env-var mapping reuses `LOGIN_TARGETS`. Top-level `imp login`
-is codex-OAuth-only today, so it is only mentioned when the family is
-openai-codex (`imp login` + `-m openai-codex/…`).
+- Family→env-var mapping reuses `LOGIN_TARGETS`. Top-level `imp login`
+  is codex-OAuth-only today; it is mentioned only when family is
+  openai-codex (`imp login` then `-m openai-codex/…`).
+- Exit code 1; stderr only; stdout stays empty (byte contract).
+- `-m <explicit id>` with no credential: same fail-fast — the user named
+  a family without a credential; the error names family + env var.
 
-- The check runs in `runPrint` before `createRunner` (which writes the
-   session seed).
-- exit code stays 1; stderr only, stdout stays empty (byte contract).
-- `-m <explicit id>` with no credential: same fail-fast — the user named a
-  family without a credential; the error names the family and its env var.
+**Decision D4 — the dead default must not stick (round-1 F2, expanded).**
 
-**Decision D4 — the dead default must not stick.**
+ALL THREE `seedModel` call sites are gated on the same live usability
+check — gating only `warmup` is insufficient because the resume path
+re-seeds one process later:
 
-`warmup()` currently seeds the session with the resolved model even when
-unusable. Change: when availability is `usable === false`, the session
-seed is skipped (the session starts model-less; `getModel()` returns null)
-until the user picks/logs in — `seedModel` is not called for unusable
-models; the session stays resumable with its messages.
+- `runner.ts:560` (warmup, fresh session): skip `seedModel` when
+  unusable. The session starts model-less; `getModel()` returns
+  `undefined` (round-1 F1 correction: undefined, not null — the store's
+  contract; `append()` writes fine without a model, `open()` tolerates
+  model-less sessions — verified `store.ts:268`).
+- `runner.ts:676` (`/new`): same gate — otherwise `/new` on a fresh
+  install resurrects the dead default.
+- `runner.ts:944` (`restoreModelFromSession`): `else` branch becomes
+  `else if (usable) store.seedModel(prepared.ref)` — the in-memory
+  model still applies (the turn can run and fail with the provider's
+  key error — existing behavior), but nothing unusable is persisted.
 
-- `/login` → `switchHint` note already teaches `/model <hint>`; after login
-  the family becomes configured, `/model` picker leads with it.
-- If the user submits a prompt anyway with an unusable model (interactive
-  mode keeps accepting input — the teaching note told them why), the run
-  fails with the provider's key error (existing behavior, unchanged).
-  The turn still persists as today (a failed run is still a real turn) —
-  but `seedModel` was never called, so `imp -c` does not resurrect the dead
-  default; instead `restoreModelFromSession` falls back to the startup
-  resolution chain (existing code path, `runner.ts restoreModelFromSession`
-  "saved ? … : this.options.model" branch — verbatim reuse).
+Consequences:
 
-**Decision D5 — anthropic provider error teaching (`/login` pointer).**
+- `imp -c` after a fresh-install session resolves via the startup chain
+  (`!explicit && saved ? … : options.model`), and the 944-gate stops it
+  persisting the dead default again.
+- Submitting a prompt while unusable (interactive): the run fails with
+  the provider's key error (unchanged), the turn persists as today, and
+  the session file still has NO model row.
+- **0.1.0 files (round-1 F6): no migration.** Sessions written by 0.1.0
+  carry `session_model: claude-sonnet-4-5`; resuming one without a
+  credential keeps the saved model in memory, displays it as unusable
+  (`no model — /login` + note), and — via the 944-gate — no longer
+  re-writes it. The seed (`explicit:false`) never set
+  `explicitModelSelection`, so no `setModel` write happens either.
+  Deliberate: display fixes the lie; rewriting user files is out of
+  scope.
 
-`anthropic.ts` "No API key found" message appended (interactive-relevant,
-harmless in print):
+**Decision D5 — anthropic provider error teaching:**
+
+`anthropic.ts:146` "No API key found" message appended:
 
 ```
   /login anthropic  (interactive — stores the key in ~/.imp/auth.json)
 ```
 
-The other families' providers already teach their env var; their in-REPL
-`/login` pointer arrives with #login-dialog polish, out of scope here.
+Other families' providers already teach their env var; their in-REPL
+`/login` pointers arrive with #login-dialog polish, out of scope.
+
+**Decision D6 — `/login` mid-session footer refresh (round-1 F3):**
+
+`/login` and `/logout` success paths call `ctx.refreshFooter?.()`.
+With the live probe (3.1) the footer then flips
+`no model — /login` → the model id on the very next repaint. Today
+`refreshFooter` is only invoked from `/think` (`commands.ts:1622,1635`)
+— the login paths never repaint.
 
 ### 3.3 Which surfaces change
 
-| Surface                     | Today (0.1. seam)                        | After                                                        |
+| Surface                     | Today                                    | After                                                        |
 | --------------------------- | ---------------------------------------- | ------------------------------------------------------------ |
-| Interactive banner identity | `… · claude-sonnet-4-5`                | `… · no model available — run /login to connect one`         |
-| Footer model segment        | dead id shown                            | `no model — /login`                                          |
+| Interactive banner identity | `… · claude-sonnet-4-5`                  | `… · no model available — run /login to connect one` (unusable only) |
+| Footer model segment        | dead id shown                            | `no model — /login`; think segment dropped (unusable only)   |
 | Startup note (interactive)  | none                                     | one `▪` line (D2), after banner via startup-notes deferral    |
 | Print mode                  | session written, then key error          | clean pre-flight error, exit 1, no session/log side effects  |
-| Session seed                | dead default persisted                   | skipped while unusable; message history still persists       |
+| Session seed (3 sites)      | dead default persisted on warmup/new/resume | skipped while unusable; message history still persists     |
 | anthropic error text        | env vars only                            | + `/login anthropic` line                                    |
-| `--help` model line         | `default: $IMP_MODEL or claude-sonsur-…` | unchanged (the default id itself stays as the fallback id; only *display as in-use* changes) |
+| /login, /logout             | footer stale until next turn             | `refreshFooter()` on success (D6)                            |
+| `--help` model line         | `default: $IMP_MODEL or claude-sonnet-4-5` | unchanged — the id stays the fallback ROUTING target; only display-as-in-use changes |
 
-`--help` unchanged: the id remains the fallback *routing* target for bare
-ids; what changes is that imp no longer *presents* it as usable. If every
-family is unconfigured AND the user passes `-m whatever`, behavior is
-today's error path (unchanged).
+`--help` unchanged: if every family is unconfigured AND the user passes
+`-m whatever`, print pre-flight (D3) catches it; the id itself remains
+the documented fallback.
 
 ### 3.4 Tests
 
-1. Banner/footer: unusable → `no model available — run /login` / `no model — /login`; usable → byte-identical to today (snapshot).
-2. Startup note: fresh install shows the `▪ no model available…` line; another-family-credential case shows the targeted note; no note when usable.
-3. `familyConfigured`-based availability seam: per-family table test (env only / stored only / neither / codex OAuth stored).
-4. Print pre-flight: no session file created on unusable `-p` run (P4), stderr text, exit 1.
-5. `imp -c` after a fresh-install session → resolves via startup chain, not the dead default.
-5b. Footer follows `/model` switch to an unconfigured family mid-session: shows `no model — /login <family>` (state change re-probe).
+1. Banner: unusable → identity line ends with `no model available — run /login to connect one`; usable → byte-identical to today's pinned `imp 0.1.0 · session [0-9a-f]{8} · <model>` (`test/repl.test.ts:145` keeps passing).
+2. Footer: unusable → `no model — /login`, NO think segment; usable → pinned footer bytes (repl-tui) unchanged.
+3. Startup note: fresh install shows the `▪ no model available…` line after the banner (release-order via releaseProbe); another-family-credential case shows the targeted note; zai+glm bare id shows ONLY the specific zai note (F5 suppression); no note when usable.
+4. Availability seam: per-family table (env only / stored only / neither / codex OAuth stored), `IMP_AUTH_PATH` hermetic.
+5. Print pre-flight: unusable `-p` run → stderr text, exit 1, ZERO files under the session dir AND the log dir (P4).
+6. `imp -c` after a model-less fresh-install session → resolves startup chain; the session file gains NO model row.
+7. `/new` while unusable → new session also gains no model row (F2 third site).
+8. Resume a 0.1.0-shaped session (seeded dead model, explicit:false) without credential → banner shows unusable, session file NOT rewritten (byte-compare).
+9. Interactive submit while unusable (D4 consequence, round-1 F8): turn fails with provider key error, message rows persist, `getModel()` stays `undefined`, footer still `no model — /login`.
+10. `/login <family>` success → footer flips to the model segment (D6; scripted secret input via existing login-test harness).
+11. `/model` switch mid-session to an unconfigured family → footer `no model — /login` (live probe).
+12. Test-seam determinism (D6/P6): injected provider + host env with `ANTHROPIC_API_KEY` set → footer shows the model (usable), banner unchanged.
+13. D5: anthropic error text contains `/login anthropic` (provider unit test).
 
-Tests live in `test/` (vitest, existing conventions: hermetic `IMP_AUTH_PATH`,
-temp `HOME`, env scrubbing via existing fixtures).
+## 4. Reviewer questions (round 1) — resolutions folded in
 
-5c. D5 anthropic error contains `/login anthropic` (provider unit test).
-
-## 4. Reviewer questions (pre-registered)
-
-Q1. Is skipping `seedModel` when unusable acceptable to the session-format
-    contract? (Design intent: yes — `getModel() === null` is already a
-    supported state; `restoreModelFromSession` handles null today.)
-Q2. Should the footer `no model — /login` replace the think segment too?
-    (Draft: no — think segment renders only for knob-bearing models; an
-    unusable model still has a thinking meta. Keep both segments.)
-Q3. Print-mode pre-flight: fail-fast vs let the provider error surface
-    after the session is written? (Draft: fail-fast, P4.)
-Q3b. -m explicit + unusable: fail-fast too, or let it run? (Draft: same
-    fail-fast — the user named a family with no credential; the error
-    names the family and its env var. Consistent with D3.)Q4. Does the banner identity line get too long? (Draft: the suffix
-    `no model available — run /login to connect one` is 42 chars; the
-    identity line is already ~50 chars → ~92 chars worst case. Acceptable
-    for TUI; acceptable for legacy shells? Reviewer call.)
-Q5. Resume a session whose saved model is now unconfigured (key revoked):
-    resume still works (history loads), footer shows `no model — /login`,
-    teaching note renders. Session model stays saved; switching via /model.
-    (Draft: this is right — resume must not block on credentials.)
+- Q1 seed-skip legality → YES (verified: model-less sessions are
+  contract-legal today); but resume re-seeds at `runner.ts:944` — now
+  gated (D4).
+- Q2 think segment while unusable → DROP it (F7: contradictory with
+  "no model").
+- Q3 print fail-fast → YES; check sits before `createRunner` (session
+  AND logger both created inside it — verified).
+- Q3b explicit `-m` unusable → same fail-fast (D3).
+- Q4 banner length → accept; only ever occurs in the degraded state.
+- Q5 resume must not block on credentials → correct; plus explicit
+  no-migration statement (F6).
 
 ## 5. Out of scope
 
 - `imp login <family>` top-level for api-key families (codex-only today).
-- Auto-switching the model after `/login` (pi parity note in commands.ts
-  already documents why imp always shows the switchHint note instead).
+- Auto-switching the model after `/login` (switchHint note stays, pi parity).
 - Localizing per-family footer/banner strings.
-- `imp login` help-text rewording in `--help`/README (kept as recorded debt).
+- `imp login` help-text rewording in `--help`/README (recorded debt).
+- Other families' provider error texts gaining `/login` lines.
 
 ## 6. Milestones
 
-M1: availability seam + banner/footer + startup note (D1/D2) + tests.
-M2: print pre-flight (D3) + session-seed skip (D4) + tests.
-M3: anthropic error teaching (D5) + CHANGELOG + README note + tests.
+M1: availability seam (+ test-seam rule) + banner/footer + startup note
+    (D1/D2 + F5 suppression + F7 drop-think) + tests 1–4, 12.
+M2: print pre-flight (D3) + three-site seed gating (D4) + /login footer
+    refresh (D6/F3) + tests 5–11.
+M3: anthropic error teaching (D5) + CHANGELOG + README note + test 13.
 
-Each milestone lands as its own commit on the branch; independent code
-review after M3; merge `--no-ff` to main.
+Each milestone lands as its own commit; independent code review after
+M3; merge `--no-ff` to main.
 
 ## 7. References
 
 - Feedback report (this conversation, 2026-09-28).
-- `docs/m15-settings-design.md` — the startup model chain this design
-  sits on top of (env > trusted project > global > builtin).
-- `src/provider/discover.ts familyConfigured` — the probing seam reused.
+- `docs/m15-settings-design.md` — the startup model chain this sits on.
+- `src/provider/discover.ts familyConfigured` — the probe reused.
 - `src/runner.ts noteMissingZaiCredential` — the note pattern generalized.
 - `docs/login-dialog-design.md` — #login-dialog scope boundary.
+
+## 8. Round-1 review record (2026-09-28)
+
+Verdict FIX-FIRST, 8 findings — all verified against source before
+folding:
+
+- F1 (P3) line-citation drift (anthropic throw 146 not 120; zai note 909
+  not 905; `getModel()` undefined not null) → fixed in §1/§3.2.
+- F2 (P0) resume path re-seeds dead default (`runner.ts:944`) → D4 gates
+  all THREE seed sites (560/676/944).
+- F3 (P1) /login never repaints footer → D6 adds refreshFooter calls.
+- F4 (P1) "few state-change points" vs per-turn footer → resolved as
+  LIVE probe at render time (§3.1), no cache.
+- F5 (P2) double note for bare glm-* → D2 suppression rule.
+- F6 (P2) 0.1.0 session migration unstated → explicit no-migration (D4).
+- F7 (P2) `think:medium` beside `no model` → think segment dropped (D1).
+- F8 (P3) missing submit-while-unusable test → test 9.

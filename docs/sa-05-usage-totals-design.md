@@ -30,9 +30,10 @@ Design decisions introduced by this document (flagged for review):
   they carry no model stamp.
 - **L2** A failed main-session summarizer call leaves no entry, so its usage is
   not durable (§4.6, limitation).
-- **L3** A child transcript without a parent-side record is unobservable in the
-  parent file (§4.6, limitation; SA-06 registry is the future reconciliation
-  source).
+- **L3** (narrowed by round-1 review) A task tool-result without a parsable
+  record is a *visible* incompleteness signal (§4.1.2b). The only remaining
+  unobservable window is a SIGKILL between child completion and any parent-side
+  write — nothing is persisted at all (§4.6, residual limitation).
 
 ## 1. Problem (source-verified)
 
@@ -49,8 +50,11 @@ Design decisions introduced by this document (flagged for review):
   `CompactionEntry.usage` (`store.ts:87`, written by `compaction.ts:688` →
   `store.ts:504`) and consumed by nothing. **Branch summaries drop usage
   entirely**: `BranchSummaryEntry` (`store.ts:82`) has no usage field and
-  `appendBranchSummary(summary)` (`store.ts:699`) takes no usage, even though
-  the call site (`runner.ts:794`) has the summarizer result in hand.
+  `appendBranchSummary(summary)` (`store.ts:699`) takes no usage. The call
+  site (`runner.ts:794`) receives only the summary string today —
+  `summarizeBranchSegment` returns `run.summary.trim()` (`compaction.ts:541`)
+  and discards `run.usage` internally, so SA-05 extends its return value
+  (§3.3) before the runner can stamp the entry.
 - **Headless** `printSessionStats()` (`runner.ts:1241`) and `/status`
   (`src/repl/commands.ts:1762`) print `stats()` (`store.ts:785`) — active-branch
   message entries only. Their "cumulative" figures are branch-scoped and blind
@@ -131,8 +135,14 @@ export interface ModelUsage {
 
 export interface UsageTotals {
   parent: UsageBucket;      // assistant message entries (all branches)
-  child: UsageBucket;       // task records (all attempts, deduped)
-  summarizer: UsageBucket;  // compaction + branchSummary entries (main and child)
+  child: UsageBucket;       // task records (all attempts, deduped) — INCLUDES
+                            // the child's own summarizer usage: TaskRecord.usage
+                            // is the attempt-ledger total (task + summarizer,
+                            // subagent.ts:332), so it is counted exactly once
+  summarizer: UsageBucket;  // MAIN-session compaction + branchSummary entries
+                            // only — child-session compaction entries live in
+                            // the child file and are unreachable from the
+                            // parent scan (their usage travels in the record)
   total: UsageBucket;       // parent + child + summarizer
   byModel: ModelUsage[];    // first-seen order (cosmetic; deterministic)
   incomplete: { parent: boolean; child: boolean; summarizer: boolean };
@@ -166,9 +176,11 @@ export function priceUsageTotals(totals: UsageTotals, rateFor: RateLookup): Pric
 
 Supporting refactor (no behavior change): export a per-entry helper from
 `src/core/task-record.ts` — `taskRecordsInEntry(entry: SessionEntry): TaskRecord[]`
-over the existing private parser; `collectTaskRecords` becomes a loop over it.
-The tracker keeps its own `Set<attemptId>` for incremental dedupe (same
-defensive rule, same semantics).
+over the existing private parser. Contract (pinned, review P2): the helper
+returns validated records **in entry order and does not dedupe**;
+`collectTaskRecords` keeps the single cross-entry `seen` set (behavior
+unchanged); the tracker keeps its own `Set<attemptId>` spanning entries — never
+reset per entry, never per sync.
 
 ### 3.2 Entry format additions (additive; readers ignore unknown fields)
 
@@ -204,9 +216,19 @@ the added optional argument).
 
 `SummarizerRun` (`compaction.ts:379`) gains `usageMissing: boolean` (per call;
 set in the same places that call `recordMissingUsageReport`).
-`summarizeWithRetry` combines hops (`missing = hopA.missing || hopB.missing` —
-mirroring the ledger's accumulate-identically semantics) and both public
-results (`CompactHistoryResult`, branch-summary path) expose it.
+`summarizeWithRetry` combines hops (`usage = addUsage(hopA, hopB)`,
+`missing = hopA.missing || hopB.missing` — mirroring the ledger's
+accumulate-identically semantics); a test must assert the merged numbers and
+the OR'd flag agree on the cap-retry path.
+
+Two public results change shape:
+
+- `CompactHistoryResult` gains `usageMissing` (compaction.ts already returns
+  `usage`);
+- `summarizeBranchSegment` currently returns `string` (`compaction.ts:541`);
+  it will return `{ summary, usage, usageMissing }` (or equivalent) so the
+  runner can stamp the branchSummary entry (§4.4). Its caller
+  (`runner.ts:794`) is adjusted.
 
 ### 3.4 Runner accessor
 
@@ -219,7 +241,13 @@ transcript rescans.
 ### 3.5 Display consumers
 
 - `repl.ts::refreshFooter()` — the usage segment reads the priced aggregate
-  (§4.5); CH% and the ctx% logic stay live-history/estimate based.
+  (§4.5); CH% and the ctx% logic stay live-history/estimate based. **Sync
+  point (review P1):** `refreshFooter` keeps its existing `#footer-per-turn`
+  cadence (`repl.ts:654-656` on every assistant `message_end`, plus the settle
+  sites `:950`/`:967`); the aggregate syncs inside every refresh call
+  (O(new entries), no new triggers). A task result therefore becomes visible
+  at the next footer refresh, i.e. the next assistant `message_end` or the
+  run settle — exactly the cadence the footer already has for ctx%.
 - `runner.ts::printSessionStats()` (headless) and `commands.ts` `/status`
   session line — `in/out` switch to the aggregate (`work in X / out Y` +
   money + markers); `N msgs` stays `stats()`-based and labeled as the active
@@ -244,10 +272,19 @@ Scan = `session.getEntries()` — all entries, all branches:
    - `launched` + `usage` present: +usage, priced at
      `record.binding?.reference ?? null`; `usage.incomplete === true` → child
      incomplete;
-   - `launched` + `usage` absent: child incomplete (unknown work), no numbers.
-3. `compaction` entry → summarizer bucket: +`usage` (if present), priced at
-   `entry.model`; `entry.usageMissing === true` → summarizer incomplete;
-   usage present without `model` → legacy (L1).
+   - `launched` + `usage` absent: child incomplete (unknown work), no numbers;
+   - **(2b, review P1)** a result with `toolName === "task"`
+     (`tools/task.ts:250`) whose `taskRecord` is absent or fails validation:
+     **child incomplete** (no numbers). This is the visible form of L3 — it
+     covers SA-03's no-record exception paths and the synthetic closers
+     `persistMissingToolResults` writes on force quit
+     (`runner.ts:1251-1263`, callers `repl.ts:1351`, `cli.ts:871`).
+     In-flight task calls (a `toolCall` with no result yet) are deliberately
+     **not** flagged: that is the normal state during a live run, and the
+     durable signal arrives with the real or synthetic result.
+3. `compaction` entry → summarizer bucket (main session only): +`usage` (if
+   present), priced at `entry.model`; `entry.usageMissing === true` →
+   summarizer incomplete; usage present without `model` → legacy (L1).
 4. `branchSummary` entry → same as 3.
 
 **Never counted** (each with its reason):
@@ -317,6 +354,10 @@ usageTotalsTracker(entries):
 Footer usage segment (whole-session aggregate; same visual shape as today):
 
 - `↑i ↓o`, `R…`, `W…` from `total` (shown when > 0, as today);
+- **segment presence predicate restated (review P1):** the money segment
+  renders whenever `usd > 0 || subscription || unpriced nonzero || any
+  incomplete flag` — the last two disjuncts are new (the old code gated on
+  `cost > 0 || subscription` only, `repl.ts:899`);
 - money segment rules:
   | priced sum | unpriced usage | incomplete | segment |
   |---|---|---|---|
@@ -360,7 +401,8 @@ the limitation is documented rather than hidden.
 | summary entry `usageMissing: true` | summarizer incomplete |
 | legacy entry (pre-SA-05) | counted as reported (L1); unpriced without `model` |
 | reference with no rate | `unpriced` + partial marker (pricing unknown ≠ accounting unknown) |
-| child transcript without parent record | unobservable in the parent file (L3; SA-06 registry = future reconciliation source) |
+| task tool-result without a parsable record | child incomplete — visible (rule 2b) |
+| SIGKILL between child completion and any parent-side write | nothing in the file → not detectable (narrowed L3 residual; SA-06 registry = future reconciliation source) |
 | failed main-session summarizer call | no entry → usage not durable (L2; child-side summarizer failures ARE durable — the SA-04 ledger folds them into the record's totals) |
 
 ## 5. Edge cases and threats
@@ -380,14 +422,18 @@ the limitation is documented rather than hidden.
    no per-render rescans (task list requirement).
 7. **Money precision**: per-model buckets priced with the same formula as
    today; display rounds to 3 decimals; no new currency.
-8. **SA-07 precondition** (recorded for the later integration): a continued
+8. **No-record visibility (rule 2b)**: synthetic closers
+   (`persistMissingToolResults`) have `toolName === "task"` and no record, so
+   the child bucket goes incomplete at the next sync — deliberate; scoped to
+   results, so mid-run in-flight calls never flash the marker.
+9. **SA-07 precondition** (recorded for the later integration): a continued
    child must append a *new* task record (new `attemptId`) carrying only its
    attempt delta; the aggregate then adds it exactly once with **no SA-05
    change**. SA-07 must not mutate or rewrite earlier records (append-only
    file) and must not re-report lifetime usage.
-9. **Ordering**: sums are commutative; `byModel` order is first-seen and
-   cosmetic; tests must not depend on catalog rate *values* except where a
-   fake `RateLookup` is injected.
+10. **Ordering**: sums are commutative; `byModel` order is first-seen and
+    cosmetic; tests must not depend on catalog rate *values* except where a
+    fake `RateLookup` is injected.
 
 ## 6. Behavior-change inventory (visible, intended)
 
@@ -399,6 +445,17 @@ the limitation is documented rather than hidden.
    at the current model (`repl.ts:873` behavior replaced).
 4. The `$` segment can carry `~` / `!` / `$?` markers.
 5. Headless session line and `/status` switch their `in/out` scope (labeled).
+
+**Pinned tests and docs updated intentionally (review P1):**
+
+- `test/repl-status.test.ts:314-320` ("models outside the cost table omit the
+  `$` segment entirely") → the same run now renders `$?` (usage present, rate
+  unknown). The test is updated to the new predicate above, not deleted.
+- `test/repl-commands.test.ts:786` and `test/runner.test.ts:313` pin the exact
+  `cumulative` session-line strings → updated to the new line (work scope +
+  markers), with `msgs (active branch)` labeling.
+- `docs/m3-repl-design.md:679` documents the old session-stats line → updated
+  to the new contract (the line's scope changes are recorded there).
 
 Unchanged: `stats()`, ctx%, compaction triggers, CH%, the per-run line, session
 file compatibility (additive fields only), provider request bodies.
@@ -421,8 +478,12 @@ file compatibility (additive fields only), provider request bodies.
   when the parent model has rates); `taskRecordsInEntry` refactor pinned by the
   existing `task-record` tests.
 - **`test/compaction.test.ts` / `test/child-compaction.test.ts`**: stamps
-  written (model + usageMissing: reported / missing / both-hops-capped cases);
-  rejected summaries still persist nothing (existing pin).
+  written (model + usageMissing: reported / missing / both-hops-capped cases;
+  merged usage and the OR'd flag must agree); rejected summaries still persist
+  nothing (existing pin); **child-compaction-exactly-once**: a child that runs
+  its own compaction contributes its summarizer tokens exactly once — through
+  `TaskRecord.usage`, never through a main-session summarizer entry (the
+  "compaction does not erase incurred work" acceptance case).
 - **`test/session-store*.test.ts`**: additive-field round-trip (parse
   tolerance); `stats()` results unchanged.
 - **Runner/repl suites**: `printSessionStats`/`/status` lines show the
@@ -459,5 +520,34 @@ implementation review; owner acceptance before `--no-ff` merge.
 
 ## 10. Design review record
 
-- Pending round 1 (independent adversarial review, fresh context) — to be
-  appended here with findings and closures.
+### Round 1 (2026-09-27, fresh context) — APPROVE WITH CORRECTIONS
+
+All corrections closed in this revision.
+
+- **P1-1** summarizer-bucket wording was wrong and hid the child-summarizer
+  attribution: child compaction entries are unreachable from the parent scan;
+  a child's summarizer usage is already inside `TaskRecord.usage`
+  (`subagent.ts:332`) → attributed to the child bucket, counted once. §3.1,
+  §4.1 fixed; exactly-once test added (§7.2).
+- **P1-2** footer staleness: the sync point was never stated. §3.5 now pins the
+  existing `#footer-per-turn` cadence (message_end + settle sites), with the
+  aggregate syncing inside every refresh; no new triggers.
+- **P1-3** L3 was documentation, not visibility: the acceptance checkbox
+  "missing persistence is visible" was mis-satisfied. New rule 2b (§4.1): a
+  `task` tool-result without a parsable record → child incomplete; covers
+  SA-03's no-record paths and the synthetic closers. Narrowed residual (kill
+  before any write) documented in §4.6.
+- **P1-4** three pinned tests + one docs promise pin the replaced output.
+  Enumerated with intended updates in §6.
+- **P2-1** `taskRecordsInEntry` contract (order, no dedupe, cross-entry
+  sets) pinned in §3.1.
+- **P2-2** cap-retry merge agreement (numbers vs flag) added to §7.2.
+- **P2-3** `$?` marker noise for legacy/unpriced sessions: accepted under D4's
+  honesty rule (unknown shown as unknown); owner notified at acceptance.
+- **P3-1** §1.1 overstated what `runner.ts:794` owns (`summarizeBranchSegment`
+  returns the summary string only) — corrected; the signature change is
+  explicit in §3.3.
+- **P3-2** money drifts with the live catalog between sessions — already
+  acknowledged under D4.
+- **P3-3** naming: `usage-totals.ts` is a derived view, not a second ledger —
+  satisfies "reuse the SA-03 storage contract" (§8 note kept).

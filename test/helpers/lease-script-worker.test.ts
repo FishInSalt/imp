@@ -53,9 +53,21 @@ describe("lease script worker", () => {
 
 		if (role === "a1") {
 			seams.onAfterCreate = () => writeMarker(dir, "a-created");
-			seams.onBeforeScan = () => waitMarkerSync(dir, "b-done");
+			seams.onBeforeScan = () => {
+				waitMarkerSync(dir, "b-done");
+				waitMarkerSync(dir, "d-done");
+			};
 			const result = acquireChildLease(child, "a1-attempt", seams);
 			log(result, "a1-attempt");
+			if (result.ok) result.lease.release();
+			return;
+		}
+		if (role === "d1") {
+			// Joins after B's refusal cleanup, while A is paused pre-scan: must
+			// still be refused because A's candidate is visible (review finding 1).
+			const result = acquireChildLease(child, "d1-attempt", seams);
+			log(result, "d1-attempt");
+			writeMarker(dir, "d-done");
 			if (result.ok) result.lease.release();
 			return;
 		}

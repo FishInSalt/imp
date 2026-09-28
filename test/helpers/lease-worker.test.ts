@@ -41,9 +41,10 @@ describe("lease multiprocess worker", () => {
 		let acquired = 0;
 		let refused = 0;
 		for (let step = 0; step < steps; step += 1) {
-			// Production defaults (no pid/host/machineId/nonce seams): the real
-			// cross-process protocol runs, including machine-id initialization.
-			const result = acquireChildLease(childFile, `${tag}-${step}`);
+			// Production identity defaults (no pid/host/machineId/nonce seams);
+			// maxAttempts: 1 makes contention explicit for the refusals counter
+			// (the production retry loop would absorb it silently).
+			const result = acquireChildLease(childFile, `${tag}-${step}`, { maxAttempts: 1 });
 			if (!result.ok) {
 				refused += 1;
 				await new Promise((resolve) => setTimeout(resolve, 2));

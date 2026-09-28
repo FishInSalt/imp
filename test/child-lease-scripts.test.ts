@@ -84,18 +84,29 @@ async function freshDir(prefix: string): Promise<string> {
 }
 
 describe("lease — deterministic multiprocess interleavings (T30b)", () => {
-	it("(i) A pauses before scanning while B sees A: A proceeds, B refuses", async () => {
+	it("(i) A pauses before scanning; B and a later D are refused; A proceeds — exactly one holder", async () => {
 		const dir = await freshDir("imp-lease-s1-");
-		const [codeA, codeB] = await Promise.all([runRole(dir, "a1"), runRole(dir, "b1")]);
-		expect(codeA).toBe(0);
-		expect(codeB).toBe(0);
+		const a = runRole(dir, "a1");
+		await waitForMarker(dir, "a-created"); // A's candidate must exist before B runs
+		const b = await runRole(dir, "b1");
+		expect(b).toBe(0);
+		await waitForMarker(dir, "b-done");
+		// Multi-acquire window (review finding 1): a THIRD acquirer joining
+		// after B's refusal cleanup must still see A's live candidate.
+		const d = await runRole(dir, "d1");
+		expect(d).toBe(0);
+		await waitForMarker(dir, "d-done");
+		expect(await a).toBe(0);
 		const results = parseResults(dir);
 		const byTag = new Map(results.map((entry) => [entry.tag, entry.outcome]));
-		expect(byTag.get("a1")).toBe("ok"); // B's refusal unlinked B's candidate…
-		expect(byTag.get("b1")).toBe("busy"); // …so A's later scan saw only itself
+		expect(byTag.get("a1")).toBe("ok");
+		expect(byTag.get("b1")).toBe("busy"); // saw A's candidate at scan time
+		expect(byTag.get("d1")).toBe("busy"); // B's cleanup did NOT open a window: A was still visible
+		expect(results.filter((entry) => entry.outcome === "ok")).toHaveLength(1);
 		expect(existsSync(path.join(dir, "a-created"))).toBe(true);
 		expect(existsSync(path.join(dir, "b-done"))).toBe(true);
-		// Both candidates were cleaned (B on refusal, A on release).
+		expect(existsSync(path.join(dir, "d-done"))).toBe(true);
+		// All candidates cleaned (refusals + A's release).
 		expect(readdirSync(path.join(dir, "child.jsonl.lease"))).toHaveLength(0);
 	}, 60_000);
 

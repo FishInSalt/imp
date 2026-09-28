@@ -199,6 +199,25 @@ describe("child lease (intent + verify)", () => {
 		expect(refused.ok).toBe(false);
 		expect(seenAtScan).toBe(true); // never unlinked between create and the decision
 		expect(existsSync(ownPath)).toBe(false); // refusal cleanup ran AFTER the decision
+
+		// Held path: with no blockers the candidate exists at scan time and
+		// after the acquire returns — only release removes it.
+		const clean = await setup("imp-lease-inv2-");
+		const cleanOwn = path.join(
+			leaseDirFor(clean.child),
+			candidateName(leaseOptions.pid, leaseOptions.nonce, "inv2"),
+		);
+		let seenHeld: boolean | undefined;
+		const held = acquireChildLease(clean.child, "inv2", {
+			...leaseOptions,
+			onBeforeScan: () => {
+				seenHeld = existsSync(cleanOwn);
+			},
+		});
+		expect(held.ok).toBe(true);
+		expect(seenHeld).toBe(true);
+		expect(existsSync(cleanOwn)).toBe(true);
+		if (held.ok) held.lease.release();
 	});
 
 	it("T26-fairness: exclusive access holds when the heartbeat is never started", async () => {

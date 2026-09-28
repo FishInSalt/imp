@@ -540,6 +540,24 @@ NFS-style delayed visibility is an unsupported scenario, §14), and a
 proceeding holder never unlinks its own candidate. The heartbeat is not
 part of this argument.
 
+Multi-acquire extension (implementation review, finding 1): the single-pair
+proof plus three lifetime facts establishes the stronger SEQUENCE claim —
+no ordering of creates, refusal cleanups and stale retirements admits a
+second holder:
+
+- a proceeding holder's candidate exists from before its scan until its
+  release (the pinned invariant) and its owner executes throughout;
+- the only unlinks are refusal cleanup (that process does NOT proceed),
+  release (that process finished executing) and stale retirement (owner
+  dead in this namespace and older than the grace);
+- therefore, while any holder executes, its visible fresh candidate blocks
+  every later acquirer's scan; a scan that sees no blocker can only mean
+  every other candidate belongs to finished or refused attempts.
+
+T30b(i) exercises the sequence directly: B refuses and cleans up, a third
+acquirer D joins and is STILL refused (A's candidate remained visible), and
+only then does A proceed — exactly one holder.
+
 Owner's round-3 repro maps to: A cannot "move a live lease away" (nothing
 is ever moved); a third process's create is never enough by itself (it must
 also pass step 6's scan, which sees the live holder). Stale cleanup unlinks
@@ -822,8 +840,10 @@ remains stable while another process initializes concurrently (the
 stability requirement: the lease's id still equals the file's id).
 T30 the REAL two-process hammer test (candidate semantics, refusal counts
 asserted); T30b the DETERMINISTIC three-process regression: (i) A creates
-and pauses before scanning while B creates and scans → at most one
-proceeds; (ii) A pauses before scanning a stale candidate, B
+and pauses before scanning while B creates and scans → B refuses; a third
+acquirer D joins after B's cleanup and is STILL refused (A's candidate
+visible); A then proceeds — exactly one holder, pinning the multi-acquire
+sequence claim; (ii) A pauses before scanning a stale candidate, B
 creates+scans+proceeds, A resumes and refuses; (iii) B and C create
 simultaneously against a stale candidate → both refuse or exactly one
 proceeds, and the stale candidate was cleaned without granting anything;

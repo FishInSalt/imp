@@ -1,4 +1,5 @@
 import { familyConfigured } from "./discover.js";
+import { LOGIN_TARGETS } from "./login-targets.js";
 import type { ProviderName } from "./resolve.js";
 
 /**
@@ -30,15 +31,12 @@ export interface ModelAvailability {
 	configuredFamilies: ProviderName[];
 }
 
-const ALL_FAMILIES: readonly ProviderName[] = [
-	"anthropic",
-	"openai",
-	"openai-codex",
-	"zai",
-	"deepseek",
-	"moonshotai",
-	"moonshotai-cn",
-];
+/** Derived from LOGIN_TARGETS (implementation review F7c) — a hand list
+ *  here would silently drop a future family: discover.ts's exhaustive
+ *  switch forces the probe to learn it, but a stale side list would keep
+ *  reporting it unconfigured. LOGIN_TARGETS is the one registry that
+ *  ships with every provider (it drives /login). */
+const ALL_FAMILIES: readonly ProviderName[] = LOGIN_TARGETS.map((t) => t.family as ProviderName);
 
 export function modelAvailability(providerName: ProviderName): ModelAvailability {
 	const configuredFamilies = ALL_FAMILIES.filter(familyConfigured);

@@ -257,7 +257,13 @@ describe("runner per-session model restoration", () => {
 			expect(snapshot(legacy)).toEqual(before);
 			expect(reopen(legacy).getModel()).toBeUndefined();
 			await live.runTurn({ userMessage: "capture legacy seed" });
-			expect(reopen(legacy).getModel()).toEqual(initial);
+			// #fresh-install-hint round-2 review F2: the seed gate probes the
+			// model BEING persisted (anthropic, no credential — only zai/openai
+			// hold keys in this test), so a model-less legacy session resumed
+			// mid-session stays model-less even after a turn. The OLD assertion
+			// (seed lands as the startup default) pinned the pre-F2 behavior —
+			// the stale-family verdict — which P4 forbids.
+			expect(reopen(legacy).getModel()).toBeUndefined();
 		} finally {
 			if (prevOpen === undefined) delete process.env.OPENAI_API_KEY;
 			else process.env.OPENAI_API_KEY = prevOpen;

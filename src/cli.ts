@@ -711,12 +711,15 @@ function loadSkillSetup(
  *  error text. Reuses LOGIN_TARGETS for the family→env-var mapping (no
  *  hand table). The D7 seam does not apply here: the CLI entry never
  *  injects a provider (tests exercise this via env scrubbing).
- *  -c/-r SKIP the pre-flight entirely (implementation review F1): the
- *  saved session model outranks opts.model there, and resolving it here
- *  would duplicate restoreModelFromSession — the provider's own key
- *  error teaches, exactly like 0.1.0. */
+ *  -c/-r SKIP the pre-flight UNLESS -m was given explicitly (round-2
+ *  review F4): the SAVED session model outranks opts.model there, and
+ *  resolving it here would duplicate restoreModelFromSession — the
+ *  provider's own key error teaches, exactly like 0.1.0. An EXPLICIT -m
+ *  outranks the saved model (restoreModelFromSession's explicit branch),
+ *  so the pre-flight applies again: the user just named a family. */
 function printModelUnusable(opts: CliOptions): string | undefined {
-	if (opts.resume !== undefined || opts.continueRecent) return undefined;
+	if (opts.modelExplicit !== true && (opts.resume !== undefined || opts.continueRecent)) return undefined;
+	if (opts.model.trim() === "") return undefined; // F7e: a blank id is a parse matter, not a credential one
 	const ref = parseModelRef(opts.model);
 	if (modelAvailability(ref.provider).usable) return undefined;
 	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);
@@ -739,6 +742,8 @@ function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): Ru
 		argv,
 		model: opts.model,
 		modelExplicit: opts.modelExplicit,
+		// #fresh-install-hint (round-2 review F3): print mode marks itself —
+		// the D2 teaching note is interactive-only (stdout byte contract).
 		thinking: opts.thinking,
 		maxTokens: opts.maxTokens,
 		maxTurns: opts.maxTurns,
@@ -908,6 +913,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 		runner = await createRunner({
 			projectSettingsAllowed: projectTrusted,
 			...runnerOptions(opts, argv, renderer),
+			interactive: false, // #fresh-install-hint F3: print mode — no D2 note on stdout
 			systemPromptProjectAllowed: projectTrusted,
 			agentsProjectAllowed: projectTrusted,
 			extensions: extensions.runtime,

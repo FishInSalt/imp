@@ -127,6 +127,13 @@ export interface RunnerOptions {
 	 *  -p" case — exits with HELP and no side effects (no banners, no empty
 	 *  session file). Interactive/print modes init eagerly as before. */
 	deferInit?: boolean;
+	/** #fresh-install-hint (round-2 review F3): whether this runner serves an
+	 *  INTERACTIVE session — the D2 teaching note is interactive-only (print
+	 *  mode's renderer writes stdout, whose byte contract stays empty until
+	 *  the run starts). Print mode passes false; the REPL paths leave it
+	 *  unset, defaulting to true (the pre-existing note consumers — the
+	 *  zai teaching — printed in both worlds; only the NEW note gates on it). */
+	interactive?: boolean;
 	renderer: Renderer; // ALL status output flows through this
 	/** Test seam: scripted provider instead of the real Anthropic one. */
 	provider?: LLMProvider;
@@ -232,9 +239,13 @@ export interface Runner {
 	 *  bytes); a runtime /model switch swaps in a real provider and
 	 *  probing applies again (design §3.1). */
 	modelUsable(): boolean;
-	/** #fresh-install-hint: families holding a credential right now
-	 *  (drives the D2 startup note's "configured family" wording). */
-	configuredFamilies(): ProviderName[];
+	/** #fresh-install-hint (round-2 review F5): true once the user (or the
+	 *  CLI's -m flag) has EXPLICITLY chosen the model — /model switches and
+	 *  explicit -m set it. Display surfaces that mirror "the user's pick"
+	 *  (terminal title) show the id even when the family lacks a credential;
+	 *  surfaces that mirror "what is in use" (banner/footer) keep the /login
+	 *  pointer until a credential exists. */
+	modelSelectedExplicitly(): boolean;
 	/** The renderer all status output flows through (shared with the REPL). */
 	readonly renderer: Renderer;
 	runTurn(options: RunTurnOptions): Promise<RunAgentLoopResult>;
@@ -323,6 +334,12 @@ class RunnerImpl implements Runner {
 	 *  the RunnerOptions.provider test fake — modelUsable() reports true
 	 *  without probing; cleared when a real provider replaces it. */
 	private providerIsTestFake: boolean;
+	/** #fresh-install-hint (round-2 review F3): interactive-session marker —
+	 *  gates the D2 teaching note (print stdout byte contract). */
+	private readonly interactive: boolean;
+	/** #fresh-install-hint (round-2 review F5): an explicit -m or /model pick —
+	 *  see modelSelectedExplicitly(). */
+	private modelExplicitPick: boolean;
 	providerName: ProviderName; // implements Runner's public readonly tell
 	/** The live tool table (M18: public — the MCP manager splices its bridged
 	 *  tools in at run boundaries; the array identity is stable for the loop's
@@ -386,6 +403,8 @@ class RunnerImpl implements Runner {
 		// provider (prepareModel builds real ones; same-family reuse keeps
 		// this.provider, which stays the fake — and that IS usable).
 		this.providerIsTestFake = options.provider !== undefined;
+		this.interactive = options.interactive ?? true;
+		this.modelExplicitPick = options.modelExplicit === true;
 		this.providerName = options.provider !== undefined ? parseModelRef(options.model).provider : providerName;
 		this.model = initialModel;
 		// Multi-provider review P1-3: the compaction window must follow the
@@ -964,10 +983,19 @@ class RunnerImpl implements Runner {
 	 *  #glm-retire fires for injected providers too, pinned by its tests);
 	 *  the D7 seam then governs only the NEW generic note. */
 	private noteModelCredential(reference: string, provider: ProviderName): void {
+		// Round-2 review F3: the note is INTERACTIVE-only by design (D2) —
+		// print mode's renderer writes stdout, and its byte contract keeps
+		// stdout empty until the run starts. The provider's own key error
+		// teaches on the print path (D3). The zai-specific note above this
+		// gate is 0.1.0 behavior and stays (its tests pin print output).
+		if (!this.interactive) {
+			this.noteMissingZaiCredential(reference, provider); // #glm-retire teaching keeps its 0.1.0 reach
+			return;
+		}
 		if (this.noteMissingZaiCredential(reference, provider)) return; // specific note won
 		if (this.providerIsTestFake) return; // D7 seam — pinned test bytes
-		if (modelAvailability(provider).usable) return; // family holds a credential
-		const availability = modelAvailability(provider);
+		const availability = modelAvailability(provider); // ONE probe (F7b): usable + configured list together
+		if (availability.usable) return; // family holds a credential — nothing to teach
 		if (availability.configuredFamilies.length > 0) {
 			// some family IS signed in, just not this model's — target it
 			this.options.renderer.note(
@@ -1017,8 +1045,12 @@ class RunnerImpl implements Runner {
 		// not re-seed a dead default either — this is the line that made the
 		// warmup gate pointless one `imp -c` later. The in-memory model still
 		// applies (the turn can run and fail with the provider's key error);
-		// only the PERSISTENCE is gated.
-		else if (this.modelUsable()) store.seedModel(prepared.ref);
+		// only the PERSISTENCE is gated. Round-2 review F2: probe the model
+		// BEING PERSISTED (prepared.ref.provider), not the pre-switch live
+		// family — a /resume after switching families seeded the OLD family's
+		// usability verdict into the NEW session otherwise.
+		else if (this.providerIsTestFake || modelAvailability(prepared.ref.provider).usable)
+			store.seedModel(prepared.ref);
 		const level = startup
 			? (this.options.thinking ?? this.effectiveSettings().defaultThinkingLevel ?? "medium")
 			: this.level;
@@ -1028,6 +1060,7 @@ class RunnerImpl implements Runner {
 
 	setModel(reference: string): void {
 		const prepared = this.prepareModel(reference);
+		this.modelExplicitPick = true; // F5: a /model pick is the user's explicit choice
 		this.sessionStore?.setModel(prepared.ref);
 		this.applyModel(prepared);
 		this.noteMissingZaiCredential(prepared.reference, prepared.ref.provider);
@@ -1050,8 +1083,8 @@ class RunnerImpl implements Runner {
 		return modelAvailability(this.providerName).usable;
 	}
 
-	configuredFamilies(): ProviderName[] {
-		return modelAvailability(this.providerName).configuredFamilies;
+	modelSelectedExplicitly(): boolean {
+		return this.modelExplicitPick;
 	}
 
 	get contextWindow(): number {

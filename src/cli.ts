@@ -26,7 +26,7 @@ import { McpManager } from "./mcp/manager.js";
 import { loadCatalogCache, refreshCatalog } from "./provider/catalog.js";
 import { loginCodex, logoutCodex } from "./provider/codex-auth.js";
 import { LOGIN_TARGETS } from "./provider/login-targets.js";
-import { modelAvailability } from "./provider/model-availability.js";
+import { configuredFamilies, modelAvailability } from "./provider/model-availability.js";
 import { parseModelRef } from "./provider/resolve.js";
 import {
 	credentialSourceFamilies,
@@ -761,9 +761,13 @@ function decideStartupResolution(opts: CliOptions): StartupModelDecision {
 /** #startup-model-resolution D6: print copy for the builtin-but-unresolvable
  *  case — zero families or an ambiguous (multi-source) credential set.
  *  Names the configured families and a concrete -m escape instead of the
- *  pre-D2 dead-default message. */
+ *  pre-D2 dead-default message. Implementation-review F1: the copy must
+ *  count FAMILIES, not source-collapsed families — the env-only moonshot
+ *  pair has one source but two families, and claiming "no model configured"
+ *  would be false. */
 function printNoModelText(): string {
-	const families = credentialSourceFamilies();
+	const sources = credentialSourceFamilies();
+	const families = sources.length > 0 ? sources : configuredFamilies();
 	if (families.length === 0) {
 		return "no model configured — export <FAMILY>_API_KEY (see `imp --help`) or run /login in an interactive session";
 	}

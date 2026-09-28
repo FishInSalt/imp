@@ -569,3 +569,28 @@ print multi:   no startup model — configured: zai, deepseek — pass -m zai/gl
 
 typecheck 0 · lint 0 · build ok · 119 files / 2278 tests passed
 (implementation review pending).
+
+### 10.4 Implementation review (round 1, 2026-09-28, independent fresh context)
+
+Verdict FIX-FIRST — all findings folded; gates then 119 files / 2281 tests.
+
+- F1 (P2, fixed): the print zero/multi copy keyed off the source-collapsed
+  family set, so an env-only moonshot pair (one credential, two families)
+  printed "no model configured" — false. `printNoModelText()` now counts
+  configured FAMILIES; pinned by a spawn test.
+- F2 (P3, fixed): D5's gated-off-project suppression triggered on mere file
+  presence; it now reads the untrusted file and suppresses only when it
+  actually carries a `defaultModel` (unreadable → conservative suppress).
+- F3 (P3, fixed): D3 no longer resolves the interactive `/resume` fallback
+  reference when it came from an explicit startup `-m`
+  (`mayResolve = !explicit && !fake && (saved !== undefined || modelExplicit !== true)`);
+  pinned by a test.
+- F4 (P2, closed): §6 rev2 coverage obligations — (a) subagent child-model
+  binding asserted on the D3-resolved reference, (b) usage identity
+  (`provider/modelId` stamp) asserted on a resolved-style reference with a
+  scripted provider, (c) `imp sessions` titles for auto-resolved sessions:
+  accepted gap — resolution only changes WHICH model is seeded; the seeding
+  mechanics are covered by the existing session tests.
+- F5 (P3, fixed): the D3 test now asserts the resolution note precedes the
+  resumed line.
+- F6 (P3, no action): copy/doc alignment remark only.

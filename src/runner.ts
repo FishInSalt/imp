@@ -1173,8 +1173,11 @@ class RunnerImpl implements Runner {
 		// recorded row is deliberately NOT rewritten (divergence contract,
 		// round-1 A-F2): each startup re-derives deterministically, and the
 		// row keeps recording what the session actually used. An explicit -m
-		// never enters this branch (P5).
-		if (!explicit && !this.providerIsTestFake && !modelAvailability(prepared.ref.provider).usable) {
+		// never enters this branch (P5) — including the interactive /resume
+		// fallback where -m is the only reference (round-2 impl review F3).
+		const mayResolve =
+			!explicit && !this.providerIsTestFake && (saved !== undefined || this.options.modelExplicit !== true);
+		if (mayResolve && !modelAvailability(prepared.ref.provider).usable) {
 			const fallback = resolveStartupModelFallback();
 			if (fallback !== undefined) {
 				this.options.renderer.note(

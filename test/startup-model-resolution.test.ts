@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRunner } from "../src/runner.js";
-import { makeRenderer } from "./helpers/fakes.js";
+import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 /**
  * #startup-model-resolution (design docs/startup-model-resolution-design.md):
@@ -313,6 +313,30 @@ describe("#startup-model-resolution", () => {
 		expect(err.stderr).toContain("-m zai/glm-5.3");
 	});
 
+	it("D6 print copy: env-only moonshot names both families (impl-review F1)", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const run = promisify(execFile);
+		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
+		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
+			cwd,
+			env: {
+				PATH: process.env.PATH,
+				HOME: home,
+				IMP_AUTH_PATH: path.join(home, "auth.json"),
+				MOONSHOT_API_KEY: "k",
+			},
+		}).catch((err: unknown) => err);
+		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		// one credential, two families — ambiguous for RESOLUTION, but the copy
+		// must still tell the truth (a provider IS configured).
+		expect(err.stderr).toContain("no startup model — configured: moonshotai, moonshotai-cn");
+		expect(err.stderr).not.toContain("no model configured");
+	});
+
 	// ---- D4: login-time selection ----
 
 	it("D4: /login auto-switches when no usable model exists", async () => {
@@ -506,6 +530,61 @@ describe("#startup-model-resolution", () => {
 		expect(gatedOut.output()).not.toContain("keeps this model for new sessions");
 	});
 
+	it("D3: an explicit -m model survives an interactive /resume fallback (impl-review F3)", async () => {
+		process.env.DEEPSEEK_API_KEY = "k";
+		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const cwd = path.join(root, "proj");
+		await mkdir(cwd, { recursive: true });
+		const baseDir = path.join(root, "sessions");
+		const { createSession } = await import("../src/core/session/manager.js");
+		const session = createSession(cwd, baseDir);
+		session.appendMessage({ role: "user", content: "old" }); // model-less
+		const { renderer, output } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "claude-sonnet-4-5",
+			modelExplicit: true,
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+		});
+		runner.resumeSession(session.header.id);
+		expect(runner.modelReference()).toBe("claude-sonnet-4-5");
+		expect(output()).not.toContain("using deepseek");
+	});
+
+	it("usage identity: a resolved-style reference stamps provider/modelId (impl-review F4b)", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const cwd = path.join(root, "proj");
+		await mkdir(cwd, { recursive: true });
+		const baseDir = path.join(root, "sessions");
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "deepseek/deepseek-v4-pro",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			renderer,
+			provider: scriptedProvider([assistant([{ type: "text", text: "ok" }])], []),
+		});
+		await runner.runTurn({ userMessage: "hi" });
+		const entry = runner.session
+			?.getEntries()
+			.find((candidate) => candidate.type === "message" && candidate.message.role === "assistant");
+		expect(entry?.type).toBe("message");
+		if (entry?.type === "message") {
+			expect(entry.message.modelReference).toBe("deepseek/deepseek-v4-pro");
+		}
+	});
+
 	// ---- D3: restore path ----
 
 	it("D3: resuming a stale session resolves to the unique family; row untouched", async () => {
@@ -536,6 +615,18 @@ describe("#startup-model-resolution", () => {
 			"▪ restored model zai/glm-4.7 has no credential — using deepseek/deepseek-v4-pro",
 		);
 		expect(output()).toContain("resumed");
+		// impl-review F5: the note precedes the resumed line (order pinned)
+		expect(output().indexOf("has no credential — using")).toBeLessThan(output().indexOf("▪ resumed"));
+		// impl-review F4a: subagents inherit the RESOLVED model
+		const { resolveChildModel } = await import("../src/core/child-model.js");
+		expect(resolveChildModel({ parentReference: runner.modelReference() })).toEqual({
+			ok: true,
+			binding: {
+				providerName: "deepseek",
+				wireModelId: "deepseek-v4-pro",
+				reference: "deepseek/deepseek-v4-pro",
+			},
+		});
 		// the recorded row is NOT rewritten (divergence contract)
 		expect(session.getModel()).toEqual({ provider: "zai", modelId: "glm-4.7" });
 	});

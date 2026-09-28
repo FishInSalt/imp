@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AssistantBlock } from "../core/messages.js";
@@ -786,6 +786,21 @@ function switchModel(ctx: CommandContext, id: string): void {
 	maybeNoteDefaultModelHint(ctx); // #startup-model-resolution D5
 }
 
+/** #startup-model-resolution (D5): does the (possibly gated-off) project
+ *  settings file carry a defaultModel? Unreadable/unparsable reads as
+ *  "yes" — conservative: silence the hint rather than claim the wrong
+ *  thing. Implementation-review F2: mere file presence must not count. */
+function projectDefaultModelPresent(cwd: string): boolean {
+	const file = projectSettingsPath(cwd);
+	if (!existsSync(file)) return false;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(file, "utf-8"));
+		return typeof (parsed as { defaultModel?: unknown } | null)?.defaultModel === "string";
+	} catch {
+		return true;
+	}
+}
+
 /** #startup-model-resolution (D5): after an explicit switch, teach the one
  *  command that makes it survive new sessions — at most once per session
  *  (the ReplMachine owns `hintState`), only when no explicit default already
@@ -796,8 +811,9 @@ function maybeNoteDefaultModelHint(ctx: CommandContext): void {
 	if (state === undefined || state.defaultModelHintShown) return;
 	if (settingSource(ctx, "defaultModel") !== "default") return;
 	// With project settings gated off a project defaultModel is invisible —
-	// suppress rather than claim the wrong thing (round-2 B-F5).
-	if (!ctx.runner.projectSettingsAllowed && existsSync(projectSettingsPath(ctx.runner.runnerCwd))) return;
+	// suppress rather than claim the wrong thing (round-2 B-F5; impl-review
+	// F2: only when the file actually carries one).
+	if (!ctx.runner.projectSettingsAllowed && projectDefaultModelPresent(ctx.runner.runnerCwd)) return;
 	const fallback = resolveStartupModelFallback();
 	const reference = ctx.runner.modelReference();
 	if (fallback !== undefined && fallback.reference === reference) return;

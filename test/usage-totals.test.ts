@@ -282,6 +282,79 @@ describe("SA-05 usage totals", () => {
 		expect(priced.unpriced.inputTokens).toBe(0);
 	});
 
+	it("rule 2b is exactly-once by toolCallId: a record-less repeat adds no new signal", () => {
+		const record = taskRecord({ inputTokens: 50, outputTokens: 7 });
+		const repeated: SessionEntry = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp: TS,
+			message: {
+				role: "toolResult",
+				results: [
+					{ toolCallId: "c9", toolName: "task", content: "", isError: false, taskRecord: record },
+					{ toolCallId: "c9", toolName: "task", content: "", isError: true }, // echo without the record
+				],
+			},
+		};
+		expect(usageTotalsTracker([repeated]).view().incomplete.child).toBe(false);
+		// a genuinely NEW record-less task result still flags
+		expect(
+			usageTotalsTracker([repeated, toolResultEntry("r2", "m1", "task", true)]).view().incomplete.child,
+		).toBe(true);
+	});
+
+	it("a shrinking entry array rebuilds instead of serving stale totals", () => {
+		const entries: SessionEntry[] = [
+			assistantEntry("a1", null, 10, 1, { model: "test-parent" }),
+			assistantEntry("a2", "a1", 20, 2, { model: "test-parent" }),
+		];
+		const tracker = usageTotalsTracker(entries);
+		expect(tracker.view().parent.calls).toBe(2);
+		entries.pop(); // a mutation outside the store (pathological)
+		entries.push(taskResultEntry("t1", "a1", taskRecord({ inputTokens: 5, outputTokens: 1 })));
+		const view = tracker.view();
+		const rebuilt = usageTotalsTracker(entries).view();
+		expect(view).toEqual(rebuilt);
+		expect(view.parent.calls).toBe(1);
+		expect(view.child.calls).toBe(1);
+	});
+
+	it("a record without a binding reference stays unpriced even when the parent model is priced (no fallback)", () => {
+		const entries: SessionEntry[] = [
+			assistantEntry("a1", null, 1_000_000, 0, { model: "known/model-a" }),
+			taskResultEntry(
+				"t1",
+				"a1",
+				taskRecord({ inputTokens: 700_000, outputTokens: 0 }, { binding: undefined }),
+			),
+		];
+		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), (reference) =>
+			reference === "known/model-a" ? { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } : undefined,
+		);
+		expect(priced.usd).toBeCloseTo(1, 10); // parent only — the child is NOT repriced at the parent's rates
+		expect(priced.unpriced.inputTokens).toBe(700_000);
+	});
+
+	it("a child that compacted contributes its task+summarizer totals exactly once (acceptance case)", () => {
+		// TaskRecord.usage is the attempt-ledger total: task 150/12 + summarizer 10/5.
+		const entries: SessionEntry[] = [
+			taskResultEntry("t1", null, taskRecord({ inputTokens: 160, outputTokens: 17 })),
+			// and a main-session compaction is a separate summarizer fact
+			compactionEntry("c1", "t1", { inputTokens: 4, outputTokens: 2 }, "test-sum"),
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.child).toEqual({
+			inputTokens: 160,
+			outputTokens: 17,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			calls: 1,
+		});
+		expect(view.summarizer.inputTokens).toBe(4); // never double-counted through the child
+		expect(view.total.inputTokens).toBe(164);
+	});
+
 	it("money-segment matrix (design §4.5)", () => {
 		const seg = (a: Partial<Parameters<typeof usageMoneySegment>[0]>) =>
 			usageMoneySegment({ usd: 0, subscription: false, unpricedTokens: 0, incomplete: false, ...a });

@@ -131,7 +131,12 @@ function addToModel(
 }
 
 /** One entry → its contribution. See design §4.1 (evidence model). */
-function applyEntry(state: MutableState, seenAttempts: Set<string>, entry: SessionEntry): void {
+function applyEntry(
+	state: MutableState,
+	seenAttempts: Set<string>,
+	seenTaskCalls: Set<string>,
+	entry: SessionEntry,
+): void {
 	if (entry.type === "message") {
 		const message = entry.message;
 		if (message.role === "assistant") {
@@ -144,12 +149,19 @@ function applyEntry(state: MutableState, seenAttempts: Set<string>, entry: Sessi
 				if (record === null) {
 					// Rule 2b: a task tool result without a parsable record is a
 					// visible incompleteness signal (covers SA-03 no-record paths
-					// and the synthetic force-quit closers).
-					if (result.toolName === "task") state.incomplete.child = true;
+					// and the synthetic force-quit closers). Exactly-once by
+					// toolCallId: a record-less REPEAT of an already seen call
+					// (duplicated/hand-copied entries) adds no new signal — only
+					// the first sighting of a call without a record does.
+					if (result.toolName === "task" && !seenTaskCalls.has(result.toolCallId)) {
+						state.incomplete.child = true;
+						seenTaskCalls.add(result.toolCallId);
+					}
 					continue;
 				}
 				if (seenAttempts.has(record.attemptId)) continue; // defensive dedupe
 				seenAttempts.add(record.attemptId);
+				seenTaskCalls.add(result.toolCallId);
 				if (record.launched !== true) continue; // no call ran: nothing, not incomplete
 				if (record.usage === undefined) {
 					state.incomplete.child = true; // launched without a report: unknown work
@@ -206,14 +218,34 @@ export function usageTotalsTracker(entries: readonly SessionEntry[]): UsageTotal
 		incomplete: { parent: false, child: false, summarizer: false },
 	};
 	const seenAttempts = new Set<string>();
+	const seenTaskCalls = new Set<string>();
 	let cursor = 0;
+	let lastApplied: SessionEntry | undefined;
 	let cached: UsageTotals | null = null;
+	const reset = (): void => {
+		state.parent = emptyBucket();
+		state.child = emptyBucket();
+		state.summarizer = emptyBucket();
+		state.byModel = new Map();
+		state.incomplete = { parent: false, child: false, summarizer: false };
+		seenAttempts.clear();
+		seenTaskCalls.clear();
+		cursor = 0;
+		lastApplied = undefined;
+		cached = null;
+	};
 	return {
 		view(): UsageTotals {
+			// Append-only is the contract; a truncated or mutated array (a change
+			// outside the store) rebuilds from scratch instead of serving stale
+			// totals. Identity, not length: pop-then-push must not fool it.
+			if (cursor > 0 && entries[cursor - 1] !== lastApplied) reset();
 			if (cached !== null && cursor >= entries.length) return cached;
 			for (; cursor < entries.length; cursor++) {
 				const entry = entries[cursor];
-				if (entry !== undefined) applyEntry(state, seenAttempts, entry);
+				if (entry === undefined) continue;
+				applyEntry(state, seenAttempts, seenTaskCalls, entry);
+				lastApplied = entry;
 			}
 			cached = snapshot(state);
 			return cached;

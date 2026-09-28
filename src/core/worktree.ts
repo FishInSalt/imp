@@ -457,3 +457,137 @@ export function buildWorktreeTrailer(wt: ChildWorktree, stat: string): string {
 	const statLine = stat === "" ? "" : ` (${stat})`;
 	return `\n[task] changes kept in worktree ${wt.path} on branch ${wt.branch}${statLine} — merge it in the parent directory with \`git merge ${wt.branch}\`, or inspect first with \`git -C ${wt.path} diff\`.`;
 }
+
+/** SA-06: what a continuation must re-verify about a recorded worktree. All
+ *  elements are identity checks; "no cleanliness checks" does not mean "no
+ *  identity checks" (SA-06 design §4.2). */
+export interface WorktreeIdentity {
+	repoRoot: string;
+	path: string;
+	branch: string;
+	baseline: string;
+	/** SA-01 creation snapshot; when present the branch reflog must still
+	 *  END with it (newest-first listing: the child's commits prepend, so the
+	 *  snapshot stays the oldest tail; a rewritten log loses it). */
+	creationReflog?: readonly string[];
+}
+
+export type WorktreeProbeResult =
+	| { ok: true; detail?: string }
+	| {
+			ok: false;
+			code:
+				| "worktree-repo-missing"
+				| "worktree-missing"
+				| "worktree-unregistered"
+				| "worktree-branch-swapped"
+				| "worktree-history-replaced";
+			message: string;
+	  };
+
+/**
+ * Probe a recorded worktree identity for continuation (SA-06): repository
+ * root resolves, the exact path is registered under the recorded branch, the
+ * recorded baseline is an ancestor of the branch tip (the child's own commits
+ * are expected work, not drift), and — when a creation reflog snapshot was
+ * captured at launch — the snapshot is still a prefix of the branch reflog.
+ * Never throws; every failure maps to a reason code, never a raw exit code.
+ */
+export async function probeWorktreeIdentity(identity: WorktreeIdentity): Promise<WorktreeProbeResult> {
+	const fail = (
+		code: Exclude<WorktreeProbeResult, { ok: true }>["code"],
+		message: string,
+	): WorktreeProbeResult => ({ ok: false, code, message });
+	let repoReal: string;
+	try {
+		repoReal = realpathSync(identity.repoRoot);
+	} catch {
+		return fail("worktree-repo-missing", `repository root ${identity.repoRoot} does not resolve`);
+	}
+	let wtReal: string;
+	try {
+		wtReal = realpathSync(identity.path);
+	} catch {
+		return fail("worktree-missing", `worktree path ${identity.path} does not resolve (removed or moved)`);
+	}
+	const listed = await git(repoReal, ["worktree", "list", "--porcelain"]);
+	if (listed.status !== 0) {
+		return fail(
+			"worktree-repo-missing",
+			`git worktree list failed at ${identity.repoRoot}: ${commandFailure(listed)}`,
+		);
+	}
+	const expectedBranch = `refs/heads/${identity.branch}`;
+	let registeredBranch: string | null = null;
+	for (const block of listed.stdout.split(/\n\n+/)) {
+		const lines = block.split("\n").filter((line) => line !== "");
+		const entryPath = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+		if (entryPath === undefined || entryPath === "") continue;
+		let entryReal: string;
+		try {
+			entryReal = realpathSync(entryPath); // stale/prunable entries are skipped
+		} catch {
+			continue;
+		}
+		if (entryReal !== wtReal) continue;
+		registeredBranch = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length) ?? "";
+		break;
+	}
+	if (registeredBranch === null) {
+		return fail(
+			"worktree-unregistered",
+			`worktree ${identity.path} is no longer registered in ${identity.repoRoot} — it was removed`,
+		);
+	}
+	if (registeredBranch !== expectedBranch) {
+		return fail(
+			"worktree-branch-swapped",
+			`the worktree at ${identity.path} is on ${registeredBranch === "" ? "(detached HEAD)" : registeredBranch}, not ${expectedBranch}`,
+		);
+	}
+	const tipResult = await git(repoReal, ["rev-parse", "--verify", "--quiet", expectedBranch]);
+	const tip = tipResult.stdout.trim();
+	if (tipResult.status !== 0 || tip === "") {
+		return fail("worktree-history-replaced", `branch ${expectedBranch} cannot be resolved`);
+	}
+	const ancestor = await git(repoReal, ["merge-base", "--is-ancestor", identity.baseline, tip]);
+	if (ancestor.status === 1) {
+		return fail(
+			"worktree-history-replaced",
+			`branch tip ${tip.slice(0, 12)} does not descend from the creation baseline ${identity.baseline.slice(0, 12)}`,
+		);
+	}
+	if (ancestor.status !== 0) {
+		return fail(
+			"worktree-history-replaced",
+			`could not verify ancestry of ${identity.baseline} in ${expectedBranch}: ${commandFailure(ancestor)}`,
+		);
+	}
+	if (identity.creationReflog !== undefined && identity.creationReflog.length > 0) {
+		const reflog = await git(repoReal, ["reflog", "show", "--format=%H %gs", expectedBranch]);
+		if (reflog.status !== 0) {
+			return fail(
+				"worktree-history-replaced",
+				`git reflog failed for ${expectedBranch}: ${commandFailure(reflog)}`,
+			);
+		}
+		// `git reflog show` lists newest first: the child's own commits PREPEND
+		// entries, so the creation snapshot must still be the listing's TAIL
+		// (the oldest entries) — SA-01's D2-step-3 rule verbatim. A rewritten
+		// log (update-ref -d + recreate, expiry) loses that tail.
+		const entries = reflog.stdout.split("\n").filter((line) => line !== "");
+		const snapshot = identity.creationReflog;
+		const tail = entries.slice(entries.length - snapshot.length);
+		if (tail.length !== snapshot.length || !snapshot.every((line, i) => tail[i] === line)) {
+			return fail(
+				"worktree-history-replaced",
+				"the branch reflog no longer ends with the creation snapshot — the branch was recreated or its history rewritten",
+			);
+		}
+		return { ok: true };
+	}
+	return {
+		ok: true,
+		detail: "creation reflog snapshot unavailable at launch — ancestry verified, rewrite check skipped",
+	};
+}

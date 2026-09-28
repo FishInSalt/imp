@@ -28,6 +28,22 @@ export type { ToolCallDecision };
 /** Where an extension was discovered (M4 design §3.1). */
 export type ExtensionOrigin = "cli" | "project" | "global";
 
+/** SA-06: identity of one loaded extension module — entry file canonical path
+ *  plus content hash; consumed by the child launch record via the runner. */
+export interface ExtensionModuleIdentity {
+	name: string;
+	origin: ExtensionOrigin;
+	path: string;
+	sha256: string;
+}
+
+/** SA-06: a registered extension context section, identified by its content
+ *  hash (registration order is part of the identity). */
+export interface ExtensionContextIdentity {
+	id: string;
+	sha256: string;
+}
+
 /** Options bag for api.confirm — additive, all-optional (M10). */
 export interface ConfirmOptions {
 	/** Host-side session memory: a key the user previously approved via
@@ -191,6 +207,10 @@ export interface ExtensionSummary {
 	contextCount: number;
 	/** Total on() subscriptions (any event). */
 	hookCount: number;
+	/** SA-06: canonical entry-module path + content hash, when capturable
+	 *  (absent = the file could not be hashed — omitted, never guessed). */
+	sourcePath?: string;
+	sha256?: string;
 }
 
 /** A load failure, already reported on screen via onDiagnostic (design §7.3). */

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { ChildLaunchRecord } from "../child-launch.js";
 import { contentText } from "../messages.js";
 import { skillBlockSummary } from "../skills.js";
 import { SessionError, type SessionHeader, type SessionStats, SessionStore } from "./store.js";
@@ -54,12 +55,21 @@ export function createSession(cwd: string, baseDir?: string): SessionStore {
  * and directory, but under `children/`, with the header linked to the parent
  * by id. The subdirectory keeps children out of listSessions/resolveSession
  * scans (a flat `.jsonl` read) — resume stays parent-only by construction.
+ *
+ * SA-06: `launchFor` receives the freshly allocated child id and returns the
+ * launch record to persist in the header at construction (undefined = no
+ * launch block — conservatively non-resumable; see the SA-06 design).
  */
-export function createChildSession(parent: SessionStore, baseDir?: string): SessionStore {
+export function createChildSession(
+	parent: SessionStore,
+	baseDir?: string,
+	launchFor?: (childId: string) => ChildLaunchRecord | undefined,
+): SessionStore {
 	const dir = path.join(sessionsDirFor(parent.header.cwd, baseDir), "children");
 	mkdirSync(dir, { recursive: true });
 	const filePath = path.join(dir, `${fileTimestamp()}-${randomUUID()}.jsonl`);
-	return SessionStore.create(filePath, parent.header.cwd, undefined, parent.header.id);
+	const id = randomUUID();
+	return SessionStore.create(filePath, parent.header.cwd, id, parent.header.id, launchFor?.(id));
 }
 
 /** Cheap header + title scan of one session file (reads the whole file; files are small). */

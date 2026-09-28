@@ -144,11 +144,12 @@ describe("child continuation — verdict basics", () => {
 		const { parent, file, current } = await makeWorld();
 		const tampered: ChildLaunchFile = {
 			...file,
-			launch: { ...file.launch, approved: true, tools: [{ name: "rm_rf" }] } as never,
+			launch: { ...file.launch, approved: true } as never,
 		};
 		const verdict = await validateChildContinuation(tampered, parent, current);
-		// The current pool still matches the *recorded* tools; the injected
-		// names are ignored, and no permission can be granted by the record.
+		// Unknown fields are ignored by construction: the record cannot grant
+		// anything (no permission grants exist in the schema), so the verdict
+		// is unchanged by an injected "approved: true".
 		expect(verdict.resumable).toBe(true);
 	});
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -194,10 +194,11 @@ function writeChild(
 	childId: string,
 	launch: unknown | undefined,
 	name = "child.jsonl",
+	headerParent = parent.header.id,
 ): string {
 	const filePath = childPathFor(parent, name);
 	mkdirSync(path.dirname(filePath), { recursive: true });
-	const store = SessionStore.create(filePath, parent.header.cwd, childId, parent.header.id, launch as never);
+	const store = SessionStore.create(filePath, parent.header.cwd, childId, headerParent, launch as never);
 	store.appendMessage({ role: "user", content: "child prompt" });
 	return filePath;
 }
@@ -234,7 +235,7 @@ describe("child launch — managed lookup", () => {
 			parentSessionId: "some-other-parent",
 			childId: "child-x",
 		});
-		writeChild(parent, "child-x", launch, "foreign.jsonl");
+		writeChild(parent, "child-x", launch, "foreign.jsonl", "some-other-parent");
 		const found = findChildByLaunch(parent, "child-x");
 		expect(found.ok).toBe(false);
 		if (!found.ok) expect(found.code).toBe("not-owned");
@@ -375,7 +376,7 @@ describe("child launch — extension module identity", () => {
 		const loaded = await loadExtensions({ cwd: dir, cliPaths: [modulePath] });
 		expect(loaded.failures).toEqual([]);
 		expect(loaded.runtime.moduleIdentities()).toEqual([
-			{ name: "marker", origin: "cli", path: modulePath, sha256: bytes(source) },
+			{ name: "marker", origin: "cli", path: realpathSync(modulePath), sha256: bytes(source) },
 		]);
 		expect(loaded.runtime.contextSectionIdentities()).toEqual([]);
 	});

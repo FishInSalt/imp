@@ -1,4 +1,5 @@
-import { type Dirent, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,6 +12,7 @@ import type {
 	ExtensionEventName,
 	ExtensionFactory,
 	ExtensionFailure,
+	ExtensionModuleIdentity,
 	ExtensionOrigin,
 	ExtensionSummary,
 } from "./types.js";
@@ -80,6 +82,23 @@ function realpathOf(target: string): string {
 		return realpathSync(target);
 	} catch {
 		return target; // broken symlink / vanished path — the import step reports it
+	}
+}
+
+/** SA-06: entry-module identity (canonical path + content hash) for the child
+ *  launch record. Unreadable-after-import (rare race) omits the identity — the
+ *  child is then conservatively not resumable rather than hash-guessing. */
+function moduleIdentityFor(candidate: ExtensionCandidate): ExtensionModuleIdentity | undefined {
+	try {
+		const bytes = readFileSync(candidate.path);
+		return {
+			name: candidate.name,
+			origin: candidate.origin,
+			path: realpathOf(candidate.path),
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+		};
+	} catch {
+		return undefined;
 	}
 }
 
@@ -248,7 +267,7 @@ export async function loadExtensions(options: LoadExtensionsOptions): Promise<Lo
 		}
 
 		// 3. factory with atomic discard (E4 — same shape as E1)
-		registry.beginExtension(candidate.name, candidate.origin);
+		registry.beginExtension(candidate.name, candidate.origin, moduleIdentityFor(candidate));
 		try {
 			await (factory as ExtensionFactory)(
 				extensionApi(

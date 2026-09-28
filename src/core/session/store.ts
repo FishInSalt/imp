@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { firstLine } from "../../format.js";
+import type { ChildLaunchRecord } from "../child-launch.js";
 import { type AgentMessage, contentText, type Usage } from "../messages.js";
 
 /**
@@ -62,6 +63,10 @@ export interface SessionHeader {
 	 *  Readers ignore unknown header fields, so the format stays version 1. */
 	parent?: string;
 	model?: SessionModel;
+	/** SA-06: the child launch record (subagent sessions only). The type is
+	 *  imported type-only from child-launch.ts so the runtime edge stays
+	 *  one-way; readers ignore unknown header fields (format stays v1). */
+	launch?: ChildLaunchRecord;
 }
 
 interface EntryBase {
@@ -303,8 +308,16 @@ export class SessionStore {
 		this.explicitModelSelection = true;
 	}
 
-	/** Allocate a session identity; the file is created on its first entry. */
-	static create(filePath: string, cwd: string, id = randomUUID(), parent?: string): SessionStore {
+	/** Allocate a session identity; the file is created on its first entry.
+	 *  SA-06: `launch` is set at construction — the header (with the launch
+	 *  block) is serialized exactly once, on the first write. */
+	static create(
+		filePath: string,
+		cwd: string,
+		id: string = randomUUID(),
+		parent?: string,
+		launch?: ChildLaunchRecord,
+	): SessionStore {
 		const header: SessionHeader = {
 			type: "session",
 			version: 1,
@@ -313,6 +326,7 @@ export class SessionStore {
 			cwd,
 		};
 		if (parent !== undefined) header.parent = parent;
+		if (launch !== undefined) header.launch = launch;
 		return new SessionStore(filePath, header, []);
 	}
 

@@ -315,10 +315,12 @@ private `git` helper; no new runner). Order and codes:
   commits made by the child on its own branch are expected work, not drift;
 - when the launch record carries the SA-01 `creationReflog` snapshot (folded
   in from `ChildWorktree`, §2.1: it is recorded when capturable), the branch
-  reflog must still end with that snapshot — a rewritten/recreated log is
-  `worktree-history-replaced` (same rule as SA-01 D2 step 3). When the
-  snapshot was unavailable at launch, the verdict says so in its diagnostics
-  and relies on the ancestry check alone (documented weaker case);
+  reflog must still **end with** that snapshot — `git reflog show` lists
+  newest first, so the child's own commits prepend entries and the creation
+  snapshot stays the oldest tail (SA-01 D2 step 3 verbatim); a
+  rewritten/recreated log is `worktree-history-replaced`. When the snapshot
+  was unavailable at launch, the verdict says so in its diagnostics and
+  relies on the ancestry check alone (documented weaker case);
 - **no cleanliness checks** — uncommitted, staged and new work are all fine
   (resume is not a requirement that the tree stay at its creation commit).
   "No cleanliness checks" does **not** mean "no identity checks": the
@@ -601,3 +603,39 @@ real; SA-05's whole-session precedent; append order is time order), with the
 gating on the agent `source` path — kept diagnostics-only (behavioral
 identity is the body hash + tool/model/worktree facts; a path move with
 identical behavior is not an incompatibility).
+
+## 12. Implementation record
+
+Landed on `feat/sa-06-child-launch-record` after the red-evidence commit
+(`2881d39`). Concrete deviations from the sketches above (all deliberate,
+each with its reason; behavior is what the reviewed text describes):
+
+1. `createChildSession(parent, baseDir?, launchFor?)` takes a **factory**
+   `launchFor(childId)` instead of a prebuilt record: the launch block must
+   be set at construction with the freshly allocated child id (§2.2's
+   single-serialization invariant), which a prebuilt value cannot carry.
+2. The builder and the validator take **raw source content**
+   (`{path, content}`, `{kind, path, text}`, `{id, text}`, module identities
+   as hashed by the loader) and hash internally — one hashing authority keeps
+   launch and validation bit-identical. The doc's "fingerprint" shapes are the
+   internal comparison form.
+3. `findChildByLaunch` reports pre-match anomalies (symlinks, malformed
+   first lines, unknown header versions in files that do **not** match the
+   requested id) as diagnostics inside `not-found`; the stable codes
+   themselves are returned for the **matched** file where applicable and by
+   the new `listChildLaunches(parent)` enumeration (SA-07's diagnostics
+   surface). One added code: `outside` (realpath containment failure).
+4. Root cause found while implementing: `git reflog show` lists newest
+   first, so the child's own commits PREPEND entries. The creation snapshot
+   therefore must remain the listing's **tail** — SA-01 D2 step 3 verbatim
+   (`worktree.ts probeWorktreeIdentity`); §4.2 and the schema comment carry
+   this wording. A "prefix" misreading would have refused every worktree
+   child that committed (caught by the kept+committed red case).
+5. `SessionStore.create`'s `id` parameter is explicitly typed `string`
+   (widened from the `randomUUID()` UUID literal type) for explicit-id
+   callers — tests pin ids like `"child-1"`; the child header id is not
+   required to be a UUID by any reader.
+
+Consequences verified by the red cases turning green: 40 new unit tests
+(child-launch.test.ts, child-launch-validation.test.ts) + 3 e2e cases in
+task-tool.test.ts; full suite 118 files / 2244 tests; lint 223 files.

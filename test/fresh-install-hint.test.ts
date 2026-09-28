@@ -419,8 +419,11 @@ describe("#fresh-install-hint availability seam", () => {
 			renderer,
 			isActive: () => false,
 			requestExit: () => {},
+			abortActive: () => false,
+			replay: () => 0,
+			submitPrompt: () => {},
 		};
-		await status?.run("", ctx as Parameters<typeof status.run>[1]);
+		await status?.run("", ctx);
 		expect(output()).toContain("\u25aa model no model \u2014 /login"); // ▪ model no model — /login
 		expect(output()).not.toContain("\u25aa model claude-sonnet-4-5");
 	});

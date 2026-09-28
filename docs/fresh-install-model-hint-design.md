@@ -465,4 +465,19 @@ still self-proving. Both closed:
   directly; FakeTerminal.setTitle is not on that path) — both a revert
   of the gating code now fails tests.
 
-Gates: 2169/2169 tests, typecheck, `biome check .` clean.
+Gates: 2169/2169 tests, `biome check .` clean. (The "typecheck" claim
+here was WRONG — see round 4 below.)
+
+### Round-4 verification follow-up (2026-09-28)
+
+Round-4 caught the SAME gate-scope class a third time: the new F5 test's
+CommandContext literal was missing three required members; `tsc` passed
+because the gate ran only `tsc --noEmit` (src), while `npm run
+typecheck` also runs `tsc -p tsconfig.test.json`. Fixed by completing
+the literal (abortActive/replay/submitPrompt) — no `as unknown`
+suppression. Pattern closed for good: the batch gate is now
+`npm run typecheck && npx biome check . && npm test -- --run` verbatim —
+never a subset of any of the three.
+
+Gates (branch tip, re-verified): typecheck exit 0 (BOTH configs),
+`biome check .` 216 files clean, 2169/2169 tests.

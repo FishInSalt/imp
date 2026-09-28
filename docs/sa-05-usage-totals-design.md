@@ -551,3 +551,22 @@ All corrections closed in this revision.
   acknowledged under D4.
 - **P3-3** naming: `usage-totals.ts` is a derived view, not a second ledger —
   satisfies "reuse the SA-03 storage contract" (§8 note kept).
+
+### Delta review (2026-09-27, fix `02d2782`) — APPROVE
+
+Closed the implementation review's P2/P3: rule 2b is now exactly-once by
+`toolCallId` (only the first sighting of a call without a parsable record
+flags; a record-less repeat of an acknowledged call adds no signal), and the
+tracker rebuilds on entry-array mutation by identity
+(`entries[cursor-1] !== lastApplied`), not by length.
+
+Reviewer notes: the original P2's cited mechanism (`pruneTaskRecord`) does
+not exist in `src/` and its inner-entry double-count claim did not reproduce
+(probe: a record repeated twice in one entry counts once); the repeat-case
+over-flag it described WAS real and is fixed.
+
+Accepted residual (P3, report-flag-only, no numeric corruption): adapters
+that synthesize positional tool-call ids (`call_${index}` —
+`openai-completions.ts:420`, `codex-responses.ts:267`) could, in a relay
+scenario that drops ids, reuse an id for a distinct call and mask that
+call's record-less rule-2b signal. Not reproduced in normal use.

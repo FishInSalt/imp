@@ -139,3 +139,36 @@ describe("lease — deterministic multiprocess interleavings (T30b)", () => {
 		expect(outcomes.filter((outcome) => outcome === "ok").length).toBeLessThanOrEqual(1);
 	}, 60_000);
 });
+
+describe("lease — atomic candidate publication (T30c)", () => {
+	it("(iv) a stalled publisher's aged staging cannot produce an invisible holder", async () => {
+		const dir = await freshDir("imp-lease-s4-");
+		const a = runRole(dir, "a4");
+		await waitForMarker(dir, "a4-staged"); // A paused: staging complete, nothing published
+		const leaseDir = path.join(dir, "child.jsonl.lease");
+		// No candidate name may exist before publication (atomic publication).
+		expect(readdirSync(leaseDir).filter((name) => name.startsWith("lease-"))).toHaveLength(0);
+		// Age A's staging beyond the grace window (the owner waited 61s).
+		for (const name of readdirSync(leaseDir)) {
+			if (name.startsWith(".staging-")) {
+				const then = new Date(Date.now() - 120_000);
+				utimesSync(path.join(leaseDir, name), then, then);
+			}
+		}
+		const b = await runRole(dir, "b4"); // retires the aged staging, acquires, releases
+		expect(b).toBe(0);
+		await waitForMarker(dir, "b4-done");
+		writeFileSync(path.join(dir, "a4-go"), ""); // release A: it must re-stage and publish
+		await waitForMarker(dir, "a4-held"); // A re-staged, published, and holds
+		// A's claim must be VISIBLE while it holds (the owner's repro showed none).
+		expect(readdirSync(leaseDir).filter((name) => name.startsWith("lease-"))).toHaveLength(1);
+		const c = await runRole(dir, "c4"); // must be refused
+		expect(c).toBe(0);
+		await waitForMarker(dir, "c4-done");
+		expect(await a).toBe(0);
+		const byTag = new Map(parseResults(dir).map((entry) => [entry.tag, entry.outcome]));
+		expect(byTag.get("a4")).toBe("ok");
+		expect(byTag.get("b4")).toBe("ok");
+		expect(byTag.get("c4")).toBe("busy");
+	}, 60_000);
+});

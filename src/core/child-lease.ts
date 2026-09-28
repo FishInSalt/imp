@@ -80,6 +80,9 @@ export interface ChildLeaseOptions {
 	onAfterCreate?: () => void;
 	/** Test seam: fires immediately before the verify scan. */
 	onBeforeScan?: () => void;
+	/** Test seam: fires immediately before the candidate's link publication
+	 *  (the staging file is complete; the final name does not exist yet). */
+	onBeforeCandidatePublish?: () => void;
 	/** Test seam: fires immediately before an ABSENT machine-id link
 	 *  publish. */
 	onBeforeMachineIdPublish?: () => void;
@@ -218,6 +221,56 @@ export interface ScanConfig {
 }
 
 /**
+ * Publish a COMPLETE candidate atomically (owner round 3, P1): the payload
+ * is written to a `.staging-*` file the scanner never reads as a claim,
+ * then linked into the scanned name with a no-clobber hard link. The final
+ * name therefore NEVER exists in an incomplete state — a scanner cannot
+ * observe (or, once aged, retire) a half-written claim while its writer
+ * still completes the write and then wrongly holds. If a scanner retires
+ * our aged staging first, the link fails ENOENT and we re-stage (bounded).
+ */
+function publishCandidate(config: {
+	leaseDir: string;
+	ownName: string;
+	stagingName: string;
+	serialized: string;
+	attemptId: string;
+	onBeforeCandidatePublish?: () => void;
+}): string {
+	const ownPath = path.join(config.leaseDir, config.ownName);
+	const stagingPath = path.join(config.leaseDir, config.stagingName);
+	for (let round = 0; round < 3; round++) {
+		// Unique staging name: the file is ours alone ("w" may truncate only
+		// our own previous round).
+		writeFileSync(stagingPath, config.serialized, { encoding: "utf8" });
+		config.onBeforeCandidatePublish?.();
+		try {
+			linkSync(stagingPath, ownPath); // no-clobber atomic publication
+		} catch (err) {
+			if (errnoCode(err) === "ENOENT") continue; // staging retired by a scanner: re-stage
+			throw err;
+		}
+		// Verify by reading back (complete content, ours).
+		const written = parsePayload(readFileSync(ownPath));
+		if (written === undefined || written.attemptId !== config.attemptId) {
+			try {
+				unlinkSync(ownPath);
+			} catch {
+				// best effort
+			}
+			throw new Error(`the published lease candidate ${ownPath} did not verify`);
+		}
+		try {
+			unlinkSync(stagingPath);
+		} catch {
+			// debris; aged out by a later scan
+		}
+		return ownPath;
+	}
+	throw new Error(`cannot publish the lease candidate ${ownPath} after 3 rounds`);
+}
+
+/**
  * Scan the lease directory for any OTHER active or uncertain candidate.
  * Returns a refusal (`busy` / `owned-elsewhere`) or undefined when the own
  * candidate is the only active one. Dead+aged candidates are unlinked
@@ -237,6 +290,21 @@ function scanForBlocker(
 	}
 	for (const entry of entries) {
 		if (entry === config.ownName) continue;
+		if (!entry.startsWith("lease-")) {
+			// Staging files (and any other non-candidate entry) are never
+			// claims. Aged `.staging-*` files are our own crash/pause debris:
+			// retiring them is safe — a stalled publisher's link then fails
+			// ENOENT and re-stages (owner round 3, P1).
+			if (entry.startsWith(".staging-")) {
+				const stagingPath = path.join(config.leaseDir, entry);
+				try {
+					if (config.now() - statSync(stagingPath).mtimeMs > config.staleGraceMs) unlinkSync(stagingPath);
+				} catch {
+					// already gone
+				}
+			}
+			continue;
+		}
 		const candidatePath = path.join(config.leaseDir, entry);
 		let bytes: Buffer;
 		try {
@@ -343,7 +411,7 @@ export function acquireChildLease(
 	};
 	const serialized = `${JSON.stringify(payload)}\n`;
 	const ownName = `lease-${pid}-${nonce.slice(0, 8)}-${attemptId}`;
-	const ownPath = path.join(leaseDir, ownName);
+	const stagingName = `.staging-${pid}-${nonce.slice(0, 8)}-${attemptId}`;
 
 	try {
 		for (let round = 0; round < maxAttempts; round++) {
@@ -363,7 +431,24 @@ export function acquireChildLease(
 			if (!legacy.ok) return failWith(legacy.code, legacy.message);
 
 			mkdirSync(leaseDir, { recursive: true });
-			writeFileSync(ownPath, serialized, { encoding: "utf8", flag: "wx" });
+			let ownPath: string;
+			try {
+				ownPath = publishCandidate({
+					leaseDir,
+					ownName,
+					stagingName,
+					serialized,
+					attemptId,
+					...(options.onBeforeCandidatePublish === undefined
+						? {}
+						: { onBeforeCandidatePublish: options.onBeforeCandidatePublish }),
+				});
+			} catch (err) {
+				return failWith(
+					"io-error",
+					`cannot publish the lease candidate for ${childFilePath}: ${String(err)}`,
+				);
+			}
 			options.onAfterCreate?.();
 
 			let blocker: { code: "busy" | "owned-elsewhere"; message: string } | undefined;
@@ -387,12 +472,22 @@ export function acquireChildLease(
 				} catch {
 					// best effort
 				}
+				try {
+					unlinkSync(path.join(leaseDir, stagingName));
+				} catch {
+					// best effort
+				}
 				return failWith("io-error", `lease scan failed for ${leaseDir}: ${String(err)}`);
 			}
 			if (blocker !== undefined) {
 				// Step-8 refusal cleanup: the scan-and-decide is complete.
 				try {
 					unlinkSync(ownPath);
+				} catch {
+					// best effort
+				}
+				try {
+					unlinkSync(path.join(leaseDir, stagingName));
 				} catch {
 					// best effort
 				}
@@ -450,6 +545,11 @@ export function acquireChildLease(
 						unlinkSync(ownPath); // unique name: it is ours or gone
 					} catch {
 						process.stderr.write(`imp: could not remove the child lease candidate ${ownPath}\n`);
+					}
+					try {
+						unlinkSync(path.join(leaseDir, stagingName));
+					} catch {
+						// best effort
 					}
 				},
 			};

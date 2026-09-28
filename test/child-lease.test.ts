@@ -2,7 +2,16 @@
  * SA-07 single-writer lease tests — intent + verify protocol
  * (design docs/sa-07-child-resume-design.md §7, revised after owner round 3).
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -218,6 +227,37 @@ describe("child lease (intent + verify)", () => {
 		expect(seenHeld).toBe(true);
 		expect(existsSync(cleanOwn)).toBe(true);
 		if (held.ok) held.lease.release();
+	});
+
+	it("T34: a paused publisher never exposes an incomplete candidate; aged staging is cleaned", async () => {
+		const { child } = await setup("imp-lease-stage-");
+		const ownPath = path.join(
+			leaseDirFor(child),
+			candidateName(leaseOptions.pid, leaseOptions.nonce, "stage"),
+		);
+		let sawCandidateAtPause: boolean | undefined;
+		let sawStagingAtPause: boolean | undefined;
+		const held = acquireChildLease(child, "stage", {
+			...leaseOptions,
+			onBeforeCandidatePublish: () => {
+				sawCandidateAtPause = existsSync(ownPath);
+				sawStagingAtPause = readdirSync(leaseDirFor(child)).some((name) => name.startsWith(".staging-"));
+			},
+		});
+		expect(held.ok).toBe(true);
+		expect(sawCandidateAtPause).toBe(false); // the final name did not exist before publication
+		expect(sawStagingAtPause).toBe(true); // the COMPLETE payload waited in staging
+		expect(existsSync(ownPath)).toBe(true); // published, parseable
+		if (held.ok) held.lease.release();
+		// An aged staging file (a stalled or crashed publisher) is retired by a
+		// later scan; that publisher re-stages on its next link attempt.
+		const orphan = path.join(leaseDirFor(child), ".staging-777-abcdef12-orphan");
+		writeFileSync(orphan, "junk");
+		ageFile(orphan, 120_000);
+		const again = acquireChildLease(child, "stage2", { ...leaseOptions });
+		expect(again.ok).toBe(true);
+		expect(existsSync(orphan)).toBe(false);
+		if (again.ok) again.lease.release();
 	});
 
 	it("T26-fairness: exclusive access holds when the heartbeat is never started", async () => {

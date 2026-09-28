@@ -443,7 +443,16 @@ containing one file per acquisition attempt:
 Content (one JSON line): `{ "pid": <number>, "host": "<os.hostname()>",
 "machineId": "<uuid>", "nonce": "<uuid>", "attemptId": "<uuid>",
 "startedAt": "<ISO>" }`. Names are unique by construction, so candidate
-files never contend on a path. `nonce` is a per-process instance id
+files never contend on a path.
+
+Candidates are PUBLISHED ATOMICALLY (owner round 4, P1): the payload is
+written to a `.staging-<pid>-<nonce8>-<attemptId>` file that scanners never
+read as a claim, then linked into the candidate name with a no-clobber hard
+link (`linkSync`). The candidate name therefore never exists in an
+incomplete state — a scanner cannot observe a half-written claim, retire it
+once aged, while its writer still completes the write through the old file
+descriptor and then wrongly holds with no visible candidate (which would
+admit a second holder). `nonce` is a per-process instance id
 (module-load UUID): a same-pid candidate with a different nonce is a
 DIFFERENT instance (sibling pid namespace or a recycled pid) and is never
 treated as this process's own.
@@ -481,11 +490,15 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
    says it is dead+aged or unparseable debris, unlinked — a live or
    uncertain legacy owner refuses `busy` and creates NO directory. Then
    `mkdirSync(leaseDir, { recursive: true })`.
-5. CREATE own candidate: `writeFileSync(dir + "/" + ownName, payload,
-   { flag: "wx" })` — unique name, so this can only fail on real IO errors
-   (refuse `io-error`).
+5. PUBLISH own candidate ATOMICALLY (round 4): write the complete payload
+   to the staging file, then `linkSync(staging, ownName)` and READ BACK to
+   verify content and attemptId. If a scanner retired the aged staging
+   first, the link fails ENOENT and the publisher RE-STAGES (bounded 3
+   rounds) — it can never end up holding an unpublished claim.
 6. VERIFY by scan (the load-bearing step): readdir the lease directory and
-   inspect every OTHER entry:
+   inspect every OTHER `lease-*` entry (non-candidate names are never
+   claims; an aged `.staging-*` file is retired as our own pause/crash
+   debris — its publisher re-stages on the next link attempt):
    - unparseable content → UNKNOWN while its mtime is within the grace
      window (a torn claim is not proof of absence), else stale debris;
    - `host`/`machineId` differs → refuse `owned-elsewhere` (shared-storage
@@ -601,6 +614,9 @@ only dead+aged candidates, never a live one.
   of not trusting a dead-looking pid across pid namespaces.
 - Crashed or tampered candidates linger until a later scan ages them out;
   they are never read as leases and grant nothing.
+- `.staging-*` files are never claims; a crashed or long-paused publisher
+  leaves one, scanners retire it once aged, and the publisher re-stages on
+  the next link attempt (bounded 3 rounds, then a clean `io-error`).
 - Heartbeat anomaly handling aborts the attempt as defense in depth; it is
   not required for correctness (T28 asserts the abort, never an exclusion
   guarantee; a scan/seam test proves exclusion with the heartbeat disabled).
@@ -848,7 +864,14 @@ creates+scans+proceeds, A resumes and refuses; (iii) B and C create
 simultaneously against a stale candidate → both refuse or exactly one
 proceeds, and the stale candidate was cleaned without granting anything;
 (iv) instrumentation proves neither A's nor B's candidate was unlinked
-between its create and its scan decision (the A1 invariant). Add: a
+between its create and its scan decision (the A1 invariant; both refusal
+and held paths). T34 pins the atomic publication window: with the
+publisher paused before the link, the candidate name does not yet exist,
+the staging holds the complete payload, and an aged staging file is retired
+by a later scan. T30c(iv) replays the owner's round-4 repro end to end: A
+pauses before publication, its staging is aged, B retires the staging,
+acquires and releases, A resumes — it must RE-STAGE and publish, its claim
+must be VISIBLE while it holds, and C must be refused. Add: a
 legacy-file migration test (live legacy owner → `busy` and NO directory
 created; dead+aged → exactly the deciding read's artifact is unlinked; a
 seam-injected write between the deciding read and the unlink proves no live
@@ -1140,3 +1163,20 @@ Design review verdict: APPROVE WITH CORRECTIONS; all findings folded:
   old "stale steal" wording is superseded by "stale cleanup"; the earlier
   round's single-file probe results in this log are SUPERSEDED by the
   round-3 protocol and its regressions.
+
+### Acceptance round 4 (owner review of 5115275) — atomic candidate publication
+
+Owner finding (reproduced with real processes, no namespace tricks): a
+candidate created via `writeFileSync(..., { flag: "wx" })` is visible
+EMPTY between create and write; a scanner judging an unparseable file by
+age alone retires the aged empty file as debris while the writer still
+completes the write through the open file descriptor, then scans and
+holds — with NO candidate in the directory — and a third process acquires
+too (two live holders). Fixed by atomic publication (§7.1/§7.2 step 5):
+complete payload in `.staging-*`, no-clobber `linkSync` into the candidate
+name, read-back verification, bounded re-staging if a scanner retired the
+staging; scanners skip non-candidate names and retire only AGED staging.
+Regressions: T34 (unit) and T30c(iv) (real three-process replay of the
+owner's sequence: A paused pre-publication, aged staging, B retires +
+acquires + releases, A must re-stage and be VISIBLE while holding, C
+refused).

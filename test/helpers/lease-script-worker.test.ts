@@ -97,6 +97,35 @@ describe("lease script worker", () => {
 			}
 			return;
 		}
+		if (role === "a4") {
+			// Paused AFTER staging, BEFORE publication (the owner's window):
+			// block until the parent has aged the staging and B has run.
+			seams.onBeforeCandidatePublish = () => {
+				writeMarker(dir, "a4-staged");
+				waitMarkerSync(dir, "a4-go");
+			};
+			seams.onBeforeScan = () => waitMarkerSync(dir, "b4-done");
+			const result = acquireChildLease(child, "a4-attempt", seams);
+			log(result, "a4-attempt");
+			writeMarker(dir, "a4-held");
+			waitMarkerSync(dir, "c4-done");
+			if (result.ok) result.lease.release();
+			return;
+		}
+		if (role === "b4") {
+			const result = acquireChildLease(child, "b4-attempt", seams);
+			log(result, "b4-attempt");
+			writeMarker(dir, "b4-done");
+			if (result.ok) result.lease.release();
+			return;
+		}
+		if (role === "c4") {
+			const result = acquireChildLease(child, "c4-attempt", seams);
+			log(result, "c4-attempt");
+			writeMarker(dir, "c4-done");
+			if (result.ok) result.lease.release();
+			return;
+		}
 		if (role === "b3" || role === "c3") {
 			seams.onAfterCreate = () => writeMarker(dir, `${role}-created`);
 			seams.onBeforeScan = () => waitMarkerSync(dir, "go");

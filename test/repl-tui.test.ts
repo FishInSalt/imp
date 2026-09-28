@@ -1524,6 +1524,37 @@ describe("runRepl with shell:tui", () => {
 		}
 	});
 
+	it("#fresh-install-hint: terminal title — startup default keyless shows the pointer; an explicit /model pick shows the id", async () => {
+		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
+		for (const key of CREDENTIAL_ENV_KEYS) {
+			saved[key] = process.env[key];
+			delete process.env[key];
+		}
+		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		try {
+			const env = await startTuiRepl([], { model: "claude-sonnet-4-5", realProvider: true });
+			await settle();
+			// Startup default, no credential: the title (OSC 2 bytes in the raw
+			// stream — shell.setTitle writes them directly) mirrors the /login
+			// pointer (F5) — never the dead id.
+			const bytes = () => env.terminal.writes.join("");
+			expect(bytes()).toContain("\x1b]2;imp — no model — /login\x07");
+			expect(bytes()).not.toContain("\x1b]2;imp — claude-sonnet-4-5\x07");
+			// An explicit /model pick is the user's choice: the id shows even
+			// though zai holds no credential (modelSelectedExplicitly).
+			env.terminal.data("/model glm-4.6\r");
+			await settle();
+			expect(bytes()).toContain("\x1b]2;imp — glm-4.6\x07");
+			env.terminal.data("/exit\r");
+			await env.repl;
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
 	it("#fresh-install-hint test 10: /login success repaints the footer (credential change flips the segment)", async () => {
 		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {

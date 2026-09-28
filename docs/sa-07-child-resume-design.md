@@ -180,7 +180,8 @@ are step 6.2 and 6.3 plus the normal appends of the new attempt.
 
 1. repair note when repairs happened: `transcript repaired: N interrupted
    tool call(s) closed with an explicit unknown-outcome result[, dropped a
-   <n>-byte torn tail].` The repair precedes the new instruction, so the
+   <n>-byte torn tail | terminated an unterminated final record].` The
+   repair precedes the new instruction, so the
    CHILD model sees the unknown-outcome marker as settled history — never as
    a fresh error caused by its new prompt.
 2. worktree retention line when the launch record has a worktree:
@@ -301,38 +302,48 @@ assistant messages (`blocks[].type === "toolCall"`) and observed result ids
   never starts mid-pair; a mid-history orphan therefore means real damage,
   which is refused rather than guessed about.
 
-### 6.2 Torn final fragment (structural detection; truncate before any append)
+### 6.2 Torn final line (structural detection; make append-safe before any append)
 
 The hazard has TWO shapes, and only one was visible to parse-failure
 detection:
 
-- a) an unparseable fragment (invalid JSON): `open` drops it in memory
+- a) an UNPARSEABLE fragment (invalid JSON): `open` drops it in memory
   (stderr note), the bytes stay — `appendFileSync` concatenates the next
   entry onto it and the following reopen loses both;
-- b) a COMPLETE JSON entry with no trailing newline (crash mid-write with
-  the bytes intact): it parses fine, so parse-failure detection never fires
-  — and it is causally the most likely crash shape. Same concatenation loss:
-  both entries dropped on the next reopen (reproduced against the real
-  store during design review).
+- b) a COMPLETE JSON entry whose trailing newline never landed: it parses
+  fine and `open` KEEPS it (existing read semantics), so parse-failure
+  detection never fires — and appending after it merges both into one
+  unparseable line: both entries gone on the next reopen (reproduced against
+  the real store during design review).
 
 Detection is therefore STRUCTURAL, not parse-based: `SessionStore.open`
 records `tornFinalLine: boolean` when a persisted non-empty file's bytes do
-not end in `\n` (in addition to the in-memory drop for shape a). API:
+not end in `\n`.
+
+Repair is SHAPE-DEPENDENT — truncating both shapes would be wrong:
+
+- shape a → `truncateSync` at the last newline (the fragment is bytes no
+  reader can interpret as an entry);
+- shape b → append the missing `"\n"` (the entry is complete and `open`
+  kept it in memory; TRUNCATING it would delete a recorded entry AND desync
+  the in-memory leaf — the next appended entry would chain to an id whose
+  bytes no longer exist, producing a broken parent chain on the following
+  reopen. Correction found while writing the red tests; folded here.)
+
+API:
 
 - `SessionStore` gains `tornFinalLine: boolean` (set by `open`, the
-  `persisted`/`savedModel` pattern) and
-  `repairTornFinalLine(): { removedBytes } | undefined` — truncates the file
-  at the last newline (`truncateSync`), returns bytes removed, clears the
-  flag; `undefined` when the flag is unset or the store is not persisted;
-  idempotent (a second call is a no-op).
-- Ordering rule (pinned): truncate BEFORE any append to the child file; the
-  repair runs only after steps 1–6.1 passed.
-- Refusing instead of truncating was rejected deliberately: the torn tail is
-  exactly the crash-mid-append state that most needs continuation; shape a
-  is unparseable bytes no reader can interpret as an entry, and shape b is
-  recoverable only through this repair (the alternative — appending onto it
-  — destroys two entries). The removal is reported in the result (§4.3 item
-  1).
+  `persisted`/`savedModel` pattern) and `repairTornFinalLine(): { action:
+  "truncated" | "terminated"; bytes: number } | undefined` — truncates or
+  terminates per the shape above, clears the flag; `undefined` when the flag
+  is unset or the store is not persisted; idempotent (a second call is a
+  no-op).
+- Ordering rule (pinned): the repair runs BEFORE any append to the child
+  file, only after steps 1–6.1 passed.
+- Refusing instead of repairing was rejected deliberately: this is exactly
+  the crash-mid-append state that most needs continuation, and both repairs
+  preserve every entry that parses. The action is reported in the result
+  (§4.3 item 1).
 
 ### 6.3 Crash-tail repair (persisted, honest)
 
@@ -633,7 +644,7 @@ export function lifetimeUsageLine(records: readonly TaskRecord[], current: Usage
 
 // src/core/session/store.ts (changed)
 tornFinalLine: boolean;   // set by open(); structural: no trailing newline
-repairTornFinalLine(): { removedBytes: number } | undefined;   // truncate at last newline
+repairTornFinalLine(): { action: "truncated" | "terminated"; bytes: number } | undefined;
 
 // src/core/subagent.ts (changed)
 initialHistory?: AgentMessage[];
@@ -701,9 +712,10 @@ New `test/child-resume.test.ts` (fake provider harness like
 - T14 crash-tail orphan: synthetic result persisted BEFORE the new user
   message (file order asserted byte-level: parentId chain, marker text,
   isError), request contains the paired sequence.
-- T15 both torn shapes (invalid-JSON fragment AND complete-entry-without-
-  newline): file truncated at the last newline; after the attempt the file
-  reopens with every entry intact; result reports the repair.
+- T15 both torn shapes: the invalid-JSON fragment is TRUNCATED at the last
+  newline; the complete-entry-without-newline is TERMINATED (newline
+  appended, entry kept); after the attempt the file reopens with every entry
+  intact; result reports the repair action.
 - T16 non-tail orphan → refusal; T17 mid-history mismatch refuses even when
   the tail is clean.
 - T16b compacted transcript with a retained-tail orphan (beyond a crash
@@ -805,3 +817,10 @@ both tracks returned APPROVE WITH CORRECTIONS; all findings folded above.
 
 Red evidence (failing tests) precedes implementation; a delta review
 follows implementation, then owner acceptance.
+
+Post-review correction (red-evidence phase, while writing T15's test): the
+review's fix direction "truncate-at-last-newline handles both shapes" was
+wrong for shape b — truncating a complete-but-unterminated entry deletes a
+recorded entry and desyncs the in-memory leaf (broken parent chain after
+the next append + reopen). §6.2/§11/T15 now pin shape-dependent repair:
+shape a truncates, shape b terminates.

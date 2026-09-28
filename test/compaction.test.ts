@@ -276,6 +276,72 @@ describe("compactSession", () => {
 		expect(result).toBeNull();
 		expect(session.getEntries().length).toBe(2); // untouched
 	});
+	it("SA-05: the compaction entry carries usage + producing model; a missing report sets usageMissing", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const session = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
+		session.appendMessage(user("old question one"));
+		session.appendMessage(assistantText("old answer one"));
+		session.appendMessage(user("old question two"));
+		session.appendMessage(assistantText("old answer two"));
+		session.appendMessage(user("recent question"));
+		session.appendMessage(assistantText("recent answer"));
+		const result = await compactSession({
+			session,
+			provider: summarizerProvider("## Goal\nsummary"),
+			model: "test-sum-model",
+			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
+		});
+		expect(result).not.toBeNull();
+		const entry = session.getEntries().find((e) => e.type === "compaction") as
+			| { model?: string; usage?: unknown; usageMissing?: true }
+			| undefined;
+		expect(entry?.model).toBe("test-sum-model");
+		expect(entry?.usage).toEqual({
+			inputTokens: 1,
+			outputTokens: 1,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(entry?.usageMissing).toBeUndefined();
+
+		// missing-report variant: the numbers stay (initialization zeros), the
+		// flag rides the entry — never a fake "complete zero" report.
+		const dir2 = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const session2 = SessionStore.create(path.join(dir2, "s.jsonl"), "/p");
+		session2.appendMessage(user("old question one"));
+		session2.appendMessage(assistantText("old answer one"));
+		session2.appendMessage(user("old question two"));
+		session2.appendMessage(assistantText("old answer two"));
+		session2.appendMessage(user("recent question"));
+		session2.appendMessage(assistantText("recent answer"));
+		const noUsage: LLMProvider = {
+			name: "no-usage",
+			async *stream() {
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text: "## Goal\nno usage" }],
+						usage: { inputTokens: 0, outputTokens: 0 },
+						stopReason: "end_turn",
+						usageMissing: true,
+					},
+				};
+			},
+		};
+		const result2 = await compactSession({
+			session: session2,
+			provider: noUsage,
+			model: "test-sum-model",
+			settings: { reserveTokens: 16_384, keepRecentTokens: 4, contextWindow: 131_072 },
+		});
+		expect(result2?.usageMissing).toBe(true);
+		const entry2 = session2.getEntries().find((e) => e.type === "compaction") as
+			| { model?: string; usageMissing?: true }
+			| undefined;
+		expect(entry2?.usageMissing).toBe(true);
+		expect(entry2?.model).toBe("test-sum-model");
+	});
 });
 
 describe("isContextOverflowError (overflow-grace)", () => {
@@ -392,6 +458,38 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 			cacheWriteTokens: 0,
 		});
 		expect(ledger.incomplete).toBe(false); // both streams reported; nothing was missing
+	});
+
+	it("SA-05: cap-retry merges hop usage and ORs the missing flag", async () => {
+		const provider = scriptedProvider(
+			[
+				assistant([{ type: "text", text: "half" }], "max_tokens", { inputTokens: 10, outputTokens: 5 }),
+				{
+					role: "assistant",
+					blocks: [{ type: "text", text: "## Goal\nfull" }],
+					usage: { inputTokens: 3, outputTokens: 1 },
+					stopReason: "end_turn",
+					usageMissing: true,
+				},
+			],
+			undefined,
+			"moonshotai",
+		);
+		const settings = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const result = await compactHistory({
+			messages: overflowishHistory(6),
+			provider,
+			model: "kimi-k2.7-code",
+			settings,
+			thinking: "high",
+		});
+		expect(result?.usage).toEqual({
+			inputTokens: 13,
+			outputTokens: 6,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		}); // hop1 + hop2 numbers agree
+		expect(result?.usageMissing).toBe(true); // ...and the OR'd flag agrees with them
 	});
 
 	it("SA-04: first hop reports, the retry hop throws — report kept, incompleteness disclosed", async () => {
@@ -594,6 +692,24 @@ describe("summary quality gate + UPDATE mode (prompt-audit P2/P3)", () => {
 		await expect(
 			summarizeBranchSegment({ messages: overflowishHistory(3), provider, model: "m" }),
 		).rejects.toThrow("token cap");
+	});
+
+	it("SA-05: a branch summary returns summary + usage + missing flag for the entry stamps", async () => {
+		const provider = scriptedProvider([
+			assistant([{ type: "text", text: "## branch summary" }], "end_turn", {
+				inputTokens: 9,
+				outputTokens: 4,
+			}),
+		]);
+		const result = await summarizeBranchSegment({ messages: overflowishHistory(3), provider, model: "m" });
+		expect(result.summary).toContain("branch summary");
+		expect(result.usage).toEqual({
+			inputTokens: 9,
+			outputTokens: 4,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(result.usageMissing).toBe(false);
 	});
 
 	it("second compaction UPDATES the previous summary instead of re-summarizing it", async () => {

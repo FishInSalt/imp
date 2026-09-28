@@ -9,6 +9,7 @@ import type { AgentMessage, AssistantMessage, UserMessage } from "../src/core/me
 import { createSession } from "../src/core/session/manager.js";
 import type { SessionStore } from "../src/core/session/store.js";
 import { buildSkillCommands, expandSkillBlock, loadSkills } from "../src/core/skills.js";
+import { buildTaskRecord } from "../src/core/task-record.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
@@ -1247,6 +1248,57 @@ describe("runRepl with shell:tui", () => {
 		stopReason: "end_turn",
 	});
 
+	it("SA-05: child-only usage never moves the context segment", async () => {
+		const ctxOf = async (withChild: boolean): Promise<string | undefined> => {
+			const env = await startTuiRepl([reply("ok")], {
+				seedSession: (store) => {
+					store.appendMessage({ role: "user", content: "hello" });
+					store.appendMessage({
+						role: "assistant",
+						blocks: [{ type: "text", text: "hi" }],
+						usage: { inputTokens: 100, outputTokens: 10 },
+						model: "test-model",
+						stopReason: "end_turn",
+					});
+					// identical content either way — only the record differs
+					store.appendMessage({
+						role: "toolResult",
+						results: [
+							{
+								toolCallId: "t1",
+								toolName: "task",
+								content: "",
+								isError: false,
+								...(withChild && {
+									taskRecord: buildTaskRecord({
+										attemptId: "att-ctx",
+										sourceId: "src-ctx",
+										launched: true,
+										cwd: "/tmp",
+										status: "completed",
+										turns: 2,
+										textPresent: true,
+										usage: { inputTokens: 50, outputTokens: 7 },
+										binding: { providerName: "zai", wireModelId: "glm-5.3", reference: "zai/glm-5.3" },
+									}),
+								}),
+							},
+						],
+					});
+				},
+			});
+			await settle();
+			const frame = env.terminal.frameSince(0);
+			env.terminal.data("/exit\r");
+			await env.repl;
+			return /\d+\.\d%\/[0-9.]+[km]?/.exec(frame)?.[0];
+		};
+		const control = await ctxOf(false);
+		const withChild = await ctxOf(true);
+		expect(control).toBeDefined();
+		expect(withChild).toBe(control); // child usage feeds work totals only — never ctx%
+	});
+
 	it("SA-05 R1: the footer keeps compacted-away usage (whole-session totals)", async () => {
 		const usageAssistant = (text: string, inputTokens: number, outputTokens: number): AssistantMessage => ({
 			role: "assistant",
@@ -1289,7 +1341,8 @@ describe("runRepl with shell:tui", () => {
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
-		const seeded = options?.seedSession !== undefined || (options?.seed !== undefined && options.seed.length > 0);
+		const seeded =
+			options?.seedSession !== undefined || (options?.seed !== undefined && options.seed.length > 0);
 		if (seeded) {
 			const store = createSession(baseDir, baseDir); // runner cwd is baseDir — same bucket
 			options?.seedSession?.(store);

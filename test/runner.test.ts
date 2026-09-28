@@ -349,7 +349,10 @@ describe("Runner.runTurn", () => {
 		const id8 = runner.session?.header.id.slice(0, 8);
 		const expected =
 			`— test-model · 1 turns · in 1.2k / out 56 tokens · cache↓789\n` +
-			`— session ${id8} · 2 msgs total · in 1.2k / out 56 cumulative\n`;
+			// SA-05: work totals are the durable whole-session aggregate; the
+			// message count stays the active-branch context fact; test-model
+			// has no rates -> `$?` (unpriced, never fallback-priced).
+			`— session ${id8} · 2 msgs (active branch) · work ↑1.2k ↓56 $?\n`;
 		expect((runner as RunnerWithOutput).capturedOutput().endsWith(expected)).toBe(true);
 
 		// and without cache tokens: no cache note at all

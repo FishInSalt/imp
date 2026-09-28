@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { SessionEntry } from "../src/core/session/store.js";
-import { buildTaskRecord, type TaskRecord } from "../src/core/task-record.js";
+import {
+	buildTaskRecord,
+	type TaskRecord,
+	type TaskRecordInput,
+	type TaskRecordUsage,
+} from "../src/core/task-record.js";
 import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.js";
+import { usageMoneySegment } from "../src/format.js";
 
 /**
  * SA-05: the durable parent-plus-child work-usage aggregate.
@@ -38,7 +44,7 @@ function assistantEntry(
 	};
 }
 
-function taskRecord(usage?: { inputTokens: number; outputTokens: number }): TaskRecord {
+function taskRecord(usage?: TaskRecordUsage, overrides: Partial<TaskRecordInput> = {}): TaskRecord {
 	return buildTaskRecord({
 		attemptId: `att-${nextRecord++}`,
 		sourceId: "src",
@@ -49,6 +55,7 @@ function taskRecord(usage?: { inputTokens: number; outputTokens: number }): Task
 		textPresent: true,
 		...(usage !== undefined && { usage }),
 		binding: { providerName: "zai", wireModelId: "glm-5.3", reference: "zai/glm-5.3" },
+		...overrides,
 	});
 }
 
@@ -60,7 +67,9 @@ function taskResultEntry(id: string, parentId: string | null, record: TaskRecord
 		timestamp: TS,
 		message: {
 			role: "toolResult",
-			results: [{ toolCallId: `t-${id}`, toolName: "task", content: "done", isError: false, taskRecord: record }],
+			results: [
+				{ toolCallId: `t-${id}`, toolName: "task", content: "done", isError: false, taskRecord: record },
+			],
 		},
 	};
 }
@@ -70,6 +79,7 @@ function compactionEntry(
 	parentId: string | null,
 	usage?: { inputTokens: number; outputTokens: number },
 	model?: string,
+	usageMissing?: boolean,
 ): SessionEntry {
 	return {
 		type: "compaction",
@@ -81,6 +91,22 @@ function compactionEntry(
 		tokensBefore: 500,
 		...(usage !== undefined && { usage }),
 		...(model !== undefined && { model }),
+		...(usageMissing === true && { usageMissing: true as const }),
+	};
+}
+
+function toolResultEntry(
+	id: string,
+	parentId: string | null,
+	toolName: string,
+	isError = false,
+): SessionEntry {
+	return {
+		type: "message",
+		id,
+		parentId,
+		timestamp: TS,
+		message: { role: "toolResult", results: [{ toolCallId: `c-${id}`, toolName, content: "", isError }] },
 	};
 }
 
@@ -93,9 +119,27 @@ describe("SA-05 usage totals", () => {
 			compactionEntry("c1", "t1", { inputTokens: 20, outputTokens: 5 }, "test-sum"),
 		];
 		const view = usageTotalsTracker(entries).view();
-		expect(view.parent).toEqual({ inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 1 });
-		expect(view.child).toEqual({ inputTokens: 50, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 1 });
-		expect(view.summarizer).toEqual({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 1 });
+		expect(view.parent).toEqual({
+			inputTokens: 100,
+			outputTokens: 10,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			calls: 1,
+		});
+		expect(view.child).toEqual({
+			inputTokens: 50,
+			outputTokens: 7,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			calls: 1,
+		});
+		expect(view.summarizer).toEqual({
+			inputTokens: 20,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			calls: 1,
+		});
 		expect(view.total.inputTokens).toBe(170);
 		expect(view.total.outputTokens).toBe(22);
 		expect(view.incomplete).toEqual({ parent: false, child: false, summarizer: false });
@@ -132,5 +176,123 @@ describe("SA-05 usage totals", () => {
 		expect(priced.usd).toBeCloseTo(2 + 0.5, 10); // 1M @ $2 + 0.5M @ $1
 		expect(priced.unpriced.inputTokens).toBe(1_000_000); // the legacy message only
 		expect(priced.byModel.find((m) => m.reference === null)?.priced).toBe(false);
+	});
+	it("rebuild == incremental: a fresh tracker over the grown entries agrees", () => {
+		const entries: SessionEntry[] = [
+			userEntry("u1", null),
+			assistantEntry("a1", "u1", 10, 1, { model: "test-parent" }),
+		];
+		const tracker = usageTotalsTracker(entries);
+		expect(tracker.view().parent.calls).toBe(1);
+		entries.push(assistantEntry("a2", "a1", 7, 3, { model: "test-parent" }));
+		const incremented = tracker.view();
+		const rebuilt = usageTotalsTracker(entries).view();
+		expect(incremented).toEqual(rebuilt);
+		expect(incremented.parent.calls).toBe(2);
+		expect(incremented.parent.inputTokens).toBe(17);
+	});
+
+	it("dedupes task records by attemptId (hand-copied entries count once)", () => {
+		const record = taskRecord({ inputTokens: 5, outputTokens: 1 });
+		const entries: SessionEntry[] = [
+			taskResultEntry("t1", null, record),
+			taskResultEntry("t2", "t1", record), // same attemptId — defensive dedupe
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.child.calls).toBe(1);
+		expect(view.child.inputTokens).toBe(5);
+	});
+
+	it("rule 2b: a task result without a parsable record marks the child bucket incomplete", () => {
+		const entries: SessionEntry[] = [
+			toolResultEntry("r1", null, "task", true), // synthetic force-quit closer: no record
+			toolResultEntry("r2", "r1", "bash"), // non-task results are not a signal
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.child.calls).toBe(0);
+		expect(view.incomplete).toEqual({ parent: false, child: true, summarizer: false });
+	});
+
+	it("taxonomy: absent usage on a launched record is unknown; unlaunched records are silent", () => {
+		const entries: SessionEntry[] = [
+			taskResultEntry("t1", null, taskRecord(undefined)), // launched, no usage report
+			taskResultEntry("t2", "t1", taskRecord(undefined, { launched: false, status: "rejected" })),
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.child.calls).toBe(0);
+		expect(view.incomplete.child).toBe(true); // the launched one; the rejected one contributes nothing
+	});
+
+	it("assistant usageMissing keeps the numbers and flags the parent bucket", () => {
+		const entries: SessionEntry[] = [assistantEntry("a1", null, 0, 0, { usageMissing: true })];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.parent.calls).toBe(1);
+		expect(view.incomplete.parent).toBe(true);
+		expect(view.incomplete.child).toBe(false);
+	});
+
+	it("summary entries: usageMissing flags; a legacy entry counts once and stays unflagged (L1)", () => {
+		const entries: SessionEntry[] = [
+			compactionEntry("c1", null, { inputTokens: 8, outputTokens: 2 }, "test-sum"), // reported
+			compactionEntry("c2", "c1", { inputTokens: 3, outputTokens: 1 }, "test-sum", true), // flagged
+			compactionEntry("c3", "c2", undefined, undefined), // legacy: no usage field at all
+			compactionEntry("c4", "c3", { inputTokens: 4, outputTokens: 1 }), // legacy with numbers, no model
+		];
+		const view = usageTotalsTracker(entries).view();
+		expect(view.summarizer).toEqual({
+			inputTokens: 15,
+			outputTokens: 4,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			calls: 3,
+		});
+		expect(view.incomplete.summarizer).toBe(true);
+	});
+
+	it("prices each producer independently: an unknown child reference stays unpriced beside a priced parent", () => {
+		const entries: SessionEntry[] = [
+			assistantEntry("a1", null, 1_000_000, 0, { model: "known/model-a" }),
+			taskResultEntry(
+				"t1",
+				"a1",
+				taskRecord(
+					{ inputTokens: 2_000_000, outputTokens: 0 },
+					{ binding: { providerName: "anthropic", wireModelId: "m", reference: "unknown/model-b" } },
+				),
+			),
+		];
+		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), (reference) =>
+			reference === "known/model-a" ? { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } : undefined,
+		);
+		expect(priced.usd).toBeCloseTo(1, 10);
+		expect(priced.unpriced.inputTokens).toBe(2_000_000);
+		expect(priced.byModel.find((m) => m.reference === "unknown/model-b")?.priced).toBe(false);
+	});
+
+	it("tags subscription-backed priced usage (the (sub) semantics)", () => {
+		const entries: SessionEntry[] = [assistantEntry("a1", null, 100, 0, { model: "zai/glm-5.3" })];
+		const priced = priceUsageTotals(usageTotalsTracker(entries).view(), () => ({
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			subscription: true,
+		}));
+		expect(priced.subscription).toBe(true);
+		expect(priced.unpriced.inputTokens).toBe(0);
+	});
+
+	it("money-segment matrix (design §4.5)", () => {
+		const seg = (a: Partial<Parameters<typeof usageMoneySegment>[0]>) =>
+			usageMoneySegment({ usd: 0, subscription: false, unpricedTokens: 0, incomplete: false, ...a });
+		expect(seg({})).toBeNull();
+		expect(seg({ usd: 0.1234 })).toBe("$0.123");
+		expect(seg({ usd: 0.1234, unpricedTokens: 5 })).toBe("~$0.123");
+		expect(seg({ usd: 0.1234, incomplete: true })).toBe("$0.123!");
+		expect(seg({ usd: 0.1234, unpricedTokens: 5, incomplete: true })).toBe("~$0.123!");
+		expect(seg({ subscription: true })).toBe("$0.000 (sub)");
+		expect(seg({ unpricedTokens: 5 })).toBe("$?");
+		expect(seg({ unpricedTokens: 5, incomplete: true })).toBe("$?!");
+		expect(seg({ incomplete: true })).toBe("$?!");
 	});
 });

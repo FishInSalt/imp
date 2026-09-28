@@ -17,9 +17,10 @@ import {
 	readTrustFile,
 	removeTrust,
 } from "../core/trust.js";
+import { priceUsageTotals } from "../core/usage-totals.js";
 import { listChildWorktrees, resolveRepoState } from "../core/worktree.js";
 import type { RegisteredExtensionCommand } from "../extensions/types.js";
-import { formatTokens } from "../format.js";
+import { formatTokens, usageMoneySegment } from "../format.js";
 import { mcpConfigPaths } from "../mcp/config.js";
 import type { McpManager } from "../mcp/manager.js";
 import {
@@ -32,6 +33,7 @@ import {
 import { catalogModelIds, refreshCatalog } from "../provider/catalog.js";
 import { loadCodexCredential, loginCodex, logoutCodex } from "../provider/codex-auth.js";
 import { discoverModels, familyConfigured } from "../provider/discover.js";
+import { costFor } from "../provider/models.js";
 import {
 	supportedThinkingLevels,
 	THINKING_LEVELS,
@@ -1761,8 +1763,26 @@ export const COMMANDS: readonly SlashCommand[] = [
 			} else {
 				const stats = session.stats();
 				const name = session.getSessionName();
+				// SA-05: the message count stays the active-branch context fact; the
+				// work totals come from the durable whole-session aggregate.
+				const totals = runner.usageTotals();
+				let usagePart = "";
+				if (totals !== null) {
+					const priced = priceUsageTotals(totals, costFor);
+					const money = usageMoneySegment({
+						usd: priced.usd,
+						subscription: priced.subscription,
+						unpricedTokens:
+							priced.unpriced.inputTokens +
+							priced.unpriced.outputTokens +
+							priced.unpriced.cacheReadTokens +
+							priced.unpriced.cacheWriteTokens,
+						incomplete: totals.incomplete.parent || totals.incomplete.child || totals.incomplete.summarizer,
+					});
+					usagePart = ` · work ↑${formatTokens(totals.total.inputTokens)} ↓${formatTokens(totals.total.outputTokens)}${money === null ? "" : ` ${money}`}`;
+				}
 				ctx.renderer.note(
-					`▪ session ${session.header.id.slice(0, 8)}${name ? ` · ${name}` : ""} · ${stats.messageCount} msgs · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
+					`▪ session ${session.header.id.slice(0, 8)}${name ? ` · ${name}` : ""} · ${stats.messageCount} msgs (active branch)${usagePart}`,
 				);
 			}
 			const contextTokens = estimateContextTokens(runner.history, runner.contextEstimateFloor).tokens;

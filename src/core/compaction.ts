@@ -385,6 +385,9 @@ interface SummarizerRun {
 	summary: string;
 	finalText: string | undefined;
 	usage: Usage;
+	/** SA-05: true when at least one started stream never delivered a report
+	 *  (mirrors the ledger's recordMissingUsageReport sites). */
+	usageMissing: boolean;
 	stopReason: string | null | undefined;
 }
 
@@ -406,6 +409,7 @@ async function runSummarizer(args: {
 	let summary = "";
 	let finalText: string | undefined;
 	let stopReason: string | null | undefined;
+	let usageMissing = false;
 	recordSummarizerCall(args.usageLedger);
 	let reported = false;
 	try {
@@ -424,7 +428,10 @@ async function runSummarizer(args: {
 				addUsage(usage, event.message.usage);
 				recordUsageReport(args.usageLedger, "summarizer", event.message.usage);
 				// SA-04 round 2: message said it never saw usage data.
-				if (event.message.usageMissing === true) recordMissingUsageReport(args.usageLedger);
+				if (event.message.usageMissing === true) {
+					usageMissing = true;
+					recordMissingUsageReport(args.usageLedger);
+				}
 				stopReason = event.message.stopReason;
 				finalText = event.message.blocks
 					.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
@@ -435,9 +442,12 @@ async function runSummarizer(args: {
 	} finally {
 		// SA-04: an aborted/thrown stream still counts as a started call whose
 		// report never arrived — disclosed, never guessed.
-		if (!reported) recordMissingUsageReport(args.usageLedger);
+		if (!reported) {
+			usageMissing = true;
+			recordMissingUsageReport(args.usageLedger);
+		}
 	}
-	return { summary, finalText, usage, stopReason };
+	return { summary, finalText, usage, stopReason, usageMissing };
 }
 
 /** Rank a level for the "did the retry actually lower anything" test; an
@@ -490,6 +500,7 @@ async function summarizeWithRetry(args: {
 	}
 	const retry = await runSummarizer({ ...args, thinking: lowered });
 	addUsage(retry.usage, first.usage); // honest accounting across both hops
+	retry.usageMissing = retry.usageMissing || first.usageMissing; // SA-05: OR of the hops
 	// Abort wins over the cap on the retry hop too (design §3).
 	if (args.signal?.aborted) throw new Error(args.abortedMessage);
 	if (retry.stopReason === "max_tokens") {
@@ -516,7 +527,7 @@ export async function summarizeBranchSegment(args: {
 	/** #tree: the user's "Summarize with custom prompt" instructions,
 	 *  appended after the fixed prompt (pi's customInstructions). */
 	customInstructions?: string;
-}): Promise<string> {
+}): Promise<{ summary: string; usage: Usage; usageMissing: boolean }> {
 	const transcript = serializeForSummary(args.messages);
 	const suffix =
 		args.customInstructions !== undefined && args.customInstructions.trim() !== ""
@@ -538,7 +549,7 @@ export async function summarizeBranchSegment(args: {
 		abortedMessage: "branch summary: summarizer aborted — incomplete, rejected",
 	});
 	if (run.summary.trim() === "") throw new Error("branch summary: summarizer returned nothing");
-	return run.summary.trim();
+	return { summary: run.summary.trim(), usage: run.usage, usageMissing: run.usageMissing };
 }
 
 // ============================================================================
@@ -553,6 +564,8 @@ export interface CompactResult {
 	/** Estimated context right after (summary + retained tail, char-based). */
 	tokensAfter: number;
 	usage: Usage;
+	/** SA-05: a summarizer stream ran without delivering a usage report. */
+	usageMissing: boolean;
 }
 
 /** Result of the pure compaction computation (no session involvement). */
@@ -565,6 +578,8 @@ export interface CompactHistoryResult {
 	/** Estimated context right after (summary + retained tail, char-based). */
 	tokensAfter: number;
 	usage: Usage;
+	/** SA-05: a summarizer stream ran without delivering a usage report. */
+	usageMissing: boolean;
 }
 
 /**
@@ -648,7 +663,14 @@ export async function compactHistory(args: {
 	};
 	const tokensAfter =
 		estimateTokens(summaryMessage) + retainedTail.reduce((sum, m) => sum + estimateTokens(m), 0);
-	return { summary, retainedTail, tokensBefore, tokensAfter, usage: run.usage };
+	return {
+		summary,
+		retainedTail,
+		tokensBefore,
+		tokensAfter,
+		usage: run.usage,
+		usageMissing: run.usageMissing,
+	};
 }
 
 /**
@@ -685,12 +707,20 @@ export async function compactSession(args: {
 	});
 	if (result === null) return null;
 
-	args.session.appendCompaction(result.summary, result.retainedTail, result.tokensBefore, result.usage);
+	args.session.appendCompaction(
+		result.summary,
+		result.retainedTail,
+		result.tokensBefore,
+		result.usage,
+		// SA-05 stamps: producing model reference + missing-report flag.
+		result.usageMissing ? { model: args.model, usageMissing: true } : { model: args.model },
+	);
 	return {
 		summary: result.summary,
 		retainedCount: result.retainedTail.length,
 		tokensBefore: result.tokensBefore,
 		tokensAfter: result.tokensAfter,
 		usage: result.usage,
+		usageMissing: result.usageMissing,
 	};
 }

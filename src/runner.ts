@@ -14,12 +14,19 @@ import { loadContextFiles } from "./core/context-files.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
-import { type AgentMessage, contentText, type ImageBlock } from "./core/messages.js";
+import { type AgentMessage, contentText, type ImageBlock, type Usage } from "./core/messages.js";
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
 import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
+import {
+	priceUsageTotals,
+	type UsageTotals,
+	type UsageTotalsTracker,
+	usageTotalsTracker,
+} from "./core/usage-totals.js";
 import { modelMaxTokensFor } from "./provider/catalog.js";
+import { costFor } from "./provider/models.js";
 
 /** navigateTree's success shape (batch B: named so forkSessionAt can extend
  *  it; editorTextDroppedImages flags that the re-edited user message carried
@@ -56,7 +63,7 @@ import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure } from "./extensions/types.js";
-import { formatTokens, shorten } from "./format.js";
+import { formatTokens, shorten, usageMoneySegment } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
 import { contextWindowFor } from "./provider/models.js";
@@ -259,6 +266,10 @@ export interface Runner {
 	>;
 	printRunStats(result: RunAgentLoopResult, options?: { statsLine?: boolean }): void;
 	printSessionStats(): void;
+
+	/** SA-05: the durable whole-session work-usage aggregate (null without a
+	 *  session); syncs entries appended since the last call. */
+	usageTotals(): UsageTotals | null;
 	/** Idempotent one-time init (session wiring + banners + system prompt).
 	 *  Eager unless deferInit was set; the scripted REPL calls it on the first
 	 *  accepted line. */
@@ -343,6 +354,10 @@ class RunnerImpl implements Runner {
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
+	/** SA-05: the whole-session usage aggregate — one tracker per store instance
+	 *  (a swap on resume/new rebuilds from that store's entries). */
+	private usageTracker: UsageTotalsTracker | null = null;
+	private usageTrackerStore: SessionStore | null = null;
 	/** #compaction-ux F1: index just past the compaction splice point in
 	 *  this.history (0 when uncompacted). Assistant usage reports BEFORE the
 	 *  boundary measured a pre-compaction context and must not anchor the
@@ -781,6 +796,11 @@ class RunnerImpl implements Runner {
 
 		let outcome: "written" | "empty" | "disabled" | "failed" = "disabled";
 		let summary: string | undefined;
+		// SA-05: the branch-summary call's usage + stamps, persisted with the
+		// branchSummary entry (producing model captured BEFORE the await).
+		let summaryUsage: Usage | undefined;
+		let summaryUsageMissing = false;
+		const summaryModel = this.model; // stamp the producing model, not the post-await current one
 		if (opts?.summarize !== true || !this.branchSummaryEnabled) {
 			// no summary wanted or IMP_BRANCH_SUMMARY=0
 		} else {
@@ -791,15 +811,18 @@ class RunnerImpl implements Runner {
 				outcome = "empty"; // nothing was written beyond the target — nothing to summarize
 			} else {
 				try {
-					summary = await summarizeBranchSegment({
+					const branch = await summarizeBranchSegment({
 						messages,
 						provider: this.provider,
-						model: this.model,
-						modelMaxTokens: modelMaxTokensFor(this.model), // #derived-budget
+						model: summaryModel,
+						modelMaxTokens: modelMaxTokensFor(summaryModel), // #derived-budget
 						thinking: this.level, // pi: the summarizer thinks at the session level
 						signal: opts?.signal,
 						customInstructions: opts?.customInstructions,
 					});
+					summary = branch.summary;
+					summaryUsage = branch.usage;
+					summaryUsageMissing = branch.usageMissing;
 				} catch (err) {
 					// Abort is abort of the NAVIGATION (review P1-3): distinguish by
 					// the signal, not the message — nothing moves, not a failure.
@@ -821,7 +844,12 @@ class RunnerImpl implements Runner {
 		if (positionMoves) store.branchTo(newLeaf);
 		if (summary !== undefined) {
 			if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
-			store.appendBranchSummary(summary); // parentId = newLeaf — heads the new position
+			// SA-05 stamps: usage + producing model + missing flag ride the entry.
+			store.appendBranchSummary(
+				summary,
+				summaryUsage,
+				summaryUsageMissing ? { model: summaryModel, usageMissing: true } : { model: summaryModel },
+			); // parentId = newLeaf — heads the new position
 			outcome = "written";
 		}
 		// The editorText re-edit case may move nothing — history is already right.
@@ -1239,12 +1267,43 @@ class RunnerImpl implements Runner {
 		this.logger.log("run_end", { stopReason: result.stopReason, turns: result.turns, usage: result.usage });
 	}
 
+	/**
+	 * SA-05: the durable whole-session work-usage aggregate (null without a
+	 *  session). Syncs entries appended since the last call (cursor — O(new
+	 *  entries), no file rescans); cheap enough for every footer refresh.
+	 */
+	usageTotals(): UsageTotals | null {
+		const session = this.sessionStore;
+		if (session === null) return null;
+		if (this.usageTracker === null || this.usageTrackerStore !== session) {
+			this.usageTracker = usageTotalsTracker(session.getEntries());
+			this.usageTrackerStore = session;
+		}
+		return this.usageTracker.view();
+	}
+
 	printSessionStats(): void {
 		const session = this.sessionStore;
 		if (!session) return;
-		const stats = session.stats();
+		const stats = session.stats(); // message count stays the active-branch context fact
+		const totals = this.usageTotals();
+		let usagePart = "";
+		if (totals !== null) {
+			const priced = priceUsageTotals(totals, costFor);
+			const money = usageMoneySegment({
+				usd: priced.usd,
+				subscription: priced.subscription,
+				unpricedTokens:
+					priced.unpriced.inputTokens +
+					priced.unpriced.outputTokens +
+					priced.unpriced.cacheReadTokens +
+					priced.unpriced.cacheWriteTokens,
+				incomplete: totals.incomplete.parent || totals.incomplete.child || totals.incomplete.summarizer,
+			});
+			usagePart = ` · work ↑${formatTokens(totals.total.inputTokens)} ↓${formatTokens(totals.total.outputTokens)}${money === null ? "" : ` ${money}`}`;
+		}
 		this.options.renderer.note(
-			`— session ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs total · in ${formatTokens(stats.inputTokens)} / out ${formatTokens(stats.outputTokens)} cumulative`,
+			`— session ${session.header.id.slice(0, 8)} · ${stats.messageCount} msgs (active branch)${usagePart}`,
 		);
 	}
 

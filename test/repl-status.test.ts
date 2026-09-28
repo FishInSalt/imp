@@ -312,12 +312,14 @@ describe("footer usage segments", () => {
 		await env.repl;
 	});
 
-	it("models outside the cost table omit the $ segment entirely", async () => {
+	it("models outside the cost table show $? (unpriced), never a fallback price", async () => {
 		const env = await startTuiRepl([reply("ok", { inputTokens: 50, outputTokens: 5 })]);
 		await settle();
 		env.terminal.data("hi\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("↑50 ↓5"));
-		expect(env.terminal.frameSince(0)).not.toContain("$");
+		// SA-05: usage was reported but no rate resolves for test-model — the
+		// aggregate marks it unpriced instead of omitting or guessing.
+		expect(env.terminal.frameSince(0)).toContain("$?");
 		env.terminal.data("/exit\r");
 		await env.repl;
 	});

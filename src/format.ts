@@ -225,3 +225,23 @@ export function renderMarkdownLite(text: string, ansi = process.stdout.isTTY ===
 	}
 	return out.join("\n");
 }
+
+/** SA-05 (#sa-05-usage-totals): the money segment for the footer and the
+ *  session lines. `$0.123` = complete; `~$0.123` = partial pricing (counted
+ *  tokens without a known rate); `…!` = known-missing usage; `$?` / `$?!` =
+ *  nothing could be priced. Rates are the current catalog's — an estimate,
+ *  not an invoice. null = nothing to show. See docs/sa-05-usage-totals-design.md §4.5. */
+export function usageMoneySegment(args: {
+	usd: number;
+	subscription: boolean;
+	/** Counted tokens without a resolvable rate (presence = tokens > 0). */
+	unpricedTokens: number;
+	/** Any known-missing usage in the aggregate. */
+	incomplete: boolean;
+}): string | null {
+	const known = args.usd > 0 || args.subscription;
+	const hasUnpriced = args.unpricedTokens > 0;
+	if (!known && !hasUnpriced && !args.incomplete) return null;
+	if (!known) return args.incomplete ? "$?!" : "$?";
+	return `${hasUnpriced ? "~" : ""}$${args.usd.toFixed(3)}${args.subscription ? " (sub)" : ""}${args.incomplete ? "!" : ""}`;
+}

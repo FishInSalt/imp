@@ -783,7 +783,9 @@ describe("/status (M11)", () => {
 		await dispatchCommand("/status", env.ctx);
 		const out = env.output();
 		expect(out).toContain("▪ model claude-sonnet-4-5");
-		expect(out).toMatch(/▪ session [0-9a-f]{8} · [\d]+ msgs · in [\d.]+[km]? \/ out [\d.]+[km]? cumulative/);
+		expect(out).toMatch(
+			/▪ session [0-9a-f]{8} · [\d]+ msgs \(active branch\) · work ↑[\d.]+[km]? ↓[\d.]+[km]?/,
+		);
 		expect(out).toMatch(/▪ context ~[\d.]+[km]? tokens · \d+% of window/);
 		expect(out).toContain("▪ project trust");
 		expect(env.requests).toHaveLength(0); // read-only — no model call

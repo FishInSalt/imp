@@ -270,6 +270,29 @@ describe("SessionStore", () => {
 		expect(reopened.stats().messageCount).toBe(2);
 	});
 
+	it("SA-05: usage stamps on summary entries round-trip (additive fields)", async () => {
+		const dir = await mkpath();
+		const store = SessionStore.create(path.join(dir, "s.jsonl"), "/w");
+		store.appendMessage(user("q1"));
+		store.appendCompaction(
+			"summary",
+			[],
+			100,
+			{ inputTokens: 8, outputTokens: 2 },
+			{ model: "test-model", usageMissing: true },
+		);
+		store.appendBranchSummary("branch", { inputTokens: 3, outputTokens: 1 }, { model: "test-model" });
+		const reopened = SessionStore.open(store.filePath);
+		const compaction = reopened.getEntries().find((e) => e.type === "compaction");
+		expect(compaction).toMatchObject({
+			usage: { inputTokens: 8, outputTokens: 2 },
+			model: "test-model",
+			usageMissing: true,
+		});
+		const branch = reopened.getEntries().find((e) => e.type === "branchSummary");
+		expect(branch).toMatchObject({ usage: { inputTokens: 3, outputTokens: 1 }, model: "test-model" });
+	});
+
 	it("position markers: a fork or switch survives a restart (review P1-2)", async () => {
 		const dir = await mkpath();
 		const file = path.join(dir, "s.jsonl");

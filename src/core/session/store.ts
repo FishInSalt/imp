@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	closeSync,
+	existsSync,
+	openSync,
+	readFileSync,
+	truncateSync,
+	writeFileSync,
+} from "node:fs";
 import { firstLine } from "../../format.js";
 import type { ChildLaunchRecord } from "../child-launch.js";
 import { type AgentMessage, contentText, type Usage } from "../messages.js";
@@ -244,6 +252,31 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 	return entry as SessionEntry;
 }
 
+/** SA-07: the acceptance rule for a persisted session line, shared with
+ *  open() — a position marker OR a session_model line with a valid model
+ *  payload and boolean flag OR a valid entry. Used by repairTornFinalLine
+ *  to decide whether a final line is a record open() KEPT (terminate) or one
+ *  it would DROP (truncate). The header is not covered: the repair skips the
+ *  first non-blank line exactly like open() reads it. */
+function acceptsAsSessionLine(line: string): boolean {
+	try {
+		const probe = JSON.parse(line) as { type?: unknown; leafId?: unknown; explicit?: unknown };
+		// open() keeps ANY position marker — a bad leafId simply does not move
+		// the write head (reopen rule) and is never an error. The repair must
+		// mirror that exactly (re-review F1).
+		if (probe.type === "position") return true;
+		if (probe.type === "session_model") {
+			if (typeof probe.explicit !== "boolean") return false;
+			parseModel(probe, "session line");
+			return true;
+		}
+		parseEntryLine(line, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export class SessionStore {
 	readonly filePath: string;
 	readonly header: SessionHeader;
@@ -254,6 +287,12 @@ export class SessionStore {
 	private explicitModelSelection = false;
 	private entries: SessionEntry[] = [];
 	private byId = new Map<string, SessionEntry>();
+	/** SA-07: set by open() when the persisted bytes do not end in a newline —
+	 *  the append hazard. A complete final record without its newline would
+	 *  merge with the next append (both entries lost on the following reopen);
+	 *  an unparseable fragment does the same. Structural only — the final line
+	 *  may parse (kept by open) or not (dropped in memory). */
+	tornFinalLine = false;
 	/** Current leaf = id of the last appended entry (tree position). */
 	private leafId: string | null = null;
 	/** #tree: labels by target entry id (file-level — replay is last-write-wins,
@@ -332,9 +371,8 @@ export class SessionStore {
 
 	static open(filePath: string): SessionStore {
 		if (!existsSync(filePath)) throw new SessionError(`session file not found: ${filePath}`);
-		const lines = readFileSync(filePath, "utf8")
-			.split("\n")
-			.filter((l) => l.trim() !== "");
+		const raw = readFileSync(filePath, "utf8");
+		const lines = raw.split("\n").filter((l) => l.trim() !== "");
 		if (lines.length === 0) throw new SessionError(`empty session file: ${filePath}`);
 
 		let header: SessionHeader;
@@ -352,6 +390,7 @@ export class SessionStore {
 		const entries: SessionEntry[] = [];
 		let lastEntryIndex = -1;
 		let lastPosition: { leafId: string | null; index: number } | null = null;
+		let droppedFinalLine = false;
 		for (let i = 1; i < lines.length; i++) {
 			const raw = lines[i] as string;
 			// Position markers are file-level metadata, not tree nodes (#10
@@ -389,6 +428,7 @@ export class SessionStore {
 				// A torn FINAL line (crash mid-append) must not hide the whole session;
 				// interior corruption is still fatal — something is structurally wrong.
 				if (i === lines.length - 1 && err instanceof SessionError) {
+					droppedFinalLine = true;
 					process.stderr.write(`imp: dropping torn final line in ${filePath}\n`);
 					break;
 				}
@@ -397,6 +437,10 @@ export class SessionStore {
 		}
 		const store = new SessionStore(filePath, header, entries);
 		store.persisted = true;
+		// SA-07: repairable final-line states — a missing trailing newline (an
+		// append would merge into it) OR a final line open() had to DROP (an
+		// append would bury it as fatal interior corruption).
+		store.tornFinalLine = !raw.endsWith("\n") || droppedFinalLine;
 		store.savedModel = model;
 		store.explicitModelSelection = explicitModelSelection;
 		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
@@ -491,6 +535,62 @@ export class SessionStore {
 		};
 		this.append(entry);
 		return entry.id;
+	}
+
+	/** SA-07: make the file append-safe after a crash mid-write. Shape a (the
+	 *  final line does not parse — open dropped it in memory): truncate the
+	 *  fragment at the last newline. Shape b (the final record parses and was
+	 *  kept by open): append the missing newline — truncating it would delete
+	 *  a recorded entry AND desync the in-memory leaf (a later append would
+	 *  chain to an id whose bytes no longer exist). Idempotent; undefined when
+	 *  the store never observed the condition. */
+	repairTornFinalLine(): { action: "truncated" | "terminated"; bytes: number } | undefined {
+		if (!this.persisted || !this.tornFinalLine) return undefined;
+		const raw = readFileSync(this.filePath); // BYTES: truncateSync takes byte lengths
+		// Segment by 0x0a in BYTE space — multi-byte content (CJK, emoji,
+		// multi-byte paths) shifts string offsets away from byte offsets, and
+		// using a string offset as a byte length silently eats complete
+		// records.
+		const segments: Array<{ start: number; end: number; text: string }> = [];
+		let start = 0;
+		for (let i = 0; i < raw.length; i++) {
+			if (raw[i] === 0x0a) {
+				segments.push({ start, end: i, text: raw.subarray(start, i).toString("utf8") });
+				start = i + 1;
+			}
+		}
+		const endsWithNewline = start === raw.length;
+		if (!endsWithNewline) {
+			segments.push({ start, end: raw.length, text: raw.subarray(start).toString("utf8") });
+		}
+		// Walk like open(): blank lines are filtered, the first non-blank line
+		// is the header (open() validated it), and the first unacceptable line
+		// after that can only be the one open() DROPPED — interior damage is
+		// fatal at open(), so it cannot exist in an opened store.
+		let headerSeen = false;
+		for (const segment of segments) {
+			if (segment.text.trim() === "") continue;
+			if (!headerSeen) {
+				headerSeen = true;
+				continue;
+			}
+			if (acceptsAsSessionLine(segment.text)) continue;
+			truncateSync(this.filePath, segment.start);
+			this.tornFinalLine = false;
+			return { action: "truncated", bytes: raw.length - segment.start };
+		}
+		if (!endsWithNewline) {
+			// Every line is a record open() kept — only the trailing newline is
+			// missing. TRUNCATING would delete a recorded entry AND desync the
+			// in-memory leaf (a later append would chain to an id whose bytes
+			// no longer exist); terminate instead.
+			appendFileSync(this.filePath, "\n", { encoding: "utf8" });
+			this.tornFinalLine = false;
+			return { action: "terminated", bytes: 1 };
+		}
+		// Already repaired, or raced by another writer: nothing to do.
+		this.tornFinalLine = false;
+		return undefined;
 	}
 
 	/** M16 /name: append a session_info entry. The name is sanitized by

@@ -536,7 +536,7 @@ Design review closed.
 - `src/repl/repl.ts`: `hintState` lives on the ReplMachine (shared into
   every per-line CommandContext); banner/footer/title/resume-line copy
   picker; the two legacy constants re-export from the runner module.
-- Tests: `test/startup-model-resolution.test.ts` (17 cases, incl. two
+- Tests: `test/startup-model-resolution.test.ts` (20 cases, incl. two
   CLI-spawn e2e: silent print resolution and the interactive pipe note);
   `test/cli-model-explicit.test.ts` updated for the source-aware chain
   (+1 provenance case); `test/fresh-install-hint.test.ts` updated for the
@@ -594,3 +594,13 @@ Verdict FIX-FIRST — all findings folded; gates then 119 files / 2281 tests.
 - F5 (P3, fixed): the D3 test now asserts the resolution note precedes the
   resumed line.
 - F6 (P3, no action): copy/doc alignment remark only.
+
+### 10.5 Implementation-review round 2 (narrow verification, 2026-09-28)
+
+Verdict: all five fixes CLOSED (F1 moonshot family truth, F2 parse-based
+suppression, F3 -m guard, F4a/F4b assertions, F5 ordering). One low finding
+folded: the F2 fix's changed direction (gated-off file WITHOUT defaultModel
+→ hint must appear) is now pinned by the extended D5 test. Accepted remark:
+the F4b stamp test exercises the resolved-STYLE reference through the
+scripted-provider path (not a literal D2/D3 state) — recorded, no action.
+Gates: typecheck 0 · lint 0 · build ok · 119 files / 2281 tests.

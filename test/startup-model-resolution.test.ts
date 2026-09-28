@@ -528,6 +528,30 @@ describe("#startup-model-resolution", () => {
 		};
 		await model?.run("zai/glm-4.6", gatedCtx);
 		expect(gatedOut.output()).not.toContain("keeps this model for new sessions");
+		// impl-review round-2 N1: a gated-off file WITHOUT defaultModel must NOT
+		// silence the hint (the F2 fix's actual direction).
+		const bareCwd = path.join(root, "gated-bare");
+		await mkdir(path.join(bareCwd, ".imp"), { recursive: true });
+		await writeFile(path.join(bareCwd, ".imp", "settings.json"), JSON.stringify({ autoCompact: false }));
+		const bare = await createRunner({
+			cwd: bareCwd,
+			argv: [],
+			model: "zai/glm-4.7",
+			maxTokens: 1024,
+			maxTurns: 3,
+			noContextFiles: true,
+			noSession: true,
+			renderer,
+			projectSettingsAllowed: false,
+		});
+		const bareOut = makeRenderer();
+		await model?.run("zai/glm-4.6", {
+			...ctx,
+			runner: bare,
+			renderer: bareOut.renderer,
+			hintState: { defaultModelHintShown: false },
+		});
+		expect(bareOut.output()).toContain("keeps this model for new sessions");
 	});
 
 	it("D3: an explicit -m model survives an interactive /resume fallback (impl-review F3)", async () => {

@@ -24,6 +24,7 @@ function leasePayload(overrides: Record<string, unknown> = {}) {
 		pid: 999999,
 		host: "test-host",
 		machineId: "machine-1",
+		nonce: "old-instance",
 		attemptId: "old-attempt",
 		startedAt: new Date(0).toISOString(),
 		...overrides,
@@ -85,12 +86,37 @@ describe("child lease (SA-07)", () => {
 		if (result.ok) result.lease.release();
 	});
 
-	it("T19c: an own-pid leftover (failed release) is reclaimed immediately", async () => {
+	it("T19c: this process's own leftover (same pid AND nonce) is reclaimed immediately", async () => {
 		const { child } = await setup("imp-lease19c-");
-		writeLease(child, leasePayload({ pid: leaseOptions.pid }));
-		const result = acquireChildLease(child, "new-attempt", { ...leaseOptions, isAlive: () => true });
+		writeLease(child, leasePayload({ pid: leaseOptions.pid, nonce: "my-instance" }));
+		const result = acquireChildLease(child, "new-attempt", {
+			...leaseOptions,
+			nonce: "my-instance",
+			isAlive: () => true,
+		});
 		expect(result.ok).toBe(true);
 		if (result.ok) result.lease.release();
+	});
+
+	it("T19d (F5): a same-pid lease from an UNIDENTIFIED instance is refused, never reclaimed", async () => {
+		const { child } = await setup("imp-lease19d-");
+		// Same numeric pid, different instance nonce (a sibling pid namespace
+		// with a live holder, or a pid-recycled leftover) — the holder is
+		// reported alive and the lease must NOT be taken.
+		writeLease(child, leasePayload({ pid: leaseOptions.pid, nonce: "other-instance" }));
+		const result = acquireChildLease(child, "new-attempt", {
+			...leaseOptions,
+			nonce: "my-instance",
+			isAlive: () => true,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("busy");
+			expect(result.message).toContain("cannot identify as its own");
+		}
+		// The lease is untouched.
+		const after = JSON.parse(readFileSync(leasePathFor(child), "utf8")) as { attemptId?: string };
+		expect(after.attemptId).toBe("old-attempt");
 	});
 
 	it("T20a: a live foreign pid refuses as busy", async () => {
@@ -196,5 +222,24 @@ describe("child lease (SA-07)", () => {
 		} finally {
 			acquired.lease.release();
 		}
+	});
+});
+
+describe("child lease — machine id (production path)", () => {
+	it("F6/T29: production init works and an empty id file (crash between create and write) is repaired", async () => {
+		const { base, child } = await setup("imp-lease-mid-");
+		// No injected machineId: the production initialization path runs.
+		const first = acquireChildLease(child, "a1", { pid: 4242, host: "test-host", nonce: "n1" });
+		expect(first.ok).toBe(true);
+		if (first.ok) first.lease.release();
+		const idFile = path.join(base, ".imp-machine-id");
+		const id = readFileSync(idFile, "utf8").trim();
+		expect(id).not.toBe("");
+		// The interrupted-initialization state from the acceptance finding.
+		writeFileSync(idFile, "");
+		const second = acquireChildLease(child, "a2", { pid: 4242, host: "test-host", nonce: "n2" });
+		expect(second.ok).toBe(true);
+		if (second.ok) second.lease.release();
+		expect(readFileSync(idFile, "utf8").trim()).not.toBe("");
 	});
 });

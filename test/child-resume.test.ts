@@ -4,7 +4,15 @@
  * The R* cases were the red-evidence set (committed before implementation);
  * the T* cases complete the design's test plan.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +22,7 @@ import type { AgentDefinition } from "../src/core/agents/registry.js";
 import { lifetimeUsageLine } from "../src/core/child-resume.js";
 import { createSession, sessionsDirFor } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { runSubagent } from "../src/core/subagent.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
 import { createTaskTool, type TaskToolOptions, taskResult } from "../src/core/tools/task.js";
 import type { Tool, ToolExecuteResult } from "../src/core/tools/types.js";
@@ -249,6 +258,60 @@ describe("SA-07 resume", () => {
 		const repair = reopened.repairTornFinalLine();
 		expect(repair?.action).toBe("truncated");
 		// Repair + append + reopen must be clean.
+		const finalStore = SessionStore.open(filePath);
+		finalStore.appendMessage(user("after"));
+		const check = SessionStore.open(filePath);
+		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
+	it("R2e: repair is byte-accurate — CJK/emoji history keeps a byte-identical prefix", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn5-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-5");
+		const text = "用户任务：请检查配置 🔧 路径 /tmp/多字节/文件.txt";
+		store.appendMessage(user(text));
+		const intact = readFileSync(filePath); // complete prefix, BYTES
+		appendFileSync(filePath, '{"type":');
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true);
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("truncated");
+		expect(repair?.bytes).toBe('{"type":'.length);
+		expect(readFileSync(filePath).equals(intact)).toBe(true); // byte-for-byte
+		const finalStore = SessionStore.open(filePath);
+		const messages = finalStore.buildContext().messages;
+		expect(messages).toHaveLength(1);
+		const only = messages[0];
+		if (only?.role !== "user") throw new Error("expected the preserved user message");
+		expect(only.content).toBe(text);
+	});
+
+	it("R2f: an invalid final line WITH a trailing newline is truncated (open dropped it; append must not bury it)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn6-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-6");
+		store.appendMessage(user("first"));
+		appendFileSync(filePath, '{"broken line"\n');
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true); // dropped despite the newline
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("truncated");
+		const finalStore = SessionStore.open(filePath);
+		finalStore.appendMessage(user("after"));
+		const check = SessionStore.open(filePath);
+		expect(check.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
+	it("R2g: a session_model line missing its payload is truncated, not terminated", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-torn7-"));
+		const filePath = path.join(base, "torn.jsonl");
+		const store = SessionStore.create(filePath, base, "torn-store-7");
+		store.appendMessage(user("first"));
+		appendFileSync(filePath, '{"type":"session_model","explicit":true}');
+		const reopened = SessionStore.open(filePath);
+		expect(reopened.tornFinalLine).toBe(true); // open() dropped it
+		const repair = reopened.repairTornFinalLine();
+		expect(repair?.action).toBe("truncated"); // must NOT be kept by terminating
 		const finalStore = SessionStore.open(filePath);
 		finalStore.appendMessage(user("after"));
 		const check = SessionStore.open(filePath);
@@ -865,6 +928,68 @@ describe("SA-07 resume", () => {
 		expect(line).toContain("2 attempts");
 		expect(line).not.toContain("≥");
 		expect(line).toContain("6 in / 3 out");
+	});
+
+	it("T31 (F3): a resumed attempt's result text never falls back into the restored history", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "OLD ANSWER: no defect in first case" }])],
+		});
+		const childId = childIdOf(result);
+
+		// (a) the attempt fails before producing anything.
+		const failing = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				() => {
+					throw new Error("provider exploded");
+				},
+			],
+		});
+		const failed = await failing.task.execute({ resume: childId, prompt: "check the second case" }, signal());
+		expect(failed.isError).toBe(true);
+		expect(failed.output).not.toContain("OLD ANSWER");
+		expect(failed.output).toContain("task failed after 0 turns");
+		expect(failed.taskRecord?.textPresent).toBe(false);
+
+		// (b) the attempt completes without text of its own.
+		const silent = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([])],
+		});
+		const quiet = await silent.task.execute({ resume: childId, prompt: "check the second case" }, signal());
+		expect(quiet.output).not.toContain("OLD ANSWER");
+		expect(quiet.output).toContain("completed with no output");
+		expect(quiet.taskRecord?.textPresent).toBe(false);
+	});
+
+	it("T32 (F3): mid-attempt compaction cannot resurrect the seeded answer (unit)", async () => {
+		const oldUser = user("first task");
+		const oldAnswer = assistant([{ type: "text", text: `OLD ANSWER ${"filler ".repeat(800)}` }]);
+		const provider = scriptedProvider([
+			assistant([{ type: "text", text: "SUMMARY OF PRIOR WORK" }]), // summarizer call
+			assistant([]), // the attempt's own (silent) completion
+		]);
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "S",
+			tools: [],
+			prompt: "second instruction",
+			initialHistory: [oldUser, oldAnswer],
+			initialFloor: 0,
+			settings: { reserveTokens: 0, triggerTokens: 1, keepRecentTokens: 100, contextWindow: 1000 },
+		});
+		expect(outcome.usageDetail.summarizerCalls).toBe(1); // the splice really happened
+		expect(outcome.status).toBe("completed");
+		expect(outcome.text).toBeUndefined(); // never the seeded answer
 	});
 
 	it("T26b: a kept worktree child resumes in place — never auto-removed, prior disposition named", async () => {

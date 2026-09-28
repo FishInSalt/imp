@@ -320,33 +320,44 @@ detection:
   unparseable line: both entries gone on the next reopen (reproduced against
   the real store during design review).
 
-Detection is therefore STRUCTURAL, not parse-based: `SessionStore.open`
-records `tornFinalLine: boolean` when a persisted non-empty file's bytes do
-not end in `\n`.
+Detection is STRUCTURAL and must mirror `open()`'s ACTUAL outcome, not a
+parse guess (acceptance round 2, findings 1–2):
+
+- the flag is set when the bytes do not end in `\n` (an append would merge
+  into the fragment) OR when `open()` DROPPED a final line for any reason
+  (unparseable JSON, invalid entry, invalid model marker) — a dropped line
+  is invisible to a byte scan, and an append would bury it as fatal
+  interior corruption;
+- the repair works in BYTE SPACE on the file Buffer: line boundaries are
+  0x0a byte offsets and `truncateSync` receives byte lengths. String offsets
+  are UTF-16 code-unit positions — using them as byte lengths silently eats
+  the tail of complete multi-byte records (finding 1);
+- "is this final line a record open() kept?" is answered by
+  `acceptsAsSessionLine()` (position / session_model with a valid payload /
+  valid entry — the same parsers open() uses), never by plain JSON.parse
+  (finding 2).
 
 Repair is SHAPE-DEPENDENT — truncating both shapes would be wrong:
 
-- shape a → `truncateSync` at the last newline (the fragment is bytes no
-  reader can interpret as an entry);
-- shape b → append the missing `"\n"` (the entry is complete and `open`
-  kept it in memory; TRUNCATING it would delete a recorded entry AND desync
-  the in-memory leaf — the next appended entry would chain to an id whose
-  bytes no longer exist, producing a broken parent chain on the following
-  reopen. Correction found while writing the red tests; folded here.)
+- an unacceptable final line (what open() dropped, or would drop) →
+  TRUNCATE everything from that line's byte start;
+- an acceptable final record missing only its newline → TERMINATE (append
+  `"\n"`); truncating it would delete a recorded entry AND desync the
+  in-memory leaf (a later append would chain to an id whose bytes no longer
+  exist — broken parent chain on the following reopen).
 
 API:
 
 - `SessionStore` gains `tornFinalLine: boolean` (set by `open`, the
   `persisted`/`savedModel` pattern) and `repairTornFinalLine(): { action:
-  "truncated" | "terminated"; bytes: number } | undefined` — truncates or
-  terminates per the shape above, clears the flag; `undefined` when the flag
-  is unset or the store is not persisted; idempotent (a second call is a
-  no-op).
+  "truncated" | "terminated"; bytes: number } | undefined` — byte offsets
+  throughout; clears the flag; `undefined` when the flag is unset, the store
+  is not persisted, or nothing needed repair (idempotent).
 - Ordering rule (pinned): the repair runs BEFORE any append to the child
   file, only after steps 1–6.1 passed.
 - Refusing instead of repairing was rejected deliberately: this is exactly
-  the crash-mid-append state that most needs continuation, and both repairs
-  preserve every entry that parses. The action is reported in the result
+  the crash-mid-append state that most needs continuation, and the repair
+  preserves every byte open() accepted. The action is reported in the result
   (§4.3 item 1).
 
 ### 6.3 Crash-tail repair (persisted, honest)
@@ -400,11 +411,16 @@ exists anywhere in the codebase (verified).
 
 `<childFilePath>.lease` beside the child session file. Content (one JSON
 line): `{ "pid": <number>, "host": "<os.hostname()>", "machineId":
-"<uuid>", "attemptId": "<uuid>", "startedAt": "<ISO>" }`. The lease exists
-only while an attempt runs (created after validation, released in `finally`).
+"<uuid>", "nonce": "<uuid>", "attemptId": "<uuid>", "startedAt": "<ISO>" }`.
+`nonce` is a per-process instance id (module-load UUID): a same-pid lease
+with a different nonce cannot be identified as this process's own
+(acceptance round 2, finding 5). The lease exists only while an attempt runs
+(created after validation, released in `finally`).
 
-`machineId` is read-or-created at `<childrenDir>/.imp-machine-id` (a random
-UUID, `wx` + ENOENT-retry). It exists because `os.hostname()` collides
+`machineId` is read-or-created at `<childrenDir>/.imp-machine-id`, published
+ATOMICALLY (tmp + rename — an empty file left by a crash between create and
+write is repaired, never fatal; acceptance round 2, finding 6). It exists
+because `os.hostname()` collides
 routinely across containers sharing a mounted sessions directory, and pid
 namespaces make cross-container pids meaningless — hostname + pid alone can
 neither detect the collision nor prove liveness.
@@ -424,13 +440,20 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
    - success → READ BACK and verify (`attemptId === mine`, payload parses);
      mismatch/IO error → refuse `io-error` (never proceed on an unverified
      lease).
-   - `EEXIST` → read the existing lease, then:
+   - `EEXIST` → read the lease ONCE (acceptance round 2, finding 4: this
+     single read decides eligibility AND is the byte generation the steal
+     must move — separate reads can disagree under a concurrent writer).
+     From those bytes:
      - `host` or `machineId` differs from mine → refuse `owned-elsewhere`
        ("held on host X / by a different machine — shared-storage sessions
        across machines are not supported").
-     - unreadable / unparseable content → debris: steal path.
-     - `pid === process.pid` and the Map has NO entry → own leftover (a
-       previous release failed): steal path.
+     - unparseable content → debris: steal path.
+     - `pid` equals mine AND `nonce` equals mine → this process's own
+       failed-release leftover: steal path.
+     - `pid` equals mine AND `nonce` DIFFERS → refuse `busy` ("a process
+       with pid N that this process cannot identify as its own (another
+       instance or pid namespace)") — plain pid equality never authorizes
+       a reclaim (finding 5).
      - `isAlive(pid)` in MY namespace (injectable; default
        `process.kill(pid, 0)`, EPERM = alive) → refuse `busy` with
        pid/host/startedAt in the message.
@@ -439,16 +462,16 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
        hint ("that process looks dead here but may be live in another pid
        namespace; if it really crashed, retry in ~N s").
      - pid dead AND mtime older than the grace → steal path.
-4. Steal path: re-read the bytes; `renameSync(leasePath, <lease>.steal)`
-   (fixed target — rename is atomic, exactly one winner per generation);
-   `ENOENT` → retry from step 3 (someone else won). After the rename,
-   compare the moved content against the bytes read before it:
-   - mismatch (someone re-created the lease in the window — the moved file
-     is NEWER than what we decided about) → best-effort restore
-     (`renameSync(<lease>.steal, leasePath)`; EEXIST = a third process
-     already re-created it → leave it) → refuse `stale-contended`.
-   - match → best-effort remove the `<lease>.steal` artifact; retry from
-     step 3.
+4. Steal path: `renameSync(leasePath, <lease>.steal-<attemptId>)` (UNIQUE
+   target per attempt — two stealers can never share an artifact and a
+   rename never clobbers another's claim; finding 4); `ENOENT` → retry from
+   step 3 (someone else won). After the rename, compare the moved bytes
+   against the SAME bytes the eligibility decision read:
+   - mismatch (a writer re-created the lease in the window) → restore
+     WITHOUT clobbering: `link(steal, lease)` fails EEXIST instead of
+     replacing, so a third holder is never overwritten; then unlink our
+     artifact (or drop it when EEXIST) → refuse `stale-contended`.
+   - match → best-effort remove our artifact; retry from step 3.
    Bounded at 3 rounds → refuse `stale-contended`.
 5. Success returns `{ ok: true, lease }`.
 
@@ -469,13 +492,22 @@ stealable by the next acquire; a foreign or corrupt lease is left alone
 
 ### 7.3 Residual races (recorded, not hidden)
 
-- The read→rename window in the steal path is not atomic. The rename is
-  atomic per generation, the post-rename comparison converts "I moved a
-  fresh live lease" into a refusal for the stealer, and the heartbeat
-  anomaly check converts "my live lease disappeared under me" into an abort
-  for the holder — so no interleaving leaves TWO attempts continuing; the
-  worst outcome is that both stop and the winner of the next attempt
-  proceeds.
+- The read→rename window in the steal path is not atomic. The single-read
+  decision, the unique steal target, the post-rename byte comparison and
+  the link-based (never replacing) restore together convert every
+  interleaving into a refusal for the stealer; the heartbeat anomaly check
+  converts "my live lease disappeared under me" into an abort for the
+  holder. Worst case: both stop and the winner of the next attempt
+  proceeds. A deterministic in-process injection tests the window (T21b);
+  a REAL two-process mutual-exclusion test (T30) hammers the same child
+  lease from two spawned processes and asserts the S/E markers never
+  interleave.
+- Same-pid, different-instance leases (acceptance round 2, finding 5) are
+  refused, not reclaimed: a recycled pid whose old process is gone stays
+  `busy` until this process exits (then the dead-pid + grace path frees it)
+  or the lease is removed manually — the conservative direction, recorded.
+- Crashed stealers can leave `<lease>.steal-<attemptId>` artifacts; they are
+  never read as leases and are removed when their own attempt retries.
 - Grace delay: after a hard crash the next resume refuses `busy` until the
   lease mtime is older than `staleGraceMs` (~60s; three missed heartbeats).
   That delay is the price of not trusting a dead-looking pid across pid
@@ -537,6 +569,11 @@ Pinned behavior on resume:
   reference (fresh dispatch stamps the binding reference at task.ts:493).
   The resumed attempt's usage is therefore priced at the recorded identity,
   never the parent's current model.
+- Result text is attempt-scoped like usage (acceptance round 2, finding 3):
+  seeded messages are tracked by identity and excluded from the final-text
+  scan, so an immediately-failed or silent resumed attempt can never report
+  the previous attempt's answer as its partial result; message identities
+  survive a mid-attempt compaction splice (T31/T32).
 - Permissions: the LIVE gate (`options.onToolCall`) with
   `{ agent: launch.agent?.name, cwd: launch.cwd }` — never the record (§4.4
   of the SA-06 design). Events: same `onEvent` wiring with a fresh
@@ -625,7 +662,7 @@ export type ChildLeaseResult =
   | { ok: true; lease: ChildLeaseHandle }
   | { ok: false; code: "busy" | "stale-contended" | "owned-elsewhere" | "io-error"; message: string };
 export interface ChildLeaseOptions {
-  pid?: number; host?: string; machineId?: string;
+  pid?: number; host?: string; machineId?: string; nonce?: string;
   isAlive?: (pid: number) => boolean;
   now?: () => number;
   onBeforeStealRename?: () => void;  // test seam: inject the steal-window race
@@ -752,6 +789,15 @@ on open; repair truncates exactly; `undefined` when clean.
 Subagent unit tests: `initialHistory` seeds history and floor without
 touching fresh dispatch; fresh dispatch byte-identical (existing suite).
 
+Acceptance round 2 regressions (findings 1–6): R2e byte-accurate repair
+(CJK/emoji prefix byte-identical), R2f invalid final line WITH a trailing
+newline, R2g session_model line missing its payload; T19d a same-pid
+unidentified instance is refused; T29 production machine-id init + the
+empty-file repair; T30 the REAL two-process mutual-exclusion test (spawned
+vitest workers, S/E markers analyzed for interleaving); T31 resumed-attempt
+text isolation (immediate failure + silent completion); T32 mid-attempt
+compaction cannot resurrect the seeded answer (unit).
+
 Regression updates: `test/task-tool.test.ts` handoff-text pins learn the
 §3.3 line (mechanical, no expectation weakening).
 
@@ -852,3 +898,35 @@ Both tracks returned APPROVE WITH CORRECTIONS; corrections folded:
   resumed attempts cannot double-count (re-verified by the reviewer).
   Unverified: an executed throw-path probe (code-read verdict).
 
+### Acceptance round 2 (owner review of 39ab40d) — fixes
+
+Owner re-verification confirmed 6 findings; all fixed before resubmission:
+
+1. P1 — the repair used string offsets as byte lengths and ate the tail of
+   complete multi-byte records. The repair now works on the file Buffer;
+   R2e asserts a byte-identical prefix with CJK/emoji content. (§6.2)
+2. P1 — the repair disagreed with open()'s acceptance: an invalid final line
+   WITH a trailing newline was invisible (append buried it as fatal
+   interior corruption), and an invalid session_model line was wrongly
+   terminated. `tornFinalLine` now also covers lines open() DROPPED, and
+   completeness uses `acceptsAsSessionLine()` shared with open(); R2f/R2g
+   pin both cases plus the append+reopen. (§6.2)
+3. P2 — a resumed attempt with no output of its own reported the previous
+   attempt's answer as its partial text. Result extraction is attempt-scoped
+   by message identity; T31 (immediate failure + silent completion) and T32
+   (mid-compaction splice) pin it. (§8)
+4. P1 — the lease steal had an eligibility-vs-content double read and a
+   clobbering restore. One read decides AND is the generation the steal
+   moves; steal targets are unique per attempt; restore uses link()
+   (EEXIST, never replace). T21b (injection) plus the T30 real two-process
+   test. (§7.2)
+5. P1 — same-pid leases were treated as own leftovers. A per-process
+   `nonce` distinguishes instances; a same-pid lease with a foreign nonce is
+   REFUSED, never reclaimed (T19d). (§7.1/§7.2)
+6. P2 — an empty machine-id file (crash between create and write) blocked
+   the directory forever. Atomic publish (tmp + rename) repairs it; T29
+   runs the production initialization path. (§7.1)
+
+Per the owner's instruction, a focused adversarial re-review of the
+revised lease protocol (plus the repair and text-isolation changes)
+precedes the resubmission.

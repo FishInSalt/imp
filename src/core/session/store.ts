@@ -252,6 +252,28 @@ function parseEntryLine(line: string, lineNo: number): SessionEntry {
 	return entry as SessionEntry;
 }
 
+/** SA-07: the acceptance rule for a persisted session line, shared with
+ *  open() — a position marker OR a session_model line with a valid model
+ *  payload and boolean flag OR a valid entry. Used by repairTornFinalLine
+ *  to decide whether a final line is a record open() KEPT (terminate) or one
+ *  it would DROP (truncate). The header is not covered: the repair skips the
+ *  first non-blank line exactly like open() reads it. */
+function acceptsAsSessionLine(line: string): boolean {
+	try {
+		const probe = JSON.parse(line) as { type?: unknown; leafId?: unknown; explicit?: unknown };
+		if (probe.type === "position") return probe.leafId === null || typeof probe.leafId === "string";
+		if (probe.type === "session_model") {
+			if (typeof probe.explicit !== "boolean") return false;
+			parseModel(probe, "session line");
+			return true;
+		}
+		parseEntryLine(line, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export class SessionStore {
 	readonly filePath: string;
 	readonly header: SessionHeader;
@@ -365,6 +387,7 @@ export class SessionStore {
 		const entries: SessionEntry[] = [];
 		let lastEntryIndex = -1;
 		let lastPosition: { leafId: string | null; index: number } | null = null;
+		let droppedFinalLine = false;
 		for (let i = 1; i < lines.length; i++) {
 			const raw = lines[i] as string;
 			// Position markers are file-level metadata, not tree nodes (#10
@@ -402,6 +425,7 @@ export class SessionStore {
 				// A torn FINAL line (crash mid-append) must not hide the whole session;
 				// interior corruption is still fatal — something is structurally wrong.
 				if (i === lines.length - 1 && err instanceof SessionError) {
+					droppedFinalLine = true;
 					process.stderr.write(`imp: dropping torn final line in ${filePath}\n`);
 					break;
 				}
@@ -410,7 +434,10 @@ export class SessionStore {
 		}
 		const store = new SessionStore(filePath, header, entries);
 		store.persisted = true;
-		store.tornFinalLine = !raw.endsWith("\n");
+		// SA-07: repairable final-line states — a missing trailing newline (an
+		// append would merge into it) OR a final line open() had to DROP (an
+		// append would bury it as fatal interior corruption).
+		store.tornFinalLine = !raw.endsWith("\n") || droppedFinalLine;
 		store.savedModel = model;
 		store.explicitModelSelection = explicitModelSelection;
 		// Reopen rule (#10 review P1-2): an entry appended AFTER the last
@@ -516,54 +543,51 @@ export class SessionStore {
 	 *  the store never observed the condition. */
 	repairTornFinalLine(): { action: "truncated" | "terminated"; bytes: number } | undefined {
 		if (!this.persisted || !this.tornFinalLine) return undefined;
-		const raw = readFileSync(this.filePath, "utf8");
-		if (raw.endsWith("\n")) {
-			// Already repaired (or raced by another writer): nothing to do.
-			this.tornFinalLine = false;
-			return undefined;
-		}
-		const lastNewline = raw.lastIndexOf("\n");
-		const tail = raw.slice(lastNewline + 1);
-		// "Complete" must mean: the line open() would ACCEPT as a record — a
-		// valid JSON blob that fails entry validation must be truncated, or
-		// the next append would turn it into an interior (fatal) line.
-		let parses = false;
-		try {
-			const probe = JSON.parse(tail) as {
-				type?: unknown;
-				leafId?: unknown;
-				explicit?: unknown;
-				version?: unknown;
-				id?: unknown;
-			};
-			if (probe.type === "position") parses = probe.leafId === null || typeof probe.leafId === "string";
-			else if (probe.type === "session_model") parses = typeof probe.explicit === "boolean";
-			// A session header is only recognizable AT POSITION 0 (the whole
-			// file, no newline yet) — a "session"-typed line later in the file
-			// is garbage and must fall through to the entry parser.
-			else if (probe.type === "session" && lastNewline < 0)
-				parses = probe.version === 1 && typeof probe.id === "string";
-			else {
-				parseEntryLine(tail, 0);
-				parses = true;
+		const raw = readFileSync(this.filePath); // BYTES: truncateSync takes byte lengths
+		// Segment by 0x0a in BYTE space — multi-byte content (CJK, emoji,
+		// multi-byte paths) shifts string offsets away from byte offsets, and
+		// using a string offset as a byte length silently eats complete
+		// records.
+		const segments: Array<{ start: number; end: number; text: string }> = [];
+		let start = 0;
+		for (let i = 0; i < raw.length; i++) {
+			if (raw[i] === 0x0a) {
+				segments.push({ start, end: i, text: raw.subarray(start, i).toString("utf8") });
+				start = i + 1;
 			}
-		} catch {
-			parses = false;
 		}
-		if (parses) {
+		const endsWithNewline = start === raw.length;
+		if (!endsWithNewline) {
+			segments.push({ start, end: raw.length, text: raw.subarray(start).toString("utf8") });
+		}
+		// Walk like open(): blank lines are filtered, the first non-blank line
+		// is the header (open() validated it), and the first unacceptable line
+		// after that can only be the one open() DROPPED — interior damage is
+		// fatal at open(), so it cannot exist in an opened store.
+		let headerSeen = false;
+		for (const segment of segments) {
+			if (segment.text.trim() === "") continue;
+			if (!headerSeen) {
+				headerSeen = true;
+				continue;
+			}
+			if (acceptsAsSessionLine(segment.text)) continue;
+			truncateSync(this.filePath, segment.start);
+			this.tornFinalLine = false;
+			return { action: "truncated", bytes: raw.length - segment.start };
+		}
+		if (!endsWithNewline) {
+			// Every line is a record open() kept — only the trailing newline is
+			// missing. TRUNCATING would delete a recorded entry AND desync the
+			// in-memory leaf (a later append would chain to an id whose bytes
+			// no longer exist); terminate instead.
 			appendFileSync(this.filePath, "\n", { encoding: "utf8" });
 			this.tornFinalLine = false;
 			return { action: "terminated", bytes: 1 };
 		}
-		if (lastNewline < 0) {
-			// A single unrecognizable line as the WHOLE file — unreachable for
-			// stores open() accepted (line 1 must be a valid header). Never
-			// zero the file; leave it and report nothing.
-			return undefined;
-		}
-		truncateSync(this.filePath, lastNewline + 1);
+		// Already repaired, or raced by another writer: nothing to do.
 		this.tornFinalLine = false;
-		return { action: "truncated", bytes: raw.length - (lastNewline + 1) };
+		return undefined;
 	}
 
 	/** M16 /name: append a session_info entry. The name is sanitized by

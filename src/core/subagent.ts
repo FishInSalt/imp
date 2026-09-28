@@ -172,6 +172,13 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// passes exactly what the store's buildContext rebuilt); a fresh child
 	// starts empty and the loop pushes its single instruction below.
 	const history: AgentMessage[] = options.initialHistory ? [...options.initialHistory] : [];
+	// SA-07 (acceptance round 2, finding 3): result extraction is scoped to
+	// THIS attempt. Seeded messages are tracked by identity so a session
+	// splice (compaction rebuilds the array from buildContext) can neither
+	// leak the previous attempt's answer as "partial text" nor hide the
+	// current attempt's messages.
+	const seeded =
+		options.initialHistory === undefined ? undefined : new Set<AgentMessage>(options.initialHistory);
 	// SA-04 (design §3.3): one exactly-once attempt ledger. Created here, fed by
 	// the two provider-stream seams (task loop + summarizer), snapshotted into
 	// the outcome. Replaces the history-recomputation compensation — a replayed
@@ -343,10 +350,14 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	 *  recomputations. `turns` stays the task-turn count (reports observed). */
 	const settled = (status: SubagentStatus, reason?: string): SubagentOutcome => {
 		const snapshot = attemptUsageSnapshot(ledger);
+		// Attempt-scoped text: never fall back into restored history. A resumed
+		// attempt with no text of its own settles with text === undefined.
+		const attemptMessages =
+			seeded === undefined ? history : history.filter((message) => !seeded.has(message));
 		return {
 			status,
 			...(reason !== undefined ? { reason } : {}),
-			text: finalAssistantText(history),
+			text: finalAssistantText(attemptMessages),
 			turns: snapshot.taskReports,
 			usage: snapshot.totals,
 			usageDetail: {

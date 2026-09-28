@@ -77,6 +77,7 @@ import {
 	qualifiedReference,
 	resolveModel,
 } from "./provider/resolve.js";
+import { resolveStartupModelFallback } from "./provider/startup-model.js";
 import {
 	clampThinkingLevel,
 	THINKING_LEVELS,
@@ -89,6 +90,26 @@ import { zaiApiKey } from "./provider/zai.js";
 import type { Renderer } from "./render.js";
 
 export type RunMode = "print" | "repl";
+
+/** #startup-model-resolution (D6): the four unusable-model copy segments.
+ *  The /login variants cover "nothing configured"; the /model variants cover
+ *  "configured elsewhere, nothing selected" — the pre-D2 wording claimed no
+ *  model existed in both. Kept exported from the runner module so every
+ *  surface (banner, footer, title, resumed line, /status, legacy /model,
+ *  notes) draws from one place. */
+export const NO_MODEL_SEGMENT = "no model available — run /login to connect one";
+export const NO_MODEL_SHORT = "no model — /login";
+export const NO_MODEL_SELECTED_SEGMENT = "no model selected — /model to choose one";
+export const NO_MODEL_SELECTED_SHORT = "no model — /model";
+
+/** #startup-model-resolution (D6): the copy picker. Only meaningful while
+ *  the current model is unusable; `hasConfiguredProviders` flips the pointer
+ *  from /login to /model. Short form feeds the footer, terminal title,
+ *  resumed line, /status and the legacy /model text flow. */
+export function noModelText(hasConfiguredProviders: boolean, short = false): string {
+	if (short) return hasConfiguredProviders ? NO_MODEL_SELECTED_SHORT : NO_MODEL_SHORT;
+	return hasConfiguredProviders ? NO_MODEL_SELECTED_SEGMENT : NO_MODEL_SEGMENT;
+}
 
 /**
  * Print mode keeps today's behavior (a -p/positional prompt was given). Without
@@ -256,6 +277,11 @@ export interface Runner {
 	 *  bytes); a runtime /model switch swaps in a real provider and
 	 *  probing applies again (design §3.1). */
 	modelUsable(): boolean;
+	/** #startup-model-resolution (D6): true when at least one family holds a
+	 *  credential — the unusable-model copy picker between the /login pointer
+	 *  (nothing configured) and the /model pointer (configured elsewhere,
+	 *  nothing selected). Consulted only while modelUsable() is false. */
+	hasConfiguredProviders(): boolean;
 	/** #fresh-install-hint (round-2 review F5): true once the user (or the
 	 *  CLI's -m flag) has EXPLICITLY chosen the model — /model switches and
 	 *  explicit -m set it. Display surfaces that mirror "the user's pick"
@@ -626,7 +652,11 @@ class RunnerImpl implements Runner {
 					const est = estimateContextTokens(this.history, this.estimateFloor);
 					// #fresh-install-hint (D1, round-2 N3): the resumed note never
 					// renders a model whose family holds no credential as in use.
-					const modelSegment = this.modelUsable() ? this.modelReference() : "no model — /login";
+					// #startup-model-resolution (D6): the copy distinguishes
+					// "nothing configured" from "configured, not selected".
+					const modelSegment = this.modelUsable()
+						? this.modelReference()
+						: noModelText(this.hasConfiguredProviders(), true);
 					options.renderer.note(
 						`▪ resumed ${resumed.header.id.slice(0, 8)} · ${modelSegment} · ${stats.messageCount} msgs · ~${formatTokens(est.tokens)} tokens${loaded.compacted ? " (compacted)" : ""}`,
 					);
@@ -1091,9 +1121,11 @@ class RunnerImpl implements Runner {
 		const availability = modelAvailability(provider); // ONE probe (F7b): usable + configured list together
 		if (availability.usable) return; // family holds a credential — nothing to teach
 		if (availability.configuredFamilies.length > 0) {
-			// some family IS signed in, just not this model's — target it
+			// some family IS signed in, just not this model's —
+			// #startup-model-resolution D6: /model leads (a configured model
+			// EXISTS); the pre-D2 "run /login <family>" lead was wrong here.
 			this.options.renderer.note(
-				`▪ ${this.model} (${provider}) has no credential — run /login ${provider} (or /model to pick a configured one)`,
+				`▪ ${this.model} (${provider}) has no credential — configured: ${availability.configuredFamilies.join(", ")} — /model to pick one, or /settings defaultModel <id>`,
 			);
 			return;
 		}
@@ -1132,8 +1164,25 @@ class RunnerImpl implements Runner {
 	private restoreModelFromSession(store: SessionStore, startup: boolean): void {
 		const saved = store.getModel();
 		const explicit = startup && this.options.modelExplicit === true;
-		const reference = !explicit && saved ? `${saved.provider}/${saved.modelId}` : this.options.model;
-		const prepared = this.prepareModel(reference);
+		let prepared = this.prepareModel(
+			!explicit && saved ? `${saved.provider}/${saved.modelId}` : this.options.model,
+		);
+		// #startup-model-resolution (D3/OPEN-1): a restored model whose family
+		// lost its credential resolves to the unique credential-source family
+		// — the same "no usable model" predicate as D2, in memory only. The
+		// recorded row is deliberately NOT rewritten (divergence contract,
+		// round-1 A-F2): each startup re-derives deterministically, and the
+		// row keeps recording what the session actually used. An explicit -m
+		// never enters this branch (P5).
+		if (!explicit && !this.providerIsTestFake && !modelAvailability(prepared.ref.provider).usable) {
+			const fallback = resolveStartupModelFallback();
+			if (fallback !== undefined) {
+				this.options.renderer.note(
+					`▪ restored model ${prepared.reference} has no credential — using ${fallback.reference} (only configured provider; /model to change)`,
+				);
+				prepared = this.prepareModel(fallback.reference);
+			}
+		}
 		if (explicit) store.setModel(prepared.ref);
 		// #fresh-install-hint (D4, round-1 F2 — site 3/3): the resume path must
 		// not re-seed a dead default either — this is the line that made the
@@ -1175,6 +1224,11 @@ class RunnerImpl implements Runner {
 	modelUsable(): boolean {
 		if (this.providerIsTestFake) return true;
 		return modelAvailability(this.providerName).usable;
+	}
+
+	/** #startup-model-resolution (D6): see the Runner interface. */
+	hasConfiguredProviders(): boolean {
+		return modelAvailability(this.providerName).configuredFamilies.length > 0;
 	}
 
 	modelSelectedExplicitly(): boolean {

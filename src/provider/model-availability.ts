@@ -38,7 +38,12 @@ export interface ModelAvailability {
  *  ships with every provider (it drives /login). */
 const ALL_FAMILIES: readonly ProviderName[] = LOGIN_TARGETS.map((t) => t.family as ProviderName);
 
+/** All families holding a credential right now (stored key or env). */
+export function configuredFamilies(): ProviderName[] {
+	return ALL_FAMILIES.filter(familyConfigured);
+}
+
 export function modelAvailability(providerName: ProviderName): ModelAvailability {
-	const configuredFamilies = ALL_FAMILIES.filter(familyConfigured);
-	return { usable: configuredFamilies.includes(providerName), configuredFamilies };
+	const families = configuredFamilies();
+	return { usable: families.includes(providerName), configuredFamilies: families };
 }

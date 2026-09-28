@@ -1,6 +1,6 @@
 # SA-04 design: exactly-once attempt usage for child runs
 
-Status: DRAFT — independent adversarial design review pending.
+Status: APPROVED — independent adversarial design review round 1 (APPROVE WITH CORRECTIONS, 2026-09-27); corrections applied in this revision (see §9).
 Branch: `feat/sa-04-attempt-usage`. Baseline: `main` @ `d80519b` (SA-01 + SA-02 + SA-03 merged).
 Task list: `docs/subagent-delegation-task-list.md` §SA-04.
 
@@ -83,8 +83,8 @@ include usage replayed from prior child history") is violated by construction.
   `incomplete: true`. Today: no disclosure mechanism exists.
 - **R4** loop-level delta fixture: preloaded history containing usage-bearing
   assistant messages + one new turn → ledger totals only the new report.
-  Capability anchor (the seam does not exist yet); this is the SA-06/SA-07
-  precondition.
+  Disclosed capability anchor (red at the type level — the seam does not exist
+  on the baseline); this is the SA-06/SA-07 precondition.
 
 ## 2. Contract (interfaces frozen by this design)
 
@@ -93,12 +93,18 @@ include usage replayed from prior child history") is violated by construction.
 Definitions:
 
 - **report** — one `message_end` usage value observed during the attempt.
-- **started stream** — the loop or summarizer entered the provider's stream
-  iteration for a request (first `next()` on the async iterable).
+- **started stream** — the provider's `stream()` was invoked for a request
+  (in practice: the loop or summarizer reached the `for await`; a synchronous
+  throw from the stream call counts the same way — conservative).
 - **missing report** — a started stream ended (for any reason: normal end,
-  abort, timeout, thrown error, protocol error) without a report.
-- **incomplete** — at least one missing report occurred. It says "a report we
-  waited for did not arrive"; it never claims the request was billed or not.
+  abort, timeout, thrown error, protocol error) without a *captured* usage
+  report. "Captured" is deliberate: the abort-wins rule can discard a
+  `message_end` that was already buffered (§4), and that too is a report the
+  attempt did not capture.
+- **incomplete** — at least one started stream produced no captured report. It
+  says "we cannot fully account for everything we initiated"; it never claims
+  the request was billed, and never asserts a captured-report total is
+  complete.
 - **attribution** — which model produced a report is carried by the surrounding
   contract (the SA-02 `ChildModelBinding` → SA-03 `TaskRecord.binding`), never
   duplicated into the ledger. The ledger distinguishes task-loop vs summarizer
@@ -176,8 +182,11 @@ usage: outcome.usageDetail.incomplete
   : outcome.usage,
 ```
 
-Zero-report attempts stay byte-identical to today (no `incomplete` key;
-`{inputTokens: 0, outputTokens: 0}`). Attribution is persisted by the record's
+Zero-report attempts keep the `emptyUsage()` shape (`{inputTokens: 0,
+outputTokens: 0}`, no cache keys — the same shape today's zero-report paths
+produce; cache keys appear exactly when a report is recorded, mirroring the
+existing accumulators). No `incomplete` key is added unless a started stream
+produced no captured report. Attribution is persisted by the record's
 existing `binding` (SA-02/SA-03 contract). The trailer
 (`childUsageTrailer`, `subagent.ts:452-455`) format is unchanged; its numbers
 grow for compacting runs — that is the D1 fix, not a format change.
@@ -221,20 +230,28 @@ let reported = false;
 try {
   for await (const event of provider.stream(request)) {
     if (request.signal?.aborted) return null;         // mid-stream abort
-    onEvent?.(event);
     if (event.type === "message_end") {
-      reported = true;
-      addUsage(usage, event.message.usage);           // existing accumulator
+      reported = true;                                 // account BEFORE the observer (F2)
+      addUsage(usage, event.message.usage);            // existing accumulator
       recordUsageReport(ledger, "task", event.message.usage);
+      onEvent?.(event);
       return { ...event.message, model: request.model };
     }
+    onEvent?.(event);
   }
   if (request.signal?.aborted) return null;
   throw new Error("Provider stream ended without a message_end event");
 } finally {
-  if (!reported) recordMissingUsageReport(ledger);    // started, no report
+  if (!reported) recordMissingUsageReport(ledger);     // started, no captured report
 }
 ```
+
+For `message_end` the accounting now precedes `onEvent` (review F2): an
+observer that throws can no longer lose a report that already arrived — the
+report is captured, then the error propagates. Non-`message_end` events keep
+the original observer-first order, and observer inputs are unchanged. The
+reorder is invisible to the runner: a throwing observer discards the whole
+loop invocation (and its local accumulator) either way.
 
 - A request is "started" exactly when the `for await` is entered; the
   top-of-loop `signal?.aborted` return happens before `streamAssistant` and
@@ -309,13 +326,21 @@ wiring, not an acceptable change.
 One expression (§2.3) at the terminal construction (`task.ts:495`). No other
 task-tool change; the trailer call (`:603`) is untouched.
 
+The required `usageDetail` field makes every fake-outcome literal fail
+typecheck (review F1) — update these verified sites: `test/task-tool.test.ts:58`
+(the shared `outcome()` helper), `test/builtin-tool-presentation-integration.test.ts:231`
+and `test/tool-presentation.test.ts:96` (direct `taskResult({...})` literals),
+plus a final grep sweep for further structural fakes at implementation.
+
 ## 4. Edge cases and threats
 
 - **Abort racing a buffered `message_end`**: `streamAssistant` checks
   `signal?.aborted` BEFORE the event, so an event already buffered is dropped
-  by the existing "abort wins" rule. The ledger then reports a missing report
-  (`incomplete: true`) rather than counting a report the attempt discarded —
-  conservative, honest, and it does not touch the pinned abort semantics.
+  by the existing "abort wins" rule. The ledger reports a *discarded* report
+  (also `incomplete: true`) rather than counting a report the attempt chose
+  not to capture — conservative, honest, and it does not touch the pinned
+  abort semantics. The flag means "no captured report", never "no report was
+  sent" (review F5).
 - **Pre-aborted attempts / empty prompt**: no stream is started → clean
   `{0,0}`, `incomplete: false`. Matches SA-03 acceptance case P2-2 today.
 - **Multiple `message_end` in one stream** (contract violation): recorded
@@ -384,6 +409,10 @@ T19b). Red verification uses a `/tmp` worktree of `main` plus the new tests.
   `incomplete` key; a compacting attempt's record usage equals the engine
   totals (task + summarizer) and still carries `binding.reference`
   (attribution).
+- Typecheck fallout (F1): the three fake-outcome sites (§3.5) gain
+  `usageDetail` with zeroed buckets (`{inputTokens: 0, outputTokens: 0}`) and
+  `summarizerCalls: 0, incomplete: false`; a grep sweep confirms no further
+  structural fakes.
 
 ### 6.3 Acceptance mapping (task list §SA-04)
 
@@ -414,3 +443,30 @@ full `npm test` (baseline 110 files / 2122 tests). Red evidence recorded before
 implementation; independent adversarial implementation review after; ledger
 entry `#sa-04-attempt-usage` appended to `PROJECT_PLAN.md`; merge to `main`
 only via `--no-ff` after owner acceptance.
+
+## 9. Design review record (round 1, 2026-09-27)
+
+Independent adversarial review (fresh context, read-only): **APPROVE WITH
+CORRECTIONS**. All findings closed in this revision:
+
+- **F1 (HIGH)** — the required `usageDetail` breaks fake-outcome test literals.
+  Three verified sites enumerated in §3.5/§6.2. The review's fourth site
+  (`test/tool-presentation.test.ts:346`) is an assistant-message fixture, not a
+  `SubagentOutcome` literal (re-verified by grep over `taskResult(` callers and
+  `SubagentOutcome` imports).
+- **F2 (MEDIUM)** — `message_end` accounting moved before `onEvent` (§3.1): a
+  throwing observer can no longer lose a received report. Invisible to the
+  runner (a throwing observer discards the loop invocation either way).
+- **F3 (MEDIUM)** — the "byte-identical" hand-wave replaced by the precise
+  shape rule (§2.3). The review's counter-example does not occur:
+  `historyStats` adds cache keys only per assistant message
+  (`subagent.ts:145-158`), so a zero-report crash is `{0,0}` today — identical
+  to the ledger's untouched aggregate. The imprecision is fixed regardless.
+- **F4 (LOW)** — "started stream" defined as "the provider's stream was
+  invoked", matching the implementation even for synchronous stream-call
+  throws (§2.1).
+- **F5 (LOW)** — the flag means "no captured report"; the abort-race discard is
+  documented as such, and the flag never claims a report was not sent
+  (§2.1/§4).
+- **F6 (LOW)** — R4 stays as a disclosed capability anchor, now marked as a
+  type-level red (§6.1).

@@ -1,6 +1,6 @@
 # Startup model resolution (#startup-model-resolution)
 
-Status: rev3 — round-2 findings folded; awaiting round-3 verification; implementation not started
+Status: rev3 APPROVED (round 3, 2026-09-28) — implementation may start
 Branch: `fix/startup-model-resolution` (worktree, base main `bae428e`)
 Date: 2026-09-28
 Review log: §9 (round 1: two independent tracks, both FIX-FIRST — folded in rev2)
@@ -499,7 +499,13 @@ replacement snippet dropped the usable-case `switch with /model` hint
 explicit in the algorithm (A-N4). Copy/tests track APPROVE — all seven
 round-1 findings CLOSED; two P3 notes (footer-cell wording; print
 fail-fast refs to confirm before pinning OPEN-5 bytes).
-Round 3 (narrow verification of the rev3 fold-ins): pending.
+Round 3 (2026-09-28, narrow verification): APPROVE — all four rev3
+fold-ins CLOSED (resume explicit-`-m` guard; D4 snippet keeps the
+usable-branch hint and today's order; tail line refs reconciled;
+blank-id guard explicit and consistent with §5). No new material
+findings. One P3 path-prefix cosmetic (some `commands.ts:` citations
+omit `src/repl/`) — accepted as-is (consistent within the doc).
+Design review closed.
 
 ## 10. Implementation log
 

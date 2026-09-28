@@ -406,7 +406,7 @@ describe("tool result display channel (prompt-audit P1)", () => {
 	});
 });
 
-describe("SA-04 attempt ledger (red evidence on baseline)", () => {
+describe("SA-04 attempt ledger", () => {
 	it("R4: the ledger counts only reports produced during this invocation (resume delta fixture)", async () => {
 		const history: AgentMessage[] = [
 			assistant([{ type: "text", text: "prior attempt" }], "end_turn"), // usage 10/5 in history
@@ -459,5 +459,68 @@ describe("SA-04 attempt ledger (red evidence on baseline)", () => {
 		expect(result.stopReason).toBe("aborted");
 		expect(ledger.incomplete).toBe(true);
 		expect(ledger.totals).toEqual({ inputTokens: 0, outputTokens: 0 });
+	});
+	it("SA-04 round 2: a message_end that never saw usage data flags the ledger instead of asserting zero", async () => {
+		const provider: LLMProvider = {
+			name: "no-usage",
+			async *stream() {
+				yield {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						blocks: [{ type: "text", text: "hi" }],
+						usage: { inputTokens: 0, outputTokens: 0 },
+						stopReason: "end_turn",
+						usageMissing: true,
+					},
+				};
+			},
+		};
+		const ledger = createAttemptUsage();
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+			usageLedger: ledger,
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(ledger.taskReports).toBe(1); // the turn happened; its usage did not
+		expect(ledger.totals).toEqual({
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.incomplete).toBe(true);
+	});
+
+	it("SA-04 round 2: a throwing message_end observer cannot lose a received report", async () => {
+		const ledger = createAttemptUsage();
+		const provider = scriptedProvider([assistant([{ type: "text", text: "hi" }])]);
+		await expect(
+			runAgentLoop({
+				provider,
+				model: "mock",
+				system: "",
+				tools: [],
+				history: [],
+				userMessage: "go",
+				usageLedger: ledger,
+				onEvent: (event) => {
+					if (event.type === "message_end") throw new Error("observer exploded");
+				},
+			}),
+		).rejects.toThrow("observer exploded");
+		expect(ledger.taskReports).toBe(1);
+		expect(ledger.totals).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		expect(ledger.incomplete).toBe(false);
 	});
 });

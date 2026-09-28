@@ -423,6 +423,8 @@ async function runSummarizer(args: {
 				reported = true;
 				addUsage(usage, event.message.usage);
 				recordUsageReport(args.usageLedger, "summarizer", event.message.usage);
+				// SA-04 round 2: message said it never saw usage data.
+				if (event.message.usageMissing === true) recordMissingUsageReport(args.usageLedger);
 				stopReason = event.message.stopReason;
 				finalText = event.message.blocks
 					.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")

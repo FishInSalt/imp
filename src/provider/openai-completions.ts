@@ -382,6 +382,9 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			const usage: Usage = { inputTokens: 0, outputTokens: 0 };
 			let stopReason: StopReason = null;
 			let sawFinish = false;
+			// SA-04: did any MAPPED counter hold a number? Explicit zeros count
+			// as a report; nothing numeric means the message must say so.
+			let sawUsage = false;
 
 			for await (const sse of abortSafe(parseSse(response.body), request.signal)) {
 				if (request.signal?.aborted) return;
@@ -448,6 +451,15 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				// could make Math.max keep a larger pre-cache input.
 				const rawUsage = chunk.usage ?? choice?.usage;
 				if (rawUsage != null) {
+					if (
+						typeof rawUsage.prompt_tokens === "number" ||
+						typeof rawUsage.completion_tokens === "number" ||
+						typeof rawUsage.cached_tokens === "number" ||
+						typeof rawUsage.prompt_cache_hit_tokens === "number" ||
+						typeof rawUsage.prompt_tokens_details?.cached_tokens === "number"
+					) {
+						sawUsage = true;
+					}
 					// prompt_tokens INCLUDES cache hits (both spellings report the
 					// hit count as a subset) — subtract to match the anthropic
 					// inputTokens convention the ctx%/compaction math assumes (review F1).
@@ -483,7 +495,13 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 			if (blocks.length === 0) blocks.push({ type: "text", text: "(empty)" });
 			yield {
 				type: "message_end",
-				message: { role: "assistant", blocks, usage, stopReason },
+				message: {
+					role: "assistant",
+					blocks,
+					usage,
+					stopReason,
+					...(sawUsage ? {} : { usageMissing: true as const }),
+				},
 			};
 		},
 	};

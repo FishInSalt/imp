@@ -244,6 +244,8 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 			const slotByIndex = new Map<number, Extract<AssistantBlock, { type: "toolCall" } | { type: "text" }>>();
 			const toolRawByIndex = new Map<number, string>();
 			let usage: Usage = { inputTokens: 0, outputTokens: 0 };
+			// SA-04: did a mapped counter hold a number on the terminal event?
+			let sawUsage = false;
 			let stopReason: StopReason = null;
 			let sawCompleted = false;
 
@@ -298,7 +300,15 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 					case "response.incomplete": {
 						sawCompleted = true;
 						const responseObj = (data.response ?? {}) as Record<string, unknown>;
-						usage = usageFromResponse(responseObj.usage as ResponsesUsage | undefined);
+						const rawUsage = responseObj.usage as ResponsesUsage | undefined;
+						if (
+							typeof rawUsage?.input_tokens === "number" ||
+							typeof rawUsage?.output_tokens === "number" ||
+							typeof rawUsage?.input_tokens_details?.cached_tokens === "number"
+						) {
+							sawUsage = true;
+						}
+						usage = usageFromResponse(rawUsage);
 						const status = String(responseObj.status ?? "completed");
 						if (sse.event === "response.incomplete" || status === "incomplete") {
 							stopReason = "max_tokens";
@@ -341,7 +351,16 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 			if (stopReason === null && blocks.some((b) => b.type === "toolCall")) stopReason = "tool_use";
 			if (stopReason === "end_turn" && blocks.some((b) => b.type === "toolCall")) stopReason = "tool_use";
 			if (blocks.length === 0) blocks.push({ type: "text", text: "(empty)" });
-			yield { type: "message_end", message: { role: "assistant", blocks, usage, stopReason } };
+			yield {
+				type: "message_end",
+				message: {
+					role: "assistant",
+					blocks,
+					usage,
+					stopReason,
+					...(sawUsage ? {} : { usageMissing: true as const }),
+				},
+			};
 		},
 	};
 }

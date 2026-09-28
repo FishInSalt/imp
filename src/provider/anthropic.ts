@@ -109,6 +109,19 @@ function toWireMessages(messages: AgentMessage[]): WireMessage[] {
 }
 
 /** Parse an SSE byte stream into events. Frames are separated by a blank line. */
+/** SA-04: true when a MAPPED usage counter holds a number (any value, including
+ *  an explicit 0). Absent/null/empty/null-valued containers and unmapped keys
+ *  are "no data" — the emitted message then carries `usageMissing` instead of
+ *  letting initialization zeros read as a report. */
+function hasNumericUsage(u: Record<string, unknown>): boolean {
+	return (
+		typeof u.input_tokens === "number" ||
+		typeof u.output_tokens === "number" ||
+		typeof u.cache_read_input_tokens === "number" ||
+		typeof u.cache_creation_input_tokens === "number"
+	);
+}
+
 export function createAnthropicProvider(options: AnthropicProviderOptions = {}): LLMProvider {
 	// Key resolution mirrors Claude Code conventions so Anthropic-compatible
 	// services (e.g. Z.ai GLM Coding Plan) work via env vars alone:
@@ -226,6 +239,8 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			const usage: Usage = { inputTokens: 0, outputTokens: 0 };
 			let stopReason: StopReason = null;
 			let sawMessageStop = false;
+			// SA-04: structural sentinel — see hasNumericUsage below.
+			let sawUsage = false;
 
 			// undici rejects the body reader mid-iteration when the request is
 			// aborted; abortSafe turns that rejection into a clean generator end.
@@ -237,6 +252,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					case "message_start": {
 						const message = (data.message ?? {}) as Record<string, unknown>;
 						const u = (message.usage ?? {}) as Record<string, number>;
+						if (hasNumericUsage(u)) sawUsage = true;
 						usage.inputTokens = u.input_tokens ?? 0;
 						usage.cacheReadTokens = u.cache_read_input_tokens;
 						usage.cacheWriteTokens = u.cache_creation_input_tokens;
@@ -307,6 +323,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					case "message_delta": {
 						const delta = (data.delta ?? {}) as Record<string, unknown>;
 						const u = (data.usage ?? {}) as Record<string, number>;
+						if (hasNumericUsage(u)) sawUsage = true;
 						if (typeof delta.stop_reason === "string") {
 							stopReason = delta.stop_reason as StopReason;
 						}
@@ -353,7 +370,13 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			}
 			yield {
 				type: "message_end",
-				message: { role: "assistant", blocks, usage, stopReason },
+				message: {
+					role: "assistant",
+					blocks,
+					usage,
+					stopReason,
+					...(sawUsage ? {} : { usageMissing: true as const }),
+				},
 			};
 		},
 	};

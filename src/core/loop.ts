@@ -319,6 +319,10 @@ async function streamAssistant(args: {
 				reported = true;
 				addUsage(usage, event.message.usage);
 				recordUsageReport(ledger, "task", event.message.usage);
+				// SA-04 round 2: the adapter may have had NO usage data on the
+				// wire (its zeros are initialization, not a report) — keep the
+				// known numbers, disclose the unknown.
+				if (event.message.usageMissing === true) recordMissingUsageReport(ledger);
 				onEvent?.(event);
 				// stamp the producer model for cost attribution (footer $ segment)
 				return { ...event.message, model: request.model };

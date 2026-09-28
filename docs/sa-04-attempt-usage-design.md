@@ -471,6 +471,24 @@ CORRECTIONS**. All findings closed in this revision:
 - **F6 (LOW)** — R4 stays as a disclosed capability anchor, now marked as a
   type-level red (§6.1).
 
+### Round 2 (acceptance P1 fix: usage presence — §10)
+
+Independent adversarial review of the supplement (fresh context):
+**APPROVE WITH CORRECTIONS**, all closed in this revision.
+
+- **F1 (P1)** — the "fixtures stay byte-identical" claim was false: usage-less
+  streams now carry the flag. Known sites enumerated in §10.5; at
+  implementation the full suite stayed green (the predicted sites assert
+  fields or tolerate extra properties) — recorded in the fix commit.
+- **F2 (P2)** — codex terminal-event coverage and the structural-sentinel
+  requirement (anthropic `:239` writes `cacheReadTokens` unconditionally, so
+  presence may never be inferred from counters) stated in §10.4.
+- **F3 (P2)** — the `turns == taskReports` invariant justified structurally
+  (both sides move only on a produced `message_end`), not by line order.
+- **F4 (P3)** — test plan gained the two strong oracles: explicit zero with
+  unmapped decoration → no flag; finish-then-`usage:null` interim shape →
+  flag.
+
 ## 10. Round 2 (acceptance P1): usage presence must survive the adapter boundary
 
 ### 10.1 Problem (acceptance-verified)

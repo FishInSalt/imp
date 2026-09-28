@@ -523,8 +523,13 @@ In `loop.ts:streamAssistant` and `compaction.ts:runSummarizer`, a
 `message_end` continues to record its numbers **and** additionally calls
 `recordMissingUsageReport(ledger)` when `message.usageMissing === true`:
 
-- The message is still a produced turn: `taskReports`/turns increment and the
-  (zero) numbers are added — the invariant `turns == taskReports` holds.
+- The message is still a produced turn: `taskReports`/`turns` increment and
+  the (known) numbers are added. `turns == taskReports` holds for a structural
+  reason, not line order: both sides move exactly when a `message_end` is
+  produced (flagged or not), and neither moves when the loop aborts before a
+  message exists. A throw inside a stream (e.g. codex `response.failed`,
+  `:313-320`) ends it without `message_end` — the seam's `finally` marks the
+  attempt incomplete and no turn is counted, matching today.
 - The attempt is disclosed as `incomplete` — "known totals preserved, unknown
   usage never asserted as free".
 - Summarizer streams with the flag are still accepted for compaction: the
@@ -542,6 +547,17 @@ The numeric-counter rule is deliberately strict: a container that exists but
 carries no number tells us nothing about usage, and "nothing" must be flagged,
 not asserted as zero.
 
+- codex: `response.completed` and `response.incomplete` are the only terminal
+  events that emit `message_end` (`sawCompleted`); a usage-less `incomplete`
+  therefore yields `message_end` + flag — correct. `response.failed`
+  (`:313-320`) throws before any `message_end`; that path is already covered by
+  the seam's `finally`, no flag involved.
+- anthropic: `:239` writes `cacheReadTokens` unconditionally from the
+  message_start container. The sentinel must stay STRUCTURAL — adapters emit
+  `sawUsage ? {} : { usageMissing: true }` with an explicit boolean, never
+  inferring presence from any counter being `!== undefined` (nullable cache
+  fields would misfire).
+
 Emitted as `...(sawUsage ? {} : { usageMissing: true })` so existing fixtures
 with usage stay byte-identical.
 
@@ -551,8 +567,19 @@ with usage stay byte-identical.
   envelope + role (old readers ignore and preserve unknown fields — SA-03
   verified against v0.1.0), same lifecycle as the existing `model` stamp.
 - Wire converters build assistant payloads field-by-field (no spread over the
-  message — re-verified during implementation); the flag cannot leak to any
-  provider.
+  message — verified: the only spreads are `shared.ts:164/176` on
+  user/toolResult messages); the flag cannot leak to any provider. The
+  request-body assertions in the existing wire tests become leak guards and
+  keep their exact `JSON.stringify(body)` expectations.
+- **Known fixture fallout (review round 2, F1)**: test fixtures whose mock
+  streams contain NO usage container change behavior — their assistant
+  messages now carry `usageMissing: true`. Known sites: `test/zai.test.ts`
+  (~:33-36), the `test/compaction.test.ts` stubs, and whole-message
+  assertions in the adapter wire tests (`test/openai-completions.test.ts`
+  around :340-344). Fixing them means widening assertions/fixtures to the new
+  honest shape (or adding the usage the fixture intended); it must never mean
+  weakening a behavior claim. The final list is the full-suite diff at
+  implementation; fixtures WITH usage stay byte-identical.
 - `assistantUsage()` (compaction anchor) requires `total > 0`, so flagged
   all-zero messages are not anchors — unchanged.
 - The runner path reads neither the flag nor a ledger — unchanged.
@@ -560,8 +587,13 @@ with usage stay byte-identical.
 ### 10.6 Tests
 
 - Adapter regressions (three files, local-server SSE): normal end with no
-  usage container → `usageMissing: true`; explicit zero container → absent
-  flag; real numbers → absent flag and correct values.
+  usage container → `usageMissing: true`; explicit zero container (with
+  unmapped decorations like `choices`/`system_fingerprint` alongside) → absent
+  flag; real numbers → absent flag and correct values; **strongest oracle** —
+  the DeepSeek interim shape (`finish_reason: "stop"` followed by a final
+  chunk carrying `usage: null` only) → flag present. The explicit-zero case is
+  only meaningful together with the missing-usage case, which fails before
+  this fix and passes after.
 - Seams: loop-level `message_end` with the flag → `incomplete: true`, totals
   preserved, `taskReports` incremented; summarizer-level (via `compactHistory`
   + ledger) with the flag → summary accepted, `summarizer` bucket zeroed,

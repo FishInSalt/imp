@@ -144,8 +144,8 @@ belong to fresh dispatch):
    every reason `(code: message)`; AND `verdict.executionState === "settled"`
    → else refusal ("may still be running, or the process died before any
    parent-side write").
-5. Lease acquisition (§7) → refusal (`busy` / `stale-contended` /
-   `owned-elsewhere` / `io-error`). The attempt's try/finally opens the
+5. Lease acquisition (§7) → refusal (`busy` / `owned-elsewhere` /
+   `io-error`). The attempt's try/finally opens the
    INSTANT acquire returns `{ok:true}` — every refusal or throw from step 6
    onward releases the lease in `finally` (a live lease leaked by a refusal
    path is a contract violation, not a recoverable nuisance).
@@ -449,9 +449,20 @@ DIFFERENT instance (sibling pid namespace or a recycled pid) and is never
 treated as this process's own.
 
 A legacy single-FILE artifact `<childFilePath>.lease` (created by earlier
-commits of this unreleased branch) is handled on encounter: parse it; a
-live/uncertain owner refuses `busy`; a dead+aged or unparseable owner is
-unlinked (migration), then normal acquisition proceeds.
+commits of this unreleased branch) is migrated ON ENCOUNTER, with the same
+single-read discipline the round-2 review demanded (design review B3):
+
+- read the file ONCE; classify from THAT read only;
+- live or uncertain owner (alive in this namespace, or mtime within the
+  grace window, or unparseable and fresh) → refuse `busy`; NO directory is
+  created, nothing is unlinked;
+- dead+aged or unparseable+aged: unlink THAT artifact (deleting an aged
+  dead claim cannot revoke a live holder — the same rule as candidate
+  cleanup), then `mkdirSync` and continue. A write landing between the
+  deciding read and the unlink is out of scope for an AGED DEAD artifact:
+  the unlink can only destroy bytes the deciding read proved stale; a live
+  process re-creating a legacy file is impossible (only this code writes
+  them, and only under the old protocol).
 
 ### 7.2 Protocol (pinned)
 
@@ -464,8 +475,12 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
 1. Map hit → refuse `busy` ("already running in this process").
 2. Map miss → set the entry; all refusal paths delete it.
 3. Resolve the machine id (publish-once; §7.4).
-4. `mkdirSync(leaseDir, { recursive: true })` (a legacy file at that path
-   is migrated per §7.1).
+4. Migrate a legacy single-FILE artifact first (§7.1): `mkdirSync` on a
+   path occupied by a file FAILS (`EEXIST` on every Node version in the CI
+   matrix), so the file must be classified and, only when the SAME READ
+   says it is dead+aged or unparseable debris, unlinked — a live or
+   uncertain legacy owner refuses `busy` and creates NO directory. Then
+   `mkdirSync(leaseDir, { recursive: true })`.
 5. CREATE own candidate: `writeFileSync(dir + "/" + ownName, payload,
    { flag: "wx" })` — unique name, so this can only fail on real IO errors
    (refuse `io-error`).
@@ -491,6 +506,14 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
 8. Refusal paths unlink OWN candidate before returning; `release()` unlinks
    OWN candidate (unique name — no foreign-content checks needed) in
    `finally`.
+
+PINNED INVARIANT (load-bearing for §7.3, design review A1): the own
+candidate is NEVER unlinked between step 5 and the completion of step 6's
+scan-and-decide; the only pre-HOLD unlink is the step-8 refusal cleanup,
+which happens after the decision is final. An implementation that cleans up
+its candidate early (or lets a crash between 5 and 6 look like a "held"
+claim) breaks the exclusion argument; T30b(iv) instruments unlink calls to
+pin this.
 
 Bounded fairness: when two acquirers create candidates in the same window,
 each may see the other and both refuse. Acquire retries up to 3 rounds with
@@ -533,14 +556,19 @@ only dead+aged candidates, never a live one.
   (atomic no-clobber create). Exactly one publisher wins; every loser gets
   `EEXIST`, re-reads, and adopts the winner's id. A late publisher can
   therefore never replace an id a live lease already uses;
-- EMPTY (legacy crash artifact) → greenfield recovery: this is reachable
-  only while the file is empty or absent, and every recoverer (a) re-reads
-  after replacing and (b) adopts the settled value, so all parties converge
-  on ONE id before returning. A valid id cannot be overwritten by this
-  path: the only writers of valid ids are the link-publishers above, which
-  act only when the file is ABSENT — and nothing ever deletes a valid id
-  file, so no valid id can appear between a recoverer's empty-read and its
-  replace;
+- EMPTY (legacy crash artifact; IMPOSSIBLE to produce with the new
+  publication path — the file only appears complete via link) → **refuse
+  `io-error` with an actionable message**: "the machine id file is empty
+  (interrupted initialization under an earlier build); delete <path> to
+  reinitialize". Rationale (design review C1): concurrent EMPTY recovery
+  cannot be made non-clobbering without CAS — two recoverers that each
+  "replace-if-empty" can both return DIFFERENT ids, which is exactly the
+  owner's round-3 finding reproduced on the empty branch, and every
+  tombstone/link variant leaves a blind-unlink or blind-restore window.
+  A deterministic refusal that never touches the file is the safe rule;
+  the manual one-command recovery is the defined recovery procedure. The
+  claim-file alternative was assessed and rejected (its own stale-takeover
+  race recurses one level down);
 - allocation is retried (≤5 rounds) on transient ENOENT/EEXIST races; a
   permanent failure refuses `io-error`.
 
@@ -556,7 +584,21 @@ only dead+aged candidates, never a live one.
 - Crashed or tampered candidates linger until a later scan ages them out;
   they are never read as leases and grant nothing.
 - Heartbeat anomaly handling aborts the attempt as defense in depth; it is
-  not required for correctness.
+  not required for correctness (T28 asserts the abort, never an exclusion
+  guarantee; a scan/seam test proves exclusion with the heartbeat disabled).
+- A live-but-stalled holder whose event loop is blocked for longer than the
+  grace window can be retired as stale on the same machine (its pid looks
+  dead only if recycled; cross-namespace holders rely on the mtime). The
+  heartbeat interval (20s) makes this require a >60s synchronous stall; it
+  is recorded rather than fixed (the alternative — never retiring — breaks
+  crash recovery).
+- Machine-id tmp debris (`.imp-machine-id.tmp-*`) from crashed publishers
+  is inert and never read as an id; no sweeper may ever unlink the id file
+  itself or match it as debris (pinned invariant for any future cleanup).
+- Fairness: two acquirers creating in the same window may both refuse; the
+  bounded jittered retries (≤3 rounds) plus caller-level retry resolve it.
+  Sustained contention surfaces `busy` — a liveness cost, never a safety
+  cost.
 - Cross-machine `machineId` semantics: the id is per DIRECTORY; a directory
   shared across machines is refused on first contact (`owned-elsewhere`).
 
@@ -702,7 +744,9 @@ export interface ChildLeaseHandle {
 }
 export type ChildLeaseResult =
   | { ok: true; lease: ChildLeaseHandle }
-  | { ok: false; code: "busy" | "stale-contended" | "owned-elsewhere" | "io-error"; message: string };
+  | { ok: false; code: "busy" | "owned-elsewhere" | "io-error"; message: string };
+// "stale-contended" is retired with the single-file protocol: intent+verify
+// has no steal step, so no such outcome exists (design review D1).
 export interface ChildLeaseOptions {
   pid?: number; host?: string; machineId?: string; nonce?: string;
   isAlive?: (pid: number) => boolean;
@@ -767,18 +811,31 @@ acquisition proceeds, same-pid different-nonce refuses; T20
 `owned-elsewhere` (host/machineId mismatch); T25 release/refusal unlink the
 OWN candidate only, never others; T28 heartbeat touches keep the candidate
 mtime fresh and a missing/foreign own candidate aborts via its signal;
-T29 production machine-id init; T33a–d machine-id stability: an established
-id is never rewritten, two concurrent publishers converge on one id via
-link (deterministic seam), empty-file recovery converges, and the owner's
-end-to-end repro (publish + acquire + exit + aged reclaim without
-`owned-elsewhere`) passes; T30 the REAL two-process hammer test (updated to
-candidate semantics, refusal counts asserted); T30b the DETERMINISTIC
-three-process regression: (i) A creates and pauses before scanning while B
-creates and scans → at most one proceeds; (ii) A pauses before scanning a
-stale candidate, B creates+scans+proceeds, A resumes and refuses; (iii)
-B and C create simultaneously against a stale candidate → both refuse or
-exactly one proceeds, and the stale candidate was cleaned without granting
-anything.
+T29 production machine-id init; T33a–e machine-id stability: (a) an
+established id is never rewritten; (b) two concurrent ABSENT publishers
+converge on one id via link (deterministic seam); (c) a late publisher
+observing a VALID id adopts it — the owner's repro end-to-end (publish +
+acquire + exit + aged reclaim without `owned-elsewhere`); (d) an EMPTY file
+refuses `io-error` with the guidance and NEVER touches the file, and after
+the file is deleted acquisition works; (e) a lease referencing an id
+remains stable while another process initializes concurrently (the
+stability requirement: the lease's id still equals the file's id).
+T30 the REAL two-process hammer test (candidate semantics, refusal counts
+asserted); T30b the DETERMINISTIC three-process regression: (i) A creates
+and pauses before scanning while B creates and scans → at most one
+proceeds; (ii) A pauses before scanning a stale candidate, B
+creates+scans+proceeds, A resumes and refuses; (iii) B and C create
+simultaneously against a stale candidate → both refuse or exactly one
+proceeds, and the stale candidate was cleaned without granting anything;
+(iv) instrumentation proves neither A's nor B's candidate was unlinked
+between its create and its scan decision (the A1 invariant). Add: a
+legacy-file migration test (live legacy owner → `busy` and NO directory
+created; dead+aged → exactly the deciding read's artifact is unlinked; a
+seam-injected write between the deciding read and the unlink proves no live
+claim can be destroyed); a fairness/liveness assertion (under sustained
+contention: never two holders, and a lone acquirer eventually wins within
+the retry budget); and an exclusion test with the heartbeat disabled
+(showing exclusion does not depend on it).
 
 New `test/child-resume.test.ts` (fake provider harness like
 `test/task-tool.test.ts`):
@@ -1038,3 +1095,28 @@ Owner findings (both reproduced with synchronized real processes):
 
 Per the owner's instruction, the revised protocol must pass an independent
 pre-implementation design review before implementation resumes.
+
+Design review verdict: APPROVE WITH CORRECTIONS; all findings folded:
+
+- A1 (HIGH): §7.3's proof depends on "own candidate is never unlinked
+  between create and the HOLD decision" — now a PINNED invariant in §7.2
+  (step 8), pinned by T30b(iv).
+- B3 (HIGH): the legacy single-FILE migration could `mkdir` over a file
+  (EEXIST) and had no single-read discipline — §7.1 now pins classify-from-
+  one-read, live→`busy` with NO directory created, dead+aged→unlink that
+  artifact; regression added.
+- C1 (HIGH): EMPTY machine-id recovery was still a clobbering replace
+  (two recoverers could hold different ids — the owner's P2 reproduced on
+  that branch). §7.4 now REFUSES on an empty file with an actionable
+  message and never touches it (concurrent non-clobbering recovery is
+  impossible without CAS; the artifact cannot be produced by the new
+  publication path); T33d/e pin the refusal and the stability requirement.
+- B2/A2/C2 (MED/LOW): fairness bounded-retry note, stalled-holder retirement
+  recorded, tmp debris invariant — all in §7.5.
+- M1–M6/D1–D5: the test plan gained the migration, fairness, heartbeat-
+  independence and id-stability regressions; `stale-contended` is retired
+  from §11/§4.1 (no steal step exists); §11 lists the new seams
+  (`onAfterCreate` / `onBeforeScan` / `onBeforeMachineIdPublish`); §14's
+  old "stale steal" wording is superseded by "stale cleanup"; the earlier
+  round's single-file probe results in this log are SUPERSEDED by the
+  round-3 protocol and its regressions.

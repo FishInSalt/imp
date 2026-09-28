@@ -505,12 +505,12 @@ and `compaction.ts` `runSummarizer`.
 the `model` stamp). An adapter sets it on the emitted `message_end` message iff
 it observed NO non-empty usage container on the wire for that response:
 
-- **report** — at least one non-empty usage container was seen
-  (`chunk.usage`/`choice.usage`, `message.usage`/`data.usage`,
-  `response.usage`), regardless of the values. Explicit zeros are a complete
-  report.
-- **no data** — the container was absent, `null`, or empty at every
-  observation point. The emitted usage values are then zeros by
+- **report** — at least one counter the adapter maps held a NUMBER at some
+  observation point (`chunk.usage`/`choice.usage`, `message.usage`/
+  `data.usage`, `response.usage`). Any value counts, including an explicit 0.
+- **no data** — no mapped counter ever held a number: the container was
+  absent, `null`, empty (`{}`), null-valued (`{prompt_tokens: null}`), or
+  carried only unmapped keys. The emitted usage values are then zeros by
   initialization, and the message must carry `usageMissing: true`.
 
 The flag and the numbers are orthogonal: adapters still emit the known values
@@ -532,11 +532,15 @@ In `loop.ts:streamAssistant` and `compaction.ts:runSummarizer`, a
 
 ### 10.4 Adapter audit and tracking points
 
-| Adapter | Synthesis site | Track `sawUsage` when… |
+| Adapter | Synthesis site | `sawUsage` becomes true when a MAPPED counter is numeric |
 | --- | --- | --- |
-| openai-completions | `:382` init, yield `:486` | `rawUsage != null` and `Object.keys(rawUsage).length > 0` |
-| anthropic | `:226` init, yield `:355` | `message.usage` (message_start) or `data.usage` (message_delta) is a non-empty object |
-| codex-responses | `:246` init, yield `:344` | `responseObj.usage` is a non-empty object on `response.completed`/`response.incomplete` |
+| openai-completions | `:382` init, yield `:486` | `prompt_tokens`, `completion_tokens`, `cached_tokens`, `prompt_cache_hit_tokens`, or `prompt_tokens_details.cached_tokens` holds a number |
+| anthropic | `:226` init, yield `:355` | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, or `cache_creation_input_tokens` holds a number (message_start or message_delta) |
+| codex-responses | `:246` init, yield `:344` | `input_tokens`, `output_tokens`, or `input_tokens_details.cached_tokens` holds a number (response.completed/incomplete) |
+
+The numeric-counter rule is deliberately strict: a container that exists but
+carries no number tells us nothing about usage, and "nothing" must be flagged,
+not asserted as zero.
 
 Emitted as `...(sawUsage ? {} : { usageMissing: true })` so existing fixtures
 with usage stay byte-identical.
@@ -570,6 +574,9 @@ with usage stay byte-identical.
      `incomplete: true`;
   3. `message_end` observer throws → the received report is retained by the
      ledger even though the loop invocation crashes (F2 regression).
+- Wire-leak regression (SA-03 precedent, defense in depth): a history
+  assistant message carrying `usageMissing: true` produces a request body
+  without the flag (asserted in one adapter wire test).
 - Full-suite gate re-run; the acceptance-verified pass list (success includes
   compaction usage; multi-compaction sums; resume delta; interruption
   disclosure; cap-retry/observer retention) must stay green.

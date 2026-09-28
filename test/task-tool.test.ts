@@ -23,6 +23,7 @@ import { collectTaskRecords } from "../src/core/task-record.js";
 import { createTaskTool, taskResult } from "../src/core/tools/task.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { createWriteTool } from "../src/core/tools/write.js";
+import { loadExtensions } from "../src/extensions/loader.js";
 import { VERSION } from "../src/format.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
@@ -2519,6 +2520,14 @@ describe("child launch record (SA-06)", () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-run-"));
 		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-run-cwd-"));
 		writeFileSync(path.join(cwd, "AGENTS.md"), "project rules\n", "utf8");
+		const extDir = await mkdtemp(path.join(tmpdir(), "imp-cl-run-ext-"));
+		const extPath = path.join(extDir, "ctx.mjs");
+		writeFileSync(
+			extPath,
+			'export default (api) => { api.registerContext("rules", "ext rules"); };\n',
+			"utf8",
+		);
+		const loaded = await loadExtensions({ cwd, cliPaths: [extPath], home: extDir });
 		const { renderer } = makeRenderer();
 		const runner = await createRunner({
 			cwd,
@@ -2532,6 +2541,7 @@ describe("child launch record (SA-06)", () => {
 			renderer,
 			provider: scriptedProvider([]),
 			agentsHomeDir: base,
+			extensions: loaded.runtime,
 		});
 		const env = runner.getLaunchEnvironment();
 		expect(env.impVersion).toBe(VERSION);
@@ -2540,7 +2550,8 @@ describe("child launch record (SA-06)", () => {
 		const projectFile = env.contextFiles.find((file) => file.path === path.join(cwd, "AGENTS.md"));
 		expect(projectFile?.content).toBe("project rules"); // the loader trims context files
 		expect(env.promptFiles).toEqual([]);
-		expect(env.extensions).toEqual([]);
+		expect(env.extensions).toEqual(loaded.runtime.moduleIdentities());
+		expect(env.extensionContexts).toEqual([{ id: "rules", text: "ext rules" }]);
 	});
 
 	it("a first-write failure leaves nothing resumable behind (no advertised child)", async () => {

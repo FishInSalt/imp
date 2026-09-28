@@ -1016,6 +1016,12 @@ class RunnerImpl implements Runner {
 		// where it would pair with the captured model id of the OLD family.
 		const provider = this.provider;
 		const settings = this.settings;
+		// SA-05 round 2 (delta review F1): the pricing identity must come from
+		// the SAME snapshot pair — live this.providerName + captured model id
+		// would fabricate an identity no endpoint served (a mid-run family
+		// switch would bill the old family's compaction at the new family's
+		// rates).
+		const modelReference = qualifiedReference(this.providerName, model);
 		this.lastRunModel = model;
 		const session = this.sessionStore;
 		// run_start fires HERE, not in runTurnInner: entry-level is the one site
@@ -1024,7 +1030,7 @@ class RunnerImpl implements Runner {
 		// pair is run_end, which a provider crash skips — consumers must
 		// tolerate an unpaired run_start.
 		this.options.extensions?.emitRunStart({ type: "run_start" });
-		return this.runTurnOrRecoverFromOverflow(options, model, provider, settings, session);
+		return this.runTurnOrRecoverFromOverflow(options, model, provider, settings, session, modelReference);
 	}
 
 	/** #overflow-grace: a live "context window exceeded" provider error gets
@@ -1040,9 +1046,10 @@ class RunnerImpl implements Runner {
 		provider: LLMProvider,
 		settings: CompactionSettings,
 		session: SessionStore | null,
+		modelReference: string,
 	): Promise<RunAgentLoopResult> {
 		try {
-			return await this.runTurnInner(model, provider, settings, session, options);
+			return await this.runTurnInner(model, provider, settings, session, modelReference, options);
 		} catch (err) {
 			if (!isContextOverflowError(err)) throw err;
 			const cause = err instanceof Error ? err.message : String(err);
@@ -1050,12 +1057,7 @@ class RunnerImpl implements Runner {
 			this.options.renderer.note("▪ context over the model's window — compacting once and retrying…");
 			let compacted = false;
 			try {
-				compacted = await this.compactAndSplice(
-					provider,
-					settings,
-					model,
-					qualifiedReference(this.providerName, model),
-				);
+				compacted = await this.compactAndSplice(provider, settings, model, modelReference);
 			} catch (compactErr) {
 				const compactCause = compactErr instanceof Error ? compactErr.message : String(compactErr);
 				this.logger.log("run_error", { source: "compaction", message: compactCause });
@@ -1070,7 +1072,7 @@ class RunnerImpl implements Runner {
 			// A SECOND overflow here is terminal — surface the guidance, not the
 			// raw provider 400 (one attempt, like pi's _overflowRecoveryAttempted).
 			try {
-				return await this.runTurnInner(model, provider, settings, session, {
+				return await this.runTurnInner(model, provider, settings, session, modelReference, {
 					...options,
 					userMessage: undefined,
 				});
@@ -1101,6 +1103,8 @@ class RunnerImpl implements Runner {
 		provider: LLMProvider,
 		settings: CompactionSettings,
 		session: SessionStore | null,
+		/** SA-05 round 2: the run snapshot's fully qualified pricing identity. */
+		modelReference: string,
 		options: RunTurnOptions,
 	): Promise<RunAgentLoopResult> {
 		// The task tool is built once at construction; its child-event relay
@@ -1111,8 +1115,9 @@ class RunnerImpl implements Runner {
 			const result = await runAgentLoop({
 				provider,
 				model,
-				// SA-05 round 2: the persisted pricing identity (fully qualified).
-				modelReference: qualifiedReference(this.providerName, model),
+				// SA-05 round 2: the persisted pricing identity — the run
+				// snapshot's reference (delta review F1), never a live pair.
+				modelReference,
 				system: this.system,
 				tools: this.tools,
 				history: this.history,
@@ -1151,12 +1156,7 @@ class RunnerImpl implements Runner {
 							// the 1M→272k switch-down deadlock: the summarization request
 							// itself can exceed the new model's input window).
 							try {
-								await this.compactAndSplice(
-									provider,
-									settings,
-									model,
-									qualifiedReference(this.providerName, model),
-								);
+								await this.compactAndSplice(provider, settings, model, modelReference);
 							} catch (err) {
 								const cause = err instanceof Error ? err.message : String(err);
 								this.logger.log("run_error", { source: "compaction", message: cause });

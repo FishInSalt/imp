@@ -3,7 +3,8 @@
 - Date: 2026-09-29
 - Branch: `feat/sa-07-child-resume`
 - Baseline: `bae428e` (main; SA-06 merged)
-- Status: DRAFT — pending independent adversarial design review (two tracks).
+- Status: REVIEWED — two-track adversarial review returned APPROVE WITH
+  CORRECTIONS; all findings folded (see §16). Implementation may proceed.
 - Task-list source: `docs/subagent-delegation-task-list.md`, SA-07 section.
 - Depends on the frozen contracts of SA-03 (`src/core/task-record.ts`),
   SA-04 (`SubagentUsageDetail` / attempt ledger), SA-06
@@ -93,7 +94,7 @@ entry point.
 | --- | --- |
 | `resume` present, empty/whitespace-only | rejection: `resume must be a child session id` |
 | `resume` + `agent` | rejection: role is immutable; the child continues as its recorded role (drop `agent`) |
-| `resume` + `worktree` | rejection: the worktree decision is immutable; continuation runs in the recorded cwd/worktree |
+| `resume` + `worktree` (ANY value, including `false`) | rejection: the worktree decision is immutable; the rejection keys on PRESENCE (`args.worktree !== undefined`), never truthiness — `worktree: false` must not slip through as "not passed" |
 | `resume` + `timeoutMs` | ALLOWED — the explicit new attempt's clock |
 | `resume` + empty/whitespace-only `prompt` | rejection: a resume needs a non-empty instruction |
 | `resume` with `IMP_CHILD_SESSIONS=0` (or `childSessions: false`) | rejection: child sessions are disabled |
@@ -102,6 +103,9 @@ entry point.
 The `agent` rejection deliberately ignores whether the given agent EQUALS the
 recorded one: immutable fields are not passed at all; the record is the only
 authority. (Fresh-dispatch validation for `agent`/`worktree` is unchanged.)
+A resume call counts against the five-call chunking exactly like any other
+`task` call; five resumes of one child in one chunk serialize through §7 —
+one runs, the others refuse.
 
 ### 3.3 ID disclosure (how the parent learns eligible ids)
 
@@ -112,10 +116,15 @@ line (fresh and resume results alike):
 child session id: <id> — continue it later with task({resume: "<id>", prompt: "…"})
 ```
 
-This is a handle, not a promise: resumability is decided at resume time.
-Refusals print the reasons (§4.2); a `not-found` refusal additionally lists
+This is a handle, not a promise: resumability is decided at resume time, so
+the line states the coarse conditions in one clause — resumable only while
+imp version, assembled system/agent/tool contract, provider and the recorded
+cwd/worktree are unchanged (the SA-06 codes are the exact set). Refusals
+print the reasons (§4.2); a `not-found` refusal additionally lists
 this parent's child ids from `listChildLaunches(parent)` (id + status only;
-no per-child validation, no fleet subsystem).
+no per-child validation, no fleet subsystem). The id is deliberately
+model-visible (the parent model needs it to act) — not UI-only display
+data, and not carried through `display`/record-only paths.
 
 ## 4. Resume pipeline
 
@@ -136,11 +145,13 @@ belong to fresh dispatch):
    → else refusal ("may still be running, or the process died before any
    parent-side write").
 5. Lease acquisition (§7) → refusal (`busy` / `stale-contended` /
-   `host-mismatch` / `io-error`).
+   `owned-elsewhere` / `io-error`). The attempt's try/finally opens the
+   INSTANT acquire returns `{ok:true}` — every refusal or throw from step 6
+   onward releases the lease in `finally` (a live lease leaked by a refusal
+   path is a contract violation, not a recoverable nuisance).
 6. Transcript repair (§6): 6.1 read-only pairing scan (may refuse
-   `history-unpairable`); 6.2 truncate a torn final fragment; 6.3 append
-   synthetic results for the crash-tail orphan. Nothing before 6.2 mutates
-   the child file.
+   `history-unpairable`); 6.2 truncate a torn final fragment; 6.3 repair the
+   crash-tail orphan. Nothing before 6.2 mutates the child file.
 7. Effective history: one `store.buildContext()` call →
    `{ messages, compactionBoundary }` (also used by 6.1; the lookup already
    ran SA-06's structural validation on this branch).
@@ -169,10 +180,15 @@ are step 6.2 and 6.3 plus the normal appends of the new attempt.
 
 1. repair note when repairs happened: `transcript repaired: N interrupted
    tool call(s) closed with an explicit unknown-outcome result[, dropped a
-   <n>-byte torn tail].`
+   <n>-byte torn tail].` The repair precedes the new instruction, so the
+   CHILD model sees the unknown-outcome marker as settled history — never as
+   a fresh error caused by its new prompt.
 2. worktree retention line when the launch record has a worktree:
    `worktree kept at <path> (branch <branch>) — resume attempts do not
-   remove it; merge <branch> when done.`
+   remove it; merge <branch> when done.` When the child's LAST record shows
+   `kept-work` or `removal-failed`, the line names that prior disposition
+   too, so "deliberately kept" and "kept because the earlier assessment was
+   uncertain or failed" are never conflated.
 3. the files-changed caution: `files may have changed since the previous
    attempt — re-inspect before relying on earlier observations.`
 4. the existing usage trailer `(child: …)` — THIS attempt only.
@@ -201,25 +217,42 @@ If `getLaunchEnvironment()` is absent → refusal: the host wiring cannot
 reconstruct launch facts (children created there would have no `launch`
 block, so this is primarily a wiring-error surface).
 
-### 5.1 Tool pool reconstruction
+Permissions are NOT reconstructed from the record (SA-06 §4.4): every tool
+call of the resumed attempt flows through the parent's LIVE gate
+(`options.onToolCall`) with `{ agent: launch.agent?.name, cwd: launch.cwd }`.
+A call the current gate denies surfaces as the gate's normal denial (an
+isError result the model sees) — the record never re-authorizes anything,
+and a tool present in history is never silently re-executed (§6.1, T22).
+The task-list bullet "missing/incompatible permissions fail before
+model/tool execution" is therefore realized as: the live gate is the only
+authority, consulted fresh for every call.
 
-Mirrors the fresh path's selection rules, rooted at the recorded cwd:
+### 5.1 Tool pool reconstruction (ONE shared selection helper)
 
-- worktree child (`launch.worktree !== undefined`):
-  `getToolsForChild(launch.cwd, {providerName: launch.model.providerName,
-  modelId: launch.model.wireModelId}) ?? getToolsForCwd(launch.cwd)`;
-  `undefined` → refusal ("per-directory tool pool unavailable — cannot
-  reconstruct the child's tool contract; retry from a host that wires it").
-  This mirrors the fresh-path rule that a worktree child without a per-cwd
-  pool FAILS rather than inheriting parent-cwd tools.
-- shared-cwd child: same call chain with the fresh path's fallback to the
-  parent pool (`getToolsForChild?.(cwd, binding) ?? parentPool`).
+The fresh path's selection is factored into one helper
+(`selectChildToolPool(agent, cwd, binding, sources)` in task.ts): rebuild
+(`getToolsForChild(cwd, { providerName, modelId })` / `getToolsForCwd(cwd)` /
+parent-pool fallback per the fresh rules) → apply the agent's `tools:`
+allowlist narrowing (the existing `validateSubset`) → filter `task` out.
+Fresh dispatch and resume MUST both call it: rebuilding without the agent
+allowlist is a false `tools-drift` for every allowlisted agent, because the
+launch record stores the NARROWED array (`task.ts:353–364, 411, 431, 457`)
+and SA-06 check 10 compares exact set equality.
 
-Then `task` is filtered out, and the result feeds BOTH the `tools-drift`
-comparison (SA-06 check 10, exact set equality against `launch.tools`) and
-the execution pool. After a passing verdict the TOOL CONTRACT is therefore
-provably identical to launch; the executed attempt records the current pool
-(names + mcpServer), which the verdict has proven equal-as-a-set.
+Rooted at the recorded cwd; exact call shape (mirrors `task.ts:397–401`),
+passing the FIELDS rather than the binding object:
+`getToolsForChild(launch.cwd, { providerName: launch.model.providerName,
+modelId: launch.model.wireModelId })`.
+
+- worktree child (`launch.worktree !== undefined`): no parent-pool fallback;
+  `undefined` from both rebuilders → refusal ("per-directory tool pool
+  unavailable — cannot reconstruct the child's tool contract; retry from a
+  host that wires it").
+- shared-cwd child: the fresh path's parent-pool fallback applies.
+
+The result feeds BOTH the `tools-drift` comparison (SA-06 check 10) and the
+execution pool; after a passing verdict the tool contract is provably
+identical to launch, and the attempt records the executed pool.
 
 ### 5.2 Model immutability and the provider-identity gate
 
@@ -268,30 +301,50 @@ assistant messages (`blocks[].type === "toolCall"`) and observed result ids
   never starts mid-pair; a mid-history orphan therefore means real damage,
   which is refused rather than guessed about.
 
-### 6.2 Torn final fragment (truncate before any append)
+### 6.2 Torn final fragment (structural detection; truncate before any append)
 
-`SessionStore.open` drops an unparseable FINAL line in memory only (stderr
-note) and leaves the bytes; `appendFileSync` would concatenate the next entry
-onto the fragment and lose it on the following reopen. Resume therefore
-exposes and repairs the fact:
+The hazard has TWO shapes, and only one was visible to parse-failure
+detection:
 
-- `SessionStore` gains `tornFinalLineDropped: boolean` (set by `open`, the
-  same pattern as `persisted`/`savedModel`) and
+- a) an unparseable fragment (invalid JSON): `open` drops it in memory
+  (stderr note), the bytes stay — `appendFileSync` concatenates the next
+  entry onto it and the following reopen loses both;
+- b) a COMPLETE JSON entry with no trailing newline (crash mid-write with
+  the bytes intact): it parses fine, so parse-failure detection never fires
+  — and it is causally the most likely crash shape. Same concatenation loss:
+  both entries dropped on the next reopen (reproduced against the real
+  store during design review).
+
+Detection is therefore STRUCTURAL, not parse-based: `SessionStore.open`
+records `tornFinalLine: boolean` when a persisted non-empty file's bytes do
+not end in `\n` (in addition to the in-memory drop for shape a). API:
+
+- `SessionStore` gains `tornFinalLine: boolean` (set by `open`, the
+  `persisted`/`savedModel` pattern) and
   `repairTornFinalLine(): { removedBytes } | undefined` — truncates the file
   at the last newline (`truncateSync`), returns bytes removed, clears the
-  flag. `undefined` when the flag is unset or the store is not persisted.
-- Ordering rule (pinned): truncate BEFORE any append to the child file. The
+  flag; `undefined` when the flag is unset or the store is not persisted;
+  idempotent (a second call is a no-op).
+- Ordering rule (pinned): truncate BEFORE any append to the child file; the
   repair runs only after steps 1–6.1 passed.
 - Refusing instead of truncating was rejected deliberately: the torn tail is
-  exactly the crash-mid-append state that most needs continuation, and the
-  fragment is unparseable bytes that no reader can interpret as an entry.
-  The removal is reported in the result (§4.3 item 1).
+  exactly the crash-mid-append state that most needs continuation; shape a
+  is unparseable bytes no reader can interpret as an entry, and shape b is
+  recoverable only through this repair (the alternative — appending onto it
+  — destroys two entries). The removal is reported in the result (§4.3 item
+  1).
 
 ### 6.3 Crash-tail repair (persisted, honest)
 
 The missing results in the `M`/`A` shape are appended (via
-`store.appendMessage`) as ONE `toolResult` message, one result per missing
-id in `A`'s block order:
+`store.appendMessage`), one result per missing id in `A`'s block order. When
+a partial `toolResult` message already follows `A`, the missing results are
+merged into a continuation message appended after it — all three adapters
+emit one wire message per `toolResult` message either way
+(anthropic.ts:75, openai-completions.ts:138, codex-responses.ts:124), and
+appending (never editing the existing partial message) keeps append-only
+semantics while matching the loop's at-most-one-per-turn shape; otherwise a
+single `toolResult` message is appended.
 
 ```ts
 { toolCallId, toolName /* from the call block */, isError: true,
@@ -310,6 +363,9 @@ Decisions (rationale for review):
 - Expected real shapes: abort/ctrl-C mid-tools (assistant message recorded,
   results never appended), crash between appends, and the torn-tail case of
   6.2 (after truncation the results are missing → same repair).
+- The repair runs as step 6.3, BEFORE the new instruction is pushed (step
+  8): the resumed model sees the marker as settled history, never as a
+  fresh error caused by its new prompt.
 
 ### 6.4 Effective history
 
@@ -322,15 +378,21 @@ store").
 ## 7. Single-writer lease
 
 One active execution per child, enforced in-process and across processes on
-the same host. New module `src/core/child-lease.ts`; no existing lock
-mechanism exists anywhere in the codebase (verified).
+one machine. New module `src/core/child-lease.ts`; no existing lock mechanism
+exists anywhere in the codebase (verified).
 
 ### 7.1 Artifact
 
 `<childFilePath>.lease` beside the child session file. Content (one JSON
-line): `{ "pid": <number>, "host": "<os.hostname()>", "attemptId": "<uuid>",
-"startedAt": "<ISO>" }`. The lease exists only while an attempt runs
-(created after validation, released in `finally`).
+line): `{ "pid": <number>, "host": "<os.hostname()>", "machineId":
+"<uuid>", "attemptId": "<uuid>", "startedAt": "<ISO>" }`. The lease exists
+only while an attempt runs (created after validation, released in `finally`).
+
+`machineId` is read-or-created at `<childrenDir>/.imp-machine-id` (a random
+UUID, `wx` + ENOENT-retry). It exists because `os.hostname()` collides
+routinely across containers sharing a mounted sessions directory, and pid
+namespaces make cross-container pids meaningless — hostname + pid alone can
+neither detect the collision nor prove liveness.
 
 ### 7.2 Protocol (pinned)
 
@@ -343,49 +405,71 @@ Acquire (`acquireChildLease(childFilePath, attemptId, opts?)`):
 
 1. Map hit → refuse `busy` ("already running in this process").
 2. Map miss → set the entry. All later failures delete it.
-3. Best-effort `rmSync(<lease>.stale, {force: true})` (debris from a crashed
-   steal; safe by construction, §7.3).
-4. `writeFileSync(leasePath, payload, { flag: "wx" })`:
-   - success → READ BACK and verify (`attemptId === mine` and payload parses);
-     mismatch/EIO → refuse `io-error` (do not proceed on an unverified lease).
+3. `writeFileSync(leasePath, payload, { flag: "wx" })`:
+   - success → READ BACK and verify (`attemptId === mine`, payload parses);
+     mismatch/IO error → refuse `io-error` (never proceed on an unverified
+     lease).
    - `EEXIST` → read the existing lease, then:
-     - unreadable / unparseable → treat as debris: rename to
-       `<lease>.stale` (ENOENT → retry step 4, max 3 rounds) → remove → retry.
-     - `host !== os.hostname()` → refuse `host-mismatch` ("held on host X —
-       cross-host sessions are not supported").
-     - `pid === process.pid` → stale self (a previous release failed) →
-       steal path.
-     - `isAlive(pid)` (injectable; default `process.kill(pid, 0)`, EPERM
-       counts as alive) → refuse `busy` with pid/host/startedAt.
-     - dead → steal path.
-5. Steal path: read the lease bytes, then `renameSync(leasePath,
-   <lease>.stale)`; ENOENT → retry step 4 (someone else won). After a
-   successful rename, RE-READ the renamed payload: if it differs from the
-   bytes read before the rename, someone re-created the lease in the race
-   window — restore by `renameSync(<lease>.stale, leasePath)` best-effort,
-   then refuse `stale-contended`. Matching → best-effort remove the stale
-   file, retry step 4. Bounded at 3 rounds → refuse `stale-contended`.
-6. Success returns `{ ok: true, lease }`.
+     - `host` or `machineId` differs from mine → refuse `owned-elsewhere`
+       ("held on host X / by a different machine — shared-storage sessions
+       across machines are not supported").
+     - unreadable / unparseable content → debris: steal path.
+     - `pid === process.pid` and the Map has NO entry → own leftover (a
+       previous release failed): steal path.
+     - `isAlive(pid)` in MY namespace (injectable; default
+       `process.kill(pid, 0)`, EPERM = alive) → refuse `busy` with
+       pid/host/startedAt in the message.
+     - pid dead in my namespace AND lease mtime younger than the grace
+       window (`staleGraceMs`, default 60s) → refuse `busy` with a recovery
+       hint ("that process looks dead here but may be live in another pid
+       namespace; if it really crashed, retry in ~N s").
+     - pid dead AND mtime older than the grace → steal path.
+4. Steal path: re-read the bytes; `renameSync(leasePath, <lease>.steal)`
+   (fixed target — rename is atomic, exactly one winner per generation);
+   `ENOENT` → retry from step 3 (someone else won). After the rename,
+   compare the moved content against the bytes read before it:
+   - mismatch (someone re-created the lease in the window — the moved file
+     is NEWER than what we decided about) → best-effort restore
+     (`renameSync(<lease>.steal, leasePath)`; EEXIST = a third process
+     already re-created it → leave it) → refuse `stale-contended`.
+   - match → best-effort remove the `<lease>.steal` artifact; retry from
+     step 3.
+   Bounded at 3 rounds → refuse `stale-contended`.
+5. Success returns `{ ok: true, lease }`.
 
-Release (`lease.release()`, `finally`): if the Map still holds my
-`attemptId`, delete it; read the lease back; unlink ONLY if it parses and
-`attemptId === mine` (a foreign or corrupt lease is left alone, stderr
-note); unlink failure → stderr note (stale self is stealable on the next
-acquire via the `pid === process.pid` rule).
+Heartbeat: after acquire, the attempt touches the lease mtime every 20s
+(`utimesSync`; `setInterval(...).unref()` — the #task-timer liveness lesson;
+interval and grace are injectable seams). At each touch the holder re-reads
+the lease: content mine → touched, continue; content missing or foreign →
+**lease anomaly** — stderr note and ABORT the attempt (§8's attempt
+AbortController). Aborting is what makes the invariant "at most one attempt
+CONTINUES" hold even inside the residual race windows of §7.3.
+
+Release (`lease.release()`, `finally`): clear the Map entry when it maps to
+my attemptId; read the lease back; unlink ONLY when it parses and
+`attemptId === mine`. Unlink failure → truncate the lease to zero bytes
+(best effort) + stderr note: an empty lease is debris, immediately
+stealable by the next acquire; a foreign or corrupt lease is left alone
+(stderr note).
 
 ### 7.3 Residual races (recorded, not hidden)
 
-- The stale-steal read→rename window is not atomic. The rename is atomic for
-  ONE winner; the remaining exposure is "B re-created a live lease after A
-  read the stale one, before A's rename". The post-rename re-read converts
-  this into a refusal for A (and best-effort restore for B); the residual
-  failure mode is a missing lease file for a live B, which only a THIRD
-  concurrent resume could exploit. Documented as a known limit: single-host,
-  tiny-window, detection-not-prevention.
-- Cross-host leases are unsupported and refused, not guessed about.
+- The read→rename window in the steal path is not atomic. The rename is
+  atomic per generation, the post-rename comparison converts "I moved a
+  fresh live lease" into a refusal for the stealer, and the heartbeat
+  anomaly check converts "my live lease disappeared under me" into an abort
+  for the holder — so no interleaving leaves TWO attempts continuing; the
+  worst outcome is that both stop and the winner of the next attempt
+  proceeds.
+- Grace delay: after a hard crash the next resume refuses `busy` until the
+  lease mtime is older than `staleGraceMs` (~60s; three missed heartbeats).
+  That delay is the price of not trusting a dead-looking pid across pid
+  namespaces; it is documented, hint-texted, and seam-injectable in tests.
+- Sharing a sessions directory across machines is refused
+  (`owned-elsewhere`), not guessed about.
 - The lease protects WRITERS (attempt-vs-attempt). It does not freeze the
   filesystem: external edits during an attempt are outside any promise
-  (TOCTOU note, §12).
+  (TOCTOU note, §14).
 
 ## 8. Execution
 
@@ -409,6 +493,13 @@ via `onMessage` (loop.ts:130–147), the overflow-recovery relaunch with
 `userMessage: undefined`, auto-compaction mirroring, the attempt ledger —
 is unchanged and therefore shared with fresh dispatch.
 
+Estimator note: `estimateContextTokens(history, initialFloor)` uses the
+floor only to bound the usage-anchor search; on a seeded compacted history
+the FIRST boundary can therefore sum from index 0 (an over-estimate) when no
+assistant with usage sits at/after the floor. The consequence is at worst a
+premature no-op compaction attempt (`findCutIndex → 0 → null`), recorded
+here rather than fixed.
+
 Pinned behavior on resume:
 
 - Turn budget: fresh `runAgentLoop` → `CHILD_MAX_TURNS` (60) for the new
@@ -422,10 +513,23 @@ Pinned behavior on resume:
   `observeSessionWrites` is wired so `transcriptWriteFailed` keeps its SA-03
   meaning. The first new entry's `parentId` is the current leaf (the crash
   repair of §6.3 when present, else the settled leaf).
+- Role body: the recorded agent's CURRENT body (hash-verified equal by the
+  verdict) is resolved from the live roster and passed as `extraSystem` —
+  exactly like fresh dispatch. Resuming without it would silently drop the
+  agent profile, a role downgrade the verdict was supposed to prevent.
+- Pricing identity (SA-05 integration): the resumed call passes
+  `modelReference: launch.model.reference` — the recorded QUALIFIED
+  reference (fresh dispatch stamps the binding reference at task.ts:493).
+  The resumed attempt's usage is therefore priced at the recorded identity,
+  never the parent's current model.
 - Permissions: the LIVE gate (`options.onToolCall`) with
   `{ agent: launch.agent?.name, cwd: launch.cwd }` — never the record (§4.4
   of the SA-06 design). Events: same `onEvent` wiring with a fresh
   `sourceId` and the current `taskToolCallId`.
+- Abort wiring: the resume branch wraps the parent signal in an attempt
+  `AbortController` (relay listener removed in `finally`); the lease
+  heartbeat can abort it on a lease anomaly (§7.2), and the result then
+  names that reason ("attempt stopped: its lease was taken over").
 - Signals: the parent signal, forwarded as-is; timeout/abort classification
   is `runSubagent`'s existing logic (unchanged).
 - Worktree: the attempt runs at `launch.cwd` (validated by the SA-06 probe);
@@ -459,8 +563,12 @@ added to `TaskRecord` (frozen contract).
   `(child lifetime: N attempts, ≥ X in / Y out[ / Z cache])` — N/usage
   summed from the parent's SA-03 records for this `childId` (records only,
   never the transcript) plus this attempt. `≥` appears when any summed
-  usage carries `incomplete: true`. A record's usage is skipped when
-  absent (never invented as zero).
+  usage carries `incomplete: true` OR when a launched record has no usage
+  field at all — silent skipping would understate N without a marker, and
+  absence is "unknown", never zero (SA-05 vocabulary). N counts settled
+  records seen plus this attempt; if this attempt's record never lands
+  (crash between composition and persistence), the next resume repeats
+  N+1 — conservative, recorded.
 
 ### 9.3 The fresh-path disclosure line
 
@@ -482,20 +590,31 @@ updated; no other fresh-path behavior changes.
   by the `pid === process.pid` rule.
 - Two concurrent resumes of one child: at most one proceeds (Map or lease);
   the other refuses. Unrelated children and fresh tasks keep normal
-  concurrency (the five-call chunking is untouched).
+  concurrency (the five-call chunking is untouched) — five resumes of ONE
+  child in one chunk serialize through §7: one runs, the others refuse
+  (no queueing).
+- Restoring the same parent session in multiple processes is SUPPORTED
+  ownership (the task-list asks for an explicit statement): both copies
+  resolve the same children (SA-06's lookup keys on the parent session id),
+  and the file lease is the single-writer arbiter — the loser refuses.
 
 ## 11. Interfaces (pinned for review)
 
 ```ts
 // src/core/child-lease.ts (new)
-export interface ChildLeaseHandle { readonly path: string; readonly attemptId: string; release(): void; }
+export interface ChildLeaseHandle {
+  readonly path: string; readonly attemptId: string;
+  release(): void; startHeartbeat(onAnomaly: () => void): void;
+}
 export type ChildLeaseResult =
   | { ok: true; lease: ChildLeaseHandle }
-  | { ok: false; code: "busy" | "stale-contended" | "host-mismatch" | "io-error"; message: string };
+  | { ok: false; code: "busy" | "stale-contended" | "owned-elsewhere" | "io-error"; message: string };
 export interface ChildLeaseOptions {
-  pid?: number; host?: string;
+  pid?: number; host?: string; machineId?: string;
   isAlive?: (pid: number) => boolean;
   now?: () => number;
+  staleGraceMs?: number;   // default 60_000
+  heartbeatMs?: number;    // default 20_000
 }
 export function acquireChildLease(childFilePath: string, attemptId: string, options?: ChildLeaseOptions): ChildLeaseResult;
 
@@ -513,7 +632,7 @@ export function providerMismatch(recorded: string, live: string): string | undef
 export function lifetimeUsageLine(records: readonly TaskRecord[], current: Usage | undefined): string;
 
 // src/core/session/store.ts (changed)
-readonly? tornFinalLineDropped: boolean;                       // set by open()
+tornFinalLine: boolean;   // set by open(); structural: no trailing newline
 repairTornFinalLine(): { removedBytes: number } | undefined;   // truncate at last newline
 
 // src/core/subagent.ts (changed)
@@ -521,7 +640,9 @@ initialHistory?: AgentMessage[];
 initialFloor?: number;
 
 // src/core/tools/task.ts (changed)
-resume schema field; resume branch; taskResult handoff id line.
+resume schema field; resume branch; taskResult handoff id line; shared
+selectChildToolPool helper (fresh + resume); attempt AbortController +
+lease heartbeat wiring.
 ```
 
 ## 12. Acceptance mapping (task-list SA-07 bullets)
@@ -530,21 +651,26 @@ resume schema field; resume branch; taskResult handoff id line.
 | --- | --- | --- |
 | Fresh dispatch unchanged; continuation gets old effective context + exactly one new instruction | §3.3, §8 | T1–T3, T14 |
 | Compressed child resumes from summary + retained tail | §6.4 | T13 |
-| Completed/capped/aborted/timed-out/crashed continuable only when state+ownership permit | §4.1 steps 2–5, §10 | T4, T5, T8, T23 |
-| Tool pairing valid; side effects not auto-repeated | §6.1–6.3 | T14–T17, T22 |
-| Missing/incompatible role/model/tools/worktree/permissions fail before execution | §5, §7 | T6, T7, T9–T12 |
-| Two concurrent resumes → one writer; unrelated children concurrent | §7 | T18–T21, T24 |
-| Parent restart, stale ownership, interrupted persistence recovery | §7.2–7.3, §10 | T19, T20, T25 |
+| Completed/capped/aborted/timed-out/crashed continuable only when state+ownership permit | §4.1 steps 2–5, §10 | T4, T4b, T5, T8, T23 |
+| Tool pairing valid; side effects not auto-repeated | §6.1–6.3 | T14–T17, T16b, T22 |
+| Missing/incompatible role/model/tools/worktree/permissions fail before execution | §5, §7 | T6, T6b, T7, T9–T12 |
+| Two concurrent resumes → one writer; unrelated children concurrent | §7 | T18–T21, T24, T28 |
+| Parent restart, stale ownership, interrupted persistence recovery | §7.2–7.3, §10 | T19, T20, T25; parent restart = same-parent multi-process restore (supported — §10); the SA-06 partial-launch-write-failure cases are inherited from its suite, not re-tested here |
 | New history extends transcript; linkage correct; attempt usage excludes historical calls | §6.3, §9 | T13, T14, T26, T27 |
 | Cancellation/timeout/cap/task activity/CJK/cleanup safety preserved | §8, §10 | T23, T27, regression suites |
 
 ## 13. Test plan (red evidence first)
 
-New `test/child-lease.test.ts`: T18 in-process double acquire; T19 stale
-self (pid === process.pid, no Map entry) steal; T20 live foreign pid refuse
-+ host mismatch refuse + failed-release leftover reclaim; T21 stale debris
-(parse-fail file) recovery; T25 release semantics (foreign lease left
-alone; unlink failure noted).
+New `test/child-lease.test.ts` (clock/pid/host/liveness injectable): T18
+in-process double acquire; T19 stale rules — pid dead + mtime fresh refuses
+with the recovery hint, pid dead + mtime older than grace steals, own
+leftover (pid === self, no Map entry) steals; T20 live foreign pid refuses;
+`owned-elsewhere` (host/machineId mismatch) refuses; failed-release leftover
+(zero-byte lease) is debris-stealable; T21 unparseable debris recovery and
+`stale-contended` when the post-rename comparison finds a newer lease
+(injected interleaving); T25 release leaves foreign leases alone and notes
+failures; T28 heartbeat touches keep mtime fresh and a foreign/missing
+lease at a beat aborts the attempt via its signal.
 
 New `test/child-resume.test.ts` (fake provider harness like
 `test/task-tool.test.ts`):
@@ -555,8 +681,13 @@ New `test/child-resume.test.ts` (fake provider harness like
 - T3 happy path: one new instruction; model-visible request = effective
   history + exactly one new user message; result contains the id line.
 - T4 no settled record → refusal ("may still be running…").
+- T4b per-status continuation: aborted, timed-out and crashed attempts each
+  settle with a record and CAN be continued (status parity asserted).
 - T5 rejected-record-only child → refusal.
 - T6 role drift / missing agent → refusal (agent body edited after launch).
+- T6b permissions stay live: the gate denies a previously-allowed tool for
+  the resumed attempt → the gate's normal denial surfaces; nothing is
+  re-authorized from the record and the denied call does not run.
 - T7 system drift → refusal.
 - T8 version drift → refusal (VERSION seam).
 - T9 provider mismatch gate (record says anthropic, live provider fake
@@ -570,10 +701,13 @@ New `test/child-resume.test.ts` (fake provider harness like
 - T14 crash-tail orphan: synthetic result persisted BEFORE the new user
   message (file order asserted byte-level: parentId chain, marker text,
   isError), request contains the paired sequence.
-- T15 torn final fragment: file truncated at last newline, fragment bytes
-  gone, attempt proceeds; result reports the repair.
+- T15 both torn shapes (invalid-JSON fragment AND complete-entry-without-
+  newline): file truncated at the last newline; after the attempt the file
+  reopens with every entry intact; result reports the repair.
 - T16 non-tail orphan → refusal; T17 mid-history mismatch refuses even when
   the tail is clean.
+- T16b compacted transcript with a retained-tail orphan (beyond a crash
+  tail) → history-unpairable refusal.
 - T22 side-effect non-repetition: a tool that would run is NOT invoked
   during resume for calls recorded in history (fake tool with call counter;
   history contains an earlier result → zero invocations before the model's
@@ -584,9 +718,16 @@ New `test/child-resume.test.ts` (fake provider harness like
   different children resume concurrently.
 - T26 record assertions: same childId, new attemptId, cwd/binding/agent from
   the record, worktree disposition kept-unknown + detail.
+- T26b prior-disposition threading: the last record kept-work/
+  removal-failed → the worktree line names it (never conflated with
+  "deliberately kept").
 - T27 usage split: history carries large usage; fake provider reports a
   small report → attempt trailer shows only the new numbers; lifetime line
   sums records (≥ marker when a previous record is incomplete).
+- T27b the resumed attempt passes the recorded qualified `modelReference`
+  (usage priced at the recorded identity, not the parent's current model).
+- T27c a launched record with no usage field sets the `≥` marker (absence
+  is unknown, never a silent skip).
 
 Store unit tests (`test/session-store` beside existing ones): torn-flag set
 on open; repair truncates exactly; `undefined` when clean.
@@ -599,7 +740,17 @@ Regression updates: `test/task-tool.test.ts` handoff-text pins learn the
 
 ## 14. Known limits / deferred
 
-- Lease residual race (§7.3) — single-host, detection-based, documented.
+- Lease residual race (§7.3) — same-machine via machineId, cross-machine
+  refused; detection + heartbeat-abort backstop; stale steal waits out the
+  grace window after a crash.
+- Wire-model catalog gap: `launch.model.wireModelId` is not re-validated
+  against the live model catalog — a deprecated model id surfaces as a
+  provider error during the attempt, not a refusal (the provider gate
+  covers endpoint identity, not the catalog).
+- A settled transcript with a crash-tail orphan is repaired on the NEXT
+  resume, not at abort time.
+- Resuming a compacted child can trigger a NEW summarizer call whose cost
+  lands on the attempt's ledger (asserted in T13/T27, not hidden).
 - No cross-host resume; no cross-version resume (SA-06 is the authority).
 - Resume does not re-verify side effects happened: it preserves the RECORDED
   truth and marks interrupted calls unknown — it never claims completion.
@@ -628,5 +779,29 @@ record shape, SA-04 ledger, SA-05 pricing, SA-06 lookup/validation semantics.
 
 ## 16. Review log
 
-(pending — two-track adversarial review to be recorded here, corrections
-folded before implementation; red evidence before code.)
+Two-track adversarial review (fresh context, read-only, HEAD 8d9534a):
+both tracks returned APPROVE WITH CORRECTIONS; all findings folded above.
+
+- Track A (mechanics): B1 torn-tail detection must be STRUCTURAL (a
+  complete entry without trailing newline loses two entries on the next
+  append+reopen — reproduced against the real store; §6.2); B2 the tool-pool
+  rebuild must re-apply the agent allowlist (the record stores the narrowed
+  array; a rebuilt superset would falsely refuse every allowlisted agent;
+  §5.1); M1 the agent body must be passed as `extraSystem` (§8); M2 the
+  try/finally scope is pinned to open immediately after acquire (§4.1);
+  M3+M4+F8 the lease protocol was hardened — machineId discriminator,
+  no pre-steal deletion, post-rename content comparison, heartbeat +
+  anomaly abort, zero-byte-truncate release (§7); m1–m5 folded (partial-
+  merge repair, estimator note, N+1 note, 60-turn constant wording, catalog
+  gap recorded as a limit).
+- Track B (semantics/coverage): F5 pricing identity pinned
+  (`modelReference: launch.model.reference`; §8, T27b); F6 absent usage
+  feeds `≥` (never a silent skip; §9.2, T27c); F7 prior worktree
+  disposition threaded (§4.3, T26b); F9 `worktree` rejection on presence
+  (§3.2); F1–F4 coverage additions (T4b, T6b, T16b; inherited-SA-06
+  marking in §12); F10–F13 folded (id-line clause, exact call shape,
+  multi-process ownership statement, marker-as-history and
+  orphan-self-heal notes).
+
+Red evidence (failing tests) precedes implementation; a delta review
+follows implementation, then owner acceptance.

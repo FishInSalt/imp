@@ -489,17 +489,39 @@ describe("child continuation — worktree probe", () => {
 		expect(verdict.resumable).toBe(true);
 	});
 
-	it("a rewritten history (branch reset off the baseline) => worktree-history-replaced", async () => {
+	it("a worktree whose checkout was replaced by an unrelated repo => worktree-replaced", async () => {
 		const world = await makeWorktreeWorld();
-		// An unrelated root commit in the main repo, then reset the child's
-		// branch onto it: same branch, same registration, non-descendant tip.
+		rmSync(path.join(world.wtPath, ".git"), { force: true });
+		const init = git(world.wtPath, ["init", "-q", "-b", "main"]);
+		expect(init.status).toBe(0);
+		writeFileSync(path.join(world.wtPath, "f.txt"), "x\n", "utf8");
+		git(world.wtPath, ["add", "."]);
+		git(world.wtPath, ["-c", "user.email=t@imp.dev", "-c", "user.name=t", "commit", "-qm", "init"]);
+		const verdict = await validateChildContinuation(world.file, world.parent, world.current);
+		expect(codes(verdict.reasons)).toContain("worktree-replaced");
+	});
+
+	it("a worktree whose .git link was removed => worktree-replaced", async () => {
+		const world = await makeWorktreeWorld();
+		rmSync(path.join(world.wtPath, ".git"), { force: true });
+		const verdict = await validateChildContinuation(world.file, world.parent, world.current);
+		expect(codes(verdict.reasons)).toContain("worktree-replaced");
+	});
+
+	it("a rewritten history (branch repointed off the baseline) => worktree-history-replaced", async () => {
+		const world = await makeWorktreeWorld();
+		// An unrelated root commit in the main repo, then repoint the child's
+		// branch at it: same branch, same registration, non-descendant tip.
+		// (update-ref, not reset --hard: non-destructive, and the acceptance
+		// runner skips destructive git commands.)
 		const orphan = git(world.repo, ["checkout", "-q", "--orphan", "side"]);
 		expect(orphan.status).toBe(0);
 		writeFileSync(path.join(world.repo, "unrelated.txt"), "x\n", "utf8");
 		git(world.repo, ["add", "."]);
 		git(world.repo, ["commit", "-qm", "unrelated root"]);
-		const reset = git(world.wtPath, ["reset", "--hard", "side"]);
-		expect(reset.status).toBe(0);
+		const sideSha = git(world.repo, ["rev-parse", "HEAD"]).stdout.trim();
+		const move = git(world.repo, ["update-ref", `refs/heads/${world.branch}`, sideSha]);
+		expect(move.status).toBe(0);
 		const verdict = await validateChildContinuation(world.file, world.parent, world.current);
 		expect(codes(verdict.reasons)).toContain("worktree-history-replaced");
 	});

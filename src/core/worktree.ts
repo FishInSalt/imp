@@ -479,6 +479,7 @@ export type WorktreeProbeResult =
 			code:
 				| "worktree-repo-missing"
 				| "worktree-missing"
+				| "worktree-replaced"
 				| "worktree-unregistered"
 				| "worktree-branch-swapped"
 				| "worktree-history-replaced";
@@ -509,6 +510,57 @@ export async function probeWorktreeIdentity(identity: WorktreeIdentity): Promise
 		wtReal = realpathSync(identity.path);
 	} catch {
 		return fail("worktree-missing", `worktree path ${identity.path} does not resolve (removed or moved)`);
+	}
+	// The directory itself must still BE this checkout: the repository-side
+	// registration alone cannot prove the path holds a live worktree of the
+	// recorded repository (it could have been replaced by an unrelated repo —
+	// acceptance round 1, P1).
+	const commonDir = await git(wtReal, ["rev-parse", "--git-common-dir"]);
+	if (commonDir.status !== 0) {
+		return fail(
+			"worktree-replaced",
+			`the directory at ${identity.path} is not a git worktree: ${commandFailure(commonDir)}`,
+		);
+	}
+	let commonRoot: string;
+	try {
+		const raw = commonDir.stdout.trim();
+		const absolute = path.isAbsolute(raw) ? raw : path.resolve(wtReal, raw);
+		commonRoot = path.dirname(realpathSync(absolute));
+	} catch {
+		return fail("worktree-replaced", `could not resolve the git common directory of ${identity.path}`);
+	}
+	if (commonRoot !== repoReal) {
+		return fail(
+			"worktree-replaced",
+			`the checkout at ${identity.path} belongs to ${commonRoot}, not to ${identity.repoRoot}`,
+		);
+	}
+	const topLevel = await git(wtReal, ["rev-parse", "--show-toplevel"]);
+	if (topLevel.status !== 0) {
+		return fail(
+			"worktree-replaced",
+			`could not resolve the worktree root of ${identity.path}: ${commandFailure(topLevel)}`,
+		);
+	}
+	let topReal: string;
+	try {
+		topReal = realpathSync(topLevel.stdout.trim());
+	} catch {
+		return fail("worktree-replaced", `the worktree root ${topLevel.stdout.trim()} does not resolve`);
+	}
+	if (topReal !== wtReal) {
+		return fail(
+			"worktree-replaced",
+			`${identity.path} is inside a checkout rooted at ${topReal}, not at itself`,
+		);
+	}
+	const headRef = await git(wtReal, ["symbolic-ref", "-q", "HEAD"]);
+	if (headRef.status !== 0 || headRef.stdout.trim() !== `refs/heads/${identity.branch}`) {
+		return fail(
+			"worktree-branch-swapped",
+			`HEAD at ${identity.path} is ${headRef.stdout.trim() || "(detached)"}, not refs/heads/${identity.branch}`,
+		);
 	}
 	const listed = await git(repoReal, ["worktree", "list", "--porcelain"]);
 	if (listed.status !== 0) {

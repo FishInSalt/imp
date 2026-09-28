@@ -763,8 +763,15 @@ export class SessionStore {
 		// push + reverse: repeated unshift shifts the whole accumulated array
 		// per step (O(n²) slots for depth n) — linear instead.
 		const reversed: SessionEntry[] = [];
+		const seen = new Set<string>();
 		let current: SessionEntry | undefined = this.byId.get(target);
 		while (current) {
+			if (seen.has(current.id)) {
+				// A cyclic parentId chain must fail loudly, not spin forever:
+				// a corrupted file used to hang every getBranch/buildContext.
+				throw new SessionError(`parentId cycle at entry ${current.id}`);
+			}
+			seen.add(current.id);
 			reversed.push(current);
 			current = current.parentId === null ? undefined : this.byId.get(current.parentId);
 		}

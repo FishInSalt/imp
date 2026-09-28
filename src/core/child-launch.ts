@@ -239,12 +239,12 @@ function isBinding(value: unknown): boolean {
 
 function isAgent(value: unknown): boolean {
 	if (!isRecord(value)) return false;
-	return isName(value.name) && isName(value.source) && isHash(value.roleSha256);
+	return isName(value.name) && isAbsolutePath(value.source) && isHash(value.roleSha256);
 }
 
 function isWorktree(value: unknown): boolean {
 	if (!isRecord(value)) return false;
-	if (!isName(value.repoRoot) || !isName(value.path) || !isName(value.branch)) return false;
+	if (!isAbsolutePath(value.repoRoot) || !isAbsolutePath(value.path) || !isName(value.branch)) return false;
 	if (typeof value.baseline !== "string" || !HEX_COMMIT.test(value.baseline)) return false;
 	if (value.creationReflog === undefined) return true;
 	return (
@@ -262,7 +262,10 @@ function isSystemBlock(value: unknown): boolean {
 	if (!isRecord(value)) return false;
 	if (!isHash(value.sha256)) return false;
 	const files = value.contextFiles;
-	if (!Array.isArray(files) || !files.every((f) => isRecord(f) && isName(f.path) && isHash(f.sha256))) {
+	if (
+		!Array.isArray(files) ||
+		!files.every((f) => isRecord(f) && isAbsolutePath(f.path) && isHash(f.sha256))
+	) {
 		return false;
 	}
 	const prompt = value.promptFiles;
@@ -270,7 +273,10 @@ function isSystemBlock(value: unknown): boolean {
 		!Array.isArray(prompt) ||
 		!prompt.every(
 			(f) =>
-				isRecord(f) && (f.kind === "override" || f.kind === "append") && isName(f.path) && isHash(f.sha256),
+				isRecord(f) &&
+				(f.kind === "override" || f.kind === "append") &&
+				isAbsolutePath(f.path) &&
+				isHash(f.sha256),
 		)
 	) {
 		return false;
@@ -471,7 +477,12 @@ export function findChildByLaunch(parent: SessionStore, childId: string): ChildL
 	let messageCount: number;
 	try {
 		store = SessionStore.open(match.filePath);
-		store.getBranch(); // throws on a broken parent chain — refuse, never throw
+		// Corruption probes: a broken parent chain, a parentId cycle (guarded
+		// in getBranch) or a structurally unusable entry (e.g. a compaction
+		// without retainedTail, which only buildContext touches) must refuse
+		// here — never hang, never defer the failure to SA-07.
+		store.getBranch();
+		store.buildContext();
 		messageCount = store.getEntries().filter((entry) => entry.type === "message").length;
 	} catch (err) {
 		return {
@@ -494,6 +505,24 @@ export function findChildByLaunch(parent: SessionStore, childId: string): ChildL
 					message: `child "${childId}" has a launch record that fails schema validation — refused, not repaired`,
 				};
 	}
+	// Identity binding (design §2.1): the record must be about THIS file and
+	// THIS parent — otherwise another child's settled record could be borrowed
+	// for the verdict. header.parent === parent.header.id is enforced above,
+	// so these two checks close the three-way consistency.
+	if (parsed.launch.childId !== match.header.id) {
+		return {
+			ok: false,
+			code: "invalid-launch",
+			message: `launch.childId "${parsed.launch.childId}" does not match the file's header id "${match.header.id}" — refused`,
+		};
+	}
+	if (parsed.launch.parentSessionId !== match.header.parent) {
+		return {
+			ok: false,
+			code: "not-owned",
+			message: `launch.parentSessionId "${parsed.launch.parentSessionId}" does not match the file's header parent "${String(match.header.parent)}"`,
+		};
+	}
 	return {
 		ok: true,
 		file: { filePath: match.filePath, header: match.header, launch: parsed.launch, store, messageCount },
@@ -514,8 +543,13 @@ export function listChildLaunches(parent: SessionStore): ChildListEntry[] {
 		}
 		const entry: ChildListEntry = { filePath, status: "ok", id: candidate.header.id };
 		const parsed = parseChildLaunch(candidate.header.launch);
-		if (parsed.ok) entry.launch = parsed.launch;
-		else entry.status = parsed.reason === "missing" ? "missing-launch" : "invalid-launch";
+		if (parsed.ok) {
+			// Same identity binding rule as findChildByLaunch (design §2.1).
+			if (parsed.launch.childId !== candidate.header.id) entry.status = "invalid-launch";
+			else entry.launch = parsed.launch;
+		} else {
+			entry.status = parsed.reason === "missing" ? "missing-launch" : "invalid-launch";
+		}
 		out.push(entry);
 	}
 	return out;
@@ -540,6 +574,7 @@ export type ContinuationCode =
 	| "cwd-missing"
 	| "worktree-repo-missing"
 	| "worktree-missing"
+	| "worktree-replaced"
 	| "worktree-unregistered"
 	| "worktree-branch-swapped"
 	| "worktree-history-replaced";

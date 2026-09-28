@@ -172,6 +172,33 @@ describe("child launch record — parse", () => {
 				agent: { name: "x", source: "/x", roleSha256: "zz" },
 			},
 			{ ...(good() as object), model: { providerName: "a" } },
+			{ ...(good() as object), agent: { name: "x", source: "relative.md", roleSha256: "a".repeat(64) } },
+			{
+				...(good() as object),
+				worktree: { repoRoot: ".", baseline: "a".repeat(40), path: "/tmp/wt", branch: "b" },
+			},
+			{
+				...(good() as object),
+				worktree: { repoRoot: "/repo", baseline: "a".repeat(40), path: "../elsewhere", branch: "b" },
+			},
+			{
+				...(good() as object),
+				system: {
+					sha256: "a".repeat(64),
+					contextFiles: [{ path: "../AGENTS.md", sha256: "b".repeat(64) }],
+					promptFiles: [],
+					extensionContexts: [],
+				},
+			},
+			{
+				...(good() as object),
+				system: {
+					sha256: "a".repeat(64),
+					contextFiles: [],
+					promptFiles: [{ kind: "override", path: "relative", sha256: "b".repeat(64) }],
+					extensionContexts: [],
+				},
+			},
 		];
 		for (const value of cases) {
 			expect(parseChildLaunch(value).ok, JSON.stringify(value)?.slice(0, 80)).toBe(false);
@@ -425,6 +452,96 @@ describe("child launch — managed lookup", () => {
 		]);
 		expect(() => findChildByLaunch(parent, "broken")).not.toThrow();
 		const found = findChildByLaunch(parent, "broken");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("malformed");
+	});
+
+	it("refuses a launch block whose childId does not match the file's header id", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		// Header id "file-child"; the record claims another child's id — the
+		// old behavior would borrow that other child's settled record.
+		const launch = buildChildLaunch({
+			...buildInput(),
+			parentSessionId: parent.header.id,
+			childId: "borrowed",
+		});
+		writeChild(parent, "file-child", launch, "borrowed.jsonl");
+		const found = findChildByLaunch(parent, "file-child");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("invalid-launch");
+		const listed = listChildLaunches(parent).find(
+			(entry) => path.basename(entry.filePath) === "borrowed.jsonl",
+		);
+		expect(listed?.status).toBe("invalid-launch");
+	});
+
+	it("refuses a launch block whose parentSessionId does not match the file's header parent", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const launch = buildChildLaunch({ ...buildInput(), parentSessionId: "foreign-parent", childId: "mine" });
+		writeChild(parent, "mine", launch, "mine.jsonl");
+		const found = findChildByLaunch(parent, "mine");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("not-owned");
+	});
+
+	it("refuses a cyclic parentId chain without hanging, as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const filePath = childPathFor(parent, "cycle.jsonl");
+		const header = {
+			type: "session",
+			version: 1,
+			id: "cycle",
+			timestamp: new Date().toISOString(),
+			cwd: parent.header.cwd,
+			parent: parent.header.id,
+		};
+		const entry = {
+			type: "message",
+			id: "mmmmmmmm",
+			parentId: "mmmmmmmm",
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "x" },
+		};
+		writeRaw(filePath, [JSON.stringify(header), JSON.stringify(entry)]);
+		// A hang would time this test out; getBranch's cycle guard throws instead.
+		const found = findChildByLaunch(parent, "cycle");
+		expect(found.ok).toBe(false);
+		if (!found.ok) expect(found.code).toBe("malformed");
+	});
+
+	it("refuses a structurally unusable compaction entry (missing retainedTail) as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const filePath = childPathFor(parent, "bad-compaction.jsonl");
+		const header = {
+			type: "session",
+			version: 1,
+			id: "bad-compaction",
+			timestamp: new Date().toISOString(),
+			cwd: parent.header.cwd,
+			parent: parent.header.id,
+		};
+		const message = {
+			type: "message",
+			id: "aaaaaaaa",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: "x" },
+		};
+		const compaction = {
+			type: "compaction",
+			id: "bbbbbbbb",
+			parentId: "aaaaaaaa",
+			timestamp: new Date().toISOString(),
+			summary: "s",
+		};
+		writeRaw(filePath, [JSON.stringify(header), JSON.stringify(message), JSON.stringify(compaction)]);
+		// open() tolerates it; only buildContext() touches retainedTail — the
+		// lookup probes it so the failure refuses here, not inside SA-07.
+		const found = findChildByLaunch(parent, "bad-compaction");
 		expect(found.ok).toBe(false);
 		if (!found.ok) expect(found.code).toBe("malformed");
 	});

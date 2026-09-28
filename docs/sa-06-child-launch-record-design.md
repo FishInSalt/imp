@@ -223,9 +223,18 @@ Field requirements (all enforced by the parser):
    - >1 matches for the same id → `ambiguous` (hand-copied files are possible).
 3. On a match: containment (realpath of the file must sit inside the realpath
    of the children directory), then `header.parent === parent.header.id`
-   (`not-owned` otherwise).
-4. Full `SessionStore.open` (validates the entry stream; a broken parent
-   chain is `malformed`) + `parseChildLaunch(header.launch)` (`missing-launch`
+   (`not-owned` otherwise). The **launch identity binding (§2.1)** is then
+   enforced: `launch.childId === header.id` (`invalid-launch` otherwise) and
+   `launch.parentSessionId === header.parent` (`not-owned` otherwise) — a
+   record for a different child or parent can never donate its settled
+   status (acceptance round 1: this check was specified but missing).
+4. Full `SessionStore.open` (validates the entry stream), then **corruption
+   probes**: `getBranch()` (a broken parent chain OR a parentId cycle —
+   guarded in the store's walk since acceptance round 1, where a cycle used
+   to hang forever — is `malformed`) and `buildContext()` (a structurally
+   unusable entry, e.g. a compaction without `retainedTail`, refuses here
+   as `malformed` instead of crashing SA-07 later); then
+   `parseChildLaunch(header.launch)` (`missing-launch`
    when absent — L2; `invalid-launch` when off-schema).
 5. Result: `{ filePath, header, launch, store, messageCount }` — `store` is
    the opened `SessionStore`, handed to SA-07 for the effective-history build
@@ -281,7 +290,7 @@ with this rationale, documented and pinned by the fork-away red test (§8).
 | 10 | `tools` equal (canonical projection, `name` + `mcpServer`) | `tools-drift` |
 | 11 | `model` binding equal | `model-drift` |
 | 12 | Shared-cwd child: `cwd === launch.cwd` and it exists | `cwd-drift` / `cwd-missing` |
-| 13 | Worktree child: probe (§4.2) | `worktree-unregistered` / `worktree-branch-swapped` / `worktree-missing` / `worktree-repo-missing` / `worktree-history-replaced` |
+| 13 | Worktree child: probe (§4.2) | `worktree-unregistered` / `worktree-branch-swapped` / `worktree-missing` / `worktree-repo-missing` / `worktree-replaced` / `worktree-history-replaced` |
 
 Reason messages are actionable (they name the changed files/modules, both
 versions, both model references, the diffing tool names, the worktree path and
@@ -302,6 +311,14 @@ execution by itself.
 New `probeWorktreeIdentity()` in `src/core/worktree.ts` (uses the existing
 private `git` helper; no new runner). Order and codes:
 
+- **path-side identity first (acceptance round 1, P1)**: the repository-side
+  registration alone cannot prove the directory still IS the recorded
+  checkout. From the child path: `git rev-parse --git-common-dir` must
+  resolve to a directory whose parent is the recorded `repoRoot` (else
+  `worktree-replaced` — e.g. the `.git` link removed, or an unrelated
+  repository initialized in place), `git rev-parse --show-toplevel` must
+  equal the recorded path, and `git symbolic-ref -q HEAD` must be the
+  recorded branch (else `worktree-branch-swapped`);
 - `repoRoot` missing/unresolvable → `worktree-repo-missing`; the recorded
   `path` missing → `worktree-missing`;
 - `git worktree list --porcelain` (run at `repoRoot`): the recorded `path`
@@ -630,6 +647,35 @@ Fresh-context adversarial review of the implementation (f7b4e40):
 - (P3) a real-Runner test now drives `getLaunchEnvironment` retention
   (the §8 e2e previously injected the getter and could not see runner
   drift).
+
+### Acceptance round 1 — fixes (2026-09-29)
+
+Owner verification (11 suites, 301 passed / 1 skipped; typecheck/lint/build
+green) returned 4 blocking findings; all fixed with rejection tests:
+
+- **P1 identity binding**: lookup and enumeration now enforce
+  `launch.childId === header.id` (`invalid-launch`) and
+  `launch.parentSessionId === header.parent` (`not-owned`) — the §2.1 text
+  was right; the code had skipped it, so a transcript could borrow another
+  child's settled record. Rejection tests added for both halves; the
+  enumeration marks the childId-tampered file `invalid-launch`.
+- **P1 worktree replacement**: the probe now verifies the checkout FROM the
+  child path (common git directory → repo root, `--show-toplevel`, current
+  branch) before trusting the repository-side registration; `.git` removed
+  or an unrelated repo initialized in place now refuses as
+  `worktree-replaced`. Two tests added.
+- **P1 corrupt transcripts**: `SessionStore.getBranch` gained a parentId-cycle
+  guard (a cycle used to hang forever — the test doubles as a no-hang pin)
+  and the lookup now probes `buildContext()`, so a compaction without
+  `retainedTail` refuses as `malformed` instead of crashing downstream.
+  Two tests added.
+- **P2 path schema**: absolute-path validation now covers `agent.source`,
+  `worktree.repoRoot`/`worktree.path`, `contextFiles[].path` and
+  `promptFiles[].path` (the §2.1 contract); five rejection cases added.
+- The acceptance runner had skipped one test because its fixture ran
+  `git reset --hard`; the scenario now repoints the branch with
+  `update-ref` (equivalent, non-destructive), so every test can run
+  unattended.
 
 ## 12. Implementation record
 

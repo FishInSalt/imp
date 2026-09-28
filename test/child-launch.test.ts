@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -264,12 +272,108 @@ describe("child launch — managed lookup", () => {
 		}
 	});
 
+	it("refuses whitespace-only and torn first lines as malformed", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		writeRaw(childPathFor(parent, "blank.jsonl"), ["   "]);
+		writeFileSync(childPathFor(parent, "torn.jsonl"), '{"type":"session","version":1,"id":"to', "utf8");
+		const statuses = new Map(
+			listChildLaunches(parent).map((entry) => [path.basename(entry.filePath), entry.status]),
+		);
+		expect(statuses.get("blank.jsonl")).toBe("malformed");
+		expect(statuses.get("torn.jsonl")).toBe("malformed");
+	});
+
+	it("tolerates a torn appended line like the store does (final line dropped)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const launch = buildChildLaunch({
+			...buildInput(),
+			parentSessionId: parent.header.id,
+			childId: "torn-tail",
+		});
+		const filePath = writeChild(parent, "torn-tail", launch, "torn-tail.jsonl");
+		appendFileSync(filePath, '{"type":"message","id":"torn', "utf8");
+		const found = findChildByLaunch(parent, "torn-tail");
+		expect(found.ok).toBe(true);
+		if (found.ok) expect(found.file.messageCount).toBe(1); // the parsed view drops the tail
+	});
+
 	it("handles an absent children directory as not-found", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
 		const parent = makeParent(base);
 		const missing = findChildByLaunch(parent, "nope");
 		expect(missing.ok).toBe(false);
 		if (!missing.ok) expect(missing.code).toBe("not-found");
+	});
+
+	it("the launch block survives both first-write paths (seedModel and setModel)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const launchFor = (childId: string) =>
+			buildChildLaunch({ ...buildInput(), parentSessionId: parent.header.id, childId });
+		// Path 1: seedModel — the model rides the header on the same first write.
+		const seededPath = childPathFor(parent, "seeded.jsonl");
+		mkdirSync(path.dirname(seededPath), { recursive: true });
+		const seeded = SessionStore.create(
+			seededPath,
+			parent.header.cwd,
+			"seeded",
+			parent.header.id,
+			launchFor("seeded") as never,
+		);
+		seeded.seedModel({ provider: "anthropic", modelId: "wire-1" });
+		seeded.appendMessage({ role: "user", content: "first" });
+		const seededLines = readFileSync(seededPath, "utf8")
+			.split("\n")
+			.filter((line) => line.trim() !== "");
+		const seededHeader = JSON.parse(seededLines[0] as string) as { launch?: { childId?: string } };
+		expect(seededHeader.launch?.childId).toBe("seeded");
+		expect(findChildByLaunch(parent, "seeded").ok).toBe(true);
+		// Path 2: setModel (explicit) — header + a session_model line first.
+		const setPath = childPathFor(parent, "set.jsonl");
+		const setStore = SessionStore.create(
+			setPath,
+			parent.header.cwd,
+			"set",
+			parent.header.id,
+			launchFor("set") as never,
+		);
+		setStore.setModel({ provider: "anthropic", modelId: "wire-2" });
+		setStore.appendMessage({ role: "user", content: "first" });
+		const setLines = readFileSync(setPath, "utf8")
+			.split("\n")
+			.filter((line) => line.trim() !== "");
+		const setHeader = JSON.parse(setLines[0] as string) as { launch?: { childId?: string } };
+		expect(setHeader.launch?.childId).toBe("set");
+		expect((JSON.parse(setLines[1] as string) as { type?: string }).type).toBe("session_model");
+		expect(findChildByLaunch(parent, "set").ok).toBe(true);
+	});
+
+	it("a symlinked children directory beside the parent file still resolves its children", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const parent = makeParent(base);
+		const realDir = await mkdtemp(path.join(tmpdir(), "imp-cl-real-"));
+		symlinkSync(realDir, path.join(path.dirname(parent.filePath), "children"));
+		const launch = buildChildLaunch({
+			...buildInput(),
+			parentSessionId: parent.header.id,
+			childId: "linked",
+		});
+		const store = SessionStore.create(
+			path.join(realDir, "c.jsonl"),
+			parent.header.cwd,
+			"linked",
+			parent.header.id,
+			launch as never,
+		);
+		store.appendMessage({ role: "user", content: "hi" });
+		// Beside the parent file (the design's precondition), a symlinked
+		// children dir is the user's own arrangement — and it works.
+		expect(listChildLaunches(parent).map((entry) => entry.status)).toEqual(["ok"]);
+		const found = findChildByLaunch(parent, "linked");
+		expect(found.ok).toBe(true);
+		if (found.ok) expect(found.file.launch.childId).toBe("linked");
 	});
 
 	it("treats a legacy child (no launch block) as missing-launch — readable, not resumable", async () => {
@@ -379,6 +483,21 @@ describe("child launch — extension module identity", () => {
 			{ name: "marker", origin: "cli", path: realpathSync(modulePath), sha256: bytes(source) },
 		]);
 		expect(loaded.runtime.contextSectionIdentities()).toEqual([]);
+	});
+
+	it("a changed transitive import does not change module identity (documented limit)", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-cl-ext-"));
+		writeFileSync(path.join(dir, "dep.mjs"), "export const v = 1;\n", "utf8");
+		const modulePath = path.join(dir, "main.mjs");
+		writeFileSync(modulePath, 'import { v } from "./dep.mjs";\nexport default () => { void v; };\n', "utf8");
+		const first = await loadExtensions({ cwd: dir, cliPaths: [modulePath] });
+		const before = first.runtime.moduleIdentities();
+		writeFileSync(path.join(dir, "dep.mjs"), "export const v = 2;\n", "utf8");
+		const second = await loadExtensions({ cwd: dir, cliPaths: [modulePath] });
+		// Entry bytes unchanged => identical identity: the transitive change is
+		// resumed silently (design §7 limit, pinned so a future fix flips a
+		// known expectation instead of surprising anyone).
+		expect(second.runtime.moduleIdentities()).toEqual(before);
 	});
 
 	it("exposes registered context-section identities in load order", async () => {

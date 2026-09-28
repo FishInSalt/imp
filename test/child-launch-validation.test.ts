@@ -479,6 +479,16 @@ describe("child continuation — worktree probe", () => {
 		expect(codes(verdict.reasons)).toContain("worktree-branch-swapped");
 	});
 
+	it("duplicate tool names in a tampered record compare by set semantics (no drift)", async () => {
+		const { parent, file, current } = await makeWorld();
+		const duplicated: ChildLaunchFile = {
+			...file,
+			launch: { ...file.launch, tools: [...file.launch.tools, ...file.launch.tools] } as never,
+		};
+		const verdict = await validateChildContinuation(duplicated, parent, current);
+		expect(verdict.resumable).toBe(true);
+	});
+
 	it("a rewritten history (branch reset off the baseline) => worktree-history-replaced", async () => {
 		const world = await makeWorktreeWorld();
 		// An unrelated root commit in the main repo, then reset the child's

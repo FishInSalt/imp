@@ -604,6 +604,33 @@ gating on the agent `source` path — kept diagnostics-only (behavioral
 identity is the body hash + tool/model/worktree facts; a path move with
 identical behavior is not an incompatibility).
 
+### Implementation review — round 2 (implementation, 2026-09-28)
+
+Fresh-context adversarial review of the implementation (f7b4e40):
+**APPROVE WITH CORRECTIONS**; all findings folded:
+
+- (P2) the §2.2 first-write invariant is now pinned for BOTH paths —
+  `seedModel` (the model rides the header on the same first write) and
+  `setModel` (header + `session_model` line) — plus lookup visibility;
+- (P2) the `outside` containment branch is annotated as
+  defense-in-depth: unreachable for readdir-derived candidates (symlinked
+  child files are refused by `lstat` earlier), kept for future callers;
+- (P2) the reviewer's symlinked-children probe had placed the symlink
+  beside the sessions BASE rather than beside the parent file. With the
+  design's precondition (children co-located with the parent file) the
+  flow works end-to-end after mounting the symlink at the right level;
+  pinned by a regression test;
+- (P3) `canonicalTools` now deduplicates by name (set semantics, as §2.1
+  states), pinned by a duplicate-tools no-drift test;
+- (P3) added pins: whitespace-only first line, torn first line (both
+  `malformed`), torn appended line (the store's documented final-line
+  tolerance — the parsed view drops it), and the extension
+  transitive-import limit (entry bytes unchanged => identical identity =>
+  resumed silently; pinned so a future fix flips a known expectation);
+- (P3) a real-Runner test now drives `getLaunchEnvironment` retention
+  (the §8 e2e previously injected the getter and could not see runner
+  drift).
+
 ## 12. Implementation record
 
 Landed on `feat/sa-06-child-launch-record` after the red-evidence commit

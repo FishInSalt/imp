@@ -199,6 +199,9 @@ export interface Runner {
 	readonly session: SessionStore | null;
 	/** The assembled system prompt (test/inspection seam). */
 	readonly system: string;
+	/** SA-06: launch-environment facts for the task tool (retained assembly
+	 *  sources + extension identities), read at child spawn. */
+	getLaunchEnvironment(): LaunchEnvironmentFacts;
 	/** prompt-audit P7: re-run system assembly (MCP tool-set syncs). */
 	refreshSystemPrompt(): void;
 	/** The live tool table (M18: the MCP manager splices bridged tools in at

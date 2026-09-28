@@ -440,7 +440,9 @@ export function findChildByLaunch(parent: SessionStore, childId: string): ChildL
 		};
 	}
 	const match = matches[0] as { filePath: string; header: SessionHeader };
-	// Containment: the resolved file must sit inside the resolved directory.
+	// Containment is defense-in-depth: candidates come from readdir of this
+	// directory, so the `outside` branch only fires if a future caller hands
+	// in foreign paths; symlinked child FILES are refused earlier by lstat.
 	try {
 		const realDir = realpathSync(dir);
 		const realFile = realpathSync(match.filePath);
@@ -748,11 +750,17 @@ export async function validateChildContinuation(
 function canonicalTools(
 	tools: ReadonlyArray<{ name: string; mcpServer?: string }>,
 ): Array<{ name: string; mcpServer?: string }> {
-	return tools
-		.map((tool) =>
+	// Set semantics: duplicate names collapse to their first entry (a tampered
+	// record with duplicates must compare like a single occurrence).
+	const byName = new Map<string, { name: string; mcpServer?: string }>();
+	for (const tool of tools) {
+		if (byName.has(tool.name)) continue;
+		byName.set(
+			tool.name,
 			tool.mcpServer === undefined ? { name: tool.name } : { name: tool.name, mcpServer: tool.mcpServer },
-		)
-		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+		);
+	}
+	return [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function toolDiff(

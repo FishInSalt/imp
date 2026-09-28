@@ -23,6 +23,7 @@ import { collectTaskRecords } from "../src/core/task-record.js";
 import { createTaskTool, taskResult } from "../src/core/tools/task.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { createWriteTool } from "../src/core/tools/write.js";
+import { VERSION } from "../src/format.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
@@ -2512,6 +2513,34 @@ describe("child launch record (SA-06)", () => {
 		const verdict = await validateChildContinuation(found.file, reopened, currentFor({ cwd }));
 		expect(verdict.reasons).toEqual([]);
 		expect(verdict.resumable).toBe(true);
+	});
+
+	it("the real runner retains assembly sources for getLaunchEnvironment", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-run-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-run-cwd-"));
+		writeFileSync(path.join(cwd, "AGENTS.md"), "project rules\n", "utf8");
+		const { renderer } = makeRenderer();
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "anthropic/shared",
+			maxTokens: 1024,
+			maxTurns: 1,
+			noContextFiles: false,
+			noSession: true,
+			sessionBaseDir: base,
+			renderer,
+			provider: scriptedProvider([]),
+			agentsHomeDir: base,
+		});
+		const env = runner.getLaunchEnvironment();
+		expect(env.impVersion).toBe(VERSION);
+		expect(env.systemText).toBe(runner.system);
+		expect(env.systemText).toContain("project rules");
+		const projectFile = env.contextFiles.find((file) => file.path === path.join(cwd, "AGENTS.md"));
+		expect(projectFile?.content).toBe("project rules"); // the loader trims context files
+		expect(env.promptFiles).toEqual([]);
+		expect(env.extensions).toEqual([]);
 	});
 
 	it("a first-write failure leaves nothing resumable behind (no advertised child)", async () => {

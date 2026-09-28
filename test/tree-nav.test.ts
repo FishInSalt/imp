@@ -118,6 +118,13 @@ describe("runner.navigateTree (#tree)", () => {
 		expect(framed?.content).toContain("the abandoned branch");
 		// the abandoned set excludes the SHARED TRUNK (q1/a1) — review P1-1
 		expect(first && "content" in first ? String(first.content) : "").not.toContain("q1");
+		// SA-05 round 2: the branchSummary entry carries the fully qualified
+		// producer reference + the summarizer call's usage (pricing identity).
+		const summaryEntry = store.getEntries().find((e) => e.type === "branchSummary") as
+			| { model?: string; usage?: unknown }
+			| undefined;
+		expect(summaryEntry?.model).toBe("anthropic/claude-sonnet-4-5");
+		expect(summaryEntry?.usage).toBeDefined();
 	});
 
 	it("empty abandoned set → 'empty', no LLM call", async () => {

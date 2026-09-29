@@ -150,6 +150,19 @@ function scanToolPairs(messages: readonly AgentMessage[]): ToolPairScan {
 	const matchedIds = new Set<string>();
 	const pending = new Map<string, { id: string; name: string }>();
 	for (const message of messages) {
+		// SA-08 round 4 (F-5b): a new user/assistant message while calls still
+		// await results means the conversation moved on with the batch
+		// unfinished — refuse at the boundary, before any repair, mutation or
+		// provider call (design §12). Only the confirmed crash tail (pure
+		// toolResult messages after the last batch) stays repairable.
+		if (message.role !== "toolResult" && pending.size > 0) {
+			const ids = [...pending.keys()].join(", ");
+			return {
+				missing: [],
+				repairable: false,
+				problem: `a new ${message.role} message begins a turn while tool call(s) ${ids} are still awaiting results — the transcript cannot be paired unambiguously (start a new task instead)`,
+			};
+		}
 		if (message.role === "assistant") {
 			for (const block of message.blocks) {
 				if (block.type !== "toolCall") continue;

@@ -448,3 +448,124 @@ is disclosed.
   F2-d/e/f so a future red run fails on "a provider call happened" (the
   owner's exact complaint); file-cwd-plus-failed-probe double reporting is
   pre-existing structure and stays.
+
+## 8. Owner round 3, F-4: capture the provider with the model binding at spawn
+
+### 8.1 The finding
+
+src/core/tools/task.ts, fresh dispatch: the model binding is resolved and
+saved at 712-713, then the path awaits (resolveRepoState / 
+createChildWorktree, 738-744), and only at 848 does the attempt read
+`provider: options.getProvider()`. `/model` may run in the parent while a
+spawn is in flight; the runner updates `providerName` and `provider` in one
+synchronous block (runner.ts:1157-1158), so two ADJACENT reads form a
+coherent pair — but reads separated by awaits do not. Owner repro: actual
+call provider=openai model=claude-fixture while the record says
+providerName=anthropic reference=anthropic/claude-fixture, status
+completed. The resume path reads the live provider once (task.ts:477) and
+passes that captured instance to the attempt — it has no such window.
+
+### 8.2 Fix (capture the pair in one synchronous step)
+
+At the resolution point, read the parent reference and the provider
+back-to-back and derive the binding from the same instant:
+
+```ts
+const parentReference = options.getModelReference?.() ?? options.getModel();
+const provider = options.getProvider();
+const resolution = resolveChildModel({ parentReference, override: agent?.model, agentName: agent?.name });
+```
+
+The attempt uses the captured `provider` (replacing the late
+`options.getProvider()` at 848). No other fresh-path consumer reads the
+provider INSTANCE: the pool rebuild and capability decisions consume
+`binding` (captured with it; `getToolsForChild` receives `binding`), and
+the launch record persists `binding` only (no credentials, no instances).
+Semantics: the child inherits the model+provider pair that was current at
+the resolution instant — the SA-02 rule "whatever is current at spawn",
+with "spawn" now pinned to the synchronous pair read.
+
+Design decision (no new refusal): a caller wiring contradictory getters
+would still call one provider instance while recording another family.
+No production wiring does this (runner.ts:1157-1158 updates both fields in
+one synchronous block, so adjacent reads cannot observe a middle state),
+and the recorded identity is already gated at continuation by the resume
+path's `providerMismatch`. Adding a fresh-spawn name-agreement refusal
+would be new behavior beyond this finding; it is recorded as a known limit
+(§5-class) rather than implemented.
+
+### 8.3 Test (red-first)
+
+F4-a: a worktree child whose provider is swapped exactly inside the async
+window — the test harness's `getToolsForChild` callback (invoked after
+worktree creation, before the attempt) flips the getter's current provider
+from A to B. Assertions: A received the attempt's request (its sink has
+one entry containing the prompt), B received ZERO requests, and the record
+still carries the A-side binding (anthropic/parent-wire). Red on the
+current code: the late read sends the attempt to B (B's sink gets the
+call). Harness plumbing: HarnessArgs gains an optional
+`getProvider?: () => LLMProvider` (tests only).
+
+## 9. Owner round 3, F-5: order-aware tool pairing (SA-07 §6.1 revision)
+
+### 9.1 The finding
+
+scanToolPairs (child-resume.ts:144-182) works on SETS: declared ids
+(first occurrence wins — duplicates silently dropped), resolved ids (any
+result id, including never-declared ones), missing = declared - resolved;
+the crash-tail rule then inspects that set. Owner repros, all currently
+accepted (one provider call each, no repair):
+- a tool result with no corresponding call;
+- a tool result recorded BEFORE its call;
+- a trailing unfinished call that reuses an earlier completed call's id
+  (masked by the earlier result; no "unknown outcome" repair added).
+
+This is a DESIGN revision: sa-07 design §6.1 specified the set-based scan.
+The revision replaces §6.1's collection phase; the crash-tail rule for
+repair keeps its shape, and "refuse what cannot be paired, repair only the
+confirmed crash tail" becomes enforced by construction.
+
+### 9.2 Revised scan (single ordered pass)
+
+Walking the effective history's messages in order, maintain `pending`
+(declared, unmatched) and the seen-call id set:
+
+1. assistant `toolCall` id already seen → REFUSE: "tool call <id> is
+   declared more than once — the transcript cannot be paired unambiguously"
+   [F5-c: the reused id is ambiguous, never repaired].
+2. toolResult id not declared BEFORE this point → REFUSE: "a tool result
+   for <id> has no preceding tool call" [F5-a: no call at all; F5-b:
+   result before call]. The compaction snap (findCutIndex retains a
+   user/assistant head; §6.1) guarantees the effective history cannot
+   legitimately start with a result, so this shape is genuine damage.
+3. toolResult id already matched by an earlier result → REFUSE: "the tool
+   result for <id> is recorded more than once".
+4. otherwise: match (remove from `pending`).
+
+After the pass: `missing` = `pending`. Empty → proceed. Non-empty → the
+UNCHANGED crash-tail rule: every missing id belongs to the LAST assistant
+message and every message after it is a toolResult → repairable (repair
+exactly those ids); anything else → refuse `history-unpairable`.
+
+Order tolerance kept deliberate: results within one batch may arrive in a
+different order than the calls (each still after its call) — parallel
+tool completion is legitimate; the scan pairs by id with the order
+constraints above.
+
+### 9.3 Tests (red-first; refusal asserts zero provider calls)
+
+- F5-a: append an orphan toolResult (id with no call anywhere) → refused,
+  sink unchanged.
+- F5-b: append toolResult(id X) then assistant(toolCall X) → refused,
+  sink unchanged.
+- F5-c: first pass completes a real call/result pair (echo tool); append a
+  trailing assistant(toolCall, same id) → refused (duplicate), no repair
+  appended. On the current code all three are accepted (F5-c also without
+  a repair), which is the red evidence.
+- Positive controls stay green: T14 (single trailing orphan → repaired),
+  T16 (orphan beyond the crash tail → refused), T22 (valid pairing).
+
+### 9.4 Docs
+
+sa-07 design §6.1 gets a revision pointer to this section (set semantics
+superseded; repair rule unchanged); §16 gets the round-3 log entry.

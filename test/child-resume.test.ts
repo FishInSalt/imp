@@ -1358,9 +1358,9 @@ describe("SA-07 resume", () => {
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
 		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
 		expect(second.isError ?? false).toBe(true);
 		expect(second.output).toContain("cwd-not-directory");
-		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
 	}, 30_000);
 
 	it("SA-08/F2-e: a symlink inside the worktree whose final object is a file is refused", async () => {
@@ -1404,9 +1404,9 @@ describe("SA-07 resume", () => {
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
 		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
 		expect(second.isError ?? false).toBe(true);
 		expect(second.output).toContain("cwd-not-directory");
-		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
 	}, 30_000);
 
 	it("SA-08/F2-f: a non-worktree cwd that became a file between attempts is refused", async () => {
@@ -1435,9 +1435,9 @@ describe("SA-07 resume", () => {
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
 		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
 		expect(second.isError ?? false).toBe(true);
 		expect(second.output).toContain("cwd-not-directory");
-		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
 	});
 
 	it("SA-08/F2-g: a symlink inside the worktree to a directory inside still resumes (no over-refusal)", async () => {

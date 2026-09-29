@@ -435,3 +435,16 @@ is disclosed.
   with `canonicalJson` (from eb7fa2d), not `JSON.stringify` — the review
   read the ea3e469 generation; the guard is still valuable against a
   revert, as labeled.
+- 2026-09-29 (owner round 2 delta): post-implementation adversarial review
+  of 45766a6 — **APPROVE**, no corrections required. Independently
+  verified: branch orders and codes match §2.2 item 5 exactly; ENOENT and
+  other stat-error mappings; no over-refusal (F2-c/F2-g green, 44/44);
+  F2-d/e/f genuinely red at 61bed02 on the isError assertion and green at
+  45766a6 with unchanged expectations; sink counts measured (F2-d/e
+  requestsBefore=2, F2-f=1, zero new calls on refusal); the guard was
+  ported into an ea3e469 worktree and FAILS there (stringify refuses) and
+  passes at HEAD — a real guard. Observations folded/recorded: the
+  zero-provider-call assertion now precedes the isError assertion in
+  F2-d/e/f so a future red run fails on "a provider call happened" (the
+  owner's exact complaint); file-cwd-plus-failed-probe double reporting is
+  pre-existing structure and stays.

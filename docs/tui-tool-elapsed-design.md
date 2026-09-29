@@ -7,7 +7,7 @@
 - Status: IMPLEMENTED + REVIEWED — design review CONFIRMED (round 4,
   2026-09-29); implementation review APPROVE WITH CORRECTIONS (P3 folds
   applied). Manual terminal acceptance pending. Implementation commits:
-  dc4f068 (code + tests), 0e41b95 (CHANGELOG), fold commit follows.
+  dc4f068 (code + tests), 0e41b95 (CHANGELOG), 252a345 (review folds).
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 

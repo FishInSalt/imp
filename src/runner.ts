@@ -11,7 +11,7 @@ import {
 	summarizeBranchSegment,
 } from "./core/compaction.js";
 import { loadContextFiles } from "./core/context-files.js";
-import { createLoopHealth, healthEnabled } from "./core/health.js";
+import { createLoopHealth, healthEnabled, type LoopHealthMonitor } from "./core/health.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
@@ -1274,7 +1274,26 @@ class RunnerImpl implements Runner {
 		// pair is run_end, which a provider crash skips — consumers must
 		// tolerate an unpaired run_start.
 		this.options.extensions?.emitRunStart({ type: "run_start" });
-		return this.runTurnOrRecoverFromOverflow(options, model, provider, settings, session, modelReference);
+		// #loop-health (design §4.1; post-merge review finding 2): ONE monitor
+		// per top-level run turn — hoisted above runTurnOrRecoverFromOverflow so
+		// the overflow retry does NOT reset turn/signature/streak state or
+		// cancel open-tool timers (the child engine already shares one monitor
+		// across its retry). Observes the same stream the REPL sees; relays
+		// first fires as `health` events; disposed after the whole flow.
+		const health = healthEnabled()
+			? createLoopHealth({ emit: (signal) => options.onEvent?.({ type: "health", signal }) })
+			: undefined;
+		// runTurn is sync-returning: cleanup rides the promise's settle (the
+		// same timing class as runTurnInner's own finally).
+		return this.runTurnOrRecoverFromOverflow(
+			options,
+			model,
+			provider,
+			settings,
+			session,
+			modelReference,
+			health,
+		).finally(() => health?.dispose());
 	}
 
 	/** #overflow-grace: a live "context window exceeded" provider error gets
@@ -1291,9 +1310,10 @@ class RunnerImpl implements Runner {
 		settings: CompactionSettings,
 		session: SessionStore | null,
 		modelReference: string,
+		health: LoopHealthMonitor | undefined,
 	): Promise<RunAgentLoopResult> {
 		try {
-			return await this.runTurnInner(model, provider, settings, session, modelReference, options);
+			return await this.runTurnInner(model, provider, settings, session, modelReference, options, health);
 		} catch (err) {
 			if (!isContextOverflowError(err)) throw err;
 			const cause = err instanceof Error ? err.message : String(err);
@@ -1316,10 +1336,18 @@ class RunnerImpl implements Runner {
 			// A SECOND overflow here is terminal — surface the guidance, not the
 			// raw provider 400 (one attempt, like pi's _overflowRecoveryAttempted).
 			try {
-				return await this.runTurnInner(model, provider, settings, session, modelReference, {
-					...options,
-					userMessage: undefined,
-				});
+				return await this.runTurnInner(
+					model,
+					provider,
+					settings,
+					session,
+					modelReference,
+					{
+						...options,
+						userMessage: undefined,
+					},
+					health,
+				);
 			} catch (retryErr) {
 				if (!isContextOverflowError(retryErr)) throw retryErr;
 				const retryCause = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -1350,17 +1378,14 @@ class RunnerImpl implements Runner {
 		/** SA-05 round 2: the run snapshot's fully qualified pricing identity. */
 		modelReference: string,
 		options: RunTurnOptions,
+		/** #loop-health: the run's monitor (hoisted in runTurn so it spans the
+		 *  overflow retry); undefined when IMP_HEALTH=0. */
+		health: LoopHealthMonitor | undefined,
 	): Promise<RunAgentLoopResult> {
 		// The task tool is built once at construction; its child-event relay
 		// reaches the CURRENT turn's tap through this holder (task children run
 		// strictly inside the turn, so one slot is enough; cleared in finally).
 		this.turnEventTap = options.onEvent ?? null;
-		// #loop-health (design §4.1): one observation-only monitor per main run;
-		// it observes the same stream the REPL sees and relays first fires as
-		// `health` events. Disposed in the finally below.
-		const health = healthEnabled()
-			? createLoopHealth({ emit: (signal) => options.onEvent?.({ type: "health", signal }) })
-			: undefined;
 		try {
 			const result = await runAgentLoop({
 				provider,
@@ -1451,7 +1476,6 @@ class RunnerImpl implements Runner {
 			throw err;
 		} finally {
 			this.turnEventTap = null; // the holder is turn-scoped
-			health?.dispose();
 		}
 	}
 

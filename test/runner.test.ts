@@ -581,6 +581,70 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 		expect(events.at(-1)).toBe("run_end");
 	});
 
+	it("#loop-health: the main monitor spans the overflow retry (no reset) — post-merge review finding 2", async () => {
+		const { baseDir, cwd } = await setup();
+		let call = 0;
+		const toolTurn = (i: number) =>
+			assistant(
+				[{ type: "toolCall", id: `c${i}`, name: "noop", arguments: { message: "again" } }],
+				"tool_use",
+			);
+		const provider: LLMProvider = {
+			name: "overflow-mid-repeat",
+			async *stream() {
+				call++;
+				if (call <= 4) {
+					yield { type: "message_end", message: toolTurn(call) };
+					return;
+				}
+				if (call === 5) throw new Error('OpenAI API error 400: {"error":{"code":"context_length_exceeded"}}');
+				if (call === 6) {
+					// the compaction summary call — internal to the recovery
+					yield { type: "text_delta", text: "SUMMARY-OF-OLD" };
+					yield { type: "message_end", message: assistant([{ type: "text", text: "SUMMARY-OF-OLD" }]) };
+					return;
+				}
+				if (call === 7) {
+					yield { type: "message_end", message: toolTurn(5) };
+					return;
+				}
+				yield { type: "text_delta", text: "done" };
+				yield { type: "message_end", message: assistant([{ type: "text", text: "done" }]) };
+			},
+		};
+		const store = createSession(cwd, baseDir);
+		const big = "context ".repeat(6000); // compaction needs material beyond keepRecent
+		store.appendMessage(userMsg(`old work A ${big}`));
+		store.appendMessage(assistantText(`answer A ${big}`));
+		store.appendMessage(userMsg(`old work B ${big}`));
+		const runner = await createRunner({
+			cwd,
+			argv: [],
+			model: "test-model",
+			maxTokens: 1024,
+			maxTurns: 10,
+			noContextFiles: true,
+			noSession: false,
+			sessionBaseDir: baseDir,
+			resume: store.isPersisted ? store.header.id : undefined,
+			renderer: makeRenderer().renderer,
+			provider,
+		});
+		const health: Array<{ code: string; count: number; turn: number }> = [];
+		const result = await runner.runTurn({
+			userMessage: "please continue",
+			onEvent: (event) => {
+				if (event.type === "health") health.push(event.signal);
+			},
+		});
+		expect(result.stopReason).toBe("completed");
+		// 4 identical turns before the overflow + the 5th after the retry — one
+		// monitor spans the retry, so the repeat fires (a fresh monitor on the
+		// retry would have seen a single turn and stayed silent).
+		expect(health).toHaveLength(1);
+		expect(health[0]).toMatchObject({ code: "repeat-loop", count: 5, turn: 5 });
+	});
+
 	it("does not fire for subagent runs — top-level only, symmetric with run_end", async () => {
 		const { baseDir, cwd } = await setup();
 		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });

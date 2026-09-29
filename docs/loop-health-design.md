@@ -4,14 +4,15 @@
 - Branch: `docs/loop-health-design` (design only); implementation branch TBD
   (`feat/loop-health` proposed)
 - Baseline: `faf4b55` (main)
-- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED. Design review closed
-  2026-09-29 (round 1 NEEDS-FIXES / APPROVE WITH CORRECTIONS, round 2
-  CONFIRMED WITH NOTES, round 3 CONFIRMED — both tracks); owner decisions
-  A/B signed (A = no numeric valve; B = no injection). Implementation on
-  `feat/loop-health`; implementation review round 1 (two tracks, fresh
-  context) closed APPROVE WITH CORRECTIONS with all corrections folded (§9).
-  Final gate: 126 files / 2408 tests green; typecheck (src + test) and biome
-  clean; build emits.
+- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED + POST-MERGE REVIEW FOLDED.
+  Design review closed 2026-09-29 (round 1 NEEDS-FIXES / APPROVE WITH
+  CORRECTIONS, round 2 CONFIRMED WITH NOTES, round 3 CONFIRMED — both
+  tracks); owner decisions A/B signed (A = no numeric valve; B = no
+  injection). Implementation on `feat/loop-health`; implementation review
+  round 1 (two tracks, fresh context) closed APPROVE WITH CORRECTIONS with
+  all corrections folded (§9). Post-merge owner review folded on
+  `fix/loop-health-review2` (lint fix, main-loop retry span, peak-evidence
+  coherence — §9); final gate re-verified with UNMASKED lint exit code.
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -216,10 +217,15 @@ export function createLoopHealth(options: {
 - The monitor observes the existing `AgentEvent` stream at the two call
   sites; `runAgentLoop` gains **no** new options and is behavior-unchanged
   when no monitor exists:
-  - `runner.runTurnInner` (`src/runner.ts:1344-1446`; `onEvent` wrapper at
-    `:1415-1428`): create one monitor per run; call `observe(event)` first in
-    the wrapper; relay via `emit → options.onEvent({ type: "health", signal })`;
-    `dispose()` in the existing `finally` (`:1444-1446`).
+  - `runner.runTurn` / `runTurnOrRecoverFromOverflow` / `runTurnInner`
+    (`src/runner.ts`; `onEvent` wrapper in `runTurnInner`): ONE monitor per
+    top-level run turn, created in `runTurn` and threaded through
+    `runTurnOrRecoverFromOverflow` into `runTurnInner`, so the overflow retry
+    shares it (post-merge review finding 2 — the original per-`runTurnInner`
+    creation reset every signal on retry). The wrapper calls `observe(event)`
+    first; relay via `emit → options.onEvent({ type: "health", signal })`;
+    `dispose()` rides the `runTurn` promise's settle (`.finally`, the same
+    timing class as the old in-method `finally`).
   - `subagent.runSubagent` (`src/core/subagent.ts:165-429`; the `launchLoop`
     seam is `:327-346`): create one monitor per attempt (a resume is a fresh
     `runSubagent` call → fresh monitor; the overflow retry shares the same
@@ -273,7 +279,7 @@ export function createLoopHealth(options: {
 |---|---|---|---|
 | `repeat-loop` | R consecutive assistant turns whose tool-call signature is byte-identical: ordered list of `(toolName, sha256(canonicalJson(arguments)))` taken from the assembled assistant message at `message_end` | R=5 | once; `count` = peak run length; resets on any differing turn |
 | `mutation-failure-streak` | K failed (`isError`) `edit`/`write` results without an intervening successful `edit`/`write`, and with each consecutive pair ≤5 minutes apart (window resets the streak; non-mutating results do not) | K=3 | once; `count` = peak streak; `detail` carries tool + path |
-| `tool-open` | a single tool call still open (no `tool_end`) T ms after `tool_start` | T=600_000 | once per call; `detail` carries tool + preview + elapsed |
+| `tool-open` | a single tool call still open (no `tool_end`) T ms after `tool_start` | T=600_000 | once per attempt (the first long-open call; deduped by signal code — §4.3); `detail` carries tool + preview + elapsed |
 | `compaction-failures` | child compaction disabled after 3 consecutive summarizer failures (existing path, `src/core/subagent.ts:295-299`) | 3 | once; fact-only via `note()` |
 
 Notes:
@@ -322,7 +328,10 @@ Notes:
   `message_end` events observed since monitor creation, cumulative across the
   overflow retry; before the first `message_end` (e.g. an early `note()`), it
   is 0 — "turns observed so far". Test 8 asserts the value across the retry
-  boundary.
+  boundary. Post-merge review finding 3: when the peak `count` grows, the
+  stored entry's `turn`/`detail` are updated together with it — stored facts
+  describe the peak run coherently and never mix evidence from two batches;
+  the live `emit` remains a first-fire snapshot.
 - `compaction-failures` is event-shaped on purpose (round-1 P2-3): it reports
   3 consecutive summarizer failures that disabled compaction for the run; a
   run with `IMP_AUTOCOMPACT=0` never fires it (no compaction was attempted —
@@ -442,9 +451,12 @@ is ever written; no main-agent context is ever written.
 - Timeout classification (`timeout` vs `aborted`,
   `src/core/subagent.ts:375-376,405-406,413-414`): untouched — the monitor
   never touches signals/abort.
-- Overflow retry: monitor spans both launches; repeat/streak counts continue
-  across the boundary; `outcome.health` merges (one monitor); `turn` is
-  cumulative (test 8).
+- Overflow retry: one monitor spans both launches in BOTH engines — the
+  child shares it across its two `launchLoop` calls, and the main loop's
+  monitor is hoisted into `runTurn` above `runTurnOrRecoverFromOverflow`
+  (post-merge review finding 2; dedicated runner test). Repeat/streak counts
+  continue across the boundary; `outcome.health` merges (one monitor);
+  `turn` is cumulative (test 8).
 - Resume (SA-07): each attempt has its own monitor and its own record; a
   resumed attempt's result lines reflect only that attempt.
 - Compaction: `compactChildHistory` failure bookkeeping is unchanged; only the
@@ -528,7 +540,9 @@ is ever written; no main-agent context is ever written.
 15. Print mode — silence: `Renderer.event({type:"health", …})` writes zero
     bytes (unit); a scripted print run with a looping child produces identical
     stdout to the baseline apart from the model's own final text; stderr
-    unchanged.
+    unchanged. (The e2e half is substituted by the zero-byte unit test plus
+    the structural argument that `renderer.event` is the only print sink for
+    events — recorded in §9.)
 16. Grep tests: no `src/extensions/` reference to the health variant; no
     remaining `CHILD_MAX_TURNS` reference outside docs/history.
 17. Update the old pins. All six cap-relying live-child sites were audited
@@ -666,5 +680,34 @@ is ever written; no main-agent context is ever written.
     the still-running OLD host build's 60-turn wall mid-review — a live
     demonstration of the wall this batch removes. The settled child was
     resumed (`task({resume})`) and completed the review.
-  - After the fold: 126 files / 2408 tests green; both typechecks, biome, and
-    build clean. **Implementation review closed.**
+  - After the fold: 126 files / 2408 tests green; both typechecks and build
+    clean. **The "biome clean" claim in this line was WRONG**: the lint check
+    had been run through a pipe, whose last command masked biome's non-zero
+    exit; two formatter violations (`test/subagent.test.ts`) entered with
+    `f27efef`. Corrected post-merge on `fix/loop-health-review2` (formatting
+    only); lint re-verified UNMASKED (`echo $?` → 0). Lesson recorded: never
+    pipeline a gate whose exit code is load-bearing. **Implementation review
+    closed.**
+- Post-merge independent review (owner side, 2026-09-29, on `38b553d`; two
+  fresh adversarial tracks):
+  - Finding 1 (lint / gate honesty): as above — fixed, record corrected.
+  - Finding 2 (P2, fixed): the main loop's overflow retry reset the monitor
+    (created per `runTurnInner`); hoisted into `runTurn`, threaded through
+    the recovery flow; a new runner test (4 identical turns + overflow +
+    a 5th identical turn → repeat-loop fires) was verified RED against the
+    old wiring before the fix and green after — §6 item 8's cross-boundary
+    claim now holds for both engines.
+  - Finding 3 (P3, fixed): peak `count` growth could mix batches (`count`
+    from a later run, `detail`/`turn` from an earlier one); count/turn/detail
+    now move together (see §4.2); a mixed-batch unit test pins it.
+  - Polish folded: §4.2 tool-open wording; the render print-silence test
+    name now matches its assertions (zero bytes; spinner state was never
+    asserted).
+  - Accepted and recorded (no change): `parseTaskRecord` tolerates a foreign
+    `health: []` (harmless — producers never write empty arrays); the REPL
+    dedup-key/label divergence when `info` exists without `sourceId` is
+    unreachable (the task tool always sets it); the scripted print-run
+    stdout-equivalence e2e remains substituted by the zero-byte unit test
+    plus the structural fact that `renderer.event` is the only print sink;
+    a `canonicalJson`-throwing argument set degrades to "no signal" per the
+    never-crash contract.

@@ -60,9 +60,20 @@ describe("repeat-loop", () => {
 		const signals = monitor.signals();
 		expect(signals).toHaveLength(1);
 		expect(signals[0]).toMatchObject({ code: "repeat-loop", count: 5, turn: 5 });
-		// Peak count tracks growth after the first fire; no re-emit.
+		// Peak count tracks growth after the first fire; count/turn/detail move
+		// together (no mixed-batch evidence), and there is no re-emit.
 		monitor.observe(turn(5, [{ name: "bash", args: { command: "npm test" } }]));
-		expect(monitor.signals()[0]?.count).toBe(6);
+		expect(monitor.signals()[0]).toMatchObject({ count: 6, turn: 6 });
+	});
+
+	it("peak growth updates count/turn/detail together — never mixed batches", () => {
+		const monitor = createLoopHealth({ thresholds: { repeatTurns: 2 } });
+		monitor.observe(turn(0, [{ name: "bash", args: { command: "AAA" } }]));
+		monitor.observe(turn(1, [{ name: "bash", args: { command: "AAA" } }]));
+		expect(monitor.signals()[0]).toMatchObject({ count: 2, turn: 2, detail: 'bash "AAA"' });
+		for (let i = 2; i < 6; i++) monitor.observe(turn(i, [{ name: "bash", args: { command: "BBB" } }]));
+		// The 4-run is BBB's: count, turn and detail all describe THAT batch.
+		expect(monitor.signals()[0]).toMatchObject({ count: 4, turn: 6, detail: 'bash "BBB"' });
 	});
 
 	it("a differing turn resets the run; key order does not count as differing", () => {

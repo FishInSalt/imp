@@ -762,3 +762,57 @@ what refuses. On the current code all three are accepted (red evidence).
   same signature as the owner's round-3 observation. Not modified here
   (outside the delivery's scope); a candidate separate fix is a larger
   budget or an injectable poll timer.
+
+## 13. Owner round 5, F-6: batched image hoisting in the chat-completions wire
+
+### 13.1 The finding
+
+The internal pairing scan accepts a batch split across consecutive
+toolResult messages (a run of toolResult messages may complete one batch;
+the crash-tail repair appends missing results as another toolResult
+message — section 12). But the chat-completions conversion
+(src/provider/openai-completions.ts, `toWireMessages`, the `toolResult`
+case around 138-180) hoists each toolResult message's images into a user
+message IMMEDIATELY after that message. For the internal history
+[assistant(c1, c2), toolResult(c1 with image), toolResult(c2)] the wire
+becomes assistant -> tool c1 -> user(image) -> tool c2: a user message
+while the batch's tool messages are still incomplete — exactly the
+ordering the round-4 boundary rule refuses INTERNALLY, reintroduced by
+the conversion after the scan. The same holds for the repaired tail
+[assistant(c1, c2), toolResult(c1 with image), toolResult(c2 synthetic)].
+Owner repro used the real OpenAI adapter with a locally replaced fetch
+and captured the emitted body order (no external service; the claim is
+the wrong wire order, not an observed server rejection). Affected
+adapters: every consumer of this conversion (openai, zai, deepseek,
+moonshotai, thinking wrappers).
+
+### 13.2 Fix: defer the hoisted message to the end of the toolResult run
+
+`toWireMessages` buffers the run's images outside the per-message case;
+when the next message is NOT a toolResult (or the list ends), it flushes
+ONE user message ("Attached image(s) from tool result:" + all buffered
+images) before that next message. Every tool message of the run is then
+emitted first and the image user message follows. This is a deliberate
+deviation from the previous pi-parity placement (which assumed a single
+toolResult message per batch): a wrong wire order is not worth parity.
+Conversion-only — no transcript rewrite, no tool replay (owner
+requirement).
+
+### 13.3 Tests (red-first; test/images.test.ts capture harness)
+
+- F6-a: [user, assistant(t1, t2), toolResult(t1 with image),
+  toolResult(t2)] -> assert TWO tool messages (t1, t2 in order), BOTH
+  before the image user message, with the image user message directly
+  after the last tool message (on the current code the user message sits
+  between them: red).
+- F6-b: the repaired shape through the REAL repair: build a store with
+  [user, assistant(t1, t2), toolResult(t1 with image)], run
+  buildContinuationHistory (the repair appends the t2 unknown-outcome
+  result), drive the provider with `history.messages`, assert the same
+  order (pins repair + conversion integration).
+- Positive controls unchanged: the single-result imageTurn hoisting
+  tests, the non-vision placeholder tests, the zai wrapper test.
+
+### 13.4 Round-5 review log
+
+(pending pre-implementation review)

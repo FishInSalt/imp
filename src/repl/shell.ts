@@ -460,17 +460,19 @@ export class TuiShell implements LineInput {
 				this.options.onEof();
 				return { consume: true };
 			}
-			// Fold affordance (TUI-only; see the parity ledger): expand/collapse
-			// ALL folds — v1 toggled only the newest, which left mid-turn
-			// results permanently unexpandable (declared debt, cleared):
-			// any-collapsed → expand all; all-expanded → collapse all. With
-			// none present the key passes through to the editor — which has
-			// no Ctrl+O binding, so effectively a no-op.
+			// Fold affordance (TUI-only; see the parity ledger).
 			if (matchesKey(data, "alt+o") && this.selector === null && this.pendingAsks.length === 0) {
+				// Structured calls swap to their readable/raw arguments; nothing
+				// structured on screen leaves the key unbound (editor fallback).
 				if (!this.options.transcript.toggleRawToolArguments()) return undefined;
 				tui.requestRender();
 				return { consume: true };
 			}
+			// Ctrl+O: expand/collapse ALL folds — v1 toggled only the newest, which
+			// left mid-turn results permanently unexpandable (declared debt,
+			// cleared): any-collapsed → expand all; all-expanded → collapse all.
+			// With none present the key passes through to the editor — which has
+			// no Ctrl+O binding, so effectively a no-op.
 			if (matchesKey(data, "ctrl+o")) {
 				const folds = [...this.folds, ...this.options.transcript.toolFolds];
 				if (folds.length === 0) return undefined;

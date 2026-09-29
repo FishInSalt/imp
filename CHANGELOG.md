@@ -40,6 +40,21 @@ All notable changes to imp are documented here. The format follows
   from its detail. Malformed values render nothing; hosts without a picker
   ignore the styling and stay byte-stable.
 
+- **Confirm prompt surface, Phase 3 (#confirm-prompt).** The approval moment now
+  says who is asking and reads as one piece. The host names the caller —
+  `▪ confirm: guardian — allow this bash command?` in the transcript, a faint
+  `· guardian` after the picker title, and `blocked by extension guardian:` in
+  the block result — so extensions stop naming themselves (guardian drops its
+  `[guardian] ` prefixes) without any new API surface: the label is host-derived
+  and cannot be spoofed. While a picker is open the activity region paints no
+  tool rows: `tool_start` precedes the gate, so those rows used to claim
+  `running Ns` although nothing was executing, and repeated the gated command a
+  third time. Every picker now opens one blank row below the transcript, and the
+  line you decide on (the extension's reason) renders at normal weight instead of
+  faint — the `(↑/↓ move …)` affordance and the `▪` record lines stay faint.
+  Design + three adversarial review rounds + a mutation-verified implementation
+  check: `docs/confirm-prompt-design.md` §15.
+
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
   TUI transcript carry a marker — green `✓` for successes, red `✗` for
   failures — with a dim wall-time suffix when the call took ≥1s

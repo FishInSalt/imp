@@ -797,6 +797,25 @@ describe("TuiShell selector", () => {
 		withTag.shell.close();
 	});
 
+	it("#confirm-prompt (Phase 3 D9): a hostile attribution is sanitized — no raw escape reaches the terminal", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.select({
+			title: "allow this bash command?",
+			// an SGR escape plus a bold-marker: sanitizeDisplay must strip the
+			// CSI sequence, leaving only the host's own dim codes around the tag.
+			attribution: "bad\x1b[31mname\x1b[1m",
+			items: [{ label: "Yes" }],
+		});
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\u00b7 badname"); // the visible text survives, sanitized
+		expect(raw).not.toContain("\x1b[31m"); // the injected color never reaches the terminal
+		expect(raw).not.toContain("\x1b[1m"); // nor the injected bold
+		shell.close();
+	});
+
 	it("Down moves the selection; Enter confirms the moved-to index", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
@@ -4472,6 +4491,29 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const after = terminal.frameSince(mark);
 		expect(after).toContain("running"); // rows come back on pick
 		expect(after).toContain("echo hi");
+		shell.close();
+	});
+
+	it("#confirm-prompt (Phase 3 D10): the picker's repaint alone clears the rows — <20ms, before the 120ms ticker", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		// Let the tool row paint ONCE, then act well inside one 120ms tick so the
+		// ticker cannot mask a missing repaint in setSelector (the recorded bug).
+		await settle(20);
+		expect(terminal.frameSince(0)).toContain("echo hi");
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(20); // < the 120ms ticker: only setSelector's own repaint can act
+		// Frames are differential — force one full repaint of the CURRENT container
+		// tree (no activity rebuild), still inside the ticker window. If setSelector
+		// did not rebuild the region, the stale tool row is still a child and paints.
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(20);
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("approve?"); // the picker mounted
+		expect(frame).not.toContain("running"); // D10 pulled the tool rows at once
+		expect(frame).not.toContain("echo hi");
 		shell.close();
 	});
 

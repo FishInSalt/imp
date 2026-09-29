@@ -822,7 +822,11 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 - Scope: keyed on `selector`, which also covers the login dialog and the
   session-tree picker (`:1025`, `:1103`) even though they do not go through
   `select()`. With the narrowed rule the only rows those flows could hide are
-  tool rows, which cannot exist there: they are invoked when the turn is idle.
+  tool rows. One reachable case: `/model` is `allowedDuringRun: true`
+  (`src/repl/commands.ts:1459`) and opens a real picker, so invoking it mid-run
+  hides genuine live tool rows until the picker closes — an accepted consequence
+  of keeping one uniform rule (the picker owns the screen and the rows return on
+  close).
 
 #### D11 — one blank line between the transcript and a picker
 
@@ -940,7 +944,7 @@ after the merge.
 
 | # | Question |
 |---|---|
-| O1 | D10 keys on `selector`, which also covers the login dialog and the session-tree picker. Round 1 flagged this as over-suppression; D10 was narrowed to tool rows only, so the flows that could lose real information (transcript-side task live rows) are unaffected. Confirm the narrowed rule is enough |
+| O1 | D10 keys on `selector`, which also covers the login dialog and the session-tree picker. Round 1 flagged this as over-suppression; D10 was narrowed to tool rows only, so the flows that could lose real information (transcript-side task live rows) are unaffected. The implementation check found the one reachable case — mid-run `/model` (`allowedDuringRun`) hides live tool rows until the picker closes — accepted and documented in D10's scope |
 | O2 | D9 puts the name on both the record line and the picker title. Keep both, or one? |
 | O3 | D12 needs a reset-only end for detail spans because `WARN_END` restores dim. Variant argument, or delete detail-level `warnSpans` entirely (no extension passes it; it survives only in tests)? |
 | O4 | Text-host record notes stay faint. Confirm the asymmetry, or escalate? |
@@ -989,7 +993,25 @@ and the `pendingSelects` drain, which re-enters `closed`-guarded entries);
 D11's three boxes and the D5 invariant; D12's mechanism; and the absence of new
 contradictions with §6-§12.
 
-### 15.11 Process
+### 15.12 Implementation check (A1)
+
+Independent adversarial check of `9ae65d0` (fresh context, mutation testing):
+verdict **APPROVE WITH CORRECTIONS** — every decision implemented as specified,
+four gates green, twelve mutations probed of which five survived. All five plus
+the CHANGELOG gap are folded:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| F1 | P3 | No pin covered the **chunk-path** block string: reverting `loop.ts:475` to `an extension` left the suite green | Folded: `test/loop-concurrency.test.ts:228` drives a `concurrencySafe` tool through a registry-backed gate; mutation RED |
+| F2 | P3 | `setSelector`'s repaint was unpinned — deleting it survived because tests settle past the 120 ms ticker that masks it | Folded: `test/repl-tui.test.ts:4502` asserts no tool row inside the ticker window; mutation RED |
+| F3 | P3 | `sanitizeDisplay(attribution)` was unpinned | Folded: `test/repl-tui.test.ts:807` feeds a hostile attribution; mutation RED |
+| F4 | P3 | The empty-source guards in `blockSource` and the record label were unpinned | Folded: `test/loop-concurrency.test.ts:250` and `test/repl-confirm.test.ts:53`; both mutations RED |
+| F5 | P3 | D10's scope text claimed the login/tree flows run when the turn is idle; `/model` is `allowedDuringRun` and opens a real picker mid-run | Folded: D10's scope rewritten with the reachable case; O1 updated |
+| F6 | P3 | `CHANGELOG.md` was not updated although §15.4 forecasts it | Folded: the Phase 3 entry |
+
+Survived-mutation count after the fold: 0. Suite 128 files / 2507 tests.
+
+### 15.13 Process
 
 Branch `feat/confirm-prompt-phase3` from `000d72c` in the confirm worktree; this
 amendment goes through an independent adversarial review before implementation;
@@ -1000,3 +1022,6 @@ Implementation was split into two waves (D9; then D10-D12). Wave 1 was verified
 with the focused test files only and missed three decision-object pins that the
 full suite caught; from Wave 2 on, every wave runs the whole suite (`vitest run`)
 before it is called done.
+
+An independent implementation check followed (`§15.12`); its pin gaps were folded
+with mutation-verified pins before the merge.

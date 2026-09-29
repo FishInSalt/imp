@@ -53,6 +53,15 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		await host.confirm.handler("plain question");
 		expect(host.output()).toContain("▪ confirm: plain question");
 		expect(host.output()).not.toContain("▪ confirm:  —");
+		// an EMPTY-string source is treated exactly like an absent one (the
+		// blockSource/record-line empty guards), not as a ` — ` prefix.
+		const beforeEmpty = host.output().length;
+		await host.confirm.handler("empty source question", undefined, undefined, "");
+		const emptyLine = host.output().slice(beforeEmpty);
+		expect(emptyLine).toContain("▪ confirm: empty source question");
+		expect(emptyLine).not.toContain("▪ confirm:  —");
+		// the empty string flows through as-is; the shell treats "" as no tag
+		expect(host.picks.at(-1)?.attribution).toBe("");
 		// session-allowlist note keeps the same prefix shape (the pick answer is
 		// "Yes, don't ask again this session" — index 1)
 		host.pickAnswer.value = 1;

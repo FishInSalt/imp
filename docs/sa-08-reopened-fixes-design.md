@@ -521,8 +521,8 @@ between the two (`await validateChildContinuation(...)`, plus the lease
 acquisition), so a /model swap can happen in that window — the attempt
 still runs on the CAPTURED instance, and that capture (not the absence of
 a window) is the correctness argument. The comment at the read pins the
-invariant: do not move the read after the await, and do not re-read the
-provider inside the attempt.
+invariant: do not move the read after the await; no code path re-reads the
+provider inside the attempt, and none may be added.
 
 ### 8.3 Test (red-first)
 
@@ -688,7 +688,14 @@ any provider call).
 Interaction with the crash-tail rule (unchanged): the repairable tail
 shape has by definition NO user/assistant message after the unresolved
 batch (only toolResult messages), so the boundary rule cannot fire on it;
-T14/T16 keep their behavior. Result-order tolerance within one batch
+T14 keeps its behavior. Wording unification (design-review correction):
+T16's and T17's shapes (call -> user; call -> call -> result) DO carry a
+later user/assistant message, so they now refuse with the BOUNDARY
+wording instead of "inconsistent beyond a crash tail"; their assertions
+are updated accordingly (refusal, no mutation, zero provider calls —
+behavior unchanged, not a weakened expectation). The tail message now
+fires only for unresolved batches followed purely by toolResult
+messages. Result-order tolerance within one batch
 (parallel completion) is unaffected: toolResult messages never trigger
 the boundary rule. Legitimate grammar invariant (verified against the
 loop): between an assistant call batch and its toolResult message the
@@ -703,14 +710,39 @@ snap to user/assistant, so a retained tail cannot begin mid-pair.
   calls; transcript bytes unchanged.
 - F5-e: call c1, then a user message, then result c1 -> refused at the
   user message; zero provider calls.
-- F5-f: call c1, then a second assistant message with call c2, then the
-  results -> refused at the second assistant message; zero provider calls.
+- F5-f: call c1, then a second assistant message with call c2, then
+  results for BOTH ids (sets balance — on the current code this is
+  ACCEPTED, which is the red) -> refused at the second assistant message;
+  zero provider calls.
 - F5-g (positive control): one batch (c1, c2) whose results arrive
   OUT OF ORDER in a single toolResult message -> accepted (guards against
-  over-refusal; green before and after).
+  over-refusal; green before and after). No tools are needed in either
+  harness for F5-d/e/f/g: their first passes are tool-free and the crafted
+  history's tool NAMES are never pool-checked (F5-c's echo requirement is
+  specific to its real first-pass pool).
+- Assertion strengthening (design-review correction): F5-d/e/f assert the
+  boundary wording, the PENDING id by name, the zero-provider-call sink
+  marker, and transcript byte-equality — pinning the refusal to the
+  boundary check rather than the tail inference.
 - T14/T16 (tail repair / non-tail refusal) stay green, as do F5-a/b/c
   and the ordering controls from section 9.
 
 All three refusal cases use the echo tool in both harnesses so the
 recorded pool rebuilds identically and the scan — not tools-drift — is
 what refuses. On the current code all three are accepted (red evidence).
+
+### 12.4 Round-4 review log (pre-implementation)
+
+- 2026-09-29: fresh-context adversarial review of 8cebb92 (§12 + the
+  §8.2 correction) — **APPROVE WITH CORRECTIONS**, rule sound, no
+  legitimate transcript refused. Independently verified by driving
+  buildContinuationHistory directly: the three repro shapes are accepted
+  today (red-able) and the out-of-order batch stays legal; the loop
+  grammar invariants (one toolResult append per batch, fillMissingTool
+  Results before a capped/aborted run ends, findCutIndex heads, the
+  resume's own instruction push AFTER the scan) hold. Folded: T16/T17
+  wording unification (above), F5-f's both-results construction, F5-d/e/f
+  assertion strengthening, F5-g's no-tools note, the softened
+  re-read invariant. One review claim does not hold as stated: §8.2 does
+  NOT mention `transcriptFor` (that word appears only in §1's rebind
+  notes) — nothing to drop there.

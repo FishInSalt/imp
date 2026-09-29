@@ -286,7 +286,11 @@ settle fires. §6 records the invariant.
     and aborts the chunk. Phase 3's `tool_end` emit has the same exposure today,
     so this is not a new class of failure; the design deliberately matches it
     rather than wrapping the emit in a `try`/`catch` that would silently drop
-    display updates.
+    display updates. It is slightly *wider* than the existing one: phase 3
+    pushes each result before emitting (`loop.ts:487-489`), so a throwing
+    `tool_end` observer still preserves the results of earlier calls, while a
+    throw from the settle emit discards the whole chunk's results. Measured, and
+    still theoretical — neither the REPL tap nor the health monitor throws.
 
 ## 7. Test plan
 
@@ -403,4 +407,19 @@ leave it alone is that it never ran, not that the marker would flip).
   was only ever a transport detail. The *rendered* order assertion (a, a, b, b),
   added last batch, is unchanged and still pins what matters; replay still
   builds `a, b, a, b` because it feeds stored order.
-- Gate: 127 files / 2477 tests, lint 0, typecheck (both configs) 0, build 0.
+- Independent adversarial code review (fresh context): **NEEDS-FIXES**, on
+  coverage only — the implementation matched the design and no leak or
+  idempotence defect was found, but two load-bearing invariants survived their
+  mutations. Both are now pinned:
+  1. §4.4 item 1 (top-level only): the `#tool-settle` TUI test emits a
+     child-sourced settle for a live child call and asserts no fold appears —
+     mutation (dropping `if (info === undefined)`) is now red.
+  2. §4.4 item 2 (one shared arm): a second test drives a non-`task`
+     concurrency-safe call and asserts its `activityTools` row is gone after the
+     settle — the half-copy mutation is now red.
+  Also folded in: the mid-flight assertions are captured inside the run and
+  asserted in the test body (an assertion thrown inside the mocked `runTurn` is
+  swallowed by the REPL and surfaces as a downstream `waitUntil` timeout), and
+  §6.10 now records that a settle-path throw discards results phase 3 would have
+  preserved.
+- Gate: 127 files / 2478 tests, lint 0, typecheck (both configs) 0, build 0.

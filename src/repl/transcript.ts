@@ -57,6 +57,19 @@ export class TranscriptSink implements Component {
 	}
 	readonly toolFolds: ToolBlockFold[] = [];
 	private inputFolds = new WeakMap<ToolBlock, ToolBlockFold>();
+	/** #task-inline-live-rows (B1): the input fold for a tool_call id, so the
+	 *  owning shell can address a running task's live rows. Cleared in clear();
+	 *  "latest writer wins" is safe because the shell only addresses currently
+	 *  running tasks (tool_call ids are not unique across assistant messages). */
+	private inputFoldById = new Map<string, ToolBlockFold>();
+	/** #task-inline-live-rows (B1): pulled by the append callback when a task's
+	 *  fold is created after the shell already published its rows
+	 *  (trackActivity precedes renderer.event). A PUBLIC field mirroring
+	 *  `onUpdate`: the owning shell installs it in start() and unbinds it behind
+	 *  an ownership guard in stopTerminal(), because the same sink is handed
+	 *  from the one-shot trust-ask shell to the real REPL shell. Must be a pure
+	 *  read — it runs inside the append closure. */
+	taskLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
 	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
 	 *  tests (production passes nothing — the sink defaults to Date.now). */
 	readonly toolSink: ToolPresentationSink;
@@ -68,6 +81,19 @@ export class TranscriptSink implements Component {
 				fold.setRawArguments(this.rawToolArguments);
 				this.inputFolds.set(block, fold);
 				this.toolFolds.push(fold);
+				if (block.kind === "input") {
+					// A provider may reuse a tool_call id across assistant messages
+					// (`call_${index}`); the previous fold for this id is settled and must
+					// not keep live rows. The shell's push for the new task ran BEFORE this
+					// fold existed, so it may have painted onto that superseded fold.
+					const displaced = this.inputFoldById.get(block.id);
+					if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
+					this.inputFoldById.set(block.id, fold);
+					// #task-inline-live-rows (B1): pull the rows the shell published
+					// before this fold existed, so the first paint is complete.
+					const rows = this.taskLiveRowsResolver?.(block.id) ?? null;
+					if (rows !== null) fold.setLiveRows(rows);
+				}
 				this.appendChild(fold);
 			},
 			(previous, next) => {
@@ -85,6 +111,7 @@ export class TranscriptSink implements Component {
 	clear(): void {
 		this.toolSink.clear();
 		this.inputFolds = new WeakMap();
+		this.inputFoldById.clear();
 		this.rawToolArguments = false;
 		this.toolFolds.length = 0;
 		this.generation++;
@@ -100,6 +127,15 @@ export class TranscriptSink implements Component {
 		this.settleBoundary();
 		this.entries.push({ type: "component", component });
 		this.onUpdate?.();
+	}
+
+	/** #task-inline-live-rows (B1): publish a running task's live rows to its
+	 *  input fold. A no-op when the fold is not yet known — the shell's resolver
+	 *  covers that case at fold-creation time. */
+	setTaskLiveRows(key: string, rows: readonly string[] | null): void {
+		const fold = this.inputFoldById.get(key);
+		if (fold === undefined) return;
+		if (fold.setLiveRows(rows)) this.onUpdate?.();
 	}
 
 	feedUser(text: string): void {

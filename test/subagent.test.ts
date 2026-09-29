@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import type { AgentEvent } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
@@ -96,21 +97,54 @@ describe("runSubagent", () => {
 		expect(request.model).toBe("glm-5.3");
 	});
 
-	it("reports max_iterations after CHILD_MAX_TURNS tool-calling turns", async () => {
-		const toolCallStep: ScriptStep = assistant([
-			{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "again" } },
-		]);
-		const provider = scriptedProvider([toolCallStep]); // repeats forever
+	it("runs past 60 tool-calling turns to completion (uncapped, #loop-health)", async () => {
+		// 65 DISTINCT tool turns — past the removed 60 wall; the final answer
+		// ends the run. Distinct args keep the health monitor silent.
+		const steps: ScriptStep[] = [];
+		for (let i = 0; i < 65; i++) {
+			steps.push(
+				assistant([{ type: "toolCall", id: `c${i}`, name: "echo", arguments: { message: `again-${i}` } }]),
+			);
+		}
+		steps.push(assistant([{ type: "text", text: "done after 66" }]));
 		const outcome: SubagentOutcome = await runSubagent({
-			provider,
+			provider: scriptedProvider(steps),
 			model: "m",
 			system: "",
 			tools: [echo],
 			prompt: "loop",
 		});
-		expect(outcome.status).toBe("max_iterations");
-		expect(outcome.turns).toBe(60); // #subagent-softlanding: backup wall 40→60
-		expect(outcome.text).toBeUndefined();
+		expect(outcome.status).toBe("completed");
+		expect(outcome.turns).toBe(66);
+		expect(outcome.text).toBe("done after 66");
+		expect(outcome.health).toEqual([]);
+	}, 20000);
+
+	it("repeated identical turns record a repeat-loop fact and relay one live health event", async () => {
+		const steps: ScriptStep[] = [];
+		for (let i = 0; i < 6; i++) {
+			steps.push(
+				assistant([{ type: "toolCall", id: `r${i}`, name: "echo", arguments: { message: "again" } }]),
+			);
+		}
+		steps.push(assistant([{ type: "text", text: "recovered" }]));
+		const events: AgentEvent[] = [];
+		const outcome: SubagentOutcome = await runSubagent({
+			provider: scriptedProvider(steps),
+			model: "m",
+			system: "",
+			tools: [echo],
+			prompt: "loop",
+			onEvent: (event) => events.push(event),
+		});
+		expect(outcome.status).toBe("completed");
+		expect(outcome.health).toHaveLength(1);
+		expect(outcome.health[0]).toMatchObject({ code: "repeat-loop", count: 6, turn: 5 });
+		const relayed = events.filter(
+			(event): event is Extract<AgentEvent, { type: "health" }> => event.type === "health",
+		);
+		expect(relayed).toHaveLength(1);
+		expect(relayed[0]?.signal).toMatchObject({ code: "repeat-loop", count: 6 });
 	}, 20000);
 
 	it("maps a parent-signal abort to status 'aborted'", async () => {

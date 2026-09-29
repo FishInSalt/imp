@@ -106,6 +106,7 @@ describe("semantic tool presentation", () => {
 							summarizerCalls: 0,
 							incomplete: false,
 						},
+						health: [],
 						reason: "disconnected",
 					},
 					session,

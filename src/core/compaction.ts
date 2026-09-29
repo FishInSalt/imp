@@ -38,8 +38,9 @@ export interface CompactionSettings {
 	contextWindow: number;
 }
 
-/** Parse a positive int env var; fall back (with a warning) instead of going NaN. */
-function envInt(name: string, fallback: number): number {
+/** Parse a positive int env var; fall back (with a warning) instead of going NaN.
+ *  Exported for #loop-health threshold parsing (same semantics, one helper). */
+export function envInt(name: string, fallback: number): number {
 	const raw = process.env[name];
 	if (raw === undefined || raw === "") return fallback;
 	const n = Number(raw);

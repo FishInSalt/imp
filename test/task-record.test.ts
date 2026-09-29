@@ -94,6 +94,20 @@ describe("buildTaskRecord (SA-03)", () => {
 		expect(record.usage?.inputTokens).toBe(1);
 	});
 
+	it("#loop-health: valid facts round-trip; malformed facts are dropped, never record-nulling", () => {
+		const health = [{ code: "repeat-loop" as const, count: 5, turn: 5, detail: "bash test" }];
+		const record = buildTaskRecord(input({ health }));
+		expect(record.health).toEqual(health);
+		expect(parseTaskRecord(JSON.parse(JSON.stringify(record)))?.health).toEqual(health);
+		const raw = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+		raw.health = [{ code: "nope" }];
+		const dropped = parseTaskRecord(raw);
+		expect(dropped).not.toBeNull(); // advisory field cannot null the record
+		expect(dropped?.health).toBeUndefined();
+		// absent stays absent; empty producers omit the field entirely
+		expect(buildTaskRecord(input()).health).toBeUndefined();
+	});
+
 	it("SA-08/F3-a: a binding whose reference does not derive from provider/wire id is refused", () => {
 		const record = buildTaskRecord(
 			input({

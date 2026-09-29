@@ -13,7 +13,7 @@ import {
 	overflowGuidance,
 	shouldCompact,
 } from "./compaction.js";
-import { CHILD_MAX_TURNS } from "./constants.js";
+import { createLoopHealth, type HealthSignal, healthEnabled } from "./health.js";
 import { type RunAgentLoopOptions, type RunAgentLoopResult, runAgentLoop } from "./loop.js";
 import type { AgentMessage, Usage } from "./messages.js";
 import { type SessionStore, summaryToMessage } from "./session/store.js";
@@ -96,7 +96,7 @@ export interface SubagentOptions {
 
 export type SubagentStatus =
 	| "completed" // final assistant message carried text or not — text tells
-	| "max_iterations" // hit CHILD_MAX_TURNS; text is the best-effort answer
+	| "max_iterations" // legacy: hit an explicit turn cap; #loop-health removed the child wall
 	| "aborted" // parent signal aborted (user Ctrl+C)
 	| "timeout" // the child's own clock fired; parent signal still live
 	| "crash"; // provider/protocol error; partial recovery applies
@@ -126,6 +126,8 @@ export interface SubagentOutcome {
 	usage: Usage;
 	/** SA-04 split (see SubagentUsageDetail). */
 	usageDetail: SubagentUsageDetail;
+	/** #loop-health: detection facts for this attempt (possibly empty). */
+	health: readonly HealthSignal[];
 }
 
 /**
@@ -184,6 +186,12 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	// the outcome. Replaces the history-recomputation compensation — a replayed
 	// history (SA-06/07) can never leak into this attempt's delta.
 	const ledger = createAttemptUsage();
+	// #loop-health (design §4.1): one observation-only monitor per attempt,
+	// created BEFORE the compaction closure below so its `note()` can fire
+	// early; the overflow retry shares it; disposed in the outer finally.
+	const health = healthEnabled()
+		? createLoopHealth({ emit: (signal) => options.onEvent?.({ type: "health", signal }) })
+		: undefined;
 	// SA-02 D4: settings AND the summarizer output cap come from the SAME
 	// canonical reference — one lookup helper, consumed below.
 	const { settings, modelMaxTokens } = childModelMetadata(options);
@@ -195,12 +203,12 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 
 	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
 	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.
-	// IMP_AUTOCOMPACT=0 disables it exactly like the main loop. NOTE: compaction
-	// does NOT reset the turn budget — CHILD_MAX_TURNS still bounds the child.
-	// The loop's turn counter is untouched by the history splice: compaction
-	// buys context room, not extra turns. (Overflow recovery below is the
-	// deliberate exception: it is a SECOND runAgentLoop call, so its loop
-	// counter starts fresh — worst case 2x CHILD_MAX_TURNS, main-loop parity.)
+	// IMP_AUTOCOMPACT=0 disables it exactly like the main loop. Compaction does
+	// NOT reset the loop's turn counter — it buys context room, not extra
+	// turns. (Overflow recovery below is the deliberate exception: it is a
+	// SECOND runAgentLoop call, so its loop counter starts fresh — #loop-health
+	// removed the child turn wall, so neither counter is bounded; the monitor's
+	// counts span both launches.)
 	const autoCompact = options.autoCompact ?? process.env.IMP_AUTOCOMPACT !== "0";
 	// Summarizer-failure backstop: after 3 consecutive failures compaction is
 	// disabled for the rest of the run (one stderr note) — a persistent auth
@@ -286,14 +294,16 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			return { compacted: false }; // keepRecent swallowed everything (cut <= 0)
 		} catch (err) {
 			// Keep the un-compacted history and continue; the next turn boundary
-			// retries if the estimate is still over the threshold (bounded by
-			// CHILD_MAX_TURNS). The child has no status channel to report to.
+			// retries if the estimate is still over the threshold (#loop-health:
+			// no turn bound remains — three consecutive failures disable it for
+			// the run, and the fact is reported through the health monitor).
 			// Abort-during-summarizer also lands here (the signal is forwarded) —
 			// the recovery seam re-checks child.signal.aborted, onBeforeTurn
 			// simply retries next boundary.
 			consecutiveFailures += 1;
 			if (consecutiveFailures >= 3) {
 				compactionDisabled = true;
+				health?.note("compaction-failures", 3, "3 consecutive summarizer failures");
 				process.stderr.write(
 					"imp: child compaction failed 3 times in a row — giving up for this task; the run continues un-compacted\n",
 				);
@@ -336,10 +346,17 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			tools: options.tools,
 			history,
 			userMessage,
-			maxIterations: CHILD_MAX_TURNS,
+			// #loop-health: children are uncapped (owner decision A). Explicit
+			// Infinity is load-bearing — the loop's default floor is 100.
+			maxIterations: Number.POSITIVE_INFINITY,
 			onMessage: options.onMessage,
 			onToolCall: options.onToolCall,
-			onEvent: options.onEvent,
+			// #loop-health: the monitor observes the same stream the caller
+			// relays; both overflow launches share it.
+			onEvent: (event) => {
+				health?.observe(event);
+				options.onEvent?.(event);
+			},
 			onBeforeTurn,
 			signal: child.signal,
 			usageLedger: ledger, // SA-04: every task report lands here
@@ -366,6 +383,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				summarizerCalls: snapshot.summarizerCalls,
 				incomplete: snapshot.incomplete,
 			},
+			health: health?.signals() ?? [],
 		};
 	};
 
@@ -426,6 +444,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 	} finally {
 		options.signal?.removeEventListener("abort", relay);
 		clock?.removeEventListener("abort", relay);
+		health?.dispose();
 	}
 }
 

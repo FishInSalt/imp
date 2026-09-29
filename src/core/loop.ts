@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
 import { MAX_CONCURRENT_TASKS } from "./constants.js";
+import type { HealthSignal } from "./health.js";
 import {
 	type AgentMessage,
 	type AssistantMessage,
@@ -17,7 +18,11 @@ import { recordMissingUsageReport, recordUsageReport } from "./usage-ledger.js";
 export type AgentEvent =
 	| LLMEvent
 	| { type: "tool_start"; toolCallId: string; name: string; args: unknown }
-	| { type: "tool_end"; result: ToolResult };
+	| { type: "tool_end"; result: ToolResult }
+	/** #loop-health: a first-fire health signal, emitted by the callers'
+	 *  monitors (never by the loop) and relayed to the interactive REPL.
+	 *  It is not an M4 extension event and reaches no extension sink. */
+	| { type: "health"; signal: HealthSignal };
 
 export interface RunAgentLoopOptions {
 	provider: LLMProvider;

@@ -1,5 +1,6 @@
 import type { Readable } from "node:stream";
 import { estimateContextTokens } from "../core/compaction.js";
+import { type HealthSignal, healthSignalText } from "../core/health.js";
 import type { AgentEvent, RunAgentLoopResult } from "../core/loop.js";
 import { type AgentMessage, contentText, type Usage } from "../core/messages.js";
 import { killTrackedDetachedChildren } from "../core/process-tree.js";
@@ -359,6 +360,9 @@ class ReplMachine {
 	private childParents = new Map<string, string | undefined>();
 	private closedParents = new Set<string>();
 	private activeRun: object | null = null;
+	/** #loop-health: note dedup keys (`sourceId|main` + code) for the current
+	 *  run; cleared at run start. */
+	private healthNoted = new Set<string>();
 	private activityTools = new Map<string, ActivityToolLine>();
 	private activityAgents = new Map<string, ActivityAgentLine>();
 	private activityParents = new Map<string, ActivityAgentLine>();
@@ -641,6 +645,7 @@ class ReplMachine {
 		if (this.input.setFooter !== undefined) this.renderer.user(display ?? line);
 		this.renderer.think(); // live spinner until the first event arrives (print/legacy)
 		this.pushActivity(); // TUI activity region: thinking phase from the start
+		this.healthNoted.clear(); // #loop-health: note dedup is per-run
 		const controller = new AbortController();
 		this.controller = controller;
 		const run = {};
@@ -652,6 +657,13 @@ class ReplMachine {
 				signal: controller.signal,
 				onEvent: (event: AgentEvent, info?: AgentEventInfo) => {
 					if (this.activeRun !== run) return;
+					// #loop-health (design §4.3): health events become one dim note
+					// per (source|main, code) per run — they never reach
+					// trackActivity, renderer.event, or showResultFold.
+					if (event.type === "health") {
+						this.healthNote(event.signal, info);
+						return;
+					}
 					this.trackActivity(event, info);
 					// Top-level events feed the Renderer; subagent-sourced ones
 					// (info set) go to the activity region only — M5's
@@ -1102,6 +1114,19 @@ class ReplMachine {
 			}
 		}
 		if (body !== "") this.renderer.writeLine(body);
+	}
+
+	/** #loop-health (design §4.3): one dim note per (source|main, code) per
+	 *  run; child notes carry the agent label, main notes stay plain. The note
+	 *  is the only health surface in the REPL — nothing is routed onward. */
+	private healthNote(signal: HealthSignal, info?: AgentEventInfo): void {
+		const key = `${info?.sourceId ?? "main"}:${signal.code}`;
+		if (this.healthNoted.has(key)) return;
+		this.healthNoted.add(key);
+		// Child notes carry the agent label (fallback "task"); main notes are plain.
+		const label =
+			info === undefined ? "" : `${info.agent !== undefined && info.agent !== "" ? info.agent : "task"}: `;
+		this.renderer.note(`▪ health: ${label}${healthSignalText(signal)}`);
 	}
 
 	/** Activity shares prepared root calls with the transcript. Child state is

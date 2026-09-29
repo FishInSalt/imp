@@ -5,13 +5,6 @@
 /** Tail cap for oversized tool results (bash output, task results). */
 export const MAX_BYTES = 50 * 1024; // 50KB
 
-/** Subagent turn wall (#subagent-softlanding rev 4, demoted from budget to
- *  backup: guards degenerate loops only — budget decisions belong to the
- *  parent agent, and zero prompts are injected into the child). Children
- *  auto-compact between turns like the main loop (M7), so the practical
- *  ceiling for honest work is the parent's judgment, not this wall. */
-export const CHILD_MAX_TURNS = 60;
-
 /** Default child wall clock (#subagent-softlanding rev 4). REPL (TTY): no
  *  clock — the user's Ctrl+C is the backstop. Print/headless runs: a
  *  generous 60-minute hang guard (the turn wall does not tick while a

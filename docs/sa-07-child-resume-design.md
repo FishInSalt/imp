@@ -687,9 +687,11 @@ here rather than fixed.
 
 Pinned behavior on resume:
 
-- Turn budget: fresh `runAgentLoop` → `CHILD_MAX_TURNS` (60) for the new
-  attempt (task list: "reset the execution allowance"; no auto-resume loop
-  — the call is manual, nothing re-invokes it).
+- Turn budget: fresh `runAgentLoop` per resume attempt (task list: "reset the
+  execution allowance"; no auto-resume loop — the call is manual, nothing
+  re-invokes it). #loop-health (2026-09-29, docs/loop-health-design.md) removed
+  the child turn cap — attempts are uncapped; the original `CHILD_MAX_TURNS`
+  (60) value this line pinned is historical.
 - Timeout precedence: `args.timeoutMs` > the recorded agent's frontmatter
   `timeoutMs` (the body is hash-verified by validation) > mode default
   (`defaultChildTimeoutMs`). autoCompact/settings resolve per attempt

@@ -59,7 +59,7 @@ let result = await runAgentLoop({ ..., userMessage: options.prompt, ... })
 
 - **D1 单次恢复**：对齐主循环与 pi。二次失败 reason 用 `overflowGuidance`（compaction.ts 既有函数）而非裸 provider 400。**受众差异记档（审查 P3-2）**：guidance 文案面向 REPL 用户（提到 /model、/compact、/new），而子代理的 reason 落进父模型的工具结果——父模型跑不了这些命令。保留同一函数不做分支：工具结果的最终读者是人，指引仍然成立。
 - **D2 abort 语义（审查 P1-1 修订）**：压缩与重试都在 `child.signal` 作用域内。两个窗口分论：**重试窗口**——runAgentLoop 对 abort 返回 `stopReason:"aborted"`，走现行 aborted/timeout 分支，无需处理；**压缩窗口**——compactChildHistory 把 abort 引发的 summarizer 失败吞进内部 catch（只落 `{compacted:false, error}` 且计入熔断），恢复缝必须在判定 crash 前检查 `child.signal.aborted`：时钟 fired 且父未 abort → timeout；否则 aborted。二者都不产生额外状态，但缺少该检查会把超时误报为 crash『nothing safe to compact』。
-- **D3 计账与预算（审查 P2-3 补）**：重试成功后 `turns/usage` 不用第二次 runAgentLoop 的返回值（它只数第二轮迭代），改用 crash 路径同款 `historyStats(history) + summarized 累计`——两轮的真实成本都在 history 里。**预算重置**：重试是新的 runAgentLoop 调用，`maxIterations`（CHILD_MAX_TURNS）从头再计——最坏 2×40 轮。与主循环同形（每次 runTurnInner 独立 maxTurns，runner.ts:815）；这是恢复的固有代价而非漏洞，随本批修订 subagent.ts:158 的『compaction does NOT reset the turn budget』注释（轮间压缩仍不重置；溢出恢复会重置——两回事分说）。
+- **D3 计账与预算（审查 P2-3 补）**：重试成功后 `turns/usage` 不用第二次 runAgentLoop 的返回值（它只数第二轮迭代），改用 crash 路径同款 `historyStats(history) + summarized 累计`——两轮的真实成本都在 history 里。**预算重置**：重试是新的 runAgentLoop 调用，`maxIterations`（CHILD_MAX_TURNS）从头再计——最坏 2×40 轮。与主循环同形（每次 runTurnInner 独立 maxTurns，runner.ts:815）；这是恢复的固有代价而非漏洞，随本批修订 subagent.ts:158 的『compaction does NOT reset the turn budget』注释（轮间压缩仍不重置；溢出恢复会重置——两回事分说）。（#loop-health 2026-09-29：CHILD_MAX_TURNS 已删除，重试仍是新的 runAgentLoop 调用，但不再有轮数上限；『最坏 2×40 轮』为历史记档。）
 - **D4 不碰 task 工具/状态机**：恢复成功 → 正常 status；失败 → 现行 crash 渲染。无新状态、无接口变化。
 
 ## 4. B：Anthropic 分支翻页设计
@@ -118,7 +118,7 @@ reviewer 判 **needs-fixes**（2 P1 + 4 P2 + 5 P3），逐条亲自核实后全�
 - **P1-2**（已修，伪码 catch retryErr 分支）：非溢出的重试错误必须走现行 crash 带原始 message（对齐 runner.ts:775），不得一律 overflowGuidance 谎称溢出。
 - **P2-1**（已修，改动点 1）：boolean 返回值合并了『summarizer 失败』与『无可压缩』——改 `{compacted, error?}`，error 进 guidance cause 槽；明确 shouldCompact 门只在 onBeforeTurn、恢复直调不可能被低估算拒绝（审查问答 Q3 结论：设计前提成立）；A4/A6 按真实触发改写。
 - **P2-2**（已修，§4 缓存语义）：逐页不带 cacheKey（fetchOnce 现状每页成功即落缓存，会缓存半截）；合并后一次落盘；中途失败整体 null。
-- **P2-3**（已修，D3）：重试重置 maxIterations（最坏 2×CHILD_MAX_TURNS）——与主循环同形，记为决策并修订 subagent.ts:158 注释。
+- **P2-3**（已修，D3）：重试重置 maxIterations（最坏 2×CHILD_MAX_TURNS）——与主循环同形，记为决策并修订 subagent.ts:158 注释。（#loop-health 2026-09-29：该常量已删除，见 D3 修订注。）
 - **P2-4**（已修，改动点 1）：fetchOnce 签名容不下翻页字段——命名 `fetchPage` 新缝，fetchOnce 变薄包装。
 - **P3×5**（已修）：§2 pi 措辞（pi 无子代理概念；结构性差异=imp 无需移除步骤）；D1 受众差异记档；encodeURIComponent；§5-B 测试模式更正（本地 http 服务器）；A2 钉 summarizer 真调用数。
 

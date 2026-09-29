@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLoopHealth, type HealthSignal, healthEnabled, healthSignalText } from "../src/core/health.js";
+import {
+	createLoopHealth,
+	DEFAULT_HEALTH_THRESHOLDS,
+	type HealthSignal,
+	healthEnabled,
+	healthSignalText,
+} from "../src/core/health.js";
 import type { AgentEvent } from "../src/core/loop.js";
 import type { AssistantMessage, ToolResult } from "../src/core/messages.js";
 
@@ -147,16 +153,12 @@ describe("mutation-failure-streak", () => {
 	it("fires after consecutive failed edit/write results, non-mutating results allowed between", () => {
 		const monitor = createLoopHealth({ thresholds: { mutationFailures: 3 } });
 		monitor.observe(turn(0, [{ name: "edit", args: { path: "src/a.ts" } }]));
-		monitor.observe(start("t0-c0", "edit"));
 		monitor.observe(end("t0-c0", "edit", true));
 		monitor.observe(turn(1, [{ name: "read", args: { path: "src/a.ts" } }]));
-		monitor.observe(start("t1-c0", "read"));
 		monitor.observe(end("t1-c0", "read", false)); // non-mutating result: no reset
 		monitor.observe(turn(2, [{ name: "write", args: { path: "src/b.ts" } }]));
-		monitor.observe(start("t2-c0", "write"));
 		monitor.observe(end("t2-c0", "write", true));
 		monitor.observe(turn(3, [{ name: "edit", args: { path: "src/a.ts" } }]));
-		monitor.observe(start("t3-c0", "edit"));
 		monitor.observe(end("t3-c0", "edit", true));
 		const signals = monitor.signals();
 		expect(signals).toHaveLength(1);
@@ -168,14 +170,12 @@ describe("mutation-failure-streak", () => {
 		const monitor = createLoopHealth({ thresholds: { mutationFailures: 3 } });
 		for (const [i, ok] of [true, true, false].entries()) {
 			monitor.observe(turn(i, [{ name: "edit", args: { path: "a" } }]));
-			monitor.observe(start(`t${i}-c0`, "edit"));
 			monitor.observe(end(`t${i}-c0`, "edit", ok));
 		}
 		expect(monitor.signals()).toHaveLength(0); // last success reset the streak
 		const ignored = createLoopHealth({ thresholds: { mutationFailures: 3 } });
 		for (const i of [0, 1, 2]) {
 			ignored.observe(turn(i, [{ name: "bash", args: { command: "false" } }]));
-			ignored.observe(start(`b${i}`, "bash"));
 			ignored.observe(end(`b${i}`, "bash", true));
 		}
 		expect(ignored.signals()).toHaveLength(0);
@@ -186,107 +186,48 @@ describe("mutation-failure-streak", () => {
 		vi.setSystemTime(0);
 		const monitor = createLoopHealth({ thresholds: { mutationFailures: 3 } });
 		monitor.observe(turn(0, [{ name: "edit", args: { path: "a" } }]));
-		monitor.observe(start("t0-c0", "edit"));
 		monitor.observe(end("t0-c0", "edit", true));
 		vi.setSystemTime(6 * 60_000);
 		for (const i of [1, 2]) {
 			monitor.observe(turn(i, [{ name: "edit", args: { path: "a" } }]));
-			monitor.observe(start(`t${i}-c0`, "edit"));
 			monitor.observe(end(`t${i}-c0`, "edit", true));
 		}
 		expect(monitor.signals()).toHaveLength(0); // gap reset: streak restarted at 1, now 2
 		monitor.observe(turn(3, [{ name: "edit", args: { path: "a" } }]));
-		monitor.observe(start("t3-c0", "edit"));
 		monitor.observe(end("t3-c0", "edit", true));
 		expect(monitor.signals()[0]?.code).toBe("mutation-failure-streak");
 	});
 });
 
-describe("tool-open", () => {
-	it("fires once per call at the threshold with elapsed detail", () => {
+describe("removed signal (Amendment 1)", () => {
+	it("tool_start is a no-op: no signals, no timers, nothing after settle", () => {
 		vi.useFakeTimers();
-		const monitor = createLoopHealth({ thresholds: { toolOpenMs: 600_000 } });
-		monitor.observe(turn(0, [{ name: "bash", args: { command: "npm run build" } }]));
-		monitor.observe(start("t0-c0", "bash", { command: "npm run build" }));
-		vi.advanceTimersByTime(599_999);
-		expect(monitor.signals()).toHaveLength(0);
-		vi.advanceTimersByTime(1);
-		const signals = monitor.signals();
-		expect(signals).toHaveLength(1);
-		expect(signals[0]).toMatchObject({ code: "tool-open", count: 1, turn: 1 });
-		expect(signals[0]?.detail).toBe('bash "npm run build" was still open after 10m00s');
-		vi.advanceTimersByTime(600_000);
-		expect(monitor.signals()).toHaveLength(1); // once per call/ code
-	});
-
-	it("tool_end before the threshold cancels; dispose cancels; no pending timers remain", () => {
-		vi.useFakeTimers();
-		const monitor = createLoopHealth({ thresholds: { toolOpenMs: 1000 } });
+		const monitor = createLoopHealth();
 		monitor.observe(turn(0, [{ name: "bash", args: { command: "x" } }]));
 		monitor.observe(start("t0-c0", "bash"));
-		monitor.observe(end("t0-c0", "bash", false));
-		vi.advanceTimersByTime(60_000);
+		vi.advanceTimersByTime(60 * 60_000);
 		expect(monitor.signals()).toHaveLength(0);
 		expect(vi.getTimerCount()).toBe(0);
-
-		monitor.observe(turn(1, [{ name: "bash", args: { command: "y" } }]));
-		monitor.observe(start("t1-c0", "bash"));
 		monitor.dispose();
-		vi.advanceTimersByTime(60_000);
-		expect(monitor.signals()).toHaveLength(0);
-		expect(vi.getTimerCount()).toBe(0);
-	});
-
-	it("duplicate toolCallIds: the overwritten timer is cleared, not orphaned", () => {
-		vi.useFakeTimers();
-		const monitor = createLoopHealth({ thresholds: { toolOpenMs: 50 } });
-		monitor.observe(
-			turn(0, [
-				{ name: "bash", args: { command: "a" } },
-				{ name: "bash", args: { command: "b" } },
-			]),
-		);
-		monitor.observe(start("dup", "bash"));
-		monitor.observe(start("dup", "bash"));
-		monitor.observe(end("dup", "bash", false));
-		vi.advanceTimersByTime(100);
-		expect(monitor.signals()).toHaveLength(0);
-		expect(vi.getTimerCount()).toBe(0);
-	});
-
-	it("open-tool timers are unref'd (a forgotten dispose cannot pin the loop open)", () => {
-		const spy = vi.spyOn(globalThis, "setTimeout");
-		try {
-			const monitor = createLoopHealth({ thresholds: { toolOpenMs: 60_000 } });
-			monitor.observe(turn(0, [{ name: "bash", args: { command: "x" } }]));
-			monitor.observe(start("t0-c0", "bash"));
-			const timer = spy.mock.results[0]?.value as { hasRef?: () => boolean } | undefined;
-			expect(timer?.hasRef?.()).toBe(false);
-			monitor.dispose();
-		} finally {
-			spy.mockRestore();
-		}
 	});
 });
 
 describe("facts contract and lifecycle", () => {
 	it("dedupes by code, keeps first-fire order, and emits once per code", () => {
-		vi.useFakeTimers();
 		const emitted: HealthSignal[] = [];
 		const monitor = createLoopHealth({
-			thresholds: { toolOpenMs: 10 },
+			thresholds: { repeatTurns: 2 },
 			emit: (signal) => emitted.push(signal),
 		});
 		monitor.observe(turn(0, [{ name: "bash", args: { command: "a" } }]));
-		monitor.observe(start("t0-c0", "bash"));
-		vi.advanceTimersByTime(10);
-		monitor.observe(start("t0-other", "bash"));
-		vi.advanceTimersByTime(10);
+		monitor.observe(turn(1, [{ name: "bash", args: { command: "a" } }]));
 		expect(monitor.signals()).toHaveLength(1); // one entry per code
 		expect(emitted).toHaveLength(1); // emit fires on first only
+		monitor.observe(turn(2, [{ name: "bash", args: { command: "a" } }]));
+		expect(monitor.signals()).toHaveLength(1); // peak growth adds no entry
 		monitor.note("compaction-failures", 3, "3 consecutive summarizer failures");
-		expect(monitor.signals().map((s) => s.code)).toEqual(["tool-open", "compaction-failures"]);
-		expect(emitted.map((s) => s.code)).toEqual(["tool-open", "compaction-failures"]);
+		expect(monitor.signals().map((s) => s.code)).toEqual(["repeat-loop", "compaction-failures"]);
+		expect(emitted.map((s) => s.code)).toEqual(["repeat-loop", "compaction-failures"]);
 		monitor.note("compaction-failures", 3, "again");
 		expect(emitted).toHaveLength(2);
 	});
@@ -342,13 +283,33 @@ describe("thresholds and env", () => {
 		expect(healthEnabled()).toBe(true);
 	});
 
+	it("the removed IMP_HEALTH_TOOL_OPEN_MS is ignored (no env read, no warning)", () => {
+		const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		process.env.IMP_HEALTH_TOOL_OPEN_MS = "not-a-number";
+		try {
+			const monitor = createLoopHealth();
+			monitor.note("compaction-failures", 3, "x");
+			expect(monitor.signals()).toHaveLength(1);
+			expect(warning).not.toHaveBeenCalled();
+			expect("toolOpenMs" in DEFAULT_HEALTH_THRESHOLDS).toBe(false);
+		} finally {
+			warning.mockRestore();
+		}
+	});
+
 	it("healthSignalText renders the pinned human shapes", () => {
-		expect(healthSignalText({ code: "repeat-loop", count: 5, turn: 5, detail: 'bash "npm test"' })).toBe(
-			'repeated identical tool calls ×5 (last: bash "npm test")',
-		);
+		expect(
+			healthSignalText({
+				code: "repeat-loop",
+				count: 5,
+				turn: 5,
+				detail: 'bash "npm test"',
+			}),
+		).toBe('repeated identical tool calls ×5 (last: bash "npm test")');
 		expect(
 			healthSignalText({ code: "mutation-failure-streak", count: 3, turn: 2, detail: "edit src/a.ts" }),
 		).toBe("3 consecutive failed edits (last: edit src/a.ts)");
+		// Legacy read-only (Amendment 1): renders pre-removal records.
 		expect(
 			healthSignalText({
 				code: "tool-open",
@@ -394,6 +355,29 @@ describe("removal sweep (design §6 item 16)", () => {
 			}
 		};
 		for (const root of ["../src/", "../test/"]) walk(new URL(root, import.meta.url));
+		expect(hits).toEqual([]);
+	});
+
+	it("no tool-open producer references remain in src/ (Amendment 1)", async () => {
+		const { readdirSync, readFileSync } = await import("node:fs");
+		// Producer tokens only — the string "tool-open" itself stays legal in the
+		// legacy read-only arms (HealthCode, healthSignalText).
+		const tokens = ["toolOpenMs", "onToolStart", "openTimers", "IMP_HEALTH_TOOL_OPEN_MS"];
+		const hits: string[] = [];
+		const walk = (dir: URL): void => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				if (entry.isDirectory()) {
+					walk(new URL(`${entry.name}/`, dir));
+					continue;
+				}
+				if (!entry.name.endsWith(".ts")) continue;
+				const text = readFileSync(new URL(entry.name, dir), "utf8");
+				for (const token of tokens) {
+					if (text.includes(token)) hits.push(`${dir.pathname}${entry.name}:${token}`);
+				}
+			}
+		};
+		walk(new URL("../src/", import.meta.url));
 		expect(hits).toEqual([]);
 	});
 });

@@ -52,7 +52,7 @@ export interface TaskRecordWorktree {
 }
 
 /** #loop-health: one detected condition for the attempt. Producer-bounded
- *  (deduped by code, ≤4 entries, detail ≤120 chars); an additive optional
+ *  (deduped by code, ≤3 entries, detail ≤120 chars); an additive optional
  *  field on the record — old records parse unchanged, and a malformed
  *  `health` is DROPPED at parse time, never record-nulling (design §4.3). */
 export interface TaskRecordHealthSignal {
@@ -257,6 +257,10 @@ function isWorktree(v: unknown): boolean {
 function isHealthSignal(v: unknown): boolean {
 	if (typeof v !== "object" || v === null) return false;
 	const h = v as Record<string, unknown>;
+	// `tool-open` is legacy read-only (Amendment 1): no producer emits it, but
+	// pre-removal records carry it — and one rejected entry would drop the
+	// WHOLE `health` array (the every() check below), losing facts that still
+	// validate. Same pattern as the legacy `max_iterations` status.
 	return (
 		(h.code === "repeat-loop" ||
 			h.code === "mutation-failure-streak" ||

@@ -13,9 +13,9 @@ All notable changes to imp are documented here. The format follows
   longer stop at a 60-turn wall (`CHILD_MAX_TURNS` removed; owner decisions
   2026-09-29: no numeric valve, no prompt injection). A shared,
   observation-only loop-health monitor now runs in both the subagent engine
-  and the main loop and detects four conditions from the existing event
+  and the main loop and detects three conditions from the existing event
   stream: repeated identical tool-call turns, repeated failed `edit`/`write`
-  attempts, a tool left open ≥10 minutes, and the child's
+  attempts, and the child's
   compaction-failure backstop. Child facts surface honestly (task-result
   lines + a `health` field on the TaskRecord); first fires render one dim
   REPL note (`▪ health: …`; `IMP_HEALTH=0` disables; thresholds overridable

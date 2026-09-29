@@ -389,8 +389,8 @@ owner-facing and will be listed as pending until the owner confirms.
   (green-✓ + dim-time) plumbing unspecified against the single-DIM render
   sites (fixed: D2 plumbing note + local green escape), stale `· 2.3s` in
   CHANGELOG/ledger to update with the implementation, placeholder/ordering
-  bookkeeping (fixed on close). All folded in revision 2; round 2
-  <pending>.
+  bookkeeping (fixed on close). All folded in revision 2; round 2:
+  **CONFIRMED** (clean scan, zero new findings).
 
 ## Process
 

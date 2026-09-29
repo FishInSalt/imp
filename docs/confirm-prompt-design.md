@@ -1,8 +1,8 @@
 # Confirm prompt surface (design)
 
-Status: CONFIRMED WITH NOTES through round 3 — Phase 1 may be implemented; Phase 2
-starts after one short confirmation round on D7 (the round-2/3 folds are recorded
-in §13).
+Status: CONFIRMED WITH NOTES through round 3; round 4 closed the remaining Phase 2
+file-placement defect (R-1). Awaiting one short round-5 confirmation; Phase 1 may
+be implemented in parallel (no open Phase 1 finding).
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -359,13 +359,16 @@ interface ConfirmOptions {
   (`node_modules/@earendil-works/pi-tui/dist/components/text.js:54-55`), so a
   command string containing ESC sequences would otherwise reach the terminal
   (round-2 N2).
-- **Warn styling and wrapping (round-3 R3).** `preview.warnSpans` are plain
-  `[start, end)` offsets into `text` — the extension never emits ANSI. The
-  helper styles those ranges with the same alert pair the detail block uses
-  (`WARN_START`/`WARN_END`, `src/format.ts:162-163`) and wraps the styled text
-  through `wrappedRows(text, width, spans)` (`src/repl/components/tool-block.ts:73`,
-  whose `spans` parameter is the style-aware path). Width follows the existing
-  enforcement pattern (`test/repl-tui.test.ts:742`).
+- **Warn styling and wrapping (round-3 R3, wording corrected in round 4).**
+  `preview.warnSpans` are plain `[start, end)` offsets into `text` — the
+  extension never emits ANSI. The helper maps each tuple to `{start, end, style}`
+  (the `StyleSpan` shape the wrap path consumes, `src/repl/components/tool-block.ts:16-27`)
+  with the host's alert style, and wraps through `wrappedRows(text, width, spans)`
+  (`:73`). Note the mechanism: `styled()` applies `span.style` and appends its own
+  `RESET` (`:16-27`) — `WARN_END` (`src/format.ts:163`) belongs to the
+  `applyWarnSpans` path (the detail block, `src/repl/shell.ts:840`) and is **not**
+  consumed by the wrap path. Width follows the existing enforcement pattern
+  (`test/repl-tui.test.ts:742`).
 - Degradation (D8) applies: hosts without a picker ignore both fields.
 
 ### D8 — degradation matrix (must not change)
@@ -403,10 +406,21 @@ Acceptance criteria (scriptable):
 
 ## 8. Phase 2 — seam + consumer: scope, files, acceptance
 
-Files: `src/extensions/types.ts` (D7), `src/repl/shell.ts` (preview section,
-`rememberLabel` in the option label, the small command-header renderer),
-`examples/extensions/guardian.mjs` (pass both at the bash gate, `rememberLabel`
-at the write gate), `test/repl-tui.test.ts`, `test/guardian.test.ts`.
+Files: `src/extensions/types.ts` (D7), **`src/repl/repl.ts`** (`TtyConfirm`
+builds the option labels from `CONFIRM_ITEMS` at `:234-238`, passed at `:279`, so
+`rememberLabel` lands here; the plain `preview` note on text hosts belongs to the
+same handler, `:265-291`), `src/repl/components/tool-block.ts` (new exported
+`renderCommandHeader` helper), `src/repl/shell.ts` (the picker-side preview row),
+`examples/extensions/guardian.mjs` (pass both at the bash gate and drop its
+`command: …` prefix; `rememberLabel` at the write gate), `test/repl-tui.test.ts`,
+`test/repl-confirm.test.ts` (the text-host preview note — `test/repl-tui.test.ts`
+always drives a `TuiShell`, so it cannot reach a text host),
+`test/guardian.test.ts`.
+
+Round-4 correction: an earlier draft listed only `shell.ts` for Phase 2. The
+shell never runs on text hosts (`TuiShell` exists only when the input implements
+`select`; `bindSelect` is then the only setter of `this.select`), and the option
+labels are built in `repl.ts`, not in the picker primitive.
 
 Acceptance criteria (scriptable):
 
@@ -438,10 +452,11 @@ Acceptance criteria (scriptable):
 | 1 | `test/repl-tui.test.ts` | ten marker sites + new pins |
 | 1 | `test/repl-confirm.test.ts` | detail-note guard for the no-picker path |
 | 2 | `src/extensions/types.ts` | `rememberLabel`, `preview` |
+| 2 | `src/repl/repl.ts` | `rememberLabel` in the option labels; the plain `preview` note on text hosts |
 | 2 | `src/repl/components/tool-block.ts` | new exported `renderCommandHeader` helper (sanitize, warn style, wrap) |
-| 2 | `src/repl/shell.ts` | render both fields; ignore malformed; write the plain preview note on non-picker hosts |
-| 2 | `examples/extensions/guardian.mjs` | pass both fields |
-| 2 | `test/repl-tui.test.ts`, `test/guardian.test.ts` | consumer pins, `:107` update |
+| 2 | `src/repl/shell.ts` | render the preview row in the picker; ignore malformed values |
+| 2 | `examples/extensions/guardian.mjs` | pass `rememberLabel` + `preview`; drop the `command: …` prefix |
+| 2 | `test/repl-tui.test.ts`, `test/repl-confirm.test.ts`, `test/guardian.test.ts` | picker pins, text-host preview note, `:107` update |
 
 No new dependencies. No persistence or session-format changes. No model-visible
 change: `api.confirm` still resolves boolean.
@@ -473,7 +488,9 @@ Phase 2:
 - RED: control bytes in `preview.text`/`preview.tool` are stripped, and a long
   command wraps inside the box width (round-2 N2).
 - RED: `detail` + `preview` together render the command exactly once, and a text
-  host prints the preview as one plain note line (round-3 R2).
+  host (`test/repl-confirm.test.ts`, `makeConfirmHost({ select: false })` at
+  `:114`) prints the preview as one plain note line (round-3 R2, located in
+  round 4).
 - RED: guardian's bash gate passes a preview and a remember label.
 - RED/updated: `test/guardian.test.ts:107` includes `rememberLabel` (currently an
   exact-equality assertion — an intentional trap to catch silent option drift).
@@ -564,6 +581,18 @@ Round-3 statement on readiness: **Phase 1 may start** (no open finding against
 D1-D6). **Phase 2** is buildable as written after the R2 rule above; per §14 the
 changed section (D7) gets one short confirmation round before Phase 2 coding.
 
+**Round 4** (scoped confirmation of the round-3 fold, `05df60b`) — verdict **NEEDS
+REVISION**: one substantive documentation defect, Phase 2 only.
+
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| R-1 | P2 | The fold put the text-host "plain preview note" in `src/repl/shell.ts`, which never runs on text hosts, and omitted `src/repl/repl.ts` from Phase 2 — yet `rememberLabel` must land there too, because the option labels are built from `CONFIRM_ITEMS` (`src/repl/repl.ts:234-238`, passed at `:279`) | Folded: §8 file list and the §9 Phase 2 rows now name `src/repl/repl.ts` for both duties; the text-host pin is placed in `test/repl-confirm.test.ts` (the `repl-tui` harness always drives a `TuiShell`) |
+| R-2 | P3 | "same alert pair (`WARN_START`/`WARN_END`)" mismatched the actual mechanism: the wrap path consumes `span.style` and appends its own `RESET` (`src/repl/components/tool-block.ts:16-27`); `WARN_END` belongs to `applyWarnSpans` | Folded: D7 restates the mapping as `{start, end, style}` and names where `WARN_END` applies |
+
+Round-4 confirmation of the round-3 folds that hold: the division-of-labour rule
+is logically sound on both host kinds, `renderCommandHeader`'s home and signature
+are right, and R1/R4 are clean.
+
 ## 14. Process
 
 - Work happens in the `/Users/z/Z/Agent_demo/imp-confirm-design` worktree. The
@@ -571,11 +600,12 @@ changed section (D7) gets one short confirmation round before Phase 2 coding.
   that session's branch `feat/task-inline-live-rows` merged into `main` as
   `39d3f66` (+ ledger `06dbfcb`) while this document was in review. This design
   touches none of that work.
-- One design (this document) → independent adversarial review (rounds 1-3 done;
-  round 1 NEEDS REVISION, rounds 2-3 CONFIRMED WITH NOTES, all folds recorded in
-  §13) → Phase 1 implementation on its own branch → gates → implementation
-  check → `--no-ff` merge → ledger entry.
-- Phase 2 reuses this document; if its sections change after round 2, the
-  changed section gets a fresh review round before implementation.
+- One design (this document) → independent adversarial review (rounds 1-4 done;
+  round 1 and 4 NEEDS REVISION, rounds 2-3 CONFIRMED WITH NOTES, all folds
+  recorded in §13) → Phase 1 implementation on its own branch → gates →
+  implementation check → `--no-ff` merge → ledger entry.
+- Phase 2 reuses this document; after the round-4 fold its sections are frozen
+  unless something changes, in which case the changed section gets a fresh short
+  review round before implementation.
 - Each phase merges separately and is independently revertible; neither phase
   touches persisted state, so rollback is a revert, not a migration.

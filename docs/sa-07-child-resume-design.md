@@ -1263,3 +1263,16 @@ Three fresh-context read-only tracks over the integrated main (4a2976b):
   gate only, shared tool-pool selection, lease guarantees held under
   adversarial probing, no background framework / retry loop / provider
   migration introduced.
+
+### SA-08 REOPENED (owner integration review, 2026-09-29)
+
+The owner's independent review of the integrated delivery overturned the
+closure record above with two P1s and one P2, each independently
+reproduced: F-1 a resume can run on a pre-lease history snapshot (a
+completed round from another executor is missed and the append forks);
+F-2 worktree identity validation never constrains the executed cwd;
+F-3 the TaskRecord billing identity is not derivation-checked even though
+the launch record now is. Fix design:
+docs/sa-08-reopened-fixes-design.md (its own pre-implementation review is
+recorded there). The closure record above stays as history; SA-08 is open
+until the fixes pass acceptance.

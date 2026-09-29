@@ -164,13 +164,14 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 	let lastMutationFailureAt: number | undefined;
 
 	/** First fire per code wins: stores + emits once; later growth updates
-	 *  the peak count in place (no re-emit; the note stays first-fire). */
+	 *  the peak count in place (no re-emit; the note stays first-fire). The
+	 *  emitted object is a clone — callers cannot mutate internal state. */
 	function record(signal: HealthSignal): void {
 		const existing = firedIndex.get(signal.code);
 		if (existing === undefined) {
 			firedIndex.set(signal.code, fired.length);
 			fired.push(signal);
-			options.emit?.(signal);
+			options.emit?.({ ...signal });
 			return;
 		}
 		const current = fired[existing];
@@ -179,16 +180,22 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 
 	function observe(event: AgentEvent): void {
 		if (disposed) return;
-		if (event.type === "message_end") {
-			onTurn(event.message);
-			return;
-		}
-		if (event.type === "tool_start") {
-			onToolStart(event.toolCallId, event.name);
-			return;
-		}
-		if (event.type === "tool_end") {
-			onToolEnd(event.result);
+		try {
+			if (event.type === "message_end") {
+				onTurn(event.message);
+				return;
+			}
+			if (event.type === "tool_start") {
+				onToolStart(event.toolCallId, event.name);
+				return;
+			}
+			if (event.type === "tool_end") {
+				onToolEnd(event.result);
+			}
+		} catch {
+			// #loop-health contract: the monitor must never affect the run — a
+			// malformed event (e.g. cyclic tool args defeating canonicalJson)
+			// degrades to "no signal". The timer path has the same guard.
 		}
 	}
 
@@ -244,6 +251,10 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 			}
 		}, thresholds.toolOpenMs);
 		timer.unref?.();
+		// A duplicate toolCallId must not orphan the earlier timer (SA-08 round 3
+		// hardened the loop against duplicate ids; the monitor clears on overwrite).
+		const prior = openTimers.get(toolCallId);
+		if (prior !== undefined) clearTimeout(prior);
 		openTimers.set(toolCallId, timer);
 	}
 
@@ -283,18 +294,22 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 
 	function note(code: HealthCode, count: number, detail?: string): void {
 		if (disposed) return;
-		record({
-			code,
-			count,
-			turn: observedTurns,
-			...(detail !== undefined ? { detail: boundDetail(detail) } : {}),
-		});
+		try {
+			record({
+				code,
+				count,
+				turn: observedTurns,
+				...(detail !== undefined ? { detail: boundDetail(detail) } : {}),
+			});
+		} catch {
+			// Same never-affect-the-run contract as observe().
+		}
 	}
 
 	return {
 		observe,
 		note,
-		signals: () => [...fired],
+		signals: () => fired.map((signal) => ({ ...signal })),
 		dispose(): void {
 			if (disposed) return;
 			disposed = true;

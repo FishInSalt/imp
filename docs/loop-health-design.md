@@ -4,11 +4,14 @@
 - Branch: `docs/loop-health-design` (design only); implementation branch TBD
   (`feat/loop-health` proposed)
 - Baseline: `faf4b55` (main)
-- Status: REVIEWED (rev 3) + OWNER SIGNED. Two-track adversarial review closed
+- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED. Design review closed
   2026-09-29 (round 1 NEEDS-FIXES / APPROVE WITH CORRECTIONS, round 2
-  CONFIRMED WITH NOTES, round 3 CONFIRMED — both tracks). Owner decisions A/B
-  signed 2026-09-29: **A = no numeric valve; B = no injection.**
-  Implementation proceeds on `feat/loop-health`.
+  CONFIRMED WITH NOTES, round 3 CONFIRMED — both tracks); owner decisions
+  A/B signed (A = no numeric valve; B = no injection). Implementation on
+  `feat/loop-health`; implementation review round 1 (two tracks, fresh
+  context) closed APPROVE WITH CORRECTIONS with all corrections folded (§9).
+  Final gate: 126 files / 2408 tests green; typecheck (src + test) and biome
+  clean; build emits.
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -642,3 +645,26 @@ is ever written; no main-agent context is ever written.
   N2-N4 folded; the `child-resume` persisted-fixture rework is implementable
   with existing helpers. **Design review closed.** Implementation may start
   after the owner signs decisions A/B (§3).
+- Implementation review round 1 (2026-09-29, two tracks, fresh context, on
+  `a8cbec9` + `87f294e`):
+  - Track A (design conformance): APPROVE WITH CORRECTIONS — every
+    substantive requirement FULFILLED with evidence; corrections were
+    test-completeness (design §6 items 7/8 absent, the unref assertion
+    missing) plus P3 coverage/documentation notes.
+  - Track B (adversarial): APPROVE WITH CORRECTIONS — no P0/P1. Folded:
+    P2-1 (the synchronous `observe()`/`note()` paths were unguarded — a
+    cyclic-args event could crash the run; now swallowed under the
+    never-affect-the-run contract, matching the timer guard), P2-2 (a
+    duplicate `toolCallId` orphaned the first `tool-open` timer; now cleared
+    on overwrite), P2-3 (the two §6 tests added), P3-2 (emitted and returned
+    signals were the internal mutable objects; now clones — `emit` is a
+    first-fire snapshot, later growth updates only the outcome facts).
+    Accepted/documented: P3-1 (an open-tool timer can fire during the
+    overflow compact window; observation-only, default T=10 min) and P3-3
+    (cosmetic commit-message count).
+  - Episode worth recording: the track-B reviewer child was itself stopped by
+    the still-running OLD host build's 60-turn wall mid-review — a live
+    demonstration of the wall this batch removes. The settled child was
+    resumed (`task({resume})`) and completed the review.
+  - After the fold: 126 files / 2408 tests green; both typechecks, biome, and
+    build clean. **Implementation review closed.**

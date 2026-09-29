@@ -225,6 +225,37 @@ describe("tool-open", () => {
 		expect(monitor.signals()).toHaveLength(0);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	it("duplicate toolCallIds: the overwritten timer is cleared, not orphaned", () => {
+		vi.useFakeTimers();
+		const monitor = createLoopHealth({ thresholds: { toolOpenMs: 50 } });
+		monitor.observe(
+			turn(0, [
+				{ name: "bash", args: { command: "a" } },
+				{ name: "bash", args: { command: "b" } },
+			]),
+		);
+		monitor.observe(start("dup", "bash"));
+		monitor.observe(start("dup", "bash"));
+		monitor.observe(end("dup", "bash", false));
+		vi.advanceTimersByTime(100);
+		expect(monitor.signals()).toHaveLength(0);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("open-tool timers are unref'd (a forgotten dispose cannot pin the loop open)", () => {
+		const spy = vi.spyOn(globalThis, "setTimeout");
+		try {
+			const monitor = createLoopHealth({ thresholds: { toolOpenMs: 60_000 } });
+			monitor.observe(turn(0, [{ name: "bash", args: { command: "x" } }]));
+			monitor.observe(start("t0-c0", "bash"));
+			const timer = spy.mock.results[0]?.value as { hasRef?: () => boolean } | undefined;
+			expect(timer?.hasRef?.()).toBe(false);
+			monitor.dispose();
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });
 
 describe("facts contract and lifecycle", () => {

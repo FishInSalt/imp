@@ -98,6 +98,7 @@ describe("taskResult contract (§3)", () => {
 			"[task] health: 3 consecutive failed edits (last: edit src/a.ts) — the child may be stuck; verify the result before relying on it.",
 		);
 		expect(success.output.indexOf("(child: 2 turns")).toBeLessThan(success.output.indexOf("[task] health:"));
+		expect(success.output.match(/\[task\] health:/g)).toHaveLength(2); // one line per signal
 
 		const aborted = taskResult(
 			outcome({ status: "aborted", text: undefined, health }),

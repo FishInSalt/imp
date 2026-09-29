@@ -144,7 +144,8 @@ describe("runSubagent", () => {
 			(event): event is Extract<AgentEvent, { type: "health" }> => event.type === "health",
 		);
 		expect(relayed).toHaveLength(1);
-		expect(relayed[0]?.signal).toMatchObject({ code: "repeat-loop", count: 6 });
+		// First-fire snapshot (count 5); later growth updates the outcome facts, not the relay.
+		expect(relayed[0]?.signal).toMatchObject({ code: "repeat-loop", count: 5, turn: 5 });
 	}, 20000);
 
 	it("maps a parent-signal abort to status 'aborted'", async () => {
@@ -167,6 +168,66 @@ describe("runSubagent", () => {
 		expect(outcome.status).toBe("aborted");
 		expect(outcome.turns).toBe(1); // the tool returned when the signal fired
 	});
+
+	it("abort with an open tool: the disposed monitor fires nothing after settle (#loop-health)", async () => {
+		const saved = process.env.IMP_HEALTH_TOOL_OPEN_MS;
+		process.env.IMP_HEALTH_TOOL_OPEN_MS = "200";
+		try {
+			const g = gate();
+			const controller = new AbortController();
+			const events: AgentEvent[] = [];
+			const provider = scriptedProvider([
+				assistant([{ type: "toolCall", id: "c1", name: "gated", arguments: { message: "hold" } }]),
+			]);
+			const pending = runSubagent({
+				provider,
+				model: "m",
+				system: "",
+				tools: [abortAwareTool(g)],
+				prompt: "go",
+				signal: controller.signal,
+				onEvent: (event) => events.push(event),
+			});
+			await new Promise((r) => setTimeout(r, 20));
+			controller.abort();
+			const outcome = await pending;
+			expect(outcome.status).toBe("aborted");
+			expect(outcome.health).toEqual([]);
+			// Past the 200ms threshold: a leaked timer would have fired by now.
+			await new Promise((r) => setTimeout(r, 300));
+			expect(events.filter((event) => event.type === "health")).toHaveLength(0);
+		} finally {
+			if (saved === undefined) delete process.env.IMP_HEALTH_TOOL_OPEN_MS;
+			else process.env.IMP_HEALTH_TOOL_OPEN_MS = saved;
+		}
+	}, 20000);
+
+	it("IMP_HEALTH=0 disables the monitor entirely (no facts, no emits)", async () => {
+		const saved = process.env.IMP_HEALTH;
+		process.env.IMP_HEALTH = "0";
+		try {
+			const steps: ScriptStep[] = [];
+			for (let i = 0; i < 5; i++) {
+				steps.push(assistant([{ type: "toolCall", id: `d${i}`, name: "echo", arguments: { message: "again" } }]));
+			}
+			steps.push(assistant([{ type: "text", text: "done" }]));
+			const events: AgentEvent[] = [];
+			const outcome = await runSubagent({
+				provider: scriptedProvider(steps),
+				model: "m",
+				system: "",
+				tools: [echo],
+				prompt: "loop",
+				onEvent: (event) => events.push(event),
+			});
+			expect(outcome.status).toBe("completed");
+			expect(outcome.health).toEqual([]);
+			expect(events.filter((event) => event.type === "health")).toHaveLength(0);
+		} finally {
+			if (saved === undefined) delete process.env.IMP_HEALTH;
+			else process.env.IMP_HEALTH = saved;
+		}
+	}, 20000);
 
 	it("maps the child clock to status 'timeout' and leaves the parent signal live", async () => {
 		const g = gate(); // never released: the abort race must win
@@ -329,6 +390,40 @@ describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagin
 		});
 		expect(outcome.usageDetail.summarizerCalls).toBe(1);
 		expect(outcome.usageDetail.incomplete).toBe(true);
+	});
+
+	it("#loop-health: a repeat run crosses the retry boundary on one monitor (cumulative turn)", async () => {
+		// 4 identical tool turns, then the overflow error, then the 5th identical
+		// turn fires repeat-loop on the SAME monitor (the retry shares it) —
+		// count 5, turn 5 (cumulative across both launches).
+		const sink: LLMRequest[] = [];
+		const call = (i: number) =>
+			assistant([{ type: "toolCall", id: `c${i}`, name: "echo", arguments: { message: "again" } }], "tool_use");
+		const provider = scriptedProvider(
+			[
+				call(0),
+				call(1),
+				call(2),
+				call(3),
+				OVERFLOW,
+				assistant([{ type: "text", text: "summary of the child work" }]),
+				call(4),
+				assistant([{ type: "text", text: "recovered" }]),
+			],
+			sink,
+		);
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [echo],
+			prompt: "go",
+			settings: TINY,
+		});
+		expect(outcome.status).toBe("completed");
+		expect(outcome.text).toBe("recovered");
+		expect(outcome.health).toHaveLength(1);
+		expect(outcome.health[0]).toMatchObject({ code: "repeat-loop", count: 5, turn: 5 });
 	});
 
 	it("second overflow → crash with the guidance text; exactly one real summarizer call", async () => {

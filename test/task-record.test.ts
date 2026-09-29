@@ -96,7 +96,8 @@ describe("buildTaskRecord (SA-03)", () => {
 
 	it("#loop-health: valid facts round-trip; malformed facts are dropped, never record-nulling", () => {
 		const health = [{ code: "repeat-loop" as const, count: 5, turn: 5, detail: "bash test" }];
-		const record = buildTaskRecord(input({ health }));
+		const usage = { inputTokens: 7, outputTokens: 3 };
+		const record = buildTaskRecord(input({ health, usage }));
 		expect(record.health).toEqual(health);
 		expect(parseTaskRecord(JSON.parse(JSON.stringify(record)))?.health).toEqual(health);
 		const raw = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
@@ -104,6 +105,8 @@ describe("buildTaskRecord (SA-03)", () => {
 		const dropped = parseTaskRecord(raw);
 		expect(dropped).not.toBeNull(); // advisory field cannot null the record
 		expect(dropped?.health).toBeUndefined();
+		expect(dropped?.usage).toEqual(usage); // identity/usage survive the drop
+		expect(dropped?.attemptId).toBe("attempt-1");
 		// absent stays absent; empty producers omit the field entirely
 		expect(buildTaskRecord(input()).health).toBeUndefined();
 	});

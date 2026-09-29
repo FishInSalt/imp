@@ -393,9 +393,12 @@ export class ToolBlockFold implements Component {
 			// Header-only rows carry it only when the header fits with it.
 			const dur = block.elapsedMs === undefined ? "" : ` · ${formatToolElapsed(block.elapsedMs)}`;
 			const durW = visibleWidth(dur);
+			// Two width bases by design: content rows reserve against `prefix`
+			// (header + two spaces) with an 8-column floor (I3); header-only rows
+			// measure the bare `header` against the full width (I4).
 			const reserve = durW > 0 && w - visibleWidth(prefix) - durW >= 8 ? durW : 0;
 			const addHeader = (): void => {
-				if (durW > 0 && !title.includes("\n") && visibleWidth(header) + durW <= w) {
+				if (durW > 0 && visibleWidth(header) + durW <= w) {
 					rows.push(`${styledPrefix(header, "", spans)}${DIM}${dur}${RESET}`);
 					return;
 				}

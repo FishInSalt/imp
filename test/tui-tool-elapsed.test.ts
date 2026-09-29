@@ -99,6 +99,19 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		expect(rows.join("\n")).toContain("● bash");
 	});
 
+	it("shows the suffix on a header-only row exactly when the header fits with it", () => {
+		// read + expanded + raw + covered path -> header-only row; header `● read`
+		// is 6 columns, suffix 7: w=13 shows, w=12 omits.
+		const shown = input("read", { path: "src/a.ts" }, readPresentation, 2300);
+		shown.setExpanded(true);
+		shown.setRawArguments(true);
+		expect(plain(shown.render(13))[0]).toBe("● read · 2.3s");
+		const omitted = input("read", { path: "src/a.ts" }, readPresentation, 2300);
+		omitted.setExpanded(true);
+		omitted.setRawArguments(true);
+		expect(plain(omitted.render(12))[0]).toBe("● read");
+	});
+
 	it("keeps the suffix on the first row when expanded", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation, 2300);
 		fold.setExpanded(true);

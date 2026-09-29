@@ -4,8 +4,10 @@
 - Branch: `feat/tui-tool-elapsed` (this document's review; implementation follows
   on the same branch)
 - Baseline: `f1fcc54` (main)
-- Status: CONFIRMED (round 4, 2026-09-29) — design review closed;
-  implementation on `feat/tui-tool-elapsed`.
+- Status: IMPLEMENTED + REVIEWED — design review CONFIRMED (round 4,
+  2026-09-29); implementation review APPROVE WITH CORRECTIONS (P3 folds
+  applied). Manual terminal acceptance pending. Implementation commits:
+  dc4f068 (code + tests), 0e41b95 (CHANGELOG), fold commit follows.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -344,6 +346,17 @@ owner-facing and will be listed as pending until the owner confirms.
 
 - Round 4 (same reviewer, closure check, 2026-09-29): **CONFIRMED** —
   N-A/N-B FIXED; zero new findings; design review closed.
+
+- Implementation review (same reviewer, on the committed diff,
+  2026-09-29): **APPROVE WITH CORRECTIONS** — no live defect; falsification
+  sweeps over I1-I6 (widths 1-80, CJK/emoji paths, all modes) and every D4
+  lifecycle path found none. P3 folds: addHeader's dead `\n` guard removed
+  (latent I4 hole, unreachable in production), positive header-only width
+  pins added (w=13 shows / w=12 omits), reserve-vs-addHeader width bases
+  documented. Red evidence: 19/25 unit pins red pre-implementation;
+  integration slow-pin red against baseline src (20 failed / 8 passed /
+  145 skipped). Gates (unmasked): lint 0, typecheck 0, 127 files / 2440
+  tests 0, build 0.
 
 ## Process
 

@@ -246,6 +246,13 @@ inside `createToolSink` with an injectable clock:
 - New optional fields on `ToolBlock`: `elapsedMs?: number` and
   `failed?: boolean` (host-owned,
   presentation-only, never in `sections`/`metadata`/raw payload).
+- `failed` is deliberately distinct from the pre-existing required
+  `ToolBlock.error` (which marks *interrupted* input blocks — finalize
+  sets it, `src/repl/tool-presentation.ts:709`; prepared inputs default
+  false): the ✗ keys on `failed` only. With today's measurement gate an
+  `error`-keyed marker would still be blank on interrupted rows (no
+  `elapsedMs`), but the coupling would silently break if interruptions
+  ever gained a measurement — the explicit end-time field avoids that.
 - Sink lifecycle: `start()` records `startedAt` in the entry; at
   `end(result, replay)` — **after** the terminal flag is set, **before**
   the output block is appended — the sink calls `update(entry.input,
@@ -288,7 +295,9 @@ inside `createToolSink` with an injectable clock:
 - `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs` + `failed`;
   sink timing and end-time update call (Amendment 2: the ≥1000ms sink
   gate is removed — every measured live success updates; Amendment 3:
-  the `isError` gate is removed too and the update carries `failed`).
+  the `isError` gate is removed too and the update carries `failed`);
+  the `ToolBlock.elapsedMs` doc comment (`:110-113`) is updated — drop
+  `non-error`/`errored`; document `failed` as its own field.
 - `src/repl/components/tool-block.ts` — suffix rendering per D2
   invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
   green escape; Amendment 3: ✗/✓ marker selection by `failed`).
@@ -321,7 +330,9 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
 - failed calls (Amendment 3): `failed: true` + sub-second → bare red `✗`
   (plain + ANSI pins, ` ${RED}✗${RESET}`); + ≥1s → `✗ 2.3s`; `failed:
   true` without `elapsedMs` → no suffix (the marker stays
-  measurement-gated); the I1 sweep includes failed folds;
+  measurement-gated); the I1 sweep includes failed folds; the
+  header-only equality pin is restated for ✗ too (`w == header + 2`
+  shows / `+1` omits, failed fixture);
 - with semantic summary present: suffix last;
 - multi-line command: suffix on the first row, continuation rows unchanged;
 - header-only call (no path/body): `● name ✓ 2.3s`;
@@ -339,7 +350,8 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
   the suffix, and the same holds for a multi-row inline command body
   (first-row wrap width and the `consumed`/`summaryVisible` scan both
   reduced by `s`);
-- output/diff blocks with the field set: no suffix (I5);
+- output/diff blocks with the fields set (pin both `elapsedMs` and
+  `failed: true`): no suffix (I5);
 - `updateBlock` re-render reflects a newly set/removed `elapsedMs`.
 
 Unit — `createToolSink` with injected clock:
@@ -381,7 +393,10 @@ returning — no real waits:
 - error tool (Amendment 3): the call row ends with `✗ 5.0s` (the
   failing stand-in advances the clock 5000ms); `elapsedMs === 5000` and
   `failed === true`;
-- resume/replay frames → no suffix.
+- resume/replay frames → no suffix; stale titles are renamed in the
+  batch (the fast/failed integration test title; check the "● ✗ line
+  stays" title/comment at `test/repl-tui.test.ts:3038` for whether it
+  now reads as the sole ✗ surface).
 
 Regression:
 - full existing suite green; legacy/print byte pins untouched by

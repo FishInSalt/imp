@@ -640,6 +640,20 @@ export class TuiShell implements LineInput {
 		}
 	}
 
+	/** Route every selector transition (set and clear) through here: it repaints
+	 *  the activity region, because D10's tool-row suppression is PULLED —
+	 *  requestRender() does not rebuild the activity container. */
+	private setSelector(
+		next: {
+			teardown: () => void;
+			filterKey?: (data: string) => boolean;
+			numberKey?: (data: string) => boolean;
+		} | null,
+	): void {
+		this.selector = next;
+		this.renderActivity();
+	}
+
 	/** Rebuild the activity rows (dim; the ✓/⎿ completion lives in the
 	 *  transcript — this region is pending state only). */
 	private renderActivity(): void {
@@ -679,13 +693,20 @@ export class TuiShell implements LineInput {
 			active.set(id, row);
 			this.activityContainer.addChild(row);
 		};
-		for (const tool of this.activity.tools) {
-			const label = tool.label === "" ? "" : ` ${tool.label}`;
-			add(
-				`tool:${tool.id}:${tool.startedAtMs}`,
-				`${frame} running${elapsed(tool.startedAtMs)}`,
-				`${tool.name}${label}`,
-			);
+		// #confirm-prompt (Phase 3 D10): while a picker is open no tool row is
+		// painted. Phase 1 runs tool_start → gate serially BEFORE Phase 2 executes
+		// the approved subset, so these rows would claim `running Ns` although
+		// nothing is executing. The turn-level spinner above and the transcript-
+		// side task live rows below are genuine progress and stay.
+		if (this.selector === null) {
+			for (const tool of this.activity.tools) {
+				const label = tool.label === "" ? "" : ` ${tool.label}`;
+				add(
+					`tool:${tool.id}:${tool.startedAtMs}`,
+					`${frame} running${elapsed(tool.startedAtMs)}`,
+					`${tool.name}${label}`,
+				);
+			}
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer
 		// sources may share a parent — aggregate their row groups so the fold keeps
@@ -852,6 +873,10 @@ export class TuiShell implements LineInput {
 		}));
 		let list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
 		const box = new Container();
+		// #confirm-prompt (Phase 3 D11): one blank row between the transcript and
+		// the picker — a Spacer (an empty Text renders zero rows). Leading, so the
+		// list stays the LAST child (Phase 1 D5).
+		box.addChild(new Spacer(1));
 		if (options.title !== undefined && options.title !== "") {
 			// #confirm-prompt (Phase 3 D9): the caller name rides after the title as a
 			// faint tag (host-derived, sanitizeDisplay because the value reaches the
@@ -868,8 +893,10 @@ export class TuiShell implements LineInput {
 		// the alert highlight on the named ranges (host owns color).
 		if (options.detail !== undefined && options.detail !== "") {
 			const spans = options.warnSpans ?? [];
-			// The outer dim wraps the whole block; span coloring rides inside it.
-			box.addChild(new Text(dim(applyWarnSpans(options.detail, spans, true), true), 0, 0));
+			// #confirm-prompt (Phase 3 D12): what you decide renders at normal
+			// weight — no outer dim. The warn spans therefore close with a plain
+			// reset (restoreDim=false); the dim end would reintroduce faint.
+			box.addChild(new Text(applyWarnSpans(options.detail, spans, true, false), 0, 0));
 		}
 		// #confirm-prompt (Phase 2 D7): the extension's command preview renders in
 		// the transcript's call-header idiom, above the items. Malformed previews
@@ -894,7 +921,7 @@ export class TuiShell implements LineInput {
 			const finish = (index: number | null): void => {
 				if (settled) return;
 				settled = true;
-				this.selector = null;
+				this.setSelector(null);
 				this.updatePlaceholder(); // the hint may come back with the picker gone
 				this.askContainer.removeChild(box);
 				tui.setFocus(this.editor); // the editor owns keys again
@@ -973,11 +1000,11 @@ export class TuiShell implements LineInput {
 				finish(index);
 				return true;
 			};
-			this.selector = {
+			this.setSelector({
 				teardown: () => finish(null),
 				filterKey, // the pre-focus listener consults this while open
 				numberKey, // #confirm-prompt: digits quick-pick (non-filterable only)
-			};
+			});
 			this.updatePlaceholder(); // keys belong to the picker — hide the hint
 			list.onSelect = (item) => finish(Number(item.value));
 			list.onCancel = () => finish(null);
@@ -1004,6 +1031,12 @@ export class TuiShell implements LineInput {
 			});
 		}
 		const dialog = new LoginDialog(tui, options.title);
+		// #confirm-prompt (Phase 3 D11): one blank row between the transcript and
+		// the dialog — a Spacer (never an empty Text, which renders zero rows).
+		// Focus stays on the dialog component (setFocus(dialog) below).
+		const dialogBox = new Container();
+		dialogBox.addChild(new Spacer(1));
+		dialogBox.addChild(dialog);
 		return new Promise((resolve, reject) => {
 			let settled = false; // five racing finish sources (design rev3 P1-2)
 			const finish = (): void => {
@@ -1017,9 +1050,9 @@ export class TuiShell implements LineInput {
 				// Idempotent with the Esc/Ctrl+C path (the settled guard runs
 				// first; cancel() is itself a no-op after the first call).
 				dialog.teardownNow();
-				this.selector = null;
+				this.setSelector(null);
 				this.updatePlaceholder();
-				this.askContainer.removeChild(dialog);
+				this.askContainer.removeChild(dialogBox);
 				// Null-guard: teardown may fire after close() began detaching
 				// (design rev3 P2-4).
 				if (this.editor !== null) tui.setFocus(this.editor);
@@ -1031,9 +1064,9 @@ export class TuiShell implements LineInput {
 				const queued = this.pendingSelects.shift();
 				if (queued !== undefined) queued();
 			};
-			this.selector = { teardown: () => finish() };
+			this.setSelector({ teardown: () => finish() });
 			this.updatePlaceholder();
-			this.askContainer.addChild(dialog);
+			this.askContainer.addChild(dialogBox);
 			tui.setFocus(dialog);
 			tui.requestRender();
 			// The wrapper owns teardown on ALL settle paths (design rev3
@@ -1079,9 +1112,9 @@ export class TuiShell implements LineInput {
 			const finish = (entryId: string | null): void => {
 				if (settled) return;
 				settled = true;
-				this.selector = null;
+				this.setSelector(null);
 				this.updatePlaceholder();
-				this.askContainer.removeChild(box);
+				this.askContainer.removeChild(boxWrapper);
 				tui.setFocus(this.editor);
 				tui.requestRender();
 				if (this.askLine === null) {
@@ -1109,9 +1142,14 @@ export class TuiShell implements LineInput {
 				options.title ??
 					"Navigate the session tree (enter=go · tab=filter · f=fold · L=label · ←→/pgup/pgdn=page · alt+←→=branch · ctrl+x=copy · type to search)",
 			);
-			this.selector = { teardown: () => finish(null) };
+			// #confirm-prompt (Phase 3 D11): one blank row between the transcript and
+			// the tree box — a Spacer (never an empty Text).
+			const boxWrapper = new Container();
+			boxWrapper.addChild(new Spacer(1));
+			boxWrapper.addChild(box);
+			this.setSelector({ teardown: () => finish(null) });
 			this.updatePlaceholder();
-			this.askContainer.addChild(box);
+			this.askContainer.addChild(boxWrapper);
 			tui.setFocus(box);
 			tui.requestRender();
 		});

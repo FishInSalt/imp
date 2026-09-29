@@ -4,10 +4,11 @@
 - Branch: `docs/loop-health-design` (design only); implementation branch TBD
   (`feat/loop-health` proposed)
 - Baseline: `faf4b55` (main)
-- Status: DRAFT rev 3 — all round-1 and round-2 adversarial findings folded
-  (§9). Awaiting round-3 confirmation and the owner's sign-off on decisions
-  A/B (§3). Not implementable yet. No code, test, or runtime change is
-  authorized by this document.
+- Status: REVIEWED (rev 3) — two-track adversarial review closed 2026-09-29:
+  round 1 NEEDS-FIXES / APPROVE WITH CORRECTIONS, round 2 CONFIRMED WITH
+  NOTES, round 3 CONFIRMED (both tracks). Implementation gate: the owner's
+  sign-off on decisions A/B (§3). Until that sign-off, no code, test, or
+  runtime change is authorized by this document.
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -629,4 +630,12 @@ is ever written; no main-agent context is ever written.
     spin-site list was independently re-audited: six sites total
     (`subagent.test.ts:99`, four in `task-tool.test.ts`,
     `child-resume.test.ts:922`).
-- Round 3 (confirmation of rev 3): PENDING.
+- Round 3 (2026-09-29, confirmation of `39b059e`): both tracks CONFIRMED.
+  Track A verified P2-A, P2-B, P3-B/C/D folded; the six-site spin inventory
+  matches its independent audit (no seventh site; direct `runAgentLoop` cap
+  tests pass explicit finite values and are unaffected). Track B re-audited
+  every live-child `scriptedProvider` call site (45 in `task-tool.test.ts`
+  alone, plus six other child-driving files): no additional spin site;
+  N2-N4 folded; the `child-resume` persisted-fixture rework is implementable
+  with existing helpers. **Design review closed.** Implementation may start
+  after the owner signs decisions A/B (§3).

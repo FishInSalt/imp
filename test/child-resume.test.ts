@@ -304,8 +304,9 @@ describe("SA-07 resume", () => {
 		expect(ours?.parentId).toBe(theirs?.id);
 	});
 
-	it("SA-08/F1-b: a key-order-only header rewrite does not refuse (canonical comparison)", async () => {
+	it("SA-08/F1-b: a launch key-order change between the two reads is accepted (canonical guard)", async () => {
 		const { base, cwd, parent } = await fixture();
+		let txPath = "";
 		const { task } = harness({
 			session: parent,
 			baseDir: base,
@@ -314,21 +315,24 @@ describe("SA-07 resume", () => {
 				assistant([{ type: "text", text: "child done" }]),
 				assistant([{ type: "text", text: "resumed answer" }]),
 			],
+			onBeforeResumeLease: () => {
+				// Reorder the launch object's keys ON DISK between the two reads:
+				// a comparison coupled to serialization order would refuse here;
+				// canonical equality must not. Guard, not red-first (see design).
+				const raw = readFileSync(txPath, "utf8");
+				const nl = raw.indexOf("\n");
+				if (nl <= 0) throw new Error("no header line");
+				const header = JSON.parse(raw.slice(0, nl)) as { launch: Record<string, unknown> } & Record<string, unknown>;
+				header.launch = Object.fromEntries(Object.entries(header.launch).reverse());
+				writeFileSync(txPath, `${JSON.stringify(header)}${raw.slice(nl)}`);
+			},
 		});
 		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
 		const childId = childIdOf(first);
 		const transcript = first.taskRecord?.transcript;
 		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		txPath = transcript.path;
 		persistRecord(parent, first);
-
-		// Top-level key order reversed — semantically identical, and the
-		// post-lease comparison must not confuse serialization with change.
-		const raw = readFileSync(transcript.path, "utf8");
-		const nl = raw.indexOf("\n");
-		if (nl <= 0) throw new Error("no header line");
-		const header = JSON.parse(raw.slice(0, nl)) as Record<string, unknown>;
-		const reordered = Object.fromEntries(Object.entries(header).reverse());
-		writeFileSync(transcript.path, `${JSON.stringify(reordered)}${raw.slice(nl)}`);
 
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
@@ -1312,6 +1316,167 @@ describe("SA-07 resume", () => {
 		});
 		expect(second.isError ?? false).toBe(false);
 		expect(second.taskRecord?.cwd).toBe(path.join(worktreePath, "pkg"));
+	}, 30_000);
+
+	it("SA-08/F2-d: a plain file as the worktree child's cwd is refused (zero provider calls)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-file-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		const fileCwd = path.join(worktreePath, "plain.txt");
+		writeFileSync(fileCwd, "not a directory\n", "utf8");
+		rewriteHeaderCwd(transcript.path, fileCwd);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
+	}, 30_000);
+
+	it("SA-08/F2-e: a symlink inside the worktree whose final object is a file is refused", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkfile-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		// The symlink's target is INSIDE the worktree, so containment alone
+		// would accept it — dirness-first is the load-bearing check.
+		const target = path.join(worktreePath, "plain.txt");
+		writeFileSync(target, "not a directory\n", "utf8");
+		const link = path.join(worktreePath, "link.txt");
+		symlinkSync(target, link);
+		rewriteHeaderCwd(transcript.path, link);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
+	}, 30_000);
+
+	it("SA-08/F2-f: a non-worktree cwd that became a file between attempts is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		persistRecord(parent, first);
+
+		// The directory the child ran in is replaced by a plain file. The
+		// caller's cwd string is unchanged, so the drift comparison passes
+		// and the type check is what must refuse.
+		rmSync(cwd, { recursive: true, force: true });
+		writeFileSync(cwd, "not a directory\n", "utf8");
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
+	});
+
+	it("SA-08/F2-g: a symlink inside the worktree to a directory inside still resumes (no over-refusal)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkdir-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "second pass done" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		const real = path.join(worktreePath, "real");
+		mkdirSync(real, { recursive: true });
+		const alias = path.join(worktreePath, "alias");
+		symlinkSync(real, alias);
+		rewriteHeaderCwd(transcript.path, alias);
+
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
 	}, 30_000);
 
 	it("T3-fresh: the fresh result discloses the child id as a handle", async () => {

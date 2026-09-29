@@ -1,5 +1,9 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
+import { SessionStore } from "../src/core/session/store.js";
 import type { SessionEntry } from "../src/core/session/store.js";
 import {
 	buildTaskRecord,
@@ -277,6 +281,39 @@ describe("SA-05 usage totals", () => {
 		expect(priced.usd).toBeCloseTo(1, 10);
 		expect(priced.unpriced.inputTokens).toBe(2_000_000);
 		expect(priced.byModel.find((m) => m.reference === "unknown/model-b")?.priced).toBe(false);
+	});
+
+	it("SA-08/F3-b: a tampered record identity survives neither reopen nor pricing", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-f3b-"));
+		const filePath = path.join(base, "parent.jsonl");
+		const store = SessionStore.create(filePath, base, "parent-f3b");
+		store.appendMessage({
+			role: "toolResult",
+			results: [
+				{
+					toolCallId: "call-1",
+					toolName: "task",
+					content: "done",
+					isError: false,
+					taskRecord: taskRecord(
+						{ inputTokens: 9, outputTokens: 4 },
+						{
+							binding: { providerName: "openai", wireModelId: "actual", reference: "anthropic/different" },
+						},
+					),
+				} as never,
+			],
+		});
+		const reopened = SessionStore.open(filePath);
+		const view = usageTotalsTracker(reopened.getEntries()).view();
+		expect(view.incomplete.child).toBe(true);
+		expect(view.child.calls).toBe(0);
+		expect(view.child.inputTokens).toBe(0);
+		const priced = priceUsageTotals(view, (reference) =>
+			reference === "anthropic/different" ? { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } : undefined,
+		);
+		expect(priced.usd ?? 0).toBe(0);
+		expect(priced.byModel.some((m) => m.reference === "anthropic/different")).toBe(false);
 	});
 
 	it("tags subscription-backed priced usage (the (sub) semantics)", () => {

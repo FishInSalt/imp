@@ -158,6 +158,11 @@ export interface TaskToolOptions {
 	worktreeBaseDir?: string;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
+	/** Test-only seam (SA-08 reopened F-1): invoked after validation and
+	 *  before the single-writer lease is acquired in the resume branch, so a
+	 *  test can deterministically interleave another executor's completed
+	 *  round between the lookup and the acquire. Production never sets it. */
+	onBeforeResumeLease?: () => void | Promise<void>;
 }
 
 /** SA-01: what the cleanup attempt did — drives the result text (design §D5). */
@@ -507,6 +512,11 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					}\n${RESUME_REFUSAL_TAIL}`;
 					return refuse(output);
 				}
+
+				// SA-08 reopened F-1: test seam — the deterministic interleaving
+				// point (another executor completes here) that the fix must
+				// survive. Inert in production (never set).
+				if (options.onBeforeResumeLease !== undefined) await options.onBeforeResumeLease();
 
 				// §4.1 step 5: single-writer lease, AND-ed with resumable.
 				const acquired = acquireChildLease(file.filePath, attemptId);

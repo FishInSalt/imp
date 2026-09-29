@@ -4,6 +4,7 @@ import type { SessionEntry } from "../src/core/session/store.js";
 import {
 	buildTaskRecord,
 	collectTaskRecords,
+	parseTaskRecord,
 	TASK_RECORD_VERSION,
 	type TaskRecordInput,
 } from "../src/core/task-record.js";
@@ -91,6 +92,16 @@ describe("buildTaskRecord (SA-03)", () => {
 		expect(record.binding?.reference).toBe("anthropic/m");
 		expect(record.worktree?.detail).toBe("d");
 		expect(record.usage?.inputTokens).toBe(1);
+	});
+
+	it("SA-08/F3-a: a binding whose reference does not derive from provider/wire id is refused", () => {
+		const record = buildTaskRecord(
+			input({
+				binding: { providerName: "openai", wireModelId: "actual", reference: "anthropic/different" },
+				usage: { inputTokens: 9, outputTokens: 4 },
+			}),
+		);
+		expect(parseTaskRecord(JSON.parse(JSON.stringify(record)))).toBeNull();
 	});
 
 	it("bounds reason and worktree.detail at 300 code points (CJK/surrogate safe)", () => {

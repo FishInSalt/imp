@@ -395,9 +395,22 @@ document's branch). Recorded implementation facts:
   labels `"N. <label>"`, a blank row above the items, `pickerAffordance(n)` under
   them, and a `numberKey` hook consulted by the pre-focus listener right after
   `filterKey`.
-- Red-first evidence: 7 failing pins before the change (the D1 picker-host
-  assertion, six marker/affordance pins, one new pin); 164/164 green in the two
-  focused files after.
+- Red-first evidence, corrected after the implementation check: with the FINAL
+  pin set, reverting `src/repl/repl.ts` and `src/repl/shell.ts` to `2b1c15e^`
+  fails **9** tests (the `repl-confirm` picker-host assertion, six `repl-tui`
+  marker/affordance pins, and the two `/model` marker sites). The first red run
+  showed 7 only because the two `/model` needles were updated afterwards. 164/164
+  green in the two focused files after the change.
+- **D5's blank row needs `Spacer(1)`, not an empty `Text`** — the check caught the
+  first implementation painting nothing: pi-tui's `Text.render()` returns `[]` for
+  empty/whitespace-only text (`node_modules/@earendil-works/pi-tui/dist/components/text.js`),
+  which the shell's own comment about the placeholder already notes. The pin now
+  asserts the blank line above the first item row.
+- **The D5 child-order pin was strengthened**: it asserts that no picker chrome
+  follows the refiltered list row (the next non-empty line is the editor rule),
+  which discriminates the hazard rather than merely ordering two fixed strings.
+  Both new pins were mutation-verified (empty `Text` → blank-row pin red;
+  unconditional chrome → child-order pin red).
 - Marker sites: **all ten** asserted sites needed the numbering form — including
   the two `/model` sites (`test/repl-tui.test.ts:1520,1721`). `/model` is **not**
   filterable (`src/repl/commands.ts:1503-1506`; the `filterable: true` at `:1439`
@@ -410,8 +423,9 @@ Files: `src/repl/repl.ts` (D1), `src/repl/shell.ts` (D2-D5), `CHANGELOG.md`, tes
 
 Acceptance criteria (scriptable):
 
-1. **Picker host:** a confirm frame contains the title exactly once, and the
-   detail only inside the picker (D1).
+1. **Picker host:** the picker box contains the title once *and* the transcript
+   keeps its single `▪ confirm: <title>` record line — the title legitimately
+   appears in both regions, and the detail does not (D1).
 2. **No-picker host:** the title *and* detail notes are both written
    (byte-identical to today), the readline probe at
    `test/repl-confirm.test.ts:113` still passes unchanged (D1, non-goal §5),
@@ -627,6 +641,23 @@ nine would change was wrong in the other direction and is corrected in §7.
 (b) The worktree needed `npm run build` before the suite: sixteen tests spawn
 `bin/imp.js` → `dist/cli.js`, which is gitignored and was absent in a fresh
 worktree — not a code defect, but worth knowing for any gate run here.
+
+**Phase 1 implementation check** (independent, fresh context, commit `2b1c15e`) —
+verdict **APPROVE WITH CORRECTIONS**, all four items folded on the same branch:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| C1 | P2 | D5's blank row was an empty `Text`, which paints zero rows — the specified separation did not render | Folded: `Spacer(1)` (§7), plus a pin asserting the blank line |
+| C2 | P2 | The child-order pin passed even under the exact hazard D5 names (mutation-verified by the checker) | Folded: the pin now requires that no picker chrome follows the refiltered list row |
+| C3 | P3 | The "7 failing pins" figure undercounted; the final pin set fails 9 on the pre-change source | Folded: §7 records 9 with the reason for the earlier figure |
+| C4 | P3 | §7 #1 "the title exactly once" was ambiguous — the picker shows it too, and only the detail must appear in one region | Folded: §7 #1 now names both regions |
+
+The check also confirmed: the ten marker rewrites are semantically equivalent
+(none weakened into vacuity), the four new pins are non-vacuous, the filterable
+carve-out holds at both `filterable: true` sites (`src/repl/commands.ts:1112,
+1439`), the optional `numberKey` hook cannot steal keys from the login dialog or
+tree selector (they install bare `{ teardown }` selectors), and the four gates
+reproduce at 127 files / 2466 tests.
 
 **Final review status:** APPROVED — Phase 1 may start immediately; Phase 2 follows
 its own implementation cycle.

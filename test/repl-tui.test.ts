@@ -800,6 +800,10 @@ describe("TuiShell selector", () => {
 		expect(frame).toContain("(↑/↓ move · enter select · esc cancel · 1-3 quick pick)");
 		// the affordance sits BELOW the items (D5)
 		expect(frame.indexOf("→ 1. Yes")).toBeLessThan(frame.indexOf("(↑/↓ move"));
+		// and a real blank row separates the detail block from the first item
+		const lines = frame.split("\n");
+		const firstRowAt = lines.findIndex((line) => line.includes("→ 1. Yes"));
+		expect(lines[firstRowAt - 1]?.trim()).toBe("");
 		terminal.data("3"); // a digit picks item index 2
 		await expect(chosen).resolves.toBe(2);
 		shell.close();
@@ -830,14 +834,26 @@ describe("TuiShell selector", () => {
 		await settle(0);
 		const chosen = shell.select({ items: [{ label: "alpha" }, { label: "beta" }], filterable: true });
 		await settle(0);
-		terminal.data("2"); // a query character, never a pick
+		terminal.data("a"); // a matching query: both rows survive the refilter
 		await settle();
 		const frame = terminal.frameSince(0);
-		expect(frame).toContain("filter: 2");
+		expect(frame).toContain("filter: a");
 		expect(frame).not.toContain("quick pick"); // no affordance row here
 		expect(frame).not.toContain("1. alpha"); // and no numbering
-		// child order: the refiltered list still renders below the filter row
-		expect(frame.indexOf("filter: 2")).toBeLessThan(frame.indexOf("No matching commands"));
+		// child order (D5): the refiltered list renders below the filter row, and
+		// NO picker chrome follows it — the next non-empty line is the editor rule.
+		// (applyFilter re-appends the list; chrome added after it would end up
+		// ABOVE a refiltered list, which is what this pin discriminates.)
+		const lines = frame.split("\n");
+		const filterAt = lines.findIndex((line) => line.includes("filter: a"));
+		const lastRowAt = lines.reduce(
+			(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+			-1,
+		);
+		expect(filterAt).toBeGreaterThanOrEqual(0);
+		expect(lastRowAt).toBeGreaterThan(filterAt);
+		const after = lines.slice(lastRowAt + 1).filter((line) => line.trim() !== "");
+		expect(after[0]?.trimStart().startsWith("─")).toBe(true);
 		terminal.data("\x1b"); // Esc cancels
 		await expect(chosen).resolves.toBeNull();
 		shell.close();

@@ -12,6 +12,7 @@ import {
 	matchesKey,
 	ProcessTerminal,
 	SelectList,
+	Spacer,
 	type Terminal,
 	Text,
 	TUI,
@@ -867,8 +868,9 @@ export class TuiShell implements LineInput {
 		// affordance below them — non-filterable pickers only, so the list stays
 		// the LAST child for filterable ones (applyFilter rebuilds the list by
 		// remove+append, and Container appends; an affordance after the list would
-		// end up above a refiltered list).
-		if (numbered) box.addChild(new Text("", 0, 0));
+		// end up above a refiltered list). Spacer, not an empty Text: an empty
+		// Text renders zero rows (see the placeholder note at the top of this file).
+		if (numbered) box.addChild(new Spacer(1));
 		box.addChild(list);
 		if (numbered) box.addChild(new Text(dim(pickerAffordance(items.length), true), 0, 0));
 		return new Promise<number | null>((resolve) => {

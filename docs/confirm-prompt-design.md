@@ -1062,19 +1062,28 @@ with the leanings below.
   `export class SectionRule implements Component`, constructed with an optional
   label. It generalises the private `DialogBorder`
   (`src/repl/login-dialog.ts:40-46`, "pi's DynamicBorder").
-- Render contract (`render(width)`):
-  - absent/empty label, or `width < 5` → `dim("─".repeat(width))`;
-  - otherwise the label is `sanitizeDisplay`-ed, clipped with `truncateToWidth`
-    to `max(1, width - 4)`, and the row is
+- Render contract (`render(width)`), and `implements Component` requires
+  `invalidate(): void` as well (empty — the rule caches nothing, exactly like
+  `DialogBorder`, `src/repl/login-dialog.ts:41`):
+  - absent/empty label, or `avail = width - 4 < 2` → `dim("─".repeat(width))`
+    (below that threshold a clipped label would render as `─ … ─`, which reads
+    as damage rather than a name);
+  - otherwise the label is `sanitizeDisplay`-ed, clipped with
+    `truncateToWidth(label, avail)`, and the row is
     `dim("─"×left) + " " + label + " " + dim("─"×right)` with
     `left = max(1, floor((width - (labelWidth + 2)) / 2))` and
     `right = max(1, width - (labelWidth + 2) - left)` — at least one dash on each
-    side, the label centred;
+    side, the label centred, and `visibleWidth(row) === width` exactly;
   - dashes faint, label at normal weight (D12: decision content normal, chrome
     faint).
 - Placement (base `f417fba`): the generic picker box gets the rule **between** its
   leading `Spacer(1)` (`src/repl/shell.ts:879`) and its title (`:880`); the
-  session tree gets it inside `boxWrapper` between `:1148` and `:1149`.
+  session tree gets it inside `boxWrapper` between `:1148` and `:1149`. Both are
+  **unconditional**, like D11's blank row: every shell-constructed picker box
+  gets the rule, attributed or not (unattributed → plain dashes). Ordinary
+  `ctx.select` pickers therefore change bytes too, including titleless ones
+  (`test/repl-tui.test.ts:823`); that uniformity is intended, not a confirm-only
+  decoration.
 - **Not** placed above the login dialog: it already renders `DialogBorder` above
   and below its content (`src/repl/login-dialog.ts:73,97`), so a third rule would
   be decoration. Its D11 blank row stays.
@@ -1092,8 +1101,10 @@ with the leanings below.
 ### 16.4 Files touched (forecast)
 
 `src/repl/components/section-rule.ts` (new), `src/repl/shell.ts` (title block and
-the two box sites), `test/repl-tui.test.ts`, `CHANGELOG.md`, and this document.
-`src/repl/line-input.ts` and `src/repl/repl.ts` are unchanged.
+the two box sites), `src/repl/line-input.ts` (the `attribution` doc comment only —
+it currently promises a tag after the title, which D13 removes),
+`test/repl-tui.test.ts`, `test/repl-confirm.test.ts` (a comment at `:50`), and
+`CHANGELOG.md`. `src/repl/repl.ts` is unchanged.
 
 ### 16.5 Test plan (red-first; each pin mutation-verified)
 
@@ -1116,11 +1127,17 @@ Phase 3 rule: a pin that survives its own mutation is not a pin).
 
 ### 16.6 Re-pin inventory (counts at `f417fba`)
 
-`test/repl-tui.test.ts:771-798` (the title tag) becomes the rule-label pin;
-`:800-810` (hostile attribution) points at the label instead of the title;
-`test/repl-confirm.test.ts:50-51,64` keep asserting that `attribution` reaches
-`select()` — unchanged by D13/D14; the Phase 3 D11 pins still expect the blank
-row, which stays.
+- `test/repl-tui.test.ts:771-798` (the title tag) becomes the rule-label pin.
+- `:800-810` must be **rewritten**, not re-pointed: it asserts the visible text
+  `· badname` (`:813`), and the rule label carries no `·` separator.
+- **Two D11 pins break and §16.2's layout supersedes them**:
+  `test/repl-tui.test.ts:4574` and `:4618` assert that the row above the title is
+  blank; after D14 that row is the rule, so each must assert blank → rule →
+  title.
+- `:823` (a titleless, unattributed picker) gains an unlabeled rule row.
+- `test/repl-confirm.test.ts:51,64` assert that `attribution` reaches `select()`
+  — unchanged by D13/D14; the comment at `:50` (it describes the title tag) needs
+  rewriting.
 
 ### 16.7 Degradation matrix (must not change)
 
@@ -1140,15 +1157,33 @@ login dialog shows no host-added rule.
 
 | # | Question |
 |---|---|
-| O7 | Centred label vs left-anchored after two dashes: is centring worth the arithmetic (odd/even widths, wide characters), and does `right = max(1, …)` ever overflow `width`? |
-| O8 | Should the login dialog's `DialogBorder` rows reuse `SectionRule` (one implementation), or stay private? |
-| O9 | Label at normal weight (D12's argument: it says who asks) or faint like the dashes? |
-| O10 | Rule *plus* the D11 blank row — intended airiness, or one element too many? |
+| O7 | **Answered in round 1 — no overflow is possible**: for widths 1-200 and label widths up to 500 (ASCII and wide characters) `visibleWidth(row) === width` whenever a label is drawn, with at least one dash on each side, so centring stays. Below `avail = width - 4 < 2` the rule falls back to plain dashes instead of an ellipsis-only row |
+| O8 | **Resolved: leave `DialogBorder` private.** The login dialog's rows are its own frame (top and bottom), not a section boundary; folding them into `SectionRule` would change their bytes for no user-visible gain. Revisit only if a third rule site appears |
+| O9 | **Resolved: label at normal weight.** It names who asks (information); the dashes are chrome — the same split D12 already draws inside the picker |
+| O10 | **Resolved: keep both.** The owner approved the airier layout (blank row, then rule); the rule carries the name the blank row cannot |
 
 ### 16.10 Review log (A2)
 
-**Round 1** — pending (independent adversarial review of this section at
-`f417fba`).
+**Round 1** (independent adversarial review of `706d0bc`, base `f417fba`) —
+verdict **NEEDS REVISION**. The reviewer disproved the overflow risk (O7 answered)
+and found seven documentation/test-plan gaps, all folded:
+
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| 1 | P1 | §16.6 missed two D11 pins that D14 breaks (`test/repl-tui.test.ts:4574`, `:4618` assert the row above the title is blank; it becomes the rule) | Folded: both listed with the new expectation |
+| 2 | P2 | §16.4 called `line-input.ts` unchanged, but its doc comment promises the tag D13 removes | Folded: listed as touched (comment only) |
+| 3 | P2 | The rule is added unconditionally, so unattributed and titleless pickers gain a row — the doc framed it as confirm-specific | Folded: D14 states the global uniformity and names `:823` |
+| 4 | P2 | The hostile-attribution pin asserts `· badname`; the rule label has no `·`, so it must be rewritten rather than re-pointed | Folded: §16.6 says rewritten, with the reason |
+| 5 | P3 | §16.6 mischaracterised `repl-confirm.test.ts:50` (a comment, not an assertion) | Folded: `:51,64` are the assertions; `:50` needs a comment rewrite |
+| 6 | P3 | `Component` also requires `invalidate()`, absent from the render contract | Folded: added to D14 |
+| 7 | P3 | On narrow terminals the clipped label would render as `─ … ─` | Folded: fallback threshold is now `avail < 2` → plain dashes |
+
+Round-1 checks that found nothing to change: every line ref at `f417fba`; the
+D5 child-order invariant and the `applyFilter` refilter pin; the queued-select
+FIFO; the tree box's structure (no attribution exists on `TreeSelectRequest`, so
+an unlabeled rule is the only consistent option); the login dialog's two
+borders; resize; text-host degradation and `--print` bytes; and the
+`sanitizeDisplay` import staying live in `shell.ts`.
 
 ### 16.11 Process
 

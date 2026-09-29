@@ -37,7 +37,7 @@ Two independent facts combine.
 2. **A tool call is two transcript entries.** `createToolSink.start` appends an
    input block (`src/repl/tool-presentation.ts:663-669`); `createToolSink.end`
    appends a *separate* output block (`:702-705`). `TranscriptSink`'s append
-   callback (`src/repl/transcript.ts:79-98`) wraps each block in its own
+   callback (`src/repl/transcript.ts:85-111`) wraps each block in its own
    `ToolBlockFold` and `appendChild`s it, i.e. appends at the end of `entries`.
 
 For a single call, and for every serial call, start and end arrive adjacently,
@@ -134,7 +134,7 @@ header. No change to `setLiveRows`, the resolver, or the ownership guard.
 | Orphan result (no start; e.g. `end` for an unknown id) | `createToolSink.end` appends an "Arguments unavailable" input block first (`tool-presentation.ts:691-700`), which is then the anchor — result lands after it, i.e. at the end. Unchanged. |
 | Reused tool_call id across messages (`call_${index}`) | `inputEntryById` is re-pointed to the newest fold, mirroring `inputFoldById` (§5.2 of `task-inline-live-rows-design.md`); the settled fold keeps the result already attached to it. |
 | Gate-blocked call in a chunk | Phase 3 still emits `tool_end` in call order; identical handling. |
-| Interleaved non-tool entries (thinking, status lines) | Phase 1→3 emits no lines, and the model does not stream while tools run, so nothing is appended between a chunk's starts and ends. If some future producer did, the result would attach below its own call and above that later entry — which is the point of the change. |
+| Interleaved non-tool entries (thinking, status lines) | Phase 1→3 emits no lines, and the model does not stream while tools run, so nothing is appended between a chunk's starts and ends. A thinking section *can* already sit after the call's input fold (the previous model call streamed it), but the result is emitted before the next model call exists, so the insert is invisible (§6.2). |
 | Interrupt (`finalize`) | Emits `update` only (`tool-presentation.ts:711-731`), never an append. Unchanged. |
 
 ### 4.5 Not affected

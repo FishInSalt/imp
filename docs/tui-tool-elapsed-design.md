@@ -269,9 +269,9 @@ inside `createToolSink` with an injectable clock:
 - Docs: this file; `CHANGELOG.md` Unreleased entry; `PROJECT_PLAN.md`
   ledger + backlog close at merge; README only if a display section
   exists (none found). Amendment 2 additionally updates the stale
-  `src/format.ts:141` comment ("The sink gates the ≥1s display rule" —
+  `src/format.ts:142` comment ("The sink gates the ≥1s display rule" —
   the gate moves to the renderer) and the `ToolBlock.elapsedMs` doc
-  comment at `src/repl/tool-presentation.ts:108-111`, plus the
+  comment at `src/repl/tool-presentation.ts:110-113`, plus the
   CHANGELOG/ledger `≥1s only` wording it invalidates.
 
 ## Test plan (red-first)
@@ -322,7 +322,7 @@ Unit — `createToolSink` with injected clock:
 - zero elapsed (`elapsedMs == 0`) → bare ` ✓`, never `0.0s`; negative
   elapsed (pathological injected clock) → bare ` ✓`, never `-0.5s` — the
   renderer keys the time text on `elapsedMs >= 1000`, not on field
-  presence (review finding 4);
+  presence (Amendment 2 review round 1, finding 4);
 - error result → no update;
 - `end(result, true)` (replay) → no update even if slow;
 - orphan end without start → no update;
@@ -357,8 +357,9 @@ Regression:
 
 Unmasked gate commands (lint exit code read directly — pipeline masking is
 a recorded incident): `npm run lint; echo $?`; typecheck (both tsconfigs);
-full test suite (expected: 126 files / 2412 tests baseline + new pins;
-the Amendment 2 batch re-runs all gates unmasked on its final tree);
+full test suite (expected: 127 files / 2441 tests as of Amendment 1,
+plus the Amendment 2 pins; the batch re-runs all gates unmasked on its
+final tree);
 `npm run build`. Manual terminal acceptance: passed 2026-09-29 (owner;
 Amendment 2 is a follow-up on the same surface).
 
@@ -452,6 +453,18 @@ Amendment 2 is a follow-up on the same surface).
   space after ✓ moved outside the DIM span (byte order now identical to
   the legacy `render.ts` completion line), and the three absence pins
   assert the `● bash` line is present before checking it.
+
+- Amendment 2 (owner-directed, 2026-09-29): the completion ✓ becomes
+  unconditional for measured successful calls; the time stays ≥1000ms-
+  gated; replay/error/interrupted unchanged. Round 1 (independent
+  adversarial, fresh context): **CONFIRMED WITH NOTES** — 2×P2 (stale
+  Verification paragraph; unnamed `gates at 1000ms` sink pin and the
+  under-specified constant-clock integration pin) + 4×P3 (zero/negative-
+  elapsed render rule; stale `src/format.ts` comment + Files-touched
+  checklist; CHANGELOG/ledger wording) — all folded in revision 2.
+  Round 2 (same reviewer, targeted): **CONFIRMED** — six findings FIXED;
+  fold-internal nits (dangling finding reference, two off-by-N line
+  anchors, stale baseline counts) folded on close.
 
 ## Process
 

@@ -269,8 +269,12 @@ export class TtyConfirm {
 			return true;
 		}
 		this.renderer.note(`▪ confirm: ${message}`);
-		if (detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
 		const select = this.select;
+		// #confirm-prompt (Phase 1 D1): the picker carries the detail itself, so the
+		// dim detail note is written only where no picker exists — on readline,
+		// no-host and print paths this note is the ONLY place the gated command and
+		// its reason reach the user.
+		if (select === null && detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
 		if (select !== null) {
 			const choice = await select({
 				title: message,

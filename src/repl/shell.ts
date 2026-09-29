@@ -12,6 +12,7 @@ import {
 	matchesKey,
 	ProcessTerminal,
 	SelectList,
+	Spacer,
 	type Terminal,
 	Text,
 	TUI,
@@ -180,6 +181,15 @@ const PLACEHOLDER_HINT = dim(
  *  reach for it, and "typing queues" advertises steering. */
 const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter follow-up)", true);
 
+/** #confirm-prompt (Phase 1 D2): the picker's key affordance, drawn inside the
+ *  picker box because the editor hint row is blanked while a selector owns
+ *  focus. The digit range is computed from the item count (D3 caps it at 9);
+ *  a single-item picker has no digit segment — there is nothing to quick-pick. */
+function pickerAffordance(count: number): string {
+	const range = Math.min(count, 9);
+	return `(↑/↓ move · enter select · esc cancel${range > 1 ? ` · 1-${range} quick pick` : ""})`;
+}
+
 /** #task-inline-live-rows (B1): element-wise row comparison, so an unchanged
  *  live row never invalidates a fold's render cache. */
 function rowsEqual(a: readonly string[], b: readonly string[]): boolean {
@@ -227,7 +237,11 @@ export class TuiShell implements LineInput {
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
 	/** The open selector, if any — finished on pick, cancel, or close. */
-	private selector: { teardown: () => void; filterKey?: (data: string) => boolean } | null = null;
+	private selector: {
+		teardown: () => void;
+		filterKey?: (data: string) => boolean;
+		numberKey?: (data: string) => boolean;
+	} | null = null;
 	/** Pickers queued behind an open one (M10): opened when it finishes. */
 	private pendingSelects: Array<() => void> = [];
 	private footer: Text | null = null;
@@ -357,6 +371,9 @@ export class TuiShell implements LineInput {
 				// A filterable picker eats printable input as its query (M11 #9)
 				// before the list or the editor could see it.
 				if (this.selector.filterKey?.(data) === true) return { consume: true };
+				// #confirm-prompt (Phase 1 D3): digits quick-pick on non-filterable
+				// pickers — checked after filterKey, which owns printables there.
+				if (this.selector.numberKey?.(data) === true) return { consume: true };
 			}
 			// Ctrl+V (M13 batch 2, pi's app.clipboard.pasteImage): read the system
 			// clipboard — an image becomes a tmp-file path at the cursor; text
@@ -822,9 +839,13 @@ export class TuiShell implements LineInput {
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked — the ORIGINAL index, so filtering (which hides
 		// rows) can never rewire what Enter resolves to.
+		// #confirm-prompt (Phase 1 D4): non-filterable pickers number their rows —
+		// the affordance line below advertises digits, so the rows must show them.
+		// Presentation only: `value` still carries the original index.
+		const numbered = options.filterable !== true;
 		const items = options.items.map((item, index) => ({
 			value: String(index),
-			label: item.label,
+			label: numbered ? `${index + 1}. ${item.label}` : item.label,
 			description: item.description,
 		}));
 		let list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
@@ -843,7 +864,15 @@ export class TuiShell implements LineInput {
 		let query: string | null = options.filterable === true ? "" : null;
 		const queryRow = new Text("", 0, 0);
 		if (query !== null) box.addChild(queryRow);
+		// #confirm-prompt (Phase 1 D5): a blank row above the items and the key
+		// affordance below them — non-filterable pickers only, so the list stays
+		// the LAST child for filterable ones (applyFilter rebuilds the list by
+		// remove+append, and Container appends; an affordance after the list would
+		// end up above a refiltered list). Spacer, not an empty Text: an empty
+		// Text renders zero rows (see the placeholder note at the top of this file).
+		if (numbered) box.addChild(new Spacer(1));
 		box.addChild(list);
+		if (numbered) box.addChild(new Text(dim(pickerAffordance(items.length), true), 0, 0));
 		return new Promise<number | null>((resolve) => {
 			let settled = false; // pick, cancel and close all funnel here — once
 			const finish = (index: number | null): void => {
@@ -916,9 +945,22 @@ export class TuiShell implements LineInput {
 				}
 				return false;
 			};
+			/** #confirm-prompt (Phase 1 D3): digits 1..9 pick by item index — only
+			 *  on non-filterable pickers, where a digit is not a query character.
+			 *  The index is static, so the binding stays valid when the list scrolls;
+			 *  a digit above the item count is ignored. */
+			const numberKey = (data: string): boolean => {
+				if (query !== null) return false;
+				if (data.length !== 1 || data < "1" || data > "9") return false;
+				const index = Number(data) - 1;
+				if (index >= items.length) return false;
+				finish(index);
+				return true;
+			};
 			this.selector = {
 				teardown: () => finish(null),
 				filterKey, // the pre-focus listener consults this while open
+				numberKey, // #confirm-prompt: digits quick-pick (non-filterable only)
 			};
 			this.updatePlaceholder(); // keys belong to the picker — hide the hint
 			list.onSelect = (item) => finish(Number(item.value));

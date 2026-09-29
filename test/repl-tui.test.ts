@@ -700,7 +700,7 @@ describe("TuiShell selector", () => {
 		expect(frame).toContain("pick a model");
 		expect(frame).toContain("alpha");
 		expect(frame).toContain("beta");
-		expect(frame).toContain("→ alpha"); // row 0 carries the selection marker
+		expect(frame).toContain("→ 1. alpha"); // row 0 carries the selection marker and its number
 		terminal.data("\r");
 		await expect(chosen).resolves.toBe(0);
 		shell.close();
@@ -723,7 +723,7 @@ describe("TuiShell selector", () => {
 		expect(frame.indexOf("[guardian] allow this bash command?")).toBeLessThan(
 			frame.indexOf("command: rm -rf node_modules"),
 		);
-		expect(frame.indexOf("why it matched")).toBeLessThan(frame.indexOf("→ Yes"));
+		expect(frame.indexOf("why it matched")).toBeLessThan(frame.indexOf("→ 1. Yes"));
 		terminal.data("\r");
 		await expect(chosen).resolves.toBe(0);
 		shell.close();
@@ -775,12 +775,87 @@ describe("TuiShell selector", () => {
 		const mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(0);
-		expect(terminal.frameSince(mark)).toContain("→ beta"); // marker moved
-		expect(terminal.frameSince(mark)).not.toContain("→ alpha");
+		expect(terminal.frameSince(mark)).toContain("→ 2. beta"); // marker moved
+		expect(terminal.frameSince(mark)).not.toContain("→ 1. alpha");
 		terminal.data("\x1b[B"); // Down again → gamma
 		terminal.data("\r"); // confirm
 		await settle();
 		await expect(chosen).resolves.toBe(2);
+		shell.close();
+	});
+
+	it("#confirm-prompt: a non-filterable picker numbers its rows and shows the key affordance below them (Phase 1)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "[guardian] allow this bash command?",
+			detail: "rm -rf node_modules",
+			items: [{ label: "Yes" }, { label: "Yes, don't ask again this session" }, { label: "No" }],
+		});
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("→ 1. Yes"); // rows carry their number
+		expect(frame).toContain("  2. Yes, don't ask again this session");
+		expect(frame).toContain("(↑/↓ move · enter select · esc cancel · 1-3 quick pick)");
+		// the affordance sits BELOW the items (D5)
+		expect(frame.indexOf("→ 1. Yes")).toBeLessThan(frame.indexOf("(↑/↓ move"));
+		// and a real blank row separates the detail block from the first item
+		const lines = frame.split("\n");
+		const firstRowAt = lines.findIndex((line) => line.includes("→ 1. Yes"));
+		expect(lines[firstRowAt - 1]?.trim()).toBe("");
+		terminal.data("3"); // a digit picks item index 2
+		await expect(chosen).resolves.toBe(2);
+		shell.close();
+	});
+
+	it("#confirm-prompt: digits above the item count are ignored (Phase 1 D3)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }, { label: "b" }] });
+		await settle();
+		terminal.data("9"); // no ninth row: resolves nothing
+		await settle();
+		let settled: number | null | undefined;
+		void chosen.then((value) => {
+			settled = value;
+		});
+		await settle(0);
+		expect(settled).toBeUndefined();
+		terminal.data("\r"); // the highlighted row still answers
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#confirm-prompt: a filterable picker keeps digits in its query, gains no hint, and keeps the list last (Phase 1 D2/D3/D5)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "alpha" }, { label: "beta" }], filterable: true });
+		await settle(0);
+		terminal.data("a"); // a matching query: both rows survive the refilter
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("filter: a");
+		expect(frame).not.toContain("quick pick"); // no affordance row here
+		expect(frame).not.toContain("1. alpha"); // and no numbering
+		// child order (D5): the refiltered list renders below the filter row, and
+		// NO picker chrome follows it — the next non-empty line is the editor rule.
+		// (applyFilter re-appends the list; chrome added after it would end up
+		// ABOVE a refiltered list, which is what this pin discriminates.)
+		const lines = frame.split("\n");
+		const filterAt = lines.findIndex((line) => line.includes("filter: a"));
+		const lastRowAt = lines.reduce(
+			(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+			-1,
+		);
+		expect(filterAt).toBeGreaterThanOrEqual(0);
+		expect(lastRowAt).toBeGreaterThan(filterAt);
+		const after = lines.slice(lastRowAt + 1).filter((line) => line.trim() !== "");
+		expect(after[0]?.trimStart().startsWith("─")).toBe(true);
+		terminal.data("\x1b"); // Esc cancels
+		await expect(chosen).resolves.toBeNull();
 		shell.close();
 	});
 
@@ -965,13 +1040,13 @@ describe("M9-2 review regressions", () => {
 		});
 		void shell.select({ items: [{ label: "x" }] }).then(secondSettled);
 		await settle(0);
-		expect(terminal.frameSince(0)).toContain("→ a"); // the FIRST list is still mounted
-		expect(terminal.frameSince(0)).not.toContain("→ x"); // the second is queued, not stacked
+		expect(terminal.frameSince(0)).toContain("→ 1. a"); // the FIRST list is still mounted
+		expect(terminal.frameSince(0)).not.toContain("→ 1. x"); // the second is queued, not stacked
 		terminal.data("\x1b[B");
 		terminal.data("\r");
 		await expect(first).resolves.toBe(1);
 		await settle();
-		expect(terminal.frameSince(0)).toContain("→ x"); // now the queued picker opened
+		expect(terminal.frameSince(0)).toContain("→ 1. x"); // now the queued picker opened
 		terminal.data("\r");
 		await expect(second).resolves.toBe(0);
 		shell.close();
@@ -1000,7 +1075,7 @@ describe("M9-2 review regressions", () => {
 		await settle(0);
 		const question = shell.ask("proceed? [y/N] ");
 		await settle();
-		expect(terminal.frameSince(0)).toContain("→ a"); // positive control: picker rendered
+		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control: picker rendered
 		expect(terminal.frameSince(0)).not.toContain("proceed?"); // held, not shown under the list
 		terminal.data("\x1b"); // cancel the picker
 		await settle();
@@ -1517,7 +1592,7 @@ describe("runRepl with shell:tui", () => {
 			await settle();
 			const frame = env.terminal.frameSince(0);
 			expect(frame).toContain("models — switch applies from the next turn"); // title
-			expect(frame).toContain("→ test-model"); // current id first, preselected
+			expect(frame).toContain("→ 1. test-model"); // current id first, preselected
 			expect(frame).toContain("claude-sonnet-4-5");
 			expect(frame).toContain("zai/glm-5.3"); // GLM candidates are zai-canonical
 			expect(frame).toContain("current"); // the current row is marked
@@ -1718,7 +1793,7 @@ describe("runRepl with shell:tui", () => {
 			env.terminal.data("\x0c\x0c\x0c");
 			await frameContains(env, "models — switch applies from the next turn");
 			const frame = env.terminal.frameSince(0);
-			expect(frame).toContain("→ test-model"); // current id first, preselected
+			expect(frame).toContain("→ 1. test-model"); // current id first, preselected
 			expect(frame).toContain("claude-sonnet-4-5");
 			env.terminal.data("\x1b[B"); // Down → claude-sonnet-4-5 (row 1)
 			await settle();

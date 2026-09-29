@@ -131,7 +131,7 @@ header. No change to `setLiveRows`, the resolver, or the ownership guard.
 |---|---|
 | Serial tool (all non-task tools, and `task` called alone) | The input fold is the last entry when the result arrives, so splice == append. Byte-identical transcript. |
 | Chunk larger than `MAX_CONCURRENT_TASKS` (5) | Chunks run sequentially (`loop.ts:402-412`); each chunk's results attach within the chunk. Final order is `a ra b rb … f rf …`, monotonic. |
-| Orphan result (no start; e.g. a truncated replay, or `end` for an unknown id) | `createToolSink.end` appends an "Arguments unavailable" input block first (`tool-presentation.ts:691-700`), which is then the anchor — result lands after it, i.e. at the end. Unchanged. |
+| Orphan result (no start; e.g. `end` for an unknown id) | `createToolSink.end` appends an "Arguments unavailable" input block first (`tool-presentation.ts:691-700`), which is then the anchor — result lands after it, i.e. at the end. Unchanged. |
 | Reused tool_call id across messages (`call_${index}`) | `inputEntryById` is re-pointed to the newest fold, mirroring `inputFoldById` (§5.2 of `task-inline-live-rows-design.md`); the settled fold keeps the result already attached to it. |
 | Gate-blocked call in a chunk | Phase 3 still emits `tool_end` in call order; identical handling. |
 | Interleaved non-tool entries (thinking, status lines) | Phase 1→3 emits no lines, and the model does not stream while tools run, so nothing is appended between a chunk's starts and ends. If some future producer did, the result would attach below its own call and above that later entry — which is the point of the change. |
@@ -183,8 +183,11 @@ assertion if the new test goes there instead.
    entry), `feedStatus` (`:154`, inspects only `entries.at(-1)`), and
    `completedLines` (`:242-243`, `flatMap` over completed line entries). The
    splice moves one *component* entry earlier and never touches line entries or
-   the tail, so `feedStatus`'s adjacency rule and `completedLines`' order are
-   unaffected.
+   the tail — but it *can* land ahead of a non-line entry when the call's input
+   fold is not the last entry (a thinking section from the next model call, in
+   principle). That reordering is invisible today (the result is emitted before
+   any later section exists), and it never touches line entries, so
+   `feedStatus`'s adjacency rule and `completedLines`' order are unaffected.
 3. **A result that arrives before its input fold.** Impossible for a real call
    (`start` precedes `end`); the orphan path above covers the rest.
 
@@ -253,3 +256,14 @@ parenthetical reconciles them).
   assertions for both the live run and the replay. Three of the new cases are
   red before the change (verified by reverting `transcript.ts`).
 - Gate: 127 files / 2468 tests, lint 0, typecheck (both configs) 0, build 0.
+- Independent adversarial code review (fresh context): CLEAN, 0 blocking/major.
+  It reproduced the red baseline three ways (dev tree revert, a pristine
+  `main` worktree, and the orphan scenario) and confirmed the serial path is a
+  provable splice-at-length no-op. Four carry-forwards folded in: §6.2's
+  "never touches line entries or the tail" reworded (a result can land ahead of
+  a later non-line entry), §4.4's "truncated replay" label corrected (replay
+  feeds calls before results, so it cannot produce an orphan), the sink's two
+  appends now both go through `appendEntry`, and the duplicated reused-id
+  comment removed. The fifth (no test guards
+  `test/tool-presentation.test.ts:326-347`) is left as-is: that path is already
+  covered by the new `test/repl-fold.test.ts` block and stayed green.

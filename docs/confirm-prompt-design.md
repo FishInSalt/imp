@@ -743,10 +743,10 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 
 | # | Observation | Where it comes from |
 |---|---|---|
-| P1 | "I cannot tell which information the guardian extension shows and which is imp's own" | `ExtensionRegistry.confirm` (`src/extensions/registry.ts:350`) forwards `(message, detail, options)` and never passes the caller's name; the blocked result says `blocked by an extension` (`src/core/loop.ts:459`). Provenance exists today only if the extension writes it into its own text — guardian does that in 2 of its 3 strings (`examples/extensions/guardian.mjs:94,225,247`) |
-| P2 | The gated command appears three times on one screen | (1) the transcript call header (tool_start), (2) the activity region's live rows (`src/repl/shell.ts:681-688`), (3) the Phase 2 preview row (`:868`). `tool_start` is emitted before the gate (`src/core/loop.ts:441-458`), so (1) and (2) already exist while the picker waits — and (2) claims `running Ns` although nothing is executing (Phase 1 gates run before any Phase 2 execution) |
+| P1 | "I cannot tell which information the guardian extension shows and which is imp's own" | `ExtensionRegistry.confirm` (`src/extensions/registry.ts:350`) forwards `(message, detail, options)` and never passes the caller's name; the blocked result says `blocked by an extension` in **both** block sites (`src/core/loop.ts:462` on the chunk path, `:603` on the serial `executeToolCall` path — guardian's `bash`/`write` are not concurrency-safe, so they take the serial one). Provenance exists today only if the extension writes it into its own text: guardian's two confirm messages carry `[guardian] ` (`examples/extensions/guardian.mjs:225,247`) but its floor block reason (`:94`, returned at `:242`) does not |
+| P2 | The gated command appears three times on one screen | (1) the transcript call header (tool_start), (2) the activity region's live tool rows (`src/repl/shell.ts:682-689`), (3) the Phase 2 preview row (`:868`). `tool_start` is emitted before the gate (`src/core/loop.ts:441-458`), so (1) and (2) already exist while the picker waits — and (2) claims `running Ns` although nothing is executing (Phase 1 gates run before any Phase 2 execution) |
 | P3 | The transcript and the activity region have no boundary | The root's children are appended back to back with no `Spacer` (`src/repl/shell.ts:339-347`), and the picker box is a plain `Container` whose first child is its title (`:852-882`) |
-| P4 | Decision content is rendered faint | `Renderer.note` wraps every `▪` line in `dim` (`src/render.ts:181`); the activity rows are dim (`ToolActivity.render`); so is the picker's detail (`src/repl/shell.ts:863`). Adjacent lines therefore share one weight. The owner tested `printf 'normal\n\x1b[2mfaint\x1b[0m\n'` in their terminal and *can* see faint — so P4 is a design judgement, not a terminal defect |
+| P4 | Decision content is rendered faint | `Renderer.note` wraps every `▪` line in `dim` (`src/render.ts:186`, inside the method declared at `:181`); the activity rows are dim (`ToolActivity.render`); so is the picker's detail (`src/repl/shell.ts:863`). Adjacent lines therefore share one weight. The owner tested `printf 'normal\n\x1b[2mfaint\x1b[0m\n'` in their terminal and *can* see faint — so P4 is a design judgement, not a terminal defect |
 
 ### 15.2 Decisions
 
@@ -756,54 +756,77 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
   (`src/extensions/registry.ts:350`). Its only caller is the per-extension api
   closure (`src/extensions/loader.ts:231`); that closure passes `facts.name`
   (`loader.ts:51-52`) — the same string the load banner and the `setStatus`
-  bucket already use. `ExtensionRegistryOptions.confirm` (`registry.ts:89`) gains
-  the fourth parameter.
+  bucket already use.
+- The fourth parameter threads through **five** declarations, all host-internal:
+  `ExtensionRegistryOptions.confirm` (`registry.ts:89`), the registry's private
+  field type (`registry.ts:117-118`), `LoadExtensionsOptions.confirm`
+  (`loader.ts:36`), `loadExtensionSetup`'s parameter (`cli.ts:491`), and
+  `TtyConfirm.handler` (`repl.ts:272`).
 - `ConfirmOptions` is **not** touched: the label is host-derived, so an extension
   cannot set or spoof it, and the extension-facing seam is unchanged.
-- Host rendering:
-  - record line (`src/repl/repl.ts:278`, and the remembered variant `:274`):
-    `▪ confirm: <source> — <message>` when `source` is present, else today's
-    bytes exactly;
-  - picker title (`src/repl/shell.ts:855`): append a faint ` · <source>`.
-    The source is host-derived and pattern-validated, but still goes through
-    `sanitizeDisplay`.
+- Record line (`src/repl/repl.ts:278`, and the remembered variant `:274`):
+  `▪ confirm: <source> — <message>` when `source` is present, else today's bytes
+  exactly.
+- Picker title (`src/repl/shell.ts:855`): appended faint ` · <source>`. The tag
+  needs a carrier, because `title` is a plain string: `SelectOptions`
+  (`src/repl/line-input.ts:32-45`, host-internal) gains an optional
+  `source?: string`, set **only** by the confirm path (`repl.ts:293-294`). Other
+  `ctx.select` callers (`commands.ts:628,1547,1599`, `trust-ask.ts:59`) pass no
+  `source`, so unrelated pickers are unaffected. The value is host-derived and
+  pattern-validated but still goes through `sanitizeDisplay`.
 - Block path: `ToolCallDecision` (`src/core/loop.ts:101`, declared in core by
   design) gains an optional `source?: string`; `emitToolCall`
-  (`registry.ts:368`) attaches `source: stored.source` to the decision it
-  returns and to its own handler-error decision (`:377`); `loop.ts:459` renders
-  `Tool "<name>" blocked by extension <source>: <reason>`, falling back to
-  today's `an extension` when `source` is absent.
+  (`registry.ts:368`) attaches `source: stored.source` to **every** decision it
+  returns — the extension's own `{ block: true }` (`:378`) and its own
+  handler-error decision (`:381`) — and both block strings render
+  `Tool "<name>" blocked by extension <source>: <reason>`: `loop.ts:462`
+  (chunk path) and `loop.ts:603` (serial `executeToolCall` path). Today's
+  `an extension` wording remains the fallback when `source` is absent.
+  Attaching the source to *handler-returned* decisions is what makes the floor
+  reason's prefix removal safe: `guardian.mjs:94` is returned as a block
+  decision at `:242`, so it reaches the user only through this string.
 - Consumer: guardian drops its `[guardian] ` prefixes (`guardian.mjs:94,225,247`)
   so the name appears exactly once per surface, host-written.
 - Accepted: the name appears on two surfaces at once (record line + picker
   title). Both are independently meaningful: text hosts have only the record
   line; the picker title is the live surface. See O2.
 
-#### D10 — no live activity rows while a picker is open
+#### D10 — no live tool rows while a picker is open
 
 - Rule: while `this.selector !== null` (`src/repl/shell.ts:240`) the activity
-  region paints nothing.
-- Site: `renderActivity()` (`:644`) clears the container (`:645`); after the idle
-  branch, add: if a selector is open, clear the transcript's task live rows (the
-  `taskLiveRows` loop at `:647-654`) and return without painting.
+  region paints **no tool rows** — the turn-level spinner (`:661-673`) and the
+  transcript-side task live rows are untouched.
+- Site: `renderActivity()` (`:644`) clears the container (`:645`), has an idle
+  branch (`:646-655`, whose transcript-side clearing loop is `:650-651`), and
+  builds tool rows at `:682-689` (the `add` helper ends at `:681`). The change
+  skips that tool-row loop only while a selector is open.
+- Why narrowed: the false rows are exactly the tool rows; the task live rows are
+  genuine progress from another subsystem (transcript-side `setTaskLiveRows`),
+  and blanking them on unrelated flows would be over-suppression.
 - Triggers: suppression must be *pulled*, because `requestRender()` does not
-  rebuild the activity container. Call `renderActivity()` where `this.selector`
-  is assigned (`:967` picker, `:1025` login dialog, `:1103` session tree) and
-  where it is cleared (`:888`, `:1011`, `:1073`, and the interrupt paths
-  `:489-498`).
+  rebuild the activity container. Route every selector transition through one
+  private method (e.g. `setSelector(next)`) that also calls `renderActivity()`:
+  the three assignments (`:967` picker, `:1025` login dialog, `:1103` session
+  tree) and the three clears (`:888`, `:1011`, `:1073`). The interrupt paths
+  (`:489-498`) reach those clears through `teardown()`; `close()` and the
+  `pendingSelects` drain must be verified to as well (implementation pin: a
+  picker closed by pick / Esc / Ctrl+C / close restores the rows).
 - Rationale (evidence): `src/core/loop.ts:441-458` — Phase 1 runs `tool_start →
   validation → gate` serially *before* Phase 2 executes the approved subset, so
-  while a gate's picker waits nothing is running. The rows on screen are waiting
-  rows and the `running Ns` label is false.
-- Scope: keyed on `selector`, so it also covers the login dialog and the
-  session-tree picker, which register as selectors (`:1025`, `:1103`) despite not
-  going through `select()`. Owner-approved as the recommended rule; see O1.
+  while a gate's picker waits nothing is running; the tool rows on screen are
+  waiting rows and the `running Ns` label is false. Nothing is executing then, so
+  skipping the tool rows loses no real progress.
+- Scope: keyed on `selector`, which also covers the login dialog and the
+  session-tree picker (`:1025`, `:1103`) even though they do not go through
+  `select()`. With the narrowed rule the only rows those flows could hide are
+  tool rows, which cannot exist there: they are invoked when the turn is idle.
 
 #### D11 — one blank line between the transcript and a picker
 
 - Add a leading `new Spacer(1)` to each selector surface's box: the generic
-  picker (`:852`), the login dialog container (`:1013-1027`), the session tree
-  (`:1094-1105`).
+  picker (`Container` at `:854-882`, whose first child is currently the title at
+  `:855`), the login dialog (`new LoginDialog` at `:997`, added at `:1028`), and
+  the session tree (`new TreeSelectorBox` at `:1086`, added at `:1106`).
 - Phase 1 D5's "the list stays the last child" invariant is unaffected: a leading
   spacer precedes the title, not the list.
 - Use `Spacer`, not an empty `Text` (`:878-880`: an empty `Text` renders zero
@@ -841,9 +864,10 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 
 `src/extensions/registry.ts` (confirm signature, emitToolCall source),
 `src/extensions/loader.ts` (api closure passes `facts.name`),
-`src/core/loop.ts` (decision type, block string),
+`src/core/loop.ts` (decision type, both block strings),
 `src/repl/repl.ts` (record lines),
 `src/repl/shell.ts` (title tag, detail weight, suppression, spacers),
+`src/repl/line-input.ts` (`SelectOptions.source`),
 `src/format.ts` (`applyWarnSpans` optional argument),
 `examples/extensions/guardian.mjs` (three prefixes),
 plus `test/` and `CHANGELOG.md`.
@@ -871,8 +895,11 @@ lands (the Phase 1/2 discipline).
 (`test/extensions-repl.test.ts` 11, `test/loop-hooks.test.ts` 5,
 `test/loop-concurrency.test.ts` 1); confirm-detail pins
 `test/repl-tui.test.ts` 5 / `test/repl-confirm.test.ts` 6;
-`test/repl-tui.test.ts:756` computes detail span offsets with a `command: `
-prefix (that prefix disappeared in Phase 2); plus every frame pin that includes
+`test/repl-tui.test.ts:756` computes detail span offsets from its own `detail`
+(which carries a `command: ` prefix, `:755`) and stays internally consistent;
+the byte pin D12 actually invalidates is `test/repl-tui.test.ts:763`
+(`expect(raw).toContain("\x1b[0m\x1b[2m")` — "the dim environment resumes after
+ the span"), which becomes a plain-reset assertion. Plus every frame pin that includes
 the activity rows or the picker's leading rows.
 
 ### 15.7 Degradation matrix (must not change)
@@ -894,7 +921,7 @@ after the merge.
 
 | # | Question |
 |---|---|
-| O1 | D10 keys on `selector`, which also hides live rows during the login dialog and the session-tree picker. Accept, or narrow it (e.g. a flag set only by the confirm path)? |
+| O1 | D10 keys on `selector`, which also covers the login dialog and the session-tree picker. Round 1 flagged this as over-suppression; D10 was narrowed to tool rows only, so the flows that could lose real information (transcript-side task live rows) are unaffected. Confirm the narrowed rule is enough |
 | O2 | D9 puts the name on both the record line and the picker title. Keep both, or one? |
 | O3 | D12 needs a reset-only end for detail spans because `WARN_END` restores dim. Variant argument, or delete detail-level `warnSpans` entirely (no extension passes it; it survives only in tests)? |
 | O4 | Text-host record notes stay faint. Confirm the asymmetry, or escalate? |
@@ -903,8 +930,25 @@ after the merge.
 
 ### 15.10 Review log (A1)
 
-**Round 1** — pending (independent adversarial review of this section at
-`000d72c`).
+**Round 1** (independent adversarial review of `30dbcbe`, base `000d72c`) —
+verdict **NEEDS REVISION**. Eight findings, all folded:
+
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| 1 | P0 | D9 named one block string; the literal exists twice — `loop.ts:462` (chunk path) and `:603` (`executeToolCall`, the serial path guardian's `bash`/`write` take), and the citation pointed at `:459` | Folded: §15.1 P1 and D9 name both sites |
+| 2 | P1 | The fourth confirm parameter threads through **five** declarations, not one | Folded: D9 lists all five |
+| 3 | P1 | The picker title's faint tag had no carrier, and the title is shared by every `ctx.select` caller — leakage risk | Folded: host-internal `SelectOptions.source`, set only by the confirm path; other callers pass nothing |
+| 4 | P2 | D10's site text was mis-scoped (`:647-654` is the idle branch; the transcript loop is `:650-651`; tool rows are `:682-689`) | Folded: D10 rewritten with exact ranges |
+| 5 | P2 | §15.6 misattributed the D12 breakage: `repl-tui:755-756` is internally consistent; the invalidated byte pin is `:763` | Folded |
+| 6 | P2 | Interrupt/close coverage was imprecise; `close()` and the `pendingSelects` drain omitted | Folded: D10 routes all six transitions through one method and pins row restoration on pick/Esc/Ctrl+C/close |
+| 7 | P3 | Keying on `selector` over-suppresses the login dialog and `/tree`, where the false-`running` rationale does not apply | Folded: D10 narrowed to tool rows only — task live rows and the turn spinner are untouched |
+| 8 | P3 | Miscites: `render.ts:181` is the `note` declaration (`dim` is `:186`); `guardian.mjs:94` is a block reason returned at `:242`, so its prefix can only be dropped if handler-returned decisions carry the source | Folded: citations corrected; D9 states handler-returned decisions carry `source` |
+
+Round-1 checks that found nothing to change: `confirm`'s single caller and
+`facts.name`; `stored.source` on handlers; `WARN_END` restoring dim;
+`tool_start` preceding the gate; the counts in §15.6; the selector set/clear
+sites; the picker box's first child being the title; the leading-spacer vs D5
+invariant; `NO_CONFIRM_LINE` and the plain preview note.
 
 ### 15.11 Process
 

@@ -4,8 +4,8 @@
 - Branch: `feat/tui-tool-elapsed` (this document's review; implementation follows
   on the same branch)
 - Baseline: `f1fcc54` (main)
-- Status: DRAFT v2 — round 1 independent adversarial review returned
-  NEEDS-FIXES; all findings folded (see Review log); awaiting re-review.
+- Status: DRAFT v3 — rounds 1-2 folded (see Review log); awaiting
+  round-3 re-review.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -108,9 +108,12 @@ Dim suffix appended at the end of the call block's **first row**:
   pre-series line; sub-second calls stay clean).
 - Placement invariants (pinned by tests; implementation must satisfy these,
   not a specific code path):
-  - I1: no rendered row may exceed the terminal width — pi-tui **throws**
-    on oversize lines (`@earendil-works/pi-tui` render check), so unit
-    pins assert `visibleWidth(row) <= w` for every emitted row.
+  - I1: no row emitted by `ToolBlockFold.render` may exceed the
+    terminal width — pi-tui **throws** on oversize lines
+    (`@earendil-works/pi-tui` render check), so unit pins assert
+    `visibleWidth(row) <= w` for every row of that component's output
+    (scoped to `ToolBlockFold`; `ToolActivity`'s own clamps are out of
+    scope).
   - I2: the suffix never wraps to its own row; it is omitted instead.
   - I3: the suffix width is reserved **from the first row's existing
     budget before that row's content is laid out** — never appended on
@@ -119,20 +122,31 @@ Dim suffix appended at the end of the call block's **first row**:
     append would overflow and trip the I1 throw). Concretely:
     `budget = w - visibleWidth(prefix)`; with a suffix of width `s`, if
     `budget - s >= 8`, the first row's content (path preview `ellipsize`,
-    wrapped first chunk, inline command body via a reserve argument
-    threaded into `emit`'s first row, and the expanded/raw pathFirst
-    first row) is laid out within `budget - s`, and the suffix closes the
-    row; otherwise the suffix is omitted and the full budget stands.
-    Boundary pins: `budget - s == 8` shows, `== 7` omits.
+    wrapped first chunk, and the expanded/raw pathFirst first row) is
+    laid out within `budget - s`, and the suffix closes the row;
+    otherwise the suffix is omitted and the full budget stands. Boundary
+    pins: `budget - s == 8` shows, `== 7` omits. The inline command body
+    path threads the reduction into `emit` for its **first row only**
+    (`w - visibleWidth(current) - s`); continuation rows keep
+    `w - visibleWidth(current)` so their indentation and grapheme
+    `consumed` accounting (feeding `summaryVisible`) stay unchanged.
   - I4: collapse/expand/raw state never removes an eligible suffix —
-    **I3 width omission is its only non-gating absence**. In particular
-    the header-only fallback rows (`visibleWidth(prefix) >= w` paths)
-    emit `header + suffix` when that fits, else omit.
+    **I3 width omission is its only non-gating absence**. In the
+    header-only fallback branches (`visibleWidth(prefix) >= w`), emit
+    `header + suffix` when `visibleWidth(header) + s <= w`, otherwise
+    `header` alone with no suffix; the two-space separator is never
+    rendered in these branches (a header of width `w - 1` or `w` never
+    carries a suffix).
   - I5: only input blocks (`call` rendering) can carry it; output/diff
     blocks ignore the field.
-  - I6: `finalize()`'s interruption update explicitly sets
-    `elapsedMs: undefined` (structural, in addition to D4's ordering
-    argument).
+  - I6: `finalize()`'s interruption update is constructed with
+    `elapsedMs: undefined` explicitly (defense in depth over D4's
+    ordering argument: `end` sets the terminal flag before any update,
+    and finalize only touches non-terminal entries, so a post-`end`
+    entry never reaches it). Pinned by a unit where the appended input
+    block is mutated to carry `elapsedMs`, then finalize runs: the
+    update callback receives a block with `elapsedMs === undefined` and
+    the interrupted row renders no suffix.
 - Interaction: when the first row already carries a semantic summary
   (`…  summary`), the suffix follows it (last on the row) and the
   summary's fit check includes the suffix width.
@@ -220,6 +234,9 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
   `rows.every((r) => visibleWidth(r) <= w)` — the pi-tui throw contract,
   stronger than "no visible overflow";
 - expanded and raw modes: suffix still on the first row (I4);
+- multi-row inline command body with a suffix: first row carries the
+  suffix within width; continuation rows' indentation and consumption
+  accounting unchanged;
 - omission-notice parity: a collapsed pathFirst row carrying a suffix
   emits the same omission/`… more` marker as the identical block without
   the suffix (`summaryVisible` accounting unchanged);
@@ -234,6 +251,10 @@ Unit — `createToolSink` with injected clock:
 - `end(result, true)` (replay) → no update even if slow;
 - orphan end without start → no update;
 - finalize-then-end and end-then-finalize → no duration either way;
+- mutated-input finalize pin (I6): an appended input block that carries
+  `elapsedMs` (mutated by the test) yields a finalize update whose
+  block has `elapsedMs === undefined`, and the interrupted row renders
+  no suffix;
 - append-only consumer (no update callback) → no crash, blocks unchanged;
 - duplicate end → no second update.
 
@@ -293,6 +314,16 @@ owner-facing and will be listed as pending until the owner confirms.
   correct: history claims (pre-series TUI displayed `✓ 2.3s`; drop
   incidental), D4 lifecycle mechanics (duplicate/orphan/finalize/
   clear), `ToolBlock` non-persistence, separator idiom.
+
+- Round 2 (same reviewer, targeted, 2026-09-29): **NEEDS-FIXES** —
+  findings 1/3/4/6/7 FIXED; finding 2 PARTIALLY FIXED (header-only
+  fallback wording left the header-fits/prefix-doesn't sliver open —
+  now closed with an explicit `visibleWidth(header) + s` rule); finding
+  5 NOT FIXED (I6 was an unpinned restatement — rewritten as defense
+  in depth with a mutated-input unit pin); new N1 (I3 boundary wording
+  vs `emit`'s first-row reserve mechanics — restated with the
+  continuation-row constraint and a pin), N2 (I1 pin scoped to
+  `ToolBlockFold.render`). All folded in revision 3.
 
 ## Process
 

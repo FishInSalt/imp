@@ -850,3 +850,20 @@ requirement).
   run-followed-by-assistant shapes; merged multi-image messages against a
   live gateway (reuses the existing multi-image shape; no new wire
   construct).
+- 2026-09-29: post-implementation adversarial review of fb01a9e —
+  **APPROVE**, no corrections required. Independently verified: buffer
+  ownership and both flush points (wire.push at position; system seeded
+  first); every emission shape (single-result golden, last-only image,
+  merged multi-image, run-followed-by-assistant/user, run-at-end,
+  text-only byte-identical, non-vision placeholders — the downgrade runs
+  BEFORE the conversion); the rename left no stale `hoisted` references;
+  the immediate-hoist site is unique to openai-completions.ts and the
+  wrappers pass messages through; F6-b feeds the REAL repaired list
+  (repairs string origin checked); the new tests fail at f3a5536 exactly
+  on the extra `user` between the tool messages; gates re-run (images
+  29/29, full 125 files / 2377 tests). Recorded observations (no action):
+  the flush guard precedes the exhaustive default throw (harmless; the
+  throw aborts conversion anyway) and flushPendingImages reassigns the
+  buffer in its closure (correct; noted as an edit-sensitive pattern).
+  UNVERIFIED: the pi-parity comment line references were not checked
+  against a pi checkout (comments only).

@@ -730,3 +730,185 @@ fourth now pinned); the gates reproduce at 128 files / 2483 tests; and the
   review round before implementation.
 - Each phase merges separately and is independently revertible; neither phase
   touches persisted state, so rollback is a revert, not a migration.
+
+## 15. Amendment A1 — the approval moment (Phase 3)
+
+Base `000d72c` (main after the Phase 1 acceptance ledger). Phases 1-2 are merged
+(`e9e0829`, `0d96f3b`) and the owner accepted them by eye on 2026-09-30
+(`07f60fb`, merge `000d72c`). The owner then reported four problems with the
+approval moment itself. This amendment is host-side except for one consumer
+change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
+
+### 15.1 Problem (owner-observed, with code evidence)
+
+| # | Observation | Where it comes from |
+|---|---|---|
+| P1 | "I cannot tell which information the guardian extension shows and which is imp's own" | `ExtensionRegistry.confirm` (`src/extensions/registry.ts:350`) forwards `(message, detail, options)` and never passes the caller's name; the blocked result says `blocked by an extension` (`src/core/loop.ts:459`). Provenance exists today only if the extension writes it into its own text — guardian does that in 2 of its 3 strings (`examples/extensions/guardian.mjs:94,225,247`) |
+| P2 | The gated command appears three times on one screen | (1) the transcript call header (tool_start), (2) the activity region's live rows (`src/repl/shell.ts:681-688`), (3) the Phase 2 preview row (`:868`). `tool_start` is emitted before the gate (`src/core/loop.ts:441-458`), so (1) and (2) already exist while the picker waits — and (2) claims `running Ns` although nothing is executing (Phase 1 gates run before any Phase 2 execution) |
+| P3 | The transcript and the activity region have no boundary | The root's children are appended back to back with no `Spacer` (`src/repl/shell.ts:339-347`), and the picker box is a plain `Container` whose first child is its title (`:852-882`) |
+| P4 | Decision content is rendered faint | `Renderer.note` wraps every `▪` line in `dim` (`src/render.ts:181`); the activity rows are dim (`ToolActivity.render`); so is the picker's detail (`src/repl/shell.ts:863`). Adjacent lines therefore share one weight. The owner tested `printf 'normal\n\x1b[2mfaint\x1b[0m\n'` in their terminal and *can* see faint — so P4 is a design judgement, not a terminal defect |
+
+### 15.2 Decisions
+
+#### D9 — provenance: the host names the caller, the extension stops naming itself
+
+- `ExtensionRegistry.confirm(message, detail?, options?, source?)`
+  (`src/extensions/registry.ts:350`). Its only caller is the per-extension api
+  closure (`src/extensions/loader.ts:231`); that closure passes `facts.name`
+  (`loader.ts:51-52`) — the same string the load banner and the `setStatus`
+  bucket already use. `ExtensionRegistryOptions.confirm` (`registry.ts:89`) gains
+  the fourth parameter.
+- `ConfirmOptions` is **not** touched: the label is host-derived, so an extension
+  cannot set or spoof it, and the extension-facing seam is unchanged.
+- Host rendering:
+  - record line (`src/repl/repl.ts:278`, and the remembered variant `:274`):
+    `▪ confirm: <source> — <message>` when `source` is present, else today's
+    bytes exactly;
+  - picker title (`src/repl/shell.ts:855`): append a faint ` · <source>`.
+    The source is host-derived and pattern-validated, but still goes through
+    `sanitizeDisplay`.
+- Block path: `ToolCallDecision` (`src/core/loop.ts:101`, declared in core by
+  design) gains an optional `source?: string`; `emitToolCall`
+  (`registry.ts:368`) attaches `source: stored.source` to the decision it
+  returns and to its own handler-error decision (`:377`); `loop.ts:459` renders
+  `Tool "<name>" blocked by extension <source>: <reason>`, falling back to
+  today's `an extension` when `source` is absent.
+- Consumer: guardian drops its `[guardian] ` prefixes (`guardian.mjs:94,225,247`)
+  so the name appears exactly once per surface, host-written.
+- Accepted: the name appears on two surfaces at once (record line + picker
+  title). Both are independently meaningful: text hosts have only the record
+  line; the picker title is the live surface. See O2.
+
+#### D10 — no live activity rows while a picker is open
+
+- Rule: while `this.selector !== null` (`src/repl/shell.ts:240`) the activity
+  region paints nothing.
+- Site: `renderActivity()` (`:644`) clears the container (`:645`); after the idle
+  branch, add: if a selector is open, clear the transcript's task live rows (the
+  `taskLiveRows` loop at `:647-654`) and return without painting.
+- Triggers: suppression must be *pulled*, because `requestRender()` does not
+  rebuild the activity container. Call `renderActivity()` where `this.selector`
+  is assigned (`:967` picker, `:1025` login dialog, `:1103` session tree) and
+  where it is cleared (`:888`, `:1011`, `:1073`, and the interrupt paths
+  `:489-498`).
+- Rationale (evidence): `src/core/loop.ts:441-458` — Phase 1 runs `tool_start →
+  validation → gate` serially *before* Phase 2 executes the approved subset, so
+  while a gate's picker waits nothing is running. The rows on screen are waiting
+  rows and the `running Ns` label is false.
+- Scope: keyed on `selector`, so it also covers the login dialog and the
+  session-tree picker, which register as selectors (`:1025`, `:1103`) despite not
+  going through `select()`. Owner-approved as the recommended rule; see O1.
+
+#### D11 — one blank line between the transcript and a picker
+
+- Add a leading `new Spacer(1)` to each selector surface's box: the generic
+  picker (`:852`), the login dialog container (`:1013-1027`), the session tree
+  (`:1094-1105`).
+- Phase 1 D5's "the list stays the last child" invariant is unaffected: a leading
+  spacer precedes the title, not the list.
+- Use `Spacer`, not an empty `Text` (`:878-880`: an empty `Text` renders zero
+  rows).
+
+#### D12 — weight rule: what you decide is normal weight, chrome is faint
+
+- Rule: inside a picker, the lines that carry the decision (title, reason/detail,
+  command preview, items) render at normal weight; chrome — the affordance line,
+  transcript notes, the ` · <source>` tag, the preview header's faint `●` — stays
+  faint.
+- Change: `src/repl/shell.ts:863` drops the outer `dim(...)` around the detail.
+- Coupling found while designing: `WARN_END` **restores dim**
+  (`src/format.ts:163`), so `applyWarnSpans` is only correct inside a dim
+  context. Removing the outer dim therefore needs a reset-only end for the detail
+  path. Proposal: optional fourth argument
+  `applyWarnSpans(text, spans, ansi, restoreDim = true)` — existing callers'
+  bytes are unchanged (`test/format.test.ts:81-110`). See O3.
+- Deliberate asymmetry: the same reason text stays faint where it is a transcript
+  note on a text host (`repl.ts:281`). A note is history; the picker is the live
+  decision. See O4.
+- `▪` record lines stay faint everywhere, including on the TUI.
+
+### 15.3 Explicitly not doing
+
+| Not doing | Reason |
+|---|---|
+| Removing the `● tool` header from the preview row | Cosmetic only — the command body still appears twice |
+| One copy of the command (moving the alert span onto the transcript call row) | Technically feasible (`ToolBlockFold.updateBlock`, `tool-block.ts:172-176`), but the picker would stop standing on its own: the record row can scroll out of view, and the owner would answer a prompt whose subject is off-screen |
+| Replacing global faint with an explicit colour | 74 `dim(` call sites in `src/`; 54 `\x1b[2m` byte pins across 11 test files. That is imp's whole visual language — separate proposal |
+| Styling the record note on text hosts more loudly (O4) | Out of scope here; recorded as a question |
+| Login-dialog / trust-ask visual redesign beyond D11's spacer | Not part of the reported problem |
+
+### 15.4 Files touched (forecast)
+
+`src/extensions/registry.ts` (confirm signature, emitToolCall source),
+`src/extensions/loader.ts` (api closure passes `facts.name`),
+`src/core/loop.ts` (decision type, block string),
+`src/repl/repl.ts` (record lines),
+`src/repl/shell.ts` (title tag, detail weight, suppression, spacers),
+`src/format.ts` (`applyWarnSpans` optional argument),
+`examples/extensions/guardian.mjs` (three prefixes),
+plus `test/` and `CHANGELOG.md`.
+
+### 15.5 Test plan (red-first)
+
+1. **D9**: the confirm handler receives the source (registry/repl test); the
+   record line carries `guardian —`; `blocked by extension guardian:` replaces
+   `blocked by an extension`; the picker title carries ` · guardian`; guardian's
+   three strings lose their prefix.
+2. **D10**: a TUI frame rendered with the confirm picker open contains no
+   `running` text and no tool row; after the answer the rows return.
+3. **D11**: an empty row sits between the last transcript row and the picker
+   title, for the generic picker, the login dialog and the session tree.
+4. **D12**: the detail row carries no `\x1b[2m`; a detail warn span ends with a
+   plain reset; `applyWarnSpans`' four-argument form is pinned, three-argument
+   bytes unchanged.
+
+Each pin must be verified RED on the pre-change code before the implementation
+lands (the Phase 1/2 discipline).
+
+### 15.6 Re-pin inventory (counts at `000d72c`)
+
+`[guardian]` 20 occurrences in `test/`; `blocked by an extension` 17
+(`test/extensions-repl.test.ts` 11, `test/loop-hooks.test.ts` 5,
+`test/loop-concurrency.test.ts` 1); confirm-detail pins
+`test/repl-tui.test.ts` 5 / `test/repl-confirm.test.ts` 6;
+`test/repl-tui.test.ts:756` computes detail span offsets with a `command: `
+prefix (that prefix disappeared in Phase 2); plus every frame pin that includes
+the activity rows or the picker's leading rows.
+
+### 15.7 Degradation matrix (must not change)
+
+Print / no-host: D9 changes the record-line bytes on every host (intended);
+D10/D11/D12 are TUI-only. `NO_CONFIRM_LINE` (`registry.ts:94`) and the plain
+preview note (`repl.ts:287-290`) are unchanged. The model-facing block reason
+changes only by the inserted source name. `--print` output remains ANSI-free.
+
+### 15.8 Acceptance (manual, owner)
+
+The owner approved these frames in conversation: approval screen before/after,
+approved, remembered-by-session, declined, text hosts, an ordinary run
+(activity rows unchanged), and another picker (blank line). The implementation
+check verifies the rendered frames against them; the owner re-verifies by eye
+after the merge.
+
+### 15.9 Open questions for the reviewer
+
+| # | Question |
+|---|---|
+| O1 | D10 keys on `selector`, which also hides live rows during the login dialog and the session-tree picker. Accept, or narrow it (e.g. a flag set only by the confirm path)? |
+| O2 | D9 puts the name on both the record line and the picker title. Keep both, or one? |
+| O3 | D12 needs a reset-only end for detail spans because `WARN_END` restores dim. Variant argument, or delete detail-level `warnSpans` entirely (no extension passes it; it survives only in tests)? |
+| O4 | Text-host record notes stay faint. Confirm the asymmetry, or escalate? |
+| O5 | Is the fallback wording `blocked by an extension` still right when `source` is absent, or should it be reworded? |
+| O6 | After the picker closes, is an explicit `renderActivity()` repaint needed, or does the next spinner tick suffice (the region would be stale for up to 120 ms)? |
+
+### 15.10 Review log (A1)
+
+**Round 1** — pending (independent adversarial review of this section at
+`000d72c`).
+
+### 15.11 Process
+
+Branch `feat/confirm-prompt-phase3` from `000d72c` in the confirm worktree; this
+amendment goes through an independent adversarial review before implementation;
+implementation is red-first; an independent implementation check follows; then
+`--no-ff` merge plus a ledger entry. Phases 1-2 remain untouched and revertible.

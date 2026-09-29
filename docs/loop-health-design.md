@@ -844,4 +844,12 @@ is ever written; no main-agent context is ever written.
   `CONFIRMED WITH NOTES` on `fec0ab0` (residual P2: the facts-contract
   first-fire test's vehicle depends on the removed producer — rewrite
   instruction added to the change list; P3 cite `:64`→`:67`), folded in
-  `7999ebe`; round 3 `CONFIRMED` on `7999ebe`. Implementation may start.
+  `7999ebe`; round 3 `CONFIRMED` on `7999ebe`. Implementation on
+  `2b00d80` (producer removal + legacy arms + red→green tests — the
+  no-op / env-ignored / producer-sweep pins failed on the old code
+  first); independent implementation review **APPROVE** (0 P0/P1; 2×P3 —
+  comment phrasing accepted as-is, the `start()`-helper "unused" note
+  refuted on recheck (its single call site is the new no-op test); the
+  optional subagent-level `getTimerCount` addition declined — other
+  subsystems own timers there, and the unit-level pin already covers the
+  monitor). Merged to main `--no-ff`.

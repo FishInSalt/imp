@@ -49,6 +49,21 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		);
 	});
 
+	it("renders the bare green marker for sub-second completions (Amendment 2)", () => {
+		const fold = input("bash", { command: "echo ok" }, bashPresentation, 400);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo ok ✓"]);
+		expect(fold.render(40)[0]).toBe(`${dim}●${reset} ${bold}bash${reset}  echo ok ${green}✓${reset}`);
+	});
+
+	it("renders the bare marker for zero and negative elapsed (Amendment 2)", () => {
+		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 0).render(40))).toEqual([
+			"● bash  echo ok ✓",
+		]);
+		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, -500).render(40))).toEqual([
+			"● bash  echo ok ✓",
+		]);
+	});
+
 	it("renders no suffix without elapsedMs (regression)", () => {
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation).render(40))).toEqual([
 			"● bash  echo ok",
@@ -81,11 +96,19 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 2300).render(22))).toEqual([
 			"● bash  echo ok",
 		]);
+		// Amendment 2: bare marker s=2 -> budget 18-8-2 = 8 shown; 17-8-2 = 7 omitted.
+		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 400).render(18))).toEqual([
+			"● bash  echo ok ✓",
+		]);
+		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 400).render(17))).toEqual([
+			"● bash  echo ok",
+		]);
 	});
 
 	it("never exceeds the width on any row for any width (I1)", () => {
 		const folds = [
 			input("bash", { command: "echo ok" }, bashPresentation, 2300),
+			input("bash", { command: "echo ok" }, bashPresentation, 400),
 			input("read", { path: "src/very/long/path/to/some/deeply/nested/file.ts" }, readPresentation, 2300),
 			input("bash", { command: "echo first\necho last" }, bashPresentation, 2300),
 			input("bash", { command: "echo ok" }, bashPresentation, 60000),
@@ -113,6 +136,15 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		omitted.setExpanded(true);
 		omitted.setRawArguments(true);
 		expect(plain(omitted.render(12))[0]).toBe("● read");
+		// Amendment 2: bare marker s=2 with the same fixture: w=8 shows, w=7 omits.
+		const fastShown = input("read", { path: "src/a.ts" }, readPresentation, 400);
+		fastShown.setExpanded(true);
+		fastShown.setRawArguments(true);
+		expect(plain(fastShown.render(8))[0]).toBe("● read ✓");
+		const fastOmitted = input("read", { path: "src/a.ts" }, readPresentation, 400);
+		fastOmitted.setExpanded(true);
+		fastOmitted.setRawArguments(true);
+		expect(plain(fastOmitted.render(7))[0]).toBe("● read");
 	});
 
 	it("keeps the suffix on the first row when expanded", () => {
@@ -185,16 +217,14 @@ describe("createToolSink end-time duration (#tui-tool-elapsed)", () => {
 		expect(updates[0]!.next.elapsedMs).toBe(2300);
 	});
 
-	it("gates at 1000ms", () => {
-		for (const [ms, fire] of [
-			[999, false],
-			[1000, true],
-		] as const) {
+	it("fires for any measured live success, sub-second included (Amendment 2)", () => {
+		for (const ms of [0, 999, 1000] as const) {
 			const { sink, updates, add } = harness();
 			sink.start("t1", "bash", { command: "x" });
 			add(ms);
 			sink.end(result());
-			expect(updates.length).toBe(fire ? 1 : 0);
+			expect(updates.length).toBe(1);
+			expect(updates[0]!.next.elapsedMs).toBe(ms);
 		}
 	});
 

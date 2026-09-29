@@ -389,16 +389,25 @@ export class ToolBlockFold implements Component {
 					spans.push({ start: decoration.length + name.length, end: header.length, style: RED });
 			}
 			const prefix = `${header}  `;
-			// #tui-tool-elapsed (design I1-I6; Amendment 1 mixed style): the
-			// completed call's duration is a green ✓ + dim time suffix closing the
-			// first row. Call sites must not wrap `dur` in an extra DIM; `durW`
-			// measures the plain `" ✓ X.Ys"` form. Content rows reserve its width
-			// from that row's budget; below an 8-column floor it is omitted
-			// entirely. Header-only rows carry it only when the header fits with it.
-			const elapsedText = block.elapsedMs === undefined ? "" : formatToolElapsed(block.elapsedMs);
-			const durPlain = elapsedText === "" ? "" : ` ✓ ${elapsedText}`;
+			// #tui-tool-elapsed (design I1-I6; amendments 1-2): the completed
+			// call's suffix is a green ✓ — unconditional for measured calls — plus
+			// a dim time when the call took ≥1s, closing the first row. Call sites
+			// must not wrap `dur` in an extra DIM; `durW` measures the plain form
+			// (`" ✓"` 2 cols, `" ✓ X.Ys"` 7); the time text is gated on
+			// `elapsedMs >= 1000`, never on field presence (zero and negative
+			// elapsed render the bare marker). Content rows reserve its width from
+			// that row's budget; below an 8-column floor it is omitted entirely.
+			// Header-only rows carry it only when the header fits with it.
+			const elapsedMs = block.elapsedMs;
+			const measured = elapsedMs !== undefined;
+			const elapsedText = measured && elapsedMs >= 1000 ? formatToolElapsed(elapsedMs) : "";
+			const durPlain = !measured ? "" : elapsedText === "" ? " ✓" : ` ✓ ${elapsedText}`;
 			const durW = visibleWidth(durPlain);
-			const dur = elapsedText === "" ? "" : ` ${GREEN}✓${RESET} ${DIM}${elapsedText}`;
+			const dur = !measured
+				? ""
+				: elapsedText === ""
+					? ` ${GREEN}✓`
+					: ` ${GREEN}✓${RESET} ${DIM}${elapsedText}`;
 			// Two width bases by design: content rows reserve against `prefix`
 			// (header + two spaces) with an 8-column floor (I3); header-only rows
 			// measure the bare `header` against the full width (I4).

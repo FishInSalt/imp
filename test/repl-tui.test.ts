@@ -2464,7 +2464,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("#tui-tool-elapsed: fast and failed calls render no duration", async () => {
+	it("#tui-tool-elapsed: fast calls show the bare ✓; failed calls show neither marker nor time", async () => {
 		const fast: Tool = {
 			name: "bash",
 			description: "fast stand-in",
@@ -2484,13 +2484,16 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("go\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
 		await settle();
-		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
+		// constant clock -> elapsed 0; Amendment 2 keeps this path covered: the
+		// update fires and the row carries the bare ✓ with no time text.
+		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBe(0);
 		const callLine = env.terminal
 			.frameSince(0)
 			.split("\n")
 			.find((l) => l.includes("● bash"));
 		expect(callLine).toBeTruthy();
-		expect(callLine ?? "").not.toContain("✓");
+		expect(callLine ?? "").toContain("✓");
+		expect(callLine ?? "").not.toMatch(/[0-9]/);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 

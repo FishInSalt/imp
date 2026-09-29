@@ -846,7 +846,11 @@ describe("SA-07 resume", () => {
 		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
 		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(refused.isError).toBe(true);
-		expect(refused.output).toContain("inconsistent beyond a crash tail");
+		// Owner round 4: shapes carrying a later user/assistant message refuse
+		// at the BOUNDARY (the tail wording now covers only pure toolResult
+		// tails); behavior is unchanged — refusal, no mutation, no calls.
+		expect(refused.output).toContain("still awaiting results");
+		expect(refused.output).toContain("old-call");
 		expect(readFileSync(transcript.path, "utf8")).toBe(before); // refusals mutate nothing
 	});
 
@@ -871,7 +875,10 @@ describe("SA-07 resume", () => {
 		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
 		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(refused.isError).toBe(true);
-		expect(refused.output).toContain("inconsistent beyond a crash tail");
+		// Owner round 4: boundary wording (the second assistant message begins
+		// a turn while old-call still awaits results).
+		expect(refused.output).toContain("still awaiting results");
+		expect(refused.output).toContain("old-call");
 	});
 
 	it("T22: recorded tool calls are never re-executed by history restoration", async () => {
@@ -1643,6 +1650,158 @@ describe("SA-07 resume", () => {
 		expect(second.output).toContain("declared more than once");
 		expect(sink).toHaveLength(before); // zero provider calls
 		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no repair appended
+	});
+
+	it("SA-08/F5-d: a new assistant turn while a call awaits results is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-d", name: "echo", arguments: {} }]));
+		child.appendMessage(assistant([{ type: "text", text: "another turn" }]));
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "cross-d", toolName: "echo", content: "late", isError: false }],
+		});
+		child.appendMessage(user("continue"));
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-d");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-e: a user message inserted between a call and its result is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-e", name: "echo", arguments: {} }]));
+		child.appendMessage(user("interjected"));
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "cross-e", toolName: "echo", content: "late", isError: false }],
+		});
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-e");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-f: a second batch while the first still awaits results is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-f1", name: "echo", arguments: {} }]));
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-f2", name: "echo", arguments: {} }]));
+		// BOTH results arrive, so the sets balance — the current code accepts
+		// this; the boundary rule must refuse at the second assistant message.
+		child.appendMessage({
+			role: "toolResult",
+			results: [
+				{ toolCallId: "cross-f2", toolName: "echo", content: "r2", isError: false },
+				{ toolCallId: "cross-f1", toolName: "echo", content: "r1", isError: false },
+			],
+		});
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-f1");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-g: out-of-order results within one batch stay legal (no over-refusal)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(
+			assistant([
+				{ type: "toolCall", id: "batch1", name: "echo", arguments: {} },
+				{ type: "toolCall", id: "batch2", name: "echo", arguments: {} },
+			]),
+		);
+		child.appendMessage({
+			role: "toolResult",
+			results: [
+				{ toolCallId: "batch2", toolName: "echo", content: "r2", isError: false },
+				{ toolCallId: "batch1", toolName: "echo", content: "r1", isError: false },
+			],
+		});
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "resumed fine" }])],
+		});
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
 	});
 
 	it("T3-fresh: the fresh result discloses the child id as a handle", async () => {

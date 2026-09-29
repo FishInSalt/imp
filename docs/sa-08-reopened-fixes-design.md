@@ -200,6 +200,22 @@ After the existing `probeWorktreeIdentity` result:
    from the recorded construction refuses (conservative). Legitimate flows
    record cwd as `wt.path` or `path.join(wt.path, cwdRelative)`, so their
    strings compare equal without folding. (Review correction C-4.)
+5. Directory type (owner round 2, F-2b): after existence, the cwd must
+   RESOLVE to a directory — `statSync` follows symlinks — in BOTH branches
+   (worktree and non-worktree). A regular file, a symlink whose final
+   object is a file, or a stat failure refuses with the new code
+   `cwd-not-directory` (message carries the stat error when there is one);
+   a dangling symlink is already `cwd-missing` (existsSync is false). In
+   the worktree branch the dirness check runs BEFORE the containment
+   check, so a file inside the worktree gets the precise code rather than
+   a containment verdict. Non-worktree children get the same check after
+   their existing cwd-drift/cwd-missing steps. A symlink to a directory
+   that stays inside the worktree remains usable (F2-g positive control).
+   Rationale (owner's finding): a file cwd passes existsSync, realpathSync
+   and containment but cannot host an execution environment; the attempt
+   must refuse before any provider call. This also covers a previously
+   legitimate subdirectory replaced by a file between attempts — no race
+   is needed for the failure.
 
 Explicitly in range: the worktree root and any subdirectory of it at any
 depth (the fresh-dispatch relative-position construction). Out of range:
@@ -225,6 +241,12 @@ inside the worktree.
 - Symlink case: a symlinked path component INSIDE the worktree resolving
   outside (not a symlinked worktree root — that is the probe side's case,
   review correction C-5) → refused.
+- Directory-type cases (F-2b, owner round 2): F2-d/F2-e/F2-f above, each
+  asserting the refusal and that no provider call happened; F2-g is the
+  symlink-to-directory positive control. The F1-b regression is reworked
+  to reorder `header.launch` INSIDE the `onBeforeResumeLease` seam, so it
+  exercises the two-read comparison path (the old `JSON.stringify`
+  implementation would fail it; the owner's non-blocking test-gap note).
 - Positive control: a legitimate subdirectory-parent worktree child (cwd =
   join(wt.path, rel)) resumes unchanged → accepted (guards against
   over-refusal).
@@ -330,6 +352,11 @@ is disclosed.
 | F2-a | valid worktree + unrelated cwd | resumes and runs in the unrelated dir | refused `worktree-cwd-outside` |
 | F2-b | cwd symlink resolving outside the worktree | (same acceptance bug) | refused |
 | F2-c | legit subdirectory cwd | accepted | accepted (unchanged) |
+| F2-d | worktree cwd = a plain file inside the worktree | accepted (P2 repro) | refused `cwd-not-directory`, zero provider calls |
+| F2-e | worktree cwd = symlink inside the worktree to a file inside | accepted (P2) | refused `cwd-not-directory`, zero provider calls |
+| F2-f | non-worktree cwd directory replaced by a file between attempts | accepted (P2) | refused `cwd-not-directory`, zero provider calls |
+| F2-g | worktree cwd = symlink inside the worktree to a directory inside | accepted | accepted (no over-refusal) |
+| F1-b' | launch key order changed between the two reads (via the seam) | would refuse under `JSON.stringify` | accepted under canonical comparison |
 | F3-a | tampered TaskRecord binding, parse | parsed | null |
 | F3-b | tampered TaskRecord binding, reopen + aggregate | priced, complete | unpriced, `incomplete.child` |
 | — | full suite (125 files) | green | green |
@@ -365,3 +392,12 @@ is disclosed.
   fabricate unknown work), C-2 fixed (order-insensitive canonical
   comparison + SA-08/F1-b guard), C-3 informational. Fold gates: 125
   files / 2361 tests green.
+- 2026-09-29 (owner round 2): the owner's re-verification closed F-1/F-2/
+  F-3 but kept SA-08 open on one P2 — a regular FILE as execution cwd
+  passes existsSync + realpathSync + containment (reproduced: launched
+  true, one provider call; also reachable without any race by a
+  subdirectory replaced with a file between attempts). Fixed as F-2b
+  above (directory-type check in both branches, new code
+  `cwd-not-directory`), with the F1-b regression reworked onto the seam
+  (non-blocking test-gap note). This delta's pre-implementation review is
+  recorded below.

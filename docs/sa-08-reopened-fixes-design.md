@@ -66,10 +66,16 @@ try/finally), before any repair or append:
    - `reopened.file.messageCount === 0` → refuse (reuse the
      `empty-transcript` wording): the file lost its content after the first
      lookup.
-2. From here on use ONLY the reopened store for: repair + effective history
-   (`buildContinuationHistory`), `observeSessionWrites`, the `runSubagent`
-   session, the `onMessage` append, and `taskResult`'s session argument.
-   `launch` itself is unchanged (deep-equality above guarantees it).
+2. Rebind the snapshot variable: `file` becomes `let`, and after the
+   four checks above, `file = reopened.file`. Every downstream read that
+   used the snapshot (`buildContinuationHistory`, `observeSessionWrites`,
+   the `runSubagent` session, the `onMessage` append, `transcriptFor`, and
+   `taskResult`'s session argument) automatically uses the authoritative
+   store — a forgotten site cannot keep the stale one because no reference
+   to the old store remains in scope. (Review correction C-1: the original
+   enumeration missed `transcriptFor`, task.ts:593; the mechanical rebind
+   removes the enumeration risk.) `launch` is unchanged (deep-equality
+   above guarantees it).
 
 Rationale: `findChildByLaunch` re-runs the exact SA-06 lookup boundary
 (fresh read, structural `effectiveHistoryProblem`, header/parent identity,
@@ -128,9 +134,18 @@ Assertions:
 - (a) the resumed attempt's wire request (provider sink) contains the other
   round's instruction text;
 - (b) a FRESH store opened after the attempt has both rounds in order in
-  `buildContext()` (no fork: our append chains onto the other round's
-  leaf);
+  `buildContext()` (no fork), AND the attempt's instruction entry chains
+  onto the other round's last entry (parentId check on the reopened
+  entries — the structural no-fork proof, not just a content sweep);
 - (c) the resume result is a launched outcome, not an error.
+
+The seam round simulates the child-side half of a completed attempt. The
+real two-process scenario also writes a parent-side TaskRecord; our
+in-memory parent view cannot see another process's append, so the test
+deliberately does not fabricate one in memory — §1.3 shows the stale
+parent view cannot un-settle, and parent-file appends are the session
+layer's existing behavior. This scope is explicit, not silent (review
+correction C-2).
 
 Red evidence: with the fix reverted, (a) and (b) fail (the owner's exact
 shape). The unrelated single-process suites stay green.
@@ -157,14 +172,24 @@ After the existing `probeWorktreeIdentity` result:
 1. `!existsSync(launch.cwd)` → reason `cwd-missing` (same wording as the
    non-worktree branch).
 2. Else, when `probe.ok`: resolve `realpathSync` for both `launch.cwd` and
-   `launch.worktree.path`; allowed iff
-   `realCwd === realWt || realCwd.startsWith(realWt + path.sep)`.
-   Otherwise new reason `worktree-cwd-outside`:
+   `launch.worktree.path` (both wrapped in try/catch — no resolver error
+   escapes the validator); allowed iff
+   `realCwd === realWt || realCwd.startsWith(prefix)`, where `prefix` is
+   `realWt` with exactly one trailing `path.sep` (a `realWt` that already
+   ends in a separator — the filesystem root — is used as-is). Otherwise
+   new reason `worktree-cwd-outside`:
    "the recorded execution cwd X is not inside the verified worktree Y
    (after resolving symlinks) — the validated environment and the execution
    environment must agree".
-3. `realpathSync` failure on either side → refuse (`cwd-missing` for the
-   cwd side; the probe failure already refuses the worktree side).
+3. A `realpathSync` failure on either side (vanished path, unreadable
+   component) → refuse `worktree-cwd-outside` with the resolver error in
+   the message: the consistency guarantee cannot be established, so the
+   attempt does not run. (The worktree side only reaches this branch when
+   the probe already succeeded.)
+4. Case policy: no case folding is applied — a case variant that differs
+   from the recorded construction refuses (conservative). Legitimate flows
+   record cwd as `wt.path` or `path.join(wt.path, cwdRelative)`, so their
+   strings compare equal without folding. (Review correction C-4.)
 
 Explicitly in range: the worktree root and any subdirectory of it at any
 depth (the fresh-dispatch relative-position construction). Out of range:
@@ -187,8 +212,9 @@ inside the worktree.
 - Tampered `cwd` (valid worktree block kept, cwd rewritten to an unrelated
   temp dir) → refused with `worktree-cwd-outside`; no attempt runs. [the
   owner's repro, now red→green]
-- Symlink case: `cwd` inside the worktree lexically, resolving outside →
-  refused.
+- Symlink case: a symlinked path component INSIDE the worktree resolving
+  outside (not a symlinked worktree root — that is the probe side's case,
+  review correction C-5) → refused.
 - Positive control: a legitimate subdirectory-parent worktree child (cwd =
   join(wt.path, rel)) resumes unchanged → accepted (guards against
   over-refusal).
@@ -253,8 +279,11 @@ is disclosed.
   record into a parent session FILE, reopen via `SessionStore.open`,
   aggregate → `incomplete.child: true`, child bucket empty, no model
   bucket / no `usd` for the tampered reference. [the owner's repro shape]
-- Audit result: no other fixture in test/ uses a non-derived triple
-  (checked 2026-09-29).
+- Fixture audit: an implementation-time grep re-checks every `test/`
+  fixture for co-occurring `providerName`/`wireModelId`/`reference`
+  triples before the change lands; the known one is
+  `test/usage-totals.test.ts:270` (review correction C-6 — the earlier
+  one-off audit is hereby superseded by the re-check).
 
 ## 4. Documentation and process
 
@@ -268,10 +297,12 @@ is disclosed.
 
 ## 5. Known limits / notes
 
-- Concurrent PARENT-session writers stay out of scope: the lease
-  arbitrates the child file; parent-file appends by a second process are
-  the session layer's existing behavior (unchanged by SA-07 and by this
-  reopening).
+- Concurrent PARENT-session writers are the same class of stale-view
+  problem as F-1 but are deliberately left at the session layer: the lease
+  arbitrates the child file, and parent-file appends by a second process
+  keep the session layer's existing behavior (unchanged by SA-07 and by
+  this reopening). Named explicitly so the scope choice is visible, not
+  implicit (review correction C-7).
 - `onBeforeResumeLease` is an inert test seam in production wiring.
 - The launch deep-equality refusal is strict serialization equality: any
   external in-place header rewrite (even semantically equal with different
@@ -294,5 +325,18 @@ is disclosed.
 
 ## 7. Review log (pre-implementation independent design review)
 
-- 2026-09-29: (pending — dispatching a fresh-context adversarial review of
-  this document)
+- 2026-09-29: fresh-context adversarial review of this document —
+  **APPROVE WITH CORRECTIONS**. Independently verified: the stale-store
+  mechanism (`SessionStore.open` re-reads from disk, no process-level
+  cache), the seam's single-process lease legality (the in-process map is
+  empty at seam time, so the other-executor acquire/release is
+  protocol-legal), F-3's rejection semantics matching the rule-2b branch,
+  and §1.3's no-un-settle argument. Corrections folded: C-1 (rebind the
+  snapshot variable instead of enumerating swap sites — `transcriptFor`
+  was missed), C-2 (parent-side scope made explicit + parentId no-fork
+  assertion added), C-3 (deep-equal rationale corrected:
+  `parseChildLaunch` returns the raw parsed object, so serialization
+  equality also refuses added/renamed fields — conservative by design),
+  C-4 (realpath throw/root/case policies made explicit), C-5 (symlink
+  test shape), C-6 (implementation-time fixture grep), C-7 (parent-session
+  writer class named). No rejection-level defect found.

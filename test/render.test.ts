@@ -376,4 +376,29 @@ describe("health events (print-safe, #loop-health)", () => {
 		r.event({ type: "health", signal: { code: "repeat-loop", count: 5, turn: 5, detail: "x" } });
 		expect(out.output()).toBe("");
 	});
+
+	it("print tool line: a fired signal's only footprint is the (+N) count — no health text, no note", () => {
+		// runPrint's exact renderer shape (src/cli.ts runPrint: two-line, no liveTools).
+		const printLine = (content: string): string => {
+			const out = collector();
+			const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "two-line" });
+			r.event({
+				type: "tool_end",
+				result: { toolCallId: "t1", toolName: "task", content, isError: false },
+			});
+			return out.output();
+		};
+		const without =
+			'answer text\n\n(child: 2 turns, 10 in / 5 out)\nchild session id: abc — continue it later with task({resume: "abc", prompt: "…"})';
+		const withFacts = `${without}\n[task] health: repeated identical tool calls ×5 (last: echo {"message":"again"}) — the child may be looping; verify the result before relying on it.`;
+		const lineA = printLine(without);
+		const lineB = printLine(withFacts);
+		expect(lineA).toContain("answer text (+2 lines)");
+		expect(lineB).toContain("answer text (+3 lines)");
+		// Post-merge review F4 contract: print gains no health output of its own;
+		// the task result text itself changes by design, and only the (+N) count
+		// reflects it.
+		expect(lineA).not.toContain("health");
+		expect(lineB).not.toContain("health");
+	});
 });

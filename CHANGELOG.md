@@ -20,7 +20,9 @@ All notable changes to imp are documented here. The format follows
   lines + a `health` field on the TaskRecord); first fires render one dim
   REPL note (`▪ health: …`; `IMP_HEALTH=0` disables; thresholds overridable
   via `IMP_HEALTH_*` env). Nothing is injected into any model context; print
-  stdout is unchanged. Design + two-track adversarial review:
+  mode gains no health output of its own (a fired signal's task-result text
+  change shows there only in the tool row's line count). Design + two-track
+  adversarial review (plus two folded post-merge review rounds):
   `docs/loop-health-design.md`.
 
 - **Startup model resolution (#startup-model-resolution).** A machine whose

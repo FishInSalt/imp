@@ -308,8 +308,12 @@ export function parseTaskRecord(value: unknown): TaskRecord | null {
 	if (!isBinding(r.binding) || !isOptionalStringArray(r.tools)) return null;
 	if (!isTranscript(r.transcript) || !isWorktree(r.worktree) || !isUsage(r.usage)) return null;
 	// #loop-health (design §4.3): a malformed `health` is DROPPED, never
-	// record-nulling — the parser returns the raw object via a cast below, so
-	// the drop must delete the key explicitly.
-	if (!isHealth(r.health)) delete (r as { health?: unknown }).health;
+	// record-nulling. The drop works on a shallow copy — the parser must not
+	// mutate its input (post-merge review round 2, O3).
+	if (!isHealth(r.health)) {
+		const copy: Record<string, unknown> = { ...r };
+		delete copy.health;
+		return copy as unknown as TaskRecord;
+	}
 	return r as unknown as TaskRecord;
 }

@@ -177,8 +177,9 @@ stand unchanged.
   forwards to the input fold when it is known; a no-op when it is not. (Named
   distinctly from `ToolBlockFold.setLiveRows` in §5.1 to avoid two same-named
   methods on the two layers.)
-- `setTaskLiveRowsResolver(fn: (key: string) => readonly string[] | null)` —
-  called by the append callback when it creates an input fold, so a fold created
+- `taskLiveRowsResolver: ((key: string) => readonly string[] | null) | null` —
+  a PUBLIC field mirroring `onUpdate` (the ownership guard compares against it).
+  The append callback calls it when it creates an input fold, so a fold created
   *after* the shell already published rows still gets them at creation time. The
   shell's resolver reads its own current per-task row map, which the snapshot
   push has already populated (`trackActivity` precedes `renderer.event`,
@@ -242,7 +243,10 @@ adding a `ToolActivity` row to the container.
   can be `""` (`src/repl/repl.ts:1163` falls back to `""`). The
   ordinal/discriminator computation (`taskOrdinals`, `#N`, `#N.n`) and the
   three-row shape (`└─ pending …`, prompt, `N tool starts · last: …`) are
-  unchanged; only the destination changes.
+  unchanged; only the destination changes. Several observer sources may share
+  one parent (defensive; one in the normal case), so the shell **concatenates**
+  their row groups under that parent's key — the old region rendered one
+  component per source, and the fold reproduces that grouping.
 - Track the set of task keys written in the previous pass; for any key no
   longer present, call `setTaskLiveRows(key, null)` so a finished/interrupted
   task sheds its live rows. On the `idle` branch, clear every tracked id and reset

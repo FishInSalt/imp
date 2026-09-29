@@ -180,6 +180,12 @@ const PLACEHOLDER_HINT = dim(
  *  reach for it, and "typing queues" advertises steering. */
 const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter follow-up)", true);
 
+/** #task-inline-live-rows (B1): element-wise row comparison, so an unchanged
+ *  live row never invalidates a fold's render cache. */
+function rowsEqual(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((row, index) => row === b[index]);
+}
+
 export class TuiShell implements LineInput {
 	private readonly options: TuiShellOptions;
 	/** One theme for every pi-tui component (editor AND select lists). */
@@ -211,6 +217,12 @@ export class TuiShell implements LineInput {
 	/** Cache only active rows, never historical payloads. */
 	private activityRows = new Map<string, ToolActivity>();
 	private taskOrdinals = new Map<string, { ordinal: number; sources: Map<string, number> }>();
+	/** #task-inline-live-rows (B1): current live rows per task key. Read by the
+	 *  resolver at fold-creation time, and diffed against the next pass so
+	 *  identical rows never invalidate the fold cache. */
+	private taskLiveRows = new Map<string, readonly string[]>();
+	/** Ownership guard for the shared sink's resolver (mirrors boundOnUpdate). */
+	private boundLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
 	/** Buffered setQueue text — pushes may arrive before start() and must not
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
@@ -268,6 +280,10 @@ export class TuiShell implements LineInput {
 		this.tui = tui;
 		this.boundOnUpdate = () => tui.requestRender();
 		this.options.transcript.onUpdate = this.boundOnUpdate;
+		// #task-inline-live-rows (B1): set BEFORE any fold is created, so a task
+		// fold created after the shell published its rows still pulls them.
+		this.boundLiveRowsResolver = (key) => this.taskLiveRows.get(key) ?? null;
+		this.options.transcript.taskLiveRowsResolver = this.boundLiveRowsResolver;
 
 		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
@@ -612,6 +628,8 @@ export class TuiShell implements LineInput {
 		if (this.activity.phase === "idle") {
 			this.activityRows.clear();
 			this.taskOrdinals.clear();
+			for (const key of this.taskLiveRows.keys()) this.options.transcript.setTaskLiveRows(key, null);
+			this.taskLiveRows.clear();
 			this.tui?.requestRender();
 			return;
 		}
@@ -650,6 +668,10 @@ export class TuiShell implements LineInput {
 				`${tool.name}${label}`,
 			);
 		}
+		// #task-inline-live-rows (B1): one fold per task call, but several observer
+		// sources may share a parent — aggregate their row groups so the fold keeps
+		// every source (the old region rendered one row group per source).
+		const nextTaskLiveRows = new Map<string, readonly string[]>();
 		for (const agent of this.activity.agents) {
 			const parentKey = agent.taskToolId || agent.sourceId || "";
 			let identity = this.taskOrdinals.get(parentKey);
@@ -661,9 +683,7 @@ export class TuiShell implements LineInput {
 				identity.sources.set(agent.sourceId, identity.sources.size + 1);
 			const source = agent.sourceId ? identity.sources.get(agent.sourceId) : undefined;
 			const discriminator = `#${identity.ordinal}${source ? `.${source}` : ""}`;
-			const id = `agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`;
-			const row = this.activityRows.get(id) ?? new ToolActivity("", "");
-			row.setTaskRows([
+			const taskRows = [
 				`└─ pending ${discriminator} ${activityText(agent.agent)} ${activityCount((now - agent.startedAtMs) / 1000)}s`,
 				activityText(agent.task),
 				...(agent.toolCount > 0 || agent.lastTool !== null
@@ -671,10 +691,29 @@ export class TuiShell implements LineInput {
 							`${activityCount(agent.toolCount)} tool starts${agent.lastTool === null ? "" : ` · last: ${activityText(agent.lastTool)}`}`,
 						]
 					: []),
-			]);
-			active.set(id, row);
-			this.activityContainer.addChild(row);
+			];
+			if (agent.taskToolId !== "") {
+				// The overview renders in the task's own transcript fold, not this region.
+				const existing = nextTaskLiveRows.get(parentKey);
+				nextTaskLiveRows.set(parentKey, existing === undefined ? taskRows : [...existing, ...taskRows]);
+			} else {
+				// Defensive: a source row with no parent fold keeps the region row.
+				const id = `agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`;
+				const row = this.activityRows.get(id) ?? new ToolActivity("", "");
+				row.setTaskRows(taskRows);
+				active.set(id, row);
+				this.activityContainer.addChild(row);
+			}
 		}
+		// Push only what changed; clear the keys that left the snapshot.
+		for (const [key, rows] of nextTaskLiveRows) {
+			const previous = this.taskLiveRows.get(key);
+			if (previous === undefined || !rowsEqual(previous, rows))
+				this.options.transcript.setTaskLiveRows(key, rows);
+		}
+		for (const key of this.taskLiveRows.keys())
+			if (!nextTaskLiveRows.has(key)) this.options.transcript.setTaskLiveRows(key, null);
+		this.taskLiveRows = nextTaskLiveRows;
 
 		this.activityRows = active;
 		this.tui?.requestRender();
@@ -1079,6 +1118,9 @@ export class TuiShell implements LineInput {
 		// REPL shell).
 		if (this.options.transcript.onUpdate === this.boundOnUpdate) {
 			this.options.transcript.onUpdate = null;
+		}
+		if (this.options.transcript.taskLiveRowsResolver === this.boundLiveRowsResolver) {
+			this.options.transcript.taskLiveRowsResolver = null;
 		}
 		this.terminal?.write("\x1b]2;\x07"); // hand the window its own title back
 		this.terminal = null;

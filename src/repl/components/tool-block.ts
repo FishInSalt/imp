@@ -87,11 +87,34 @@ function ellipsize(text: string, width: number): string {
 export class ToolBlockFold implements Component {
 	private expanded = false;
 	private raw = false;
-	private cache?: { width: number; expanded: boolean; raw: boolean; rows: string[] };
+	/** #task-inline-live-rows (B1): the running task's overview, painted under
+	 *  the call header. Transient — set while the task is in flight and cleared
+	 *  when it ends; never part of the block or the session. */
+	private liveRows: readonly string[] | null = null;
+	private liveRevision = 0;
+	private cache?: { width: number; expanded: boolean; raw: boolean; live: number; rows: string[] };
 	constructor(public block: ToolBlock) {}
 	updateBlock(block: ToolBlock): void {
 		this.block = block;
 		this.invalidate();
+	}
+	/** The live-row channel (B1). Returns whether anything changed (so callers
+	 *  can skip a repaint); a no-op on non-input folds, so a result fold can
+	 *  never carry live rows. */
+	setLiveRows(rows: readonly string[] | null): boolean {
+		if (this.block.kind !== "input") return false;
+		const next = rows === null || rows.length === 0 ? null : rows;
+		const same =
+			this.liveRows === null
+				? next === null
+				: next !== null &&
+					this.liveRows.length === next.length &&
+					this.liveRows.every((row, index) => row === next[index]);
+		if (same) return false;
+		this.liveRows = next;
+		this.liveRevision++;
+		this.invalidate();
+		return true;
 	}
 	hasStructuredArguments(): boolean {
 		return this.block.kind === "input" && this.block.readableArguments !== undefined;
@@ -113,7 +136,12 @@ export class ToolBlockFold implements Component {
 	}
 	render(width: number): string[] {
 		const w = Math.max(1, width);
-		if (this.cache?.width === w && this.cache.expanded === this.expanded && this.cache.raw === this.raw)
+		if (
+			this.cache?.width === w &&
+			this.cache.expanded === this.expanded &&
+			this.cache.raw === this.raw &&
+			this.cache.live === this.liveRevision
+		)
 			return this.cache.rows;
 		const block = this.block;
 		const call = block.kind === "input";
@@ -464,6 +492,11 @@ export class ToolBlockFold implements Component {
 				resultPrefix(),
 				/^(?:failed|exit -?\d+|partial|limited)$/.test(block.title) ? RED : "",
 			);
+		// #task-inline-live-rows (B1): anchor the live overview at the end of the
+		// header chain, so every header-emitting branch (addHeader, the pathFirst
+		// rows, and the collapsed body-first row) is covered; body/path/metadata
+		// rows follow it.
+		const headerEnd = rows.length;
 		if (block.callPath && !pathFirst && !(this.expanded && pathCovered))
 			add(`Path: ${block.callPath.display}`, indent, DIM);
 		for (const meta of block.metadata.filter((meta) => {
@@ -652,7 +685,14 @@ export class ToolBlockFold implements Component {
 			if (!suppressed) add(notice.text, call ? indent : resultPrefix(), DIM);
 		}
 		if (notices.length) add(notices.join(" · "), indent, DIM);
-		this.cache = { width: w, expanded: this.expanded, raw: this.raw, rows };
+		if (this.liveRows !== null) {
+			// One row group per observer source; the shell bounds each group to the
+			// activity-region shape (three rows). Rendering all groups matches the
+			// old region, which stacked one component per source.
+			const live = this.liveRows.map((row) => `${DIM}${ellipsize(activityText(row), w)}${RESET}`);
+			rows.splice(headerEnd, 0, ...live);
+		}
+		this.cache = { width: w, expanded: this.expanded, raw: this.raw, live: this.liveRevision, rows };
 		return rows;
 	}
 }

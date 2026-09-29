@@ -2263,6 +2263,95 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+	it("each concurrent task's live rows sit under its own header in launch order", async () => {
+		const child: Tool = {
+			name: "child_tool",
+			description: "test",
+			parameters: Type.Object({}),
+			execute: async () => ({ output: "unused" }),
+		};
+		const env = await startTuiRepl([reply("done")], { tools: [child] });
+		const original = env.runner.runTurn.bind(env.runner);
+		const g = gate();
+		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			for (const p of [
+				{ id: "p1", prompt: "PROMPT-ONE" },
+				{ id: "p2", prompt: "PROMPT-TWO" },
+				{ id: "p3", prompt: "PROMPT-THREE" },
+			])
+				emit({
+					type: "tool_start",
+					toolCallId: p.id,
+					name: "task",
+					args: { agent: "scout", prompt: p.prompt },
+				});
+			const start = (value: string) => ({
+				type: "tool_start" as const,
+				toolCallId: `call-${value}`,
+				name: "child_tool",
+				args: { value },
+			});
+			const info = (source: string, parent: string) => ({
+				sourceId: source,
+				taskToolCallId: parent,
+				agent: "scout",
+				cwd: "/x",
+			});
+			// Child events arrive TWO, ONE, THREE — deliberately not launch order.
+			emit(start("two"), info("s2", "p2"));
+			emit(start("one"), info("s1", "p1"));
+			emit(start("three"), info("s3", "p3"));
+			await g.promise;
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("pending #"));
+		await settle();
+		const mark = env.terminal.writes.length;
+		env.terminal.resize(110);
+		await settle();
+		const lines = stripAnsi(env.terminal.frameSince(mark))
+			.split("\n")
+			.map((line) => line.trimEnd());
+		// Each header is immediately followed by its OWN rows, in launch order.
+		for (const [prompt, discriminator] of [
+			["PROMPT-ONE", "#1.1"],
+			["PROMPT-TWO", "#2.1"],
+			["PROMPT-THREE", "#3.1"],
+		] as const) {
+			const header = lines.findIndex((line) => line.startsWith("\u25cf task") && line.includes(prompt));
+			expect(header).toBeGreaterThanOrEqual(0);
+			expect(lines[header + 1]).toContain(`pending ${discriminator}`);
+			expect(lines[header + 2]).toContain(prompt);
+		}
+		g.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("done"));
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("replaying a stored task call creates folds but never live rows", async () => {
+		const env = await startTuiRepl([reply("ok")], {
+			seed: [
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "task", arguments: { agent: "scout", prompt: "explore" } }],
+					"tool_use",
+				),
+				{
+					role: "toolResult",
+					results: [{ toolCallId: "t1", toolName: "task", content: "child answer", isError: false }],
+				},
+			],
+		});
+		await settle();
+		expect(env.transcript.toolFolds.some((fold) => fold.block.name === "task")).toBe(true);
+		expect(stripAnsi(env.terminal.frameSince(0))).not.toContain("pending #");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("cancels emitted calls in place and rejects abandoned run events after clear and id reuse", async () => {
 		const env = await startTuiRepl([reply("next epoch")]);
 		const original = env.runner.runTurn.bind(env.runner);
@@ -4062,11 +4151,13 @@ describe("TuiShell activity region (M10 B)", () => {
 		}
 	});
 
-	it("task snapshots retain ordinal epochs without transcript allocation or hook calls", async () => {
+	it("task snapshots retain ordinal epochs in the fold-backed live rows", async () => {
 		const { shell, terminal, transcript } = makeShell();
-		const hook = vi.fn(() => ({ summary: "must not run" }));
-		transcript.toolSink.setResolver(() => ({ call: hook }));
 		shell.start();
+		// #task-inline-live-rows (B1): task rows render inside the task's own
+		// transcript fold, so the fold must exist for them to be visible.
+		transcript.toolSink.start("parent", "task", { agent: "same", prompt: "independent prompt" });
+		transcript.toolSink.start("new-parent", "task", { agent: "same", prompt: "independent prompt" });
 		const agent = {
 			agent: "same",
 			task: "independent prompt",
@@ -4076,7 +4167,6 @@ describe("TuiShell activity region (M10 B)", () => {
 			toolCount: 0,
 			startedAtMs: Date.now(),
 		};
-		shell.setActivity({ phase: "working", tools: [], agents: [agent] });
 		shell.setActivity({
 			phase: "working",
 			tools: [],
@@ -4089,22 +4179,23 @@ describe("TuiShell activity region (M10 B)", () => {
 		let mark = terminal.writes.length;
 		shell.forceRender();
 		await settle();
-		expect(terminal.frameSince(mark)).toContain("pending #1.2 same");
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("pending #1.1 same");
+		expect(frame).toContain("pending #1.2 same");
 		shell.setActivity({ phase: "idle", tools: [], agents: [] });
 		shell.setActivity({ phase: "working", tools: [], agents: [{ ...agent, taskToolId: "new-parent" }] });
 		mark = terminal.writes.length;
 		terminal.resize(100);
 		await settle();
 		expect(terminal.frameSince(mark)).toContain("pending #1 same");
-		expect(transcript.toolFolds).toEqual([]);
-		expect(hook).not.toHaveBeenCalled();
 		shell.close();
 	});
 
 	it("working rows render pending tools and subagent tree lines", async () => {
-		const { terminal, shell } = makeShell();
+		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
+		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore the tree" });
 		shell.setActivity({
 			phase: "working",
 			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
@@ -4127,6 +4218,79 @@ describe("TuiShell activity region (M10 B)", () => {
 		expect(frame).toContain("explore the tree");
 		expect(frame).toContain("3 tool starts · last: bash echo deep");
 		shell.close();
+	});
+
+	it("fold-backed task rows tick their elapsed seconds", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
+		shell.setActivity({
+			phase: "working",
+			tools: [],
+			agents: [
+				{
+					agent: "scout",
+					task: "explore",
+					taskToolId: "t9",
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now() - 5000,
+				},
+			],
+		});
+		await settle(30);
+		expect(terminal.frameSince(0)).toContain("pending #1 scout 5s");
+		const mark = terminal.writes.length;
+		await settle(1300);
+		expect(terminal.frameSince(mark)).toContain("pending #1 scout 6s");
+		shell.close();
+	});
+
+	it("a stopped shell leaves the successor's live-rows resolver bound (shared sink)", async () => {
+		const transcript = new TranscriptSink();
+		const noop = (): void => {};
+		const mk = (terminal: FakeTerminal) =>
+			new TuiShell({
+				transcript,
+				terminal,
+				onLine: noop,
+				onInterrupt: noop,
+				onEof: noop,
+				onDequeue: noop,
+				onCycleThinking: noop,
+				onToggleThinking: noop,
+				onModelSelect: noop,
+			});
+		const first = mk(new FakeTerminal());
+		first.start();
+		const second = mk(new FakeTerminal());
+		second.start();
+		await settle(0);
+		first.close();
+		await first.whenSettled();
+		expect(transcript.taskLiveRowsResolver).not.toBeNull(); // the guard kept the successor's
+		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
+		second.setActivity({
+			phase: "working",
+			tools: [],
+			agents: [
+				{
+					agent: "scout",
+					task: "explore",
+					taskToolId: "t9",
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+				},
+			],
+		});
+		await settle(30);
+		expect(stripAnsi(transcript.render(80).join("\n"))).toContain("pending #1 scout");
+		second.close();
+		await second.whenSettled();
 	});
 });
 

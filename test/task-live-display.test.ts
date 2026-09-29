@@ -166,3 +166,83 @@ describe("generic promoted evidence", () => {
 		expect(fold.render(width)).toEqual(withEvidence);
 	});
 });
+
+describe("task inline live rows (B1)", () => {
+	const withInputFold = (): { transcript: TranscriptSink; fold: ToolBlockFold } => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("t1", "task", { agent: "scout", prompt: "explore" });
+		return { transcript, fold: transcript.toolFolds[0]! };
+	};
+	const plain = (rows: readonly string[]): string[] => rows.map((row) => sanitizeDisplay(row));
+
+	it("paints live rows directly under the call header and clears them", () => {
+		const { transcript, fold } = withInputFold();
+		expect(fold.setLiveRows(["└─ pending #1 scout 1s", "explore", "2 tool starts"])).toBe(true);
+		const rows = plain(transcript.render(80));
+		const header = rows.findIndex((row) => row.startsWith("● task"));
+		expect(header).toBeGreaterThanOrEqual(0);
+		expect(rows.slice(header + 1, header + 4)).toEqual([
+			"└─ pending #1 scout 1s",
+			"explore",
+			"2 tool starts",
+		]);
+		fold.setLiveRows(null);
+		expect(plain(transcript.render(80)).join("\n")).not.toContain("pending #");
+	});
+
+	it("skips identical rows (cache intact) and repaints on change", () => {
+		const { fold } = withInputFold();
+		fold.setLiveRows(["a"]);
+		const first = fold.render(80);
+		expect(fold.setLiveRows(["a"])).toBe(false);
+		expect(fold.render(80)).toBe(first);
+		expect(fold.setLiveRows(["b"])).toBe(true);
+		expect(fold.render(80)).not.toBe(first);
+	});
+
+	it("never carries live rows on an output fold", () => {
+		const fold = new ToolBlockFold(outputBlock(result("a")));
+		expect(fold.setLiveRows(["live row"])).toBe(false);
+		expect(sanitizeDisplay(fold.render(80).join("\n"))).not.toContain("live row");
+	});
+
+	it.each([1, 2, 20, 80])("keeps live rows inside width %i", (width) => {
+		const { transcript, fold } = withInputFold();
+		fold.setLiveRows([`pending ${"界".repeat(200)}`, "prompt\n\r\u2028\u2029\t\x1b[31mred"]);
+		for (const row of plain(transcript.render(width))) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+	});
+
+	it("pulls rows from the resolver when the fold is created after publication", () => {
+		const transcript = new TranscriptSink();
+		transcript.taskLiveRowsResolver = (key) => (key === "t1" ? ["└─ pending #1 scout 3s"] : null);
+		transcript.toolSink.start("t1", "task", { prompt: "go" });
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("pending #1 scout 3s");
+	});
+
+	it("renders without a resolver (bare sink / replay) and never fabricates rows", () => {
+		const transcript = new TranscriptSink();
+		expect(() => transcript.toolSink.start("t1", "task", { prompt: "go" })).not.toThrow();
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("pending #");
+	});
+
+	it("resolver is a pure read: fold creation never re-enters the render path", () => {
+		const transcript = new TranscriptSink();
+		let calls = 0;
+		transcript.taskLiveRowsResolver = () => {
+			calls++;
+			return null;
+		};
+		transcript.toolSink.start("t1", "task", { prompt: "go" });
+		expect(calls).toBe(1);
+		expect(transcript.toolFolds).toHaveLength(1); // the resolver created nothing
+	});
+
+	it("forwards setTaskLiveRows to a known fold and ignores an unknown key", () => {
+		const { transcript, fold } = withInputFold();
+		transcript.setTaskLiveRows("t1", ["└─ pending #1 scout 1s"]);
+		expect(sanitizeDisplay(fold.render(80).join("\n"))).toContain("pending #1 scout 1s");
+		expect(() => transcript.setTaskLiveRows("nope", ["live row"])).not.toThrow();
+		transcript.clear();
+		expect(() => transcript.setTaskLiveRows("t1", ["live row"])).not.toThrow();
+	});
+});

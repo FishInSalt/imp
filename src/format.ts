@@ -139,7 +139,8 @@ export function formatTokens(n: number): string {
 /** #tui-tool-elapsed: a completed tool call's wall time. Tenths are floored
  *  below a minute so the value never rounds up across the boundary
  *  (59_999 → "59.9s", not "60.0s"); the minute idiom matches the legacy
- *  spinner's formatElapsed. The sink gates the ≥1s display rule. */
+ *  spinner's formatElapsed. The renderer gates the ≥1s time display
+ *  (Amendment 2: sub-second calls show the bare ✓ instead). */
 export function formatToolElapsed(ms: number): string {
 	const seconds = Math.floor(ms / 1000);
 	if (seconds < 60) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;

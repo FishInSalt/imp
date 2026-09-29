@@ -108,8 +108,10 @@ export interface SourceEvidence {
 }
 export interface ToolBlock {
 	/** #tui-tool-elapsed: completed-call wall time, set by the sink at end on
-	 *  input blocks only (never on replayed or interrupted blocks, never on
-	 *  output blocks). Presentation-only: not persisted, never sent to the
+	 *  live, non-error input blocks (never on replayed, errored, or
+	 *  interrupted blocks, never on output blocks). The renderer shows the
+	 *  bare ✓ for any measured call and adds the time text only ≥1000ms
+	 *  (Amendment 2). Presentation-only: not persisted, never sent to the
 	 *  model. See docs/tui-tool-elapsed-design.md. */
 	elapsedMs?: number;
 	promotedEvidence?: SourceEvidence;
@@ -668,17 +670,13 @@ export function createToolSink(
 				entries.set(result.toolCallId, entry);
 			}
 			entry.terminal = true;
-			// #tui-tool-elapsed: the call row carries its wall time once the call
-			// completes. Set the terminal flag first (above), update before the
-			// output append, and skip replay/error/orphan entries (design D4).
+			// #tui-tool-elapsed: the call row carries its completion marker and
+			// wall time once the call completes. Set the terminal flag first
+			// (above), update before the output append, and skip replay/error/
+			// orphan entries (design D4; Amendment 2 removed the ≥1000ms gate —
+			// the renderer decides between the bare ✓ and ✓+time).
 			const elapsed = entry.startedAt === undefined ? undefined : clock() - entry.startedAt;
-			if (
-				elapsed !== undefined &&
-				elapsed >= 1000 &&
-				!replay &&
-				result.isError !== true &&
-				entry.input !== undefined
-			)
+			if (elapsed !== undefined && !replay && result.isError !== true && entry.input !== undefined)
 				update?.(entry.input, { ...entry.input, elapsedMs: elapsed });
 			if (!entry.input) {
 				entry.input = entry.record

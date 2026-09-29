@@ -759,8 +759,60 @@ describe("TuiShell selector", () => {
 		await settle();
 		const raw = terminal.writes.join("");
 		expect(raw).toContain("\x1b[1;31m"); // the warn color really renders
-		// and the dim environment resumes after the span
-		expect(raw).toContain("\x1b[0m\x1b[2m");
+		// #confirm-prompt (Phase 3 D12): the detail is normal weight, so a warn
+		// span closes with a plain reset (SGR 0), NOT the dim-restoring end.
+		// The span wraps the 80-col line — the closing reset lands on the tail
+		// fragment; the dim-restoring end (`\x1b[0m\x1b[2m`) must not appear.
+		expect(raw).toContain("node_modules\x1b[0m");
+		expect(raw).not.toContain("\x1b[0m\x1b[2m");
+		shell.close();
+	});
+
+	it("#confirm-prompt (Phase 3 D9): an attribution tag renders after the picker title, faint", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		// plain-title picker (no attribution): today's bytes exactly — no separator tag
+		void shell.select({
+			title: "plain picker",
+			items: [{ label: "alpha" }, { label: "beta" }],
+		});
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("plain picker · ");
+		shell.close();
+
+		const withTag = makeShell();
+		withTag.shell.start();
+		await settle(0);
+		void withTag.shell.select({
+			title: "allow this bash command?",
+			attribution: "guardian",
+			items: [{ label: "Yes" }, { label: "No" }],
+		});
+		await settle();
+		const frame = withTag.terminal.frameSince(0);
+		expect(frame).toContain("allow this bash command? · guardian");
+		// faint: the tag rides inside a dim run (`\x1b[2m · guardian`)
+		expect(withTag.terminal.writes.join("")).toContain("\x1b[2m \u00b7 guardian");
+		withTag.shell.close();
+	});
+
+	it("#confirm-prompt (Phase 3 D9): a hostile attribution is sanitized — no raw escape reaches the terminal", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.select({
+			title: "allow this bash command?",
+			// an SGR escape plus a bold-marker: sanitizeDisplay must strip the
+			// CSI sequence, leaving only the host's own dim codes around the tag.
+			attribution: "bad\x1b[31mname\x1b[1m",
+			items: [{ label: "Yes" }],
+		});
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\u00b7 badname"); // the visible text survives, sanitized
+		expect(raw).not.toContain("\x1b[31m"); // the injected color never reaches the terminal
+		expect(raw).not.toContain("\x1b[1m"); // nor the injected bold
 		shell.close();
 	});
 
@@ -4397,6 +4449,193 @@ describe("TuiShell presentation notices", () => {
 			shell.close();
 			vi.useRealTimers();
 		}
+	});
+});
+
+// ── Phase 3 A1: the approval moment (D10/D11/D12) ────────────────────────
+
+describe("D10 — no live tool rows while a picker is open", () => {
+	/** A shell with a running turn: the spinner row AND one tool row on screen. */
+	function runningShell() {
+		const env = makeShell();
+		env.shell.start();
+		return env;
+	}
+	const activity = (): Parameters<TuiShell["setActivity"]>[0] => ({
+		phase: "thinking",
+		tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+		agents: [],
+	});
+
+	it("the frame with a confirm picker open holds no running text and no tool row; the spinner stays", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		await settle(150);
+		const before = terminal.frameSince(0);
+		expect(before).toContain("running"); // the tool row really rendered pre-picker
+		expect(before).toContain("echo hi");
+		shell.forceRender();
+		await settle();
+		const mark = terminal.writes.length;
+		const chosen = shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
+		await settle(150);
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("approve?"); // the picker itself is up
+		expect(frame).not.toContain("running"); // D10: no false tool row
+		expect(frame).not.toContain("echo hi"); // its label went with the row
+		expect(frame).toContain("working…"); // the turn-level spinner is untouched
+		terminal.data("\r"); // pick Yes
+		await expect(chosen).resolves.toBe(0);
+		await settle(150);
+		const after = terminal.frameSince(mark);
+		expect(after).toContain("running"); // rows come back on pick
+		expect(after).toContain("echo hi");
+		shell.close();
+	});
+
+	it("#confirm-prompt (Phase 3 D10): the picker's repaint alone clears the rows — <20ms, before the 120ms ticker", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		// Let the tool row paint ONCE, then act well inside one 120ms tick so the
+		// ticker cannot mask a missing repaint in setSelector (the recorded bug).
+		await settle(20);
+		expect(terminal.frameSince(0)).toContain("echo hi");
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(20); // < the 120ms ticker: only setSelector's own repaint can act
+		// Frames are differential — force one full repaint of the CURRENT container
+		// tree (no activity rebuild), still inside the ticker window. If setSelector
+		// did not rebuild the region, the stale tool row is still a child and paints.
+		const mark = terminal.writes.length;
+		shell.forceRender();
+		await settle(20);
+		const frame = terminal.frameSince(mark);
+		expect(frame).toContain("approve?"); // the picker mounted
+		expect(frame).not.toContain("running"); // D10 pulled the tool rows at once
+		expect(frame).not.toContain("echo hi");
+		shell.close();
+	});
+
+	it("Esc restores the tool rows", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		await settle(150);
+		const mark = terminal.writes.length;
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(150);
+		expect(terminal.frameSince(mark)).not.toContain("echo hi");
+		terminal.data("\x1b"); // Esc cancels
+		await settle(150);
+		expect(terminal.frameSince(mark)).toContain("echo hi");
+		shell.close();
+	});
+
+	it("Ctrl+C restores the tool rows", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		await settle(150);
+		const mark = terminal.writes.length;
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(150);
+		expect(terminal.frameSince(mark)).not.toContain("echo hi");
+		terminal.data("\x03"); // Ctrl+C aborts
+		await settle(150);
+		expect(terminal.frameSince(mark)).toContain("echo hi");
+		shell.close();
+	});
+
+	it("close() tears the picker down and the rows are gone with the shell (no stale rows)", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		await settle(150);
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(150);
+		shell.close();
+		await settle(60);
+		// close() idles the activity and tears the picker down; nothing hangs.
+		expect(terminal.frameSince(0)).toContain("approve?");
+	});
+});
+
+describe("D11 — one blank line before a picker box", () => {
+	it("the generic picker leaves an empty row between the transcript and the title", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.select({ title: "pick a model", items: [{ label: "alpha" }] });
+		await settle(150);
+		const lines = terminal.frameSince(0).split("\n");
+		const titleAt = lines.findIndex((l) => l.trim() === "pick a model");
+		expect(titleAt).toBeGreaterThan(0);
+		expect(lines[titleAt - 1]?.trim()).toBe(""); // D11: a blank row precedes the title
+		shell.close();
+	});
+
+	it("the login dialog leaves an empty row between the transcript and its title", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.openLoginDialog({ title: "Login to Z.AI", run: () => new Promise<void>(() => {}) });
+		await settle(150);
+		const lines = terminal.frameSince(0).split("\n");
+		const titleAt = lines.findIndex((l) => l.includes("Login to Z.AI"));
+		expect(titleAt).toBeGreaterThan(1);
+		// the dialog opens with a border rule, then the title — the blank row
+		// D11 adds sits directly above that rule.
+		expect(lines[titleAt - 1]).toContain("─");
+		expect(lines[titleAt - 2]?.trim()).toBe("");
+		shell.close();
+	});
+
+	it("the session tree leaves an empty row between the transcript and its title", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.treeSelect({
+			title: "session tree title",
+			roots: [
+				{
+					entry: {
+						type: "message",
+						id: "e1",
+						parentId: null,
+						timestamp: new Date().toISOString(),
+						message: { role: "user", content: "hello" },
+					},
+					children: [],
+				},
+			],
+			leafId: "e1",
+		});
+		await settle(150);
+		const lines = terminal.frameSince(0).split("\n");
+		const titleAt = lines.findIndex((l) => l.includes("session tree title"));
+		expect(titleAt).toBeGreaterThan(0);
+		expect(lines[titleAt - 1]?.trim()).toBe("");
+		shell.close();
+	});
+});
+
+describe("D12 — decision content is normal weight", () => {
+	it("the picker detail row is not faint (no leading dim on the detail line)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.select({
+			title: "approve?",
+			detail: "command: rm -rf node_modules",
+			items: [{ label: "Yes" }],
+		});
+		await settle(150);
+		const raw = terminal.writes.join("");
+		// D12: the detail line opens at normal weight — no \x1b[2m before it.
+		expect(raw).toContain("command: rm -rf node_modules");
+		expect(raw).not.toContain("\x1b[2mcommand: rm -rf node_modules");
+		shell.close();
 	});
 });
 

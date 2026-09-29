@@ -164,11 +164,15 @@ export const WARN_END = "\x1b[0m\x1b[2m";
 
 /** Apply alert coloring to plain [start, end) ranges of `text`. Ranges are
  * clipped to bounds, sorted, and merged — a defensive host never trusts
- * extension math. Non-ANSI output passes text through untouched. */
+ * extension math. Non-ANSI output passes text through untouched.
+ * `restoreDim` picks the span's closing sequence: true (default) ends with
+ * WARN_END, restoring the dim environment (a span inside a dim block);
+ * false ends with a plain reset, for text rendered at normal weight. */
 export function applyWarnSpans(
 	text: string,
 	spans: ReadonlyArray<readonly [number, number]>,
 	ansi: boolean,
+	restoreDim = true,
 ): string {
 	if (!ansi || spans.length === 0) return text;
 	const sorted = [...spans]
@@ -185,9 +189,13 @@ export function applyWarnSpans(
 	}
 	let out = "";
 	let at = 0;
-	for (const [start, end] of merged) {
-		out += text.slice(at, start) + WARN_START + text.slice(start, end) + WARN_END;
-		at = end;
+	// #confirm-prompt (Phase 3 D12): WARN_END restores the dim environment, so
+	// the default suits a span inside a dim block. A caller rendering the detail
+	// at normal weight passes restoreDim=false to close with a plain reset.
+	const end = restoreDim ? WARN_END : "\x1b[0m";
+	for (const [start, endIdx] of merged) {
+		out += text.slice(at, start) + WARN_START + text.slice(start, endIdx) + end;
+		at = endIdx;
 	}
 	return out + text.slice(at);
 }

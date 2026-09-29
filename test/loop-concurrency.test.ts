@@ -4,6 +4,7 @@ import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { ExtensionRegistry } from "../src/extensions/registry.js";
 import { assistant, type Gate, gate, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
@@ -214,6 +215,53 @@ describe("tool concurrency (M5b design §6)", () => {
 		expect(results[1]?.isError).toBe(true);
 		expect(results[1]?.content).toContain("blocked by an extension: not allowed");
 		expect(results[0]?.isError).toBe(false);
+	});
+
+	it("#confirm-prompt (Phase 3 D9): the CHUNK path names the blocking extension", async () => {
+		// The concurrent (executeChunk) block string is a different literal from
+		// the serial executeToolCall one; only this test drives it through a
+		// registry-backed gate (an extension tool is concurrencySafe).
+		const registry = new ExtensionRegistry({ report: () => {} });
+		registry.beginExtension("guardian", "project");
+		registry.subscribe("tool_call", () => ({ block: true, reason: "rm -rf refused" }));
+		registry.commitExtension();
+		const events: AgentEvent[] = [];
+		const history: AgentMessage[] = [];
+		await runAgentLoop({
+			provider: scriptedProvider([calls(["safe"]), finalText]),
+			model: "m",
+			system: "",
+			tools: [holdTool("safe", gate())],
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+			onToolCall: (call) => registry.emitToolCall({ type: "tool_call", ...call }),
+		});
+		const toolResults = history.find((m) => m.role === "toolResult");
+		const results = toolResults && toolResults.role === "toolResult" ? toolResults.results : [];
+		expect(results[0]?.isError).toBe(true);
+		expect(results[0]?.content).toBe('Tool "safe" blocked by extension guardian: rm -rf refused');
+	});
+
+	it("#confirm-prompt (Phase 3 D9): an empty decision source falls back to `an extension`", async () => {
+		// blockSource's empty guard: a raw gate that sets source: "" (or a host
+		// bug) must not render `blocked by extension :` — the anonymous wording
+		// is the fallback. Drives the CHUNK path (concurrencySafe tool).
+		const events: AgentEvent[] = [];
+		const history: AgentMessage[] = [];
+		await runAgentLoop({
+			provider: scriptedProvider([calls(["safe"]), finalText]),
+			model: "m",
+			system: "",
+			tools: [holdTool("safe", gate())],
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+			onToolCall: () => ({ block: true, reason: "x", source: "" }),
+		});
+		const toolResults = history.find((m) => m.role === "toolResult");
+		const results = toolResults && toolResults.role === "toolResult" ? toolResults.results : [];
+		expect(results[0]?.content).toBe('Tool "safe" blocked by an extension: x');
 	});
 
 	it("abort mid-chunk: every started call still emits its computed tool_end", async () => {

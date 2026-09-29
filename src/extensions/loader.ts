@@ -33,7 +33,7 @@ export interface LoadExtensionsOptions {
 	/** Interactive confirm handler (the REPL's tty prompt), forwarded to the
 	 *  registry's api.confirm. Absent (print mode, tests): api.confirm resolves
 	 *  false with one stderr teaching line — never hangs. */
-	confirm?: (message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>;
+	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
 }
 
 export interface LoadedExtensions {
@@ -228,7 +228,9 @@ function extensionApi(
 		setStatus: (key, text) => registry.setExtensionStatus(`${facts.origin}:${facts.name}`, key, text),
 		// confirm works at RUNTIME (gates call it mid-run), unlike the
 		// registrations above — plain delegation, no factory-window guard.
-		confirm: (message, detail, options) => registry.confirm(message, detail, options),
+		// #confirm-prompt (Phase 3 D9): the host names the caller — the extension
+		// itself cannot set or spoof this label, and ConfirmOptions stays unchanged.
+		confirm: (message, detail, options) => registry.confirm(message, detail, options, facts.name),
 	};
 }
 

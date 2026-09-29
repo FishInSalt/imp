@@ -207,7 +207,7 @@ describe("onToolCall gate (M4c, design §8.3)", () => {
 		});
 		expect(seen).toEqual([]);
 		expect(toolResultsOf(history)[0]?.content).toBe(
-			'Tool "echo_tool" blocked by an extension: first says no',
+			'Tool "echo_tool" blocked by extension gate: first says no',
 		);
 	});
 
@@ -243,7 +243,7 @@ describe("onToolCall gate (M4c, design §8.3)", () => {
 		});
 		expect(executed).toBe(false);
 		expect(toolResultsOf(history)[0]?.content).toBe(
-			'Tool "echo_tool" blocked by an extension: handler error — gate broke',
+			'Tool "echo_tool" blocked by extension broken_gate: handler error — gate broke',
 		);
 		expect(toolResultsOf(history)[0]?.isError).toBe(true);
 	});

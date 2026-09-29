@@ -214,7 +214,9 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			name: "bash",
 			args: { command: "ls" },
 		});
-		expect(decision).toEqual({ block: true, reason: "not allowed" });
+		// #confirm-prompt (Phase 3 D9): the registry attributes every decision it
+		// returns to the extension whose handler produced it.
+		expect(decision).toEqual({ block: true, reason: "not allowed", source: "gate" });
 		expect(seen).toEqual(["one:bash"]);
 		expect(lines).toEqual([]);
 	});
@@ -233,7 +235,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			name: "bash",
 			args: {},
 		});
-		expect(decision).toEqual({ block: true, reason: "handler error — gate broke" });
+		expect(decision).toEqual({ block: true, reason: "handler error — gate broke", source: "broken_gate" });
 	});
 
 	it("run_end handlers receive the payload; no handlers → emits are safe no-ops", async () => {

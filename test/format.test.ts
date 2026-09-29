@@ -112,4 +112,16 @@ describe("applyWarnSpans (confirm-picker alert highlight)", () => {
 			),
 		).toBe(`\x1b[0m\x1b[1;31mabcd\x1b[0m\x1b[2m`);
 	});
+	it("restoreDim=false ends a span with a plain reset — D12's normal-weight detail path", () => {
+		// #confirm-prompt (Phase 3 D12): outside a dim context WARN_END's
+		// dim-restoring end would wrongly reintroduce faint. The fourth
+		// argument swaps it for a plain reset, byte-for-byte.
+		expect(applyWarnSpans("a rm -rf b", [[2, 8]], true, false)).toBe(`a \x1b[0m\x1b[1;31mrm -rf\x1b[0m b`);
+		// The default (and explicit true) keep the dim-restoring end.
+		expect(applyWarnSpans("a rm -rf b", [[2, 8]], true, true)).toBe(
+			`a \x1b[0m\x1b[1;31mrm -rf\x1b[0m\x1b[2m b`,
+		);
+		expect(applyWarnSpans("a rm -rf b", [[2, 8]], true)).toBe(`a \x1b[0m\x1b[1;31mrm -rf\x1b[0m\x1b[2m b`);
+		expect(applyWarnSpans("a rm -rf b", [[2, 8]], false, false)).toBe("a rm -rf b");
+	});
 });

@@ -353,7 +353,9 @@ describe("api.confirm wiring (spec part 2)", () => {
 				}),
 				new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 500)),
 			]);
-			expect(decision).toEqual({ block: true, reason: "declined by the fake host" });
+			// #confirm-prompt (Phase 3 D9): the decision carries the owning
+			// extension's name ("asker" is the section registered above).
+			expect(decision).toEqual({ block: true, reason: "declined by the fake host", source: "asker" });
 			expect(stderr).toHaveBeenCalledTimes(1);
 		} finally {
 			stderr.mockRestore();

@@ -86,7 +86,7 @@ export interface ExtensionRegistryOptions {
 	/** Interactive confirm (the REPL's tty prompt). Absent — print mode, plain
 	 *  tests — api.confirm resolves false after one stderr teaching line and
 	 *  never hangs (spec part 2 item 5). */
-	confirm?: (message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>;
+	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
 }
 
 /** The one stderr line written when api.confirm runs without an interactive host. */
@@ -115,7 +115,7 @@ export class ExtensionRegistry {
 
 	private readonly report: (line: string) => void;
 	private readonly confirmHandler:
-		| ((message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>)
+		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
 		| undefined;
 	/** The no-handler stderr line has been written once already. */
 	private noConfirmWarned = false;
@@ -347,7 +347,12 @@ export class ExtensionRegistry {
 	 * prompt or a throwing handler resolves false (with a teaching line), so
 	 * an extension gate can never hang a run on a question nobody can answer.
 	 */
-	async confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean> {
+	async confirm(
+		message: string,
+		detail?: string,
+		options?: ConfirmOptions,
+		source?: string,
+	): Promise<boolean> {
 		if (this.confirmHandler === undefined) {
 			// once per registry: a chatty gate in print mode (a model retrying a
 			// blocked call in a loop) must not spam one stderr line per attempt
@@ -358,7 +363,7 @@ export class ExtensionRegistry {
 			return false;
 		}
 		try {
-			return await this.confirmHandler(message, detail, options);
+			return await this.confirmHandler(message, detail, options, source);
 		} catch (err) {
 			this.report(`imp: extension confirm handler error — ${firstLine(errorText(err), 160)}`);
 			return false;
@@ -375,10 +380,10 @@ export class ExtensionRegistry {
 			if (stored.event !== "tool_call") continue;
 			try {
 				const decision = await (stored.handler as ToolCallHandler)(event);
-				if (decision?.block === true) return decision;
+				if (decision?.block === true) return { ...decision, source: stored.source };
 			} catch (err) {
 				const first = firstLine(errorText(err), 160);
-				return { block: true, reason: `handler error — ${first}` };
+				return { block: true, reason: `handler error — ${first}`, source: stored.source };
 			}
 		}
 		return undefined;

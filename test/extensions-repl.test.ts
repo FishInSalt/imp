@@ -831,7 +831,7 @@ describe("context injection and loop events through the real path (M4c, design �
 		expect(refusal).toMatchObject({
 			toolCallId: "t1",
 			toolName: "probe_tool",
-			content: 'Tool "probe_tool" blocked by an extension: probes are off — use read instead',
+			content: 'Tool "probe_tool" blocked by extension gate: probes are off — use read instead',
 			isError: true,
 		});
 		// a blocked call is resumable history: header line, then user → assistant(tool_use) → toolResult → assistant
@@ -841,7 +841,7 @@ describe("context injection and loop events through the real path (M4c, design �
 		const pair = entries.find((e) => e.message?.role === "toolResult")?.message?.results?.[0];
 		expect(pair?.isError).toBe(true);
 		expect(pair?.content).toBe(
-			'Tool "probe_tool" blocked by an extension: probes are off — use read instead',
+			'Tool "probe_tool" blocked by extension gate: probes are off — use read instead',
 		);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
@@ -882,13 +882,13 @@ describe("guardian case study (design §13.1)", () => {
 		await waitUntil(() => env.output().includes("adapted after the write block"));
 		const refusal1 = env.requests[1]?.messages.find((m) => m.role === "toolResult")?.results[0];
 		expect(refusal1?.content).toBe(
-			'Tool "bash" blocked by an extension: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
+			'Tool "bash" blocked by extension guardian: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
 		);
 		const refusal2 = env.requests[3]?.messages
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g2");
 		expect(refusal2?.content).toMatch(
-			/^Tool "write" blocked by an extension: writing outside the project directory \(.*\) — /,
+			/^Tool "write" blocked by extension guardian: writing outside the project directory \(.*\) — /,
 		);
 		// both hazards were vetoed: the sacrificial tree still stands and the outside file never appeared
 		expect(existsSync(sacrifice)).toBe(true);
@@ -900,7 +900,7 @@ describe("guardian case study (design §13.1)", () => {
 		expect(audit).toHaveLength(2);
 		expect(audit[0]).toContain("[bash]");
 		expect(audit[1]).toContain("[write]");
-		for (const line of audit) expect(line).toContain("blocked by an extension");
+		for (const line of audit) expect(line).toContain("blocked by extension guardian");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -929,13 +929,13 @@ describe("guardian case study (design §13.1)", () => {
 		await waitUntil(() => env.output().includes("parent done"));
 		// the veto reached the child, and the audit line names the child
 		const refusal = env.requests[2]?.messages.find((m) => m.role === "toolResult")?.results[0];
-		expect(refusal?.content).toContain("blocked by an extension: recursive force delete");
+		expect(refusal?.content).toContain("blocked by extension guardian: recursive force delete");
 		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8")
 			.trim()
 			.split("\n");
 		expect(audit).toHaveLength(1);
 		expect(audit[0]).toContain("[bash child:wrecker]");
-		expect(audit[0]).toContain("blocked by an extension");
+		expect(audit[0]).toContain("blocked by extension guardian");
 		// the tree the child tried to delete still stands
 		expect(existsSync(sacrifice)).toBe(true);
 		env.fake.eof();
@@ -956,7 +956,7 @@ describe("guardian case study (design §13.1)", () => {
 		await waitUntil(() => env.output().includes("adapted"));
 		const refusal = env.requests[1]?.messages.find((m) => m.role === "toolResult")?.results[0];
 		expect(refusal?.content).toBe(
-			'Tool "bash" blocked by an extension: matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run',
+			'Tool "bash" blocked by extension guardian: matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run',
 		);
 		// the invalid regex was skipped — the extension loaded and gated anyway
 		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
@@ -1084,7 +1084,7 @@ export default function (api) {
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g2");
 		expect(refusal?.content).toBe(
-			'Tool "bash" blocked by an extension: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
+			'Tool "bash" blocked by extension guardian: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
 		);
 		expect(existsSync(sacrifice)).toBe(true); // declined → nothing deleted
 		env.fake.eof();
@@ -1121,7 +1121,7 @@ export default function (api) {
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g2");
 		expect(refusal?.content).toMatch(
-			/^Tool "write" blocked by an extension: writing outside the project directory \(.*\) — /,
+			/^Tool "write" blocked by extension guardian: writing outside the project directory \(.*\) — /,
 		);
 		expect(existsSync(path.join(outsideDir, "declined.txt"))).toBe(false);
 		env.fake.eof();
@@ -1209,7 +1209,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 		const refusal = env.requests[1]?.messages
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g1");
-		expect(refusal?.content).toContain("blocked by an extension");
+		expect(refusal?.content).toContain("blocked by extension guardian");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

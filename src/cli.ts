@@ -488,7 +488,9 @@ async function main(): Promise<void> {
 async function loadExtensionSetup(
 	opts: CliOptions,
 	renderer: Renderer,
-	confirm: ((message: string, detail?: string, options?: ConfirmOptions) => Promise<boolean>) | undefined,
+	confirm:
+		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
+		| undefined,
 	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({

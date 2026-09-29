@@ -71,13 +71,13 @@ Four defects are visible in that single frame:
 | Host: `TtyConfirm.handler` writes `renderer.note` lines, then opens the picker | `src/repl/repl.ts:272-300` (title note `:278`, the picker-conditional detail note `:285`, `select` call `:293`) |
 | The notes go to the output stream, so they are the only detail carrier on non-TUI hosts | `src/render.ts` `note()`; `test/repl-confirm.test.ts:67` asserts the detail note for the picker host, `:127` the probe of the no-picker path |
 | Options are a host constant, identical for every gate | `src/repl/repl.ts:238-244` (`confirmItems`: `Yes` / `Yes, don't ask again this session` / `No`) |
-| Picker primitive: `TuiShell.select` — title, dim detail, `warnSpans`, items, optional type-to-filter | `src/repl/shell.ts:827-977`; `SelectOptions` at `src/repl/line-input.ts:31-51` |
-| Warn spans: extension supplies plain offsets, host owns color | `src/repl/shell.ts:861`; `src/format.ts:162-192` (`WARN_START = \x1b[0m\x1b[1;31m`) |
+| Picker primitive: `TuiShell.select` — title, dim detail, `warnSpans`, items, optional type-to-filter | `src/repl/shell.ts:829-979`; `SelectOptions` at `src/repl/line-input.ts:31-51` |
+| Warn spans: extension supplies plain offsets, host owns color | `src/repl/shell.ts:863`; `src/format.ts:162-192` (`WARN_START = \x1b[0m\x1b[1;31m`) |
 | Theme is the identity map — the picker rows carry no color | `src/repl/shell.ts:81-92` (`tuiEditorTheme`) |
-| The editor hint row (and notice row) are blanked while a selector owns focus | `src/repl/shell.ts:1199-1210` (`updatePlaceholder`, `blocked` at `:1203`); hide/restore comments at `:970` and `:887` |
+| The editor hint row (and notice row) are blanked while a selector owns focus | `src/repl/shell.ts:1201-1212` (`updatePlaceholder`, `blocked` at `:1205`); hide/restore comments at `:972` and `:889` |
 | Picker keys: up/down, Enter, Esc/Ctrl+C only — no digits, no letter hotkeys | `node_modules/@earendil-works/pi-tui/dist/components/select-list.js:67` (up), `:84` (cancel); row marker `"→ "` at `:91` |
-| The shell's pre-focus listener runs before the focused component sees a key | `tui.js` `inputListeners` ordering; imp's listener carries `filterKey` at `src/repl/shell.ts:925` |
-| `Container.addChild` is append-only; the filter path rebuilds the list by remove+append | `node_modules/@earendil-works/pi-tui/dist/tui.js` (`addChild` push); `src/repl/shell.ts:903` (`applyFilter`) |
+| The shell's pre-focus listener runs before the focused component sees a key | `tui.js` `inputListeners` ordering; imp's listener carries `filterKey` at `src/repl/shell.ts:927` |
+| `Container.addChild` is append-only; the filter path rebuilds the list by remove+append | `node_modules/@earendil-works/pi-tui/dist/tui.js` (`addChild` push); `src/repl/shell.ts:905` (`applyFilter`) |
 | `select` is shared: project-trust ask, `/settings`, `/model`, other command pickers | `src/repl/trust-ask.ts:59`; `src/repl/commands.ts:580,628,1109,1271` |
 | Session memory is host-side, keyed by `sessionKey` | `src/repl/repl.ts:264` (set), `:274` (short-circuit), `:301` (remember); `ConfirmOptions` at `src/extensions/types.ts:48-59` |
 | Note lines are pinned by tests | `test/repl-confirm.test.ts:66` (title), `:67` (detail — the only detail pin), `:76` and `test/repl-tui.test.ts:2139` (the `— allowed for this session` suffix, unaffected by D1) |
@@ -191,7 +191,7 @@ New guard: a test asserting the detail note **is** written when `select` is
 absent.
 
 Known transient (round-2 N5): a TUI confirm *queued* behind another picker
-(`src/repl/shell.ts:836`) writes the title note immediately but its detail
+(`src/repl/shell.ts:838`) writes the title note immediately but its detail
 only when the picker actually opens — and if the shell closes before that, the
 detail is never shown. This is accepted and documented rather than worked
 around: today's duplicate-note behavior is the thing being removed, and no
@@ -200,7 +200,7 @@ predicate exists to distinguish "queued" from "no picker".
 ### D2 — affordance line, inside the picker, on non-filterable pickers only
 
 While a picker owns focus the editor hint row is blanked on purpose
-(`src/repl/shell.ts:1199-1210`, M10 review P2#5), so the affordance must live
+(`src/repl/shell.ts:1201-1212`, M10 review P2#5), so the affordance must live
 **inside** the picker box, as a dim line under the items. Copy follows the
 existing hint style (lowercase, parenthesized, `·` separated —
 `src/repl/shell.ts:175-182`):
@@ -219,7 +219,7 @@ Rules:
   picker keeps its `filter:` row and gets no digit range (a digit there is a
   query character, D3).
 - The dim call passes the ANSI flag explicitly — `dim(text, true)` — matching
-  the detail block at `src/repl/shell.ts:861`; the `dim()` default probes
+  the detail block at `src/repl/shell.ts:863`; the `dim()` default probes
   `process.stdout.isTTY` (`src/format.ts:9`) and would make frames non-deterministic
   under the test terminal.
 - The numeric range is computed from the item count (D3/D4).
@@ -238,7 +238,7 @@ numbers before the list ever scrolls. Consequences to state explicitly:
   avoids colliding with the type-to-filter habit.
 
 Implementation: the shell's pre-focus listener (which already carries `filterKey`,
-`src/repl/shell.ts:925-955`) runs before the focused component receives a key
+`src/repl/shell.ts:927-957`) runs before the focused component receives a key
 (pi-tui `inputListeners` ordering, round-1 checked), so digit handling belongs
 next to `filterKey`, gated on `selector !== null` and the picker not being
 filterable.
@@ -260,7 +260,7 @@ Blast radius, corrected after round-1 P2 — **ten** sites, all in
   `"→ 1. Yes"`; it does not follow the prefix rule.
 
 The label prefix is presentation only: the row's identity stays the original
-index in `SelectItemOption.value` (`src/repl/shell.ts:846-850`), which is what
+index in `SelectItemOption.value` (`src/repl/shell.ts:848-852`), which is what
 `finish()` resolves. A wider search found no picker-marker assertions outside
 that file (round-1 checked).
 
@@ -287,7 +287,7 @@ Rules: exactly one blank row before the items and none between the items and the
 hint; the blank row and the hint row are added **only on non-filterable
 pickers**, so the item list stays the last child for filterable ones —
 `Container.addChild` is append-only and `applyFilter` rebuilds the list by
-remove+append (`src/repl/shell.ts:903`), so a hint appended after the list
+remove+append (`src/repl/shell.ts:905`), so a hint appended after the list
 would leave a refiltered list *below* the hint (round-1 P2). Pin a test that
 refiltering keeps the list below nothing else. Every row honors the terminal
 width (enforcement pattern: `test/repl-tui.test.ts:732`, `:299`); the item list
@@ -370,7 +370,7 @@ interface ConfirmOptions {
   with the host's alert style, and wraps through `wrappedRows(text, width, spans)`
   (`:73`). Note the mechanism: `styled()` applies `span.style` and appends its own
   `RESET` (`:16-27`) — `WARN_END` (`src/format.ts:163`) belongs to the
-  `applyWarnSpans` path (the detail block, `src/repl/shell.ts:861`) and is **not**
+  `applyWarnSpans` path (the detail block, `src/repl/shell.ts:863`) and is **not**
   consumed by the wrap path. Width follows the existing enforcement pattern
   (`test/repl-tui.test.ts:742`).
 - Degradation (D8) applies: hosts without a picker ignore both fields.

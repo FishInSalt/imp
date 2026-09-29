@@ -82,6 +82,12 @@ export class TranscriptSink implements Component {
 				this.inputFolds.set(block, fold);
 				this.toolFolds.push(fold);
 				if (block.kind === "input") {
+					// A provider may reuse a tool_call id across assistant messages
+					// (`call_${index}`); the previous fold for this id is settled and must
+					// not keep live rows. The shell's push for the new task ran BEFORE this
+					// fold existed, so it may have painted onto that superseded fold.
+					const displaced = this.inputFoldById.get(block.id);
+					if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
 					this.inputFoldById.set(block.id, fold);
 					// #task-inline-live-rows (B1): pull the rows the shell published
 					// before this fold existed, so the first paint is complete.

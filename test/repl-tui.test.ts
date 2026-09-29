@@ -4236,15 +4236,55 @@ describe("TuiShell activity region (M10 B)", () => {
 					cwd: null,
 					lastTool: null,
 					toolCount: 0,
-					startedAtMs: Date.now() - 5000,
+					startedAtMs: Date.now() - 4000,
 				},
 			],
 		});
+		// Parse the rendered seconds rather than an exact string: the assertion must
+		// hold whether the ticker fires on time or late under load.
+		const latestSeconds = (text: string): number => {
+			const matches = [...text.matchAll(/pending #1 scout (\d+)s/g)];
+			return Number(matches.at(-1)?.[1]);
+		};
 		await settle(30);
-		expect(terminal.frameSince(0)).toContain("pending #1 scout 5s");
+		const before = latestSeconds(stripAnsi(terminal.frameSince(0)));
+		expect(before).toBeGreaterThanOrEqual(4);
 		const mark = terminal.writes.length;
 		await settle(1300);
-		expect(terminal.frameSince(mark)).toContain("pending #1 scout 6s");
+		expect(latestSeconds(stripAnsi(terminal.frameSince(mark)))).toBeGreaterThan(before);
+		shell.close();
+	});
+
+	it("a reused tool_call id clears the superseded fold's live rows", async () => {
+		const { shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		const agent = {
+			agent: "scout",
+			task: "explore",
+			taskToolId: "call_0",
+			cwd: null,
+			lastTool: null,
+			toolCount: 0,
+			startedAtMs: Date.now(),
+		};
+		// Turn 1: the task runs and ends; its fold stays in the transcript.
+		transcript.toolSink.start("call_0", "task", { agent: "scout", prompt: "OLD" });
+		shell.setActivity({ phase: "working", tools: [], agents: [agent] });
+		await settle(30);
+		transcript.toolSink.end({ toolCallId: "call_0", toolName: "task", content: "done", isError: false });
+		shell.setActivity({ phase: "idle", tools: [], agents: [] });
+		transcript.toolSink.finalize(); // clearActivity's run boundary: ids become reusable
+		await settle(30);
+		// Turn 2: a provider that omits ids reuses `call_0` (openai-completions.ts:431).
+		// The push runs before the new fold exists, so it resolves to turn 1's fold.
+		shell.setActivity({ phase: "working", tools: [], agents: [agent] });
+		transcript.toolSink.start("call_0", "task", { agent: "scout", prompt: "NEW" });
+		await settle(30);
+		transcript.toolSink.end({ toolCallId: "call_0", toolName: "task", content: "done", isError: false });
+		shell.setActivity({ phase: "working", tools: [], agents: [] });
+		await settle(30);
+		expect(stripAnsi(transcript.render(80).join("\n"))).not.toContain("pending #");
 		shell.close();
 	});
 

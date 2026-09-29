@@ -218,11 +218,14 @@ Resolver wiring, teardown, and purity:
 Tool_call ids are **not** unique within a run: `src/provider/openai-completions.ts:431`
 synthesizes `call_${tc.index}` when the provider omits ids, and one `runTurn`
 can stream several assistant messages (`src/core/loop.ts:164`). The id map is
-consequently "latest writer wins", which is correct here because the shell only
-ever addresses currently running tasks, whose fold is the newest for that id,
-and it clears a task's rows when the task ends — before the next message's calls
-are created. There is no long-lived per-id payload: the resolver pulls the
-shell's live state, so a stale id can never carry rows into a later fold.
+consequently "latest writer wins". That alone is not sufficient: at the next
+task's start the shell pushes its rows *before* the new fold exists
+(`trackActivity` precedes `renderer.event`), so the push resolves to the
+**superseded** fold for a reused id and would paint the new rows onto a settled
+transcript entry. The append callback therefore clears the displaced fold
+(`displaced.setLiveRows(null)`) when it re-points an id at a new fold. The
+resolver still pulls the shell's live state, so no per-id row payload is
+retained.
 
 The shell needs no new event channel: it already receives the full per-task
 state (`agent`, `task`, `toolCount`, `lastTool`, `sourceId`, `taskToolId`) in
@@ -347,7 +350,11 @@ New/updated coverage (extend `test/repl-tui.test.ts` and
    (`src/repl/trust-ask.ts:43-56`), so a global assertion is ambiguous when a
    predecessor shell has already started and stopped on the same sink.
 10. Resolver purity: a resolver that is a pure read does not re-enter the render
-    path (assert no `setActivity`/`renderActivity` recursion).
+    path (creating a fold must not recurse).
+11. Id reuse across turns (the §5.2 displaced-fold clear): turn 1's `call_0`
+    task ends, `finalize()` runs, turn 2 reuses `call_0`; after turn 2 ends no
+    fold anywhere shows `pending #`. Also covers the shrink path (a task
+    leaving the snapshot while the phase stays `working`).
 
 Assertion impact is **not** a blanket "existing tests keep passing". Two tests
 drive `shell.setActivity` on a fold-less sink (`makeShell`) and read the rows
@@ -388,14 +395,14 @@ width sweep does not know the new field.
    implicit, the alternative is a monotonic `seq` on `ActivityAgentLine` used to
    sort before ordinal assignment. This document does not add it.
 5. **Id reuse within a run** is real (`src/provider/openai-completions.ts:431`).
-   §5.2 relies on "latest writer wins" plus the shell clearing a task's rows
-   before the next message's calls exist. The reviewer should confirm no path
-   leaves a task running across an assistant-message boundary.
-6. **`ToolActivity.setTaskRows`** becomes unused by production code, and
-   `test/task-live-display.test.ts:94-100` still drives it. Decision for this
-   batch: keep the component's task-row mode as the row-**shape** unit (it is
-   pure formatting), and additionally own the shipped row shape with a fold-level
-   test (§7). Delete it only if the fold-level test fully covers the shape.
+   §5.2 handles it by clearing the displaced fold when an id is re-pointed; a
+   regression test drives a second turn that reuses the id (with
+   `toolSink.finalize()` at the turn boundary, as `clearActivity` does).
+6. **`ToolActivity.setTaskRows`** stays: it is still used by the defensive
+   zero-parent branch (§5.3; when `taskToolCallId` is absent, `repl.ts:1163`
+   stores `taskToolId: ""`). It remains the row-**shape** unit and
+   `test/task-live-display.test.ts:94-100` still drives it; the fold-level tests
+   additionally own the shipped shape.
 7. **`taskRecord`-driven result rendering** (the task result is currently
    recognized by regex over text, not from the persisted `ToolResult.taskRecord`)
    is explicitly out of scope; it should be its own batch with its own review.

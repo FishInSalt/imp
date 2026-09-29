@@ -87,7 +87,10 @@ unconditional for measured successes; the time stays ≥ 1s-gated).
 ## Non-goals (explicit)
 
 1. **No live/ticking elapsed in transcript rows** — the activity region owns
-   in-flight state and is unchanged. Transcript rows stay settle-only.
+   in-flight state and is unchanged. Transcript rows stay settle-only. (Amended
+   for the running-task live row only by
+   `docs/task-inline-live-rows-design.md` §4.1; every other tool row keeps this
+   rule.)
 2. **Legacy shell and print mode byte-for-byte unchanged** — no edits to
    `src/render.ts` rendering paths; the legacy completion format stays as is.
 3. **No duration on interruptions or aborts** — that parity stands.

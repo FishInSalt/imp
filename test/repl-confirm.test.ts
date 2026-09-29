@@ -92,6 +92,45 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		expect(host.output()).toContain("  rm -rf node_modules"); // the only place it reaches this host
 	});
 
+	it("#confirm-prompt (Phase 2): rememberLabel lands in the remember option; the preview reaches the picker, not the notes (D7)", async () => {
+		const host = makeConfirmHost();
+		host.pickAnswer.value = 2; // "No"
+		await expect(
+			host.confirm.handler("[guardian] allow this bash command?", "why it matched: recursive force delete", {
+				sessionKey: "guardian:bash:rm",
+				rememberLabel: "this command pattern",
+				preview: { kind: "command", tool: "bash", text: "rm -rf node_modules", warnSpans: [[0, 6]] },
+			}),
+		).resolves.toBe(false);
+		expect(host.picks[0]?.items.map((item) => item.label)).toEqual([
+			"Yes",
+			"Yes, don't ask again this session (this command pattern)",
+			"No",
+		]);
+		expect(host.picks[0]?.preview).toEqual({
+			kind: "command",
+			tool: "bash",
+			text: "rm -rf node_modules",
+			warnSpans: [[0, 6]],
+		});
+		// the picker carries the preview, so the transcript must not repeat it
+		expect(host.output()).not.toContain("● bash");
+	});
+
+	it("#confirm-prompt (Phase 2): a text host gets the preview as one plain note line — the command is still shown once (D7)", async () => {
+		const host = makeConfirmHost({ select: false });
+		await expect(
+			host.confirm.handler("[guardian] allow this bash command?", "why it matched: recursive force delete", {
+				preview: { kind: "command", tool: "bash", text: "rm -rf node_modules", warnSpans: [[0, 6]] },
+			}),
+		).resolves.toBe(true);
+		expect(host.questions).toEqual(["proceed? [y/N] "]);
+		expect(host.output()).toContain("▪ confirm: [guardian] allow this bash command?");
+		expect(host.output()).toContain("why it matched: recursive force delete"); // the detail note stays (D1)
+		expect(host.output()).toContain("● bash  rm -rf node_modules"); // one plain line, no ANSI
+		expect(host.output().split("rm -rf node_modules").length - 1).toBe(1);
+	});
+
 	it("a different sessionKey still prompts", async () => {
 		const host = makeConfirmHost();
 		host.pickAnswer.value = 1;

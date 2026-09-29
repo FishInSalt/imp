@@ -5,6 +5,7 @@ export interface SelectItemOption {
 }
 
 import type { TreeNode } from "../core/session/store.js";
+import type { CommandPreview } from "../extensions/types.js";
 import type { TreeFilterMode } from "./components/tree-selector.js";
 import type { LoginDialogOptions } from "./login-dialog.js";
 
@@ -42,6 +43,10 @@ export interface SelectOptions {
 	 * from api.confirm's options.warnSpans — the host owns color, the
 	 * extension owns only plain-text offsets. */
 	warnSpans?: Array<[number, number]>;
+	/** #confirm-prompt (Phase 2): the extension's command preview, rendered in the
+	 *  transcript's call-header idiom between the detail and the items. Absent or
+	 *  malformed → nothing is drawn. */
+	preview?: CommandPreview;
 	items: SelectItemOption[];
 	/** Type-to-filter while the picker is open (M11 #9): printable input
 	 *  builds a case-insensitive substring query over the labels; arrows and

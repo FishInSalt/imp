@@ -44,6 +44,19 @@ export interface ExtensionContextIdentity {
 	sha256: string;
 }
 
+/** #confirm-prompt (Phase 2 D7): an extension-supplied command preview. Only
+ *  "command" exists; unknown kinds, non-string fields, and empty values render
+ *  nothing. Offsets are plain — the host owns color. */
+export interface CommandPreview {
+	kind: "command";
+	/** Tool name for the header, e.g. "bash". */
+	tool: string;
+	/** The command text itself. */
+	text: string;
+	/** [start, end) offsets into `text` to alert-highlight. */
+	warnSpans?: Array<[number, number]>;
+}
+
 /** Options bag for api.confirm — additive, all-optional (M10). */
 export interface ConfirmOptions {
 	/** Host-side session memory: a key the user previously approved via
@@ -57,6 +70,15 @@ export interface ConfirmOptions {
 	 * every other surface shows the detail verbatim. Out-of-range clips,
 	 * overlaps merge. */
 	warnSpans?: Array<[number, number]>;
+	/** What "don't ask again this session" will remember, in the extension's own
+	 *  words (e.g. "this command pattern", "this directory"). The host renders
+	 *  it inside the remember option's label; absent → the stock wording. */
+	rememberLabel?: string;
+	/** The request being decided, rendered in the transcript's call-header idiom
+	 *  instead of prose. The host sanitizes both fields, styles `warnSpans` with
+	 *  its own alert color, and shows the command exactly once on every surface:
+	 *  in the picker where one exists, as one plain note line otherwise. */
+	preview?: CommandPreview;
 }
 
 /**

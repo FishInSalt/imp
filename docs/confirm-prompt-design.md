@@ -2,10 +2,9 @@
 
 Status: APPROVED — independent adversarial review closed after five rounds
 (NEEDS REVISION → CONFIRMED WITH NOTES → CONFIRMED WITH NOTES → NEEDS REVISION →
-CONFIRMED); every fold is recorded in §13. **Phase 1 is implemented** on
-`feat/confirm-prompt-phase1` (§7 records the implementation facts and the gate
-results); Phase 2 (seam + guardian consumer) follows its own implementation cycle
-against the same document.
+CONFIRMED); every fold is recorded in §13. **Phase 1 and Phase 2 are both
+implemented** (§7 and §8 record the implementation facts, deviations and gate
+results); Phase 2 awaits its independent implementation check.
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -443,16 +442,47 @@ Acceptance criteria (scriptable):
 
 ## 8. Phase 2 — seam + consumer: scope, files, acceptance
 
+**Status: IMPLEMENTED** (branch `feat/confirm-prompt-phase2`). Recorded
+implementation facts and the three deviations from the text below:
+
+- The seam is exactly the two optional fields; no extension API signature
+  changed. `CommandPreview` lives in `src/extensions/types.ts` (the contract) and
+  `SelectOptions.preview` imports that type, so there is one definition.
+- **Deviation 1 (mechanism): wrapping is `Text`'s, not `wrappedRows`.**
+  `renderCommandHeader(preview)` takes the preview object and returns **one styled
+  string**; the `Text` block that carries it wraps it exactly like the detail
+  block (the house mechanism for block content). Same user-visible result — width
+  honored, header never repeated — with no width plumbing and no span-order risk.
+  A second export, `commandPreviewText(preview)`, is the plain (no-ANSI) carrier
+  for text hosts.
+- **Deviation 2 (sanitization scope): control SEQUENCES are consumed.**
+  Sanitization is the shared `sanitizeDisplay`, which consumes ANSI/CSI/OSC
+  sequences whole; a bare C0 byte follows the house policy (as on every other
+  surface, a lone BEL survives). The acceptance line below is read as "control
+  sequences are consumed" — the security-relevant part, pinned.
+- **Deviation 3 (pin placement):** the byte-exact pins live in the new
+  `test/confirm-preview.test.ts`, not in the TUI test: the TUI writes a styled row
+  in fragments, so an exact-byte assertion there is unreliable. The TUI test keeps
+  the layout pins (idiom rendered once, no `✓`/elapsed, width honored).
+- Guardian: `preview` + `rememberLabel: "this command pattern"` at the bash gate
+  (warn spans are now command-relative), `rememberLabel: "this directory"` at the
+  write gate, and the `command: …` prefix is gone from the detail — so the command
+  appears exactly once.
+- Red-first evidence: 9 pins red on the pre-change code (5 guardian option pins,
+  2 confirm pins, 2 preview pins); 219/219 green in the five focused files after.
+- Gates (unmasked): lint 0, typecheck 0, full suite 0 (**128 files / 2483
+  tests**), build 0. One flake observed once under load (an unrelated
+  `login-dialog` device-code test); it passes in isolation and on re-run.
+
 Files: `src/extensions/types.ts` (D7), **`src/repl/repl.ts`** (`TtyConfirm`
-builds the option labels from `CONFIRM_ITEMS` at `:234-238`, passed at `:279`, so
-`rememberLabel` lands here; the plain `preview` note on text hosts belongs to the
-same handler, `:265-291`), `src/repl/components/tool-block.ts` (new exported
-`renderCommandHeader` helper), `src/repl/shell.ts` (the picker-side preview row),
-`examples/extensions/guardian.mjs` (pass both at the bash gate and drop its
-`command: …` prefix; `rememberLabel` at the write gate), `test/repl-tui.test.ts`,
-`test/repl-confirm.test.ts` (the text-host preview note — `test/repl-tui.test.ts`
-always drives a `TuiShell`, so it cannot reach a text host),
-`test/guardian.test.ts`.
+builds the option labels (`confirmItems`), so `rememberLabel` lands here; the
+plain `preview` note on text hosts belongs to the same handler),
+`src/repl/components/tool-block.ts` (`renderCommandHeader`, `commandPreviewText`),
+`src/repl/shell.ts` (the picker-side preview row), `src/repl/line-input.ts`
+(`SelectOptions.preview`), `examples/extensions/guardian.mjs` (pass both at the
+bash gate and drop its `command: …` prefix; `rememberLabel` at the write gate),
+`test/confirm-preview.test.ts` (new), `test/repl-tui.test.ts`,
+`test/repl-confirm.test.ts`, `test/guardian.test.ts`, `CHANGELOG.md`.
 
 Round-4 correction: an earlier draft listed only `shell.ts` for Phase 2. The
 shell never runs on text hosts (`TuiShell` exists only when the input implements

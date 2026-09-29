@@ -25,8 +25,20 @@ All notable changes to imp are documented here. The format follows
   dim affordance line sits under the items
   (`(↑/↓ move · enter select · esc cancel · 1-3 quick pick)`). Filterable
   pickers are untouched: digits stay query characters and no hint row is added.
-  Design + five adversarial review rounds: `docs/confirm-prompt-design.md`
-  (Phase 2, the extension-facing seam, follows separately).
+  Design + five adversarial review rounds: `docs/confirm-prompt-design.md`.
+
+- **Confirm prompt surface, Phase 2 (#confirm-prompt).** Extensions can now say
+  it in two structured fields instead of prose: `preview` renders the request in
+  the transcript's own call-header idiom (`● bash  rm -rf …`, the risky fragment
+  alert-highlighted, never a completion suffix — the call has not run), and
+  `rememberLabel` names what "don't ask again this session" will cover
+  (`Yes, don't ask again this session (this command pattern)`). The host
+  sanitizes both, so an extension can never inject terminal control sequences,
+  and shows the command exactly once on every surface — in the picker where one
+  exists, as one plain note line otherwise. Guardian passes both at its bash
+  gate and a memory label at its write gate, dropping the `command: ` prefix
+  from its detail. Malformed values render nothing; hosts without a picker
+  ignore the styling and stay byte-stable.
 
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
   TUI transcript carry a marker — green `✓` for successes, red `✗` for

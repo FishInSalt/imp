@@ -55,6 +55,17 @@ All notable changes to imp are documented here. The format follows
   Design + three adversarial review rounds + a mutation-verified implementation
   check: `docs/confirm-prompt-design.md` §15.
 
+- **Confirm prompt surface, Phase 4 (#confirm-prompt).** The picker title no
+  longer repeats the caller's name (`allow this bash command?` — the transcript's
+  `▪ confirm: guardian — …` record line already says who asks), and every picker
+  box now opens with a horizontal rule carrying that name in the middle:
+  `──────────────── guardian ────────────────`. The rule is host-drawn from the
+  same host-held name, so an extension cannot write a different one; the dashes
+  are faint and the label sits at normal weight. Unattributed pickers get plain
+  dashes, and the login dialog keeps its own frame. Design + two adversarial
+  review rounds + a mutation-verified implementation check:
+  `docs/confirm-prompt-design.md` §16.
+
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
   TUI transcript carry a marker — green `✓` for successes, red `✗` for
   failures — with a dim wall-time suffix when the call took ≥1s

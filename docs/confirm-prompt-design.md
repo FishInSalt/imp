@@ -1201,3 +1201,18 @@ Branch `feat/confirm-prompt-phase4` from `f417fba`; this amendment passes an
 independent adversarial review before implementation; implementation is
 red-first with mutation-verified pins; an independent implementation check
 follows; then `--no-ff` merge plus a ledger entry. Phase 3 stays revertible.
+
+### 16.12 Implementation check (A2)
+
+Independent adversarial check of the working tree (fresh context, mutation
+testing): verdict **APPROVE WITH CORRECTIONS** — the render contract, the wiring
+and the byte pins verified, six mutations probed, one survived.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| G1 | P2 | The `avail < 2` threshold was unpinned in both directions: mutating it to `< 3` or `< 1` left the whole suite green | Folded: `test/repl-tui.test.ts` pins the exact rows at width 5 (plain dashes) and width 6 (labelled, `avail = 2`); both mutations now RED |
+| G2 | P3 | The width-identity pin never exercised a labelled wide-character label at a narrow width | Folded: a CJK label added to the loop |
+
+The check also ran three adversarial mutations of its own beyond the plan
+(restoring the Phase 3 title tag; placing the rule before the spacer; adding
+a rule to the login dialog) — all three were caught by existing pins.

@@ -32,8 +32,9 @@ export interface TreeSelectRequest {
 export interface SelectOptions {
 	/** Line rendered above the items (e.g. "pick a model"). */
 	title?: string;
-	/** #confirm-prompt (Phase 3 D9): who is asking — the host-derived extension
-	 *  name, rendered as a faint ` · <name>` tag after the title. Host-internal:
+	/** #confirm-prompt (Phase 3 D9, Phase 4 D13/D14): who is asking — the
+	 *  host-derived extension name. It labels the picker box's SectionRule
+	 *  (a faint horizontal rule); the title carries no tag. Host-internal:
 	 *  only the confirm path (`TtyConfirm.handler`) sets it, so an extension can
 	 *  neither set nor spoof it and every other `ctx.select` caller is unaffected.
 	 *  Named `attribution` to stay clear of `sourceId` below and the observer

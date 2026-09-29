@@ -1,6 +1,6 @@
 # Per-call settle: accurate concurrent timing and real-time completion display
 
-Batch: `feat/tool-settle`. Base: `main@154aa99`.
+Batch: `feat/tool-settle`. Base: `main@d244756` (rebased from the pre-`#confirm-prompt` main).
 
 ## 1. Problem
 
@@ -165,13 +165,16 @@ Two deliberate narrowings:
 1. **Top-level only.** A child-sourced settle is dropped. `trackActivity`'s
    child arm (`:1190-1193`) calls `prepareResult(calls.get(id), …)`, and
    `prepareResult` falls back to the *current* registry result hook when the
-   record is missing (`src/repl/tool-presentation-hooks.ts:318`). Were the
+   record is missing (`src/repl/tool-presentation-hooks.ts:320`). Were the
    settle event to consume the record and the authoritative `tool_end` to
    arrive afterwards, that hook could fire twice. Children gain nothing here
    anyway: a child row is updated by its own `tool_start` (already real-time)
    and nothing visible changes on its `tool_end`. So the child arm keeps
-   `event.type === "tool_end"`; a child-sourced settle falls through to
-   `pushActivity()`, a no-op repaint.
+   `event.type === "tool_end"`; a child-sourced settle is dropped entirely —
+   no `trackActivity` call, so nothing is repainted either. (The snippet above
+   is the whole branch; it must sit *before* the generic
+   `this.trackActivity(event, info)` at `repl.ts:671`, or a top-level settle
+   would run `trackActivity` twice.)
 2. **The top-level arm treats both types identically.** `trackActivity`'s
    top-level `tool_end` arm (`:1231-1242`) deletes both the plain
    `activityTools` row and the task-specific state; the settle path must not be
@@ -220,10 +223,12 @@ settle fires. §6 records the invariant.
    result twice; a separate type keeps the "authoritative" and "display-only"
    roles textually distinct, matching `health`.
 5. **Emit the settle event for refusal/validation plans too.** Those plans never
-   ran, so they carry no duration, and closing them early would flip a blocked
-   call's marker from today's `✗ <batch time>` to a bare `✓` at a different
-   moment — a visible change to an unrelated path. They keep closing in phase 3
-   (§6.4 records the cost).
+   ran, so they carry no duration. Their marker is already an error marker
+   (`isError: true` → `✗`, derived by the sink at `tool-presentation.ts:689`),
+   so emitting early could not turn it into a `✓` — but it would move a
+   *blocked* call's `✗ <batch time>` earlier for no benefit and invent a
+   duration for a call that never executed. They keep closing in phase 3
+   (§6.8 records the cost).
 
 ## 5. Compatibility
 

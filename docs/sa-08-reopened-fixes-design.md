@@ -788,11 +788,17 @@ moonshotai, thinking wrappers).
 
 ### 13.2 Fix: defer the hoisted message to the end of the toolResult run
 
-`toWireMessages` buffers the run's images outside the per-message case;
-when the next message is NOT a toolResult (or the list ends), it flushes
-ONE user message ("Attached image(s) from tool result:" + all buffered
-images) before that next message. Every tool message of the run is then
-emitted first and the image user message follows. This is a deliberate
+`toWireMessages` buffers the run's images outside the per-message case.
+Flush points, stated explicitly (design-review F6-C1): (a) at the TOP of
+the loop iteration when the current message is NOT a toolResult (i.e.
+before emitting that message), and (b) once after the loop terminates.
+The flush uses `wire.push` at the current position — never an index — and
+`wire` is seeded with the system message BEFORE the loop, so neither the
+system message nor the run's internal order can be displaced. The flush
+emits ONE user message ("Attached image(s) from tool result:" + all
+buffered images); with zero buffered images it is a no-op (non-image runs
+stay byte-identical). Every tool message of the run is emitted first and
+the image user message follows. This is a deliberate
 deviation from the previous pi-parity placement (which assumed a single
 toolResult message per batch): a wrong wire order is not worth parity.
 Conversion-only — no transcript rewrite, no tool replay (owner
@@ -801,18 +807,46 @@ requirement).
 ### 13.3 Tests (red-first; test/images.test.ts capture harness)
 
 - F6-a: [user, assistant(t1, t2), toolResult(t1 with image),
-  toolResult(t2)] -> assert TWO tool messages (t1, t2 in order), BOTH
-  before the image user message, with the image user message directly
-  after the last tool message (on the current code the user message sits
-  between them: red).
-- F6-b: the repaired shape through the REAL repair: build a store with
-  [user, assistant(t1, t2), toolResult(t1 with image)], run
-  buildContinuationHistory (the repair appends the t2 unknown-outcome
-  result), drive the provider with `history.messages`, assert the same
-  order (pins repair + conversion integration).
-- Positive controls unchanged: the single-result imageTurn hoisting
-  tests, the non-vision placeholder tests, the zai wrapper test.
+  toolResult(t2)] -> assert the EXACT role sequence
+  ["system","user","assistant","tool","tool","user"] with tool ids
+  [t1, t2], and the flushed message's content shape (text lead +
+  image_url) — exact-sequence equality, not just tail position
+  (design-review F6-C2). On the current code the user message sits
+  between the two tool messages: red.
+- F6-b: the repaired shape through the REAL repair (F6-C4): build a store
+  with SessionStore.create + [user, assistant(t1, t2), toolResult(t1 with
+  image)], run buildContinuationHistory (the repair appends the t2
+  unknown-outcome result), drive the provider with `history.messages`,
+  assert the same exact role sequence plus both tool results before the
+  image message (pins repair + conversion integration).
+- F6-c (F6-C3, green control): run where ONLY the last toolResult has an
+  image -> ["system","user","assistant","tool","tool","user"] — already
+  the correct order today; guards the flush against moving it.
+- F6-d (F6-C3): several results in the run carry images -> ONE merged
+  user message containing BOTH image URLs in order (on the current code:
+  two user messages with the wrong order: red).
+- Positive controls unchanged and reused via the existing drive()/server
+  harness (F6-C4): the single-result imageTurn hoisting tests, the
+  non-vision placeholder tests, the zai wrapper test.
 
 ### 13.4 Round-5 review log
 
-(pending pre-implementation review)
+- 2026-09-29: pre-implementation adversarial review of 69d8122 —
+  **APPROVE WITH CORRECTIONS**, no rejection-level defect. Independently
+  reproduced via the real adapter + local capture server: F6-a's wire is
+  ["system","user","assistant","tool","user","tool"] and F6-b's repaired
+  variant is ["system","user","assistant","tool","user","tool"] (both
+  red today); non-image runs are already correct and stay
+  byte-identical; the immediate-hoist site is unique to
+  openai-completions.ts (all four wrappers pass no message
+  transformation); Anthropic/codex embed images natively and are
+  unaffected; downloadUnsupportedImages runs before the conversion, so
+  the buffer degrades to the current text-only output on non-vision
+  models. Folded: F6-C1 (explicit flush points; wire.push at position;
+  system seeded before the loop), F6-C2 (exact role-sequence assertions
+  + content shape), F6-C3 (F6-c/F6-d added), F6-C4 (existing harness;
+  F6-b through the real store/repair). Unverified by the reviewer and
+  left for the implementation: the fix itself against the run-at-end and
+  run-followed-by-assistant shapes; merged multi-image messages against a
+  live gateway (reuses the existing multi-image shape; no new wire
+  construct).

@@ -111,6 +111,19 @@ describe("buildTaskRecord (SA-03)", () => {
 		expect(buildTaskRecord(input()).health).toBeUndefined();
 	});
 
+	it("#loop-health: a legacy tool-open entry keeps the whole health array (Amendment 1)", () => {
+		const health = [
+			{ code: "repeat-loop" as const, count: 5, turn: 5, detail: "bash test" },
+			{ code: "tool-open" as const, count: 1, turn: 1, detail: 'bash "x" was still open after 10m00s' },
+		];
+		const usage = { inputTokens: 7, outputTokens: 3 };
+		const record = buildTaskRecord(input({ health, usage }));
+		// The parser must keep accepting the removed code: pre-removal records
+		// carry it, and one rejected entry would drop the WHOLE health array
+		// (the `every()` semantics) — losing facts that still validate.
+		expect(parseTaskRecord(JSON.parse(JSON.stringify(record)))?.health).toEqual(health);
+	});
+
 	it("SA-08/F3-a: a binding whose reference does not derive from provider/wire id is refused", () => {
 		const record = buildTaskRecord(
 			input({

@@ -169,11 +169,10 @@ describe("runSubagent", () => {
 		expect(outcome.turns).toBe(1); // the tool returned when the signal fired
 	});
 
-	it("abort with an open tool: the disposed monitor fires nothing after settle (#loop-health)", async () => {
-		const saved = process.env.IMP_HEALTH_TOOL_OPEN_MS;
-		process.env.IMP_HEALTH_TOOL_OPEN_MS = "200";
+	it("abort with an open tool: nothing fires after settle (#loop-health)", async () => {
 		// Fake timers (design §6 item 7): no real-time race — the settled run is
-		// advanced past the threshold deterministically.
+		// advanced deterministically. Amendment 1 removed the only timer
+		// (tool-open), so this pins the absence of post-settle facts outright.
 		vi.useFakeTimers();
 		try {
 			const g = gate();
@@ -196,13 +195,11 @@ describe("runSubagent", () => {
 			const outcome = await pending;
 			expect(outcome.status).toBe("aborted");
 			expect(outcome.health).toEqual([]);
-			// Past the 200ms threshold: a leaked timer would have fired by now.
+			// Well past any former threshold: a leaked timer would have fired.
 			await vi.advanceTimersByTimeAsync(1000);
 			expect(events.filter((event) => event.type === "health")).toHaveLength(0);
 		} finally {
 			vi.useRealTimers();
-			if (saved === undefined) delete process.env.IMP_HEALTH_TOOL_OPEN_MS;
-			else process.env.IMP_HEALTH_TOOL_OPEN_MS = saved;
 		}
 	}, 20000);
 

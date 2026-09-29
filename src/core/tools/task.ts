@@ -928,7 +928,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 }
 
 /** #loop-health (design §4.3): one line per detected signal, appended as the
- *  last block of every terminal shape (never on `rejected`); ≤4 lines by the
+ *  last block of every terminal shape (never on `rejected`); ≤3 lines by the
  *  producer's dedup. `isError` semantics are untouched. */
 function healthBlock(health: readonly HealthSignal[]): string | undefined {
 	if (health.length === 0) return undefined;
@@ -944,6 +944,7 @@ function healthSuffix(signal: HealthSignal): string {
 		case "mutation-failure-streak":
 			return " — the child may be stuck; verify the result before relying on it.";
 		case "tool-open":
+			// Legacy read-only (Amendment 1): no producer; renders pre-removal records.
 			return " — a single tool call held the child for that long.";
 		case "compaction-failures":
 			return " — later turns ran without context compression.";

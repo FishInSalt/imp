@@ -7,7 +7,7 @@ import type { AssistantMessage, ToolResult } from "./messages.js";
 /**
  * #loop-health (docs/loop-health-design.md): the shared, observation-only
  * loop health monitor. It consumes the existing AgentEvent stream
- * (message_end / tool_start / tool_end) at the call sites — runAgentLoop
+ * (message_end / tool_end) at the call sites — runAgentLoop
  * itself gains no options and is behavior-unchanged without a monitor.
  *
  * v1 is detection only: no prompts, no aborts, no new terminal statuses.
@@ -17,10 +17,17 @@ import type { AssistantMessage, ToolResult } from "./messages.js";
  * valve; no injection.
  */
 
-export type HealthCode = "repeat-loop" | "mutation-failure-streak" | "tool-open" | "compaction-failures";
+export type HealthCode =
+	| "repeat-loop"
+	| "mutation-failure-streak"
+	| "compaction-failures"
+	// Legacy read-only (Amendment 1, design §9): no producer emits this since
+	// the tool-open signal was removed; the parser and the text renderers keep
+	// the arm so pre-removal records read back and render intact.
+	| "tool-open";
 
 /** One detected condition. `count` is the peak observed run length for the
- *  condition (1 for tool-open); `turn` is the assistant `message_end` count
+ *  condition; `turn` is the assistant `message_end` count
  *  since monitor creation — at first fire for the live emit, and moved
  *  together with count/detail when the peak grows (post-merge review finding
  *  3: stored facts never mix evidence from two batches). */
@@ -37,14 +44,11 @@ export interface HealthThresholds {
 	repeatTurns: number;
 	/** Failed edit/write results before `mutation-failure-streak`. */
 	mutationFailures: number;
-	/** Open-tool duration before `tool-open`. */
-	toolOpenMs: number;
 }
 
 export const DEFAULT_HEALTH_THRESHOLDS: HealthThresholds = {
 	repeatTurns: 5,
 	mutationFailures: 3,
-	toolOpenMs: 600_000,
 };
 
 /** A failed mutation older than this gap resets the streak (pi's window). */
@@ -64,14 +68,15 @@ export function healthEnabled(): boolean {
 }
 
 export interface LoopHealthMonitor {
-	/** Feed one observed loop event (message_end / tool_start / tool_end). */
+	/** Feed one observed loop event (message_end / tool_end; `tool_start` is
+	 *  ignored since Amendment 1). */
 	observe(event: AgentEvent): void;
 	/** Engine-level fact (e.g. the child's compaction backstop). Valid before
 	 *  any observe() call; `turn` reads as the turns observed so far (0). */
 	note(code: HealthCode, count: number, detail?: string): void;
 	/** Fired signals, deduped by code, first-fire order, ≤ one per code. */
 	signals(): readonly HealthSignal[];
-	/** Clears timers; idempotent. Callers MUST call this after the loop
+	/** Settle-time close; idempotent. Callers MUST call this after the loop
 	 *  settles on every path. Facts already recorded survive disposal. */
 	dispose(): void;
 }
@@ -125,13 +130,6 @@ function hashArgs(args: unknown): string {
 	return createHash("sha256").update(canonicalJson(args)).digest("hex");
 }
 
-/** `12s` / `10m05s` — the render.ts duration shape. */
-function formatElapsed(ms: number): string {
-	const s = Math.max(0, Math.round(ms / 1000));
-	if (s < 60) return `${s}s`;
-	return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
-}
-
 interface CallInfo {
 	name: string;
 	preview: string;
@@ -146,9 +144,6 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 		mutationFailures:
 			options.thresholds?.mutationFailures ??
 			envInt("IMP_HEALTH_MUTATION_FAILURES", DEFAULT_HEALTH_THRESHOLDS.mutationFailures),
-		toolOpenMs:
-			options.thresholds?.toolOpenMs ??
-			envInt("IMP_HEALTH_TOOL_OPEN_MS", DEFAULT_HEALTH_THRESHOLDS.toolOpenMs),
 	};
 
 	let disposed = false;
@@ -157,7 +152,6 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 	const fired: HealthSignal[] = [];
 	const firedIndex = new Map<HealthCode, number>();
 	const callInfo = new Map<string, CallInfo>();
-	const openTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Repeat-loop state: consecutive identical per-turn call signatures.
 	let lastSignature: string | undefined;
 	let repeatRun = 0;
@@ -193,17 +187,13 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 				onTurn(event.message);
 				return;
 			}
-			if (event.type === "tool_start") {
-				onToolStart(event.toolCallId, event.name);
-				return;
-			}
 			if (event.type === "tool_end") {
 				onToolEnd(event.result);
 			}
 		} catch {
 			// #loop-health contract: the monitor must never affect the run — a
 			// malformed event (e.g. cyclic tool args defeating canonicalJson)
-			// degrades to "no signal". The timer path has the same guard.
+			// degrades to "no signal".
 		}
 	}
 
@@ -242,36 +232,7 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 		}
 	}
 
-	function onToolStart(toolCallId: string, name: string): void {
-		const startedAt = Date.now();
-		const preview = callInfo.get(toolCallId)?.preview ?? name;
-		const timer = setTimeout(() => {
-			if (disposed) return;
-			try {
-				record({
-					code: "tool-open",
-					count: 1,
-					turn: observedTurns,
-					detail: boundDetail(`${preview} was still open after ${formatElapsed(Date.now() - startedAt)}`),
-				});
-			} catch {
-				// a health timer must never crash the run
-			}
-		}, thresholds.toolOpenMs);
-		timer.unref?.();
-		// A duplicate toolCallId must not orphan the earlier timer (SA-08 round 3
-		// hardened the loop against duplicate ids; the monitor clears on overwrite).
-		const prior = openTimers.get(toolCallId);
-		if (prior !== undefined) clearTimeout(prior);
-		openTimers.set(toolCallId, timer);
-	}
-
 	function onToolEnd(result: ToolResult): void {
-		const timer = openTimers.get(result.toolCallId);
-		if (timer !== undefined) {
-			clearTimeout(timer);
-			openTimers.delete(result.toolCallId);
-		}
 		const info = callInfo.get(result.toolCallId);
 		callInfo.delete(result.toolCallId);
 		if (result.toolName !== "edit" && result.toolName !== "write") return;
@@ -321,8 +282,6 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 		dispose(): void {
 			if (disposed) return;
 			disposed = true;
-			for (const timer of openTimers.values()) clearTimeout(timer);
-			openTimers.clear();
 			callInfo.clear();
 		},
 	};
@@ -337,6 +296,7 @@ export function healthSignalText(signal: HealthSignal): string {
 		case "mutation-failure-streak":
 			return `${signal.count} consecutive failed edits (last: ${signal.detail ?? "unknown"})`;
 		case "tool-open":
+			// Legacy read-only (Amendment 1): renders pre-removal records.
 			return signal.detail ?? `a tool call stayed open too long`;
 		case "compaction-failures":
 			return `child compaction disabled after ${signal.count} summarizer failures`;

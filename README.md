@@ -390,9 +390,9 @@ the parent's tools (minus `task` itself) and the parent's working directory,
 uncapped (the 60-turn backup wall was removed in `#loop-health`; budget
 decisions stay with the parent). A shared loop-health monitor (same signals
 for the main loop and children) reports degenerate patterns — repeated
-identical tool calls, repeated failed edits, a tool left open too long — as
-honest task-result lines, a task-record field, and one dim REPL note per
-signal (`IMP_HEALTH=0` disables it); it never injects anything into a child.
+identical tool calls, repeated failed edits — as honest task-result lines,
+a task-record field, and one dim REPL note per signal (`IMP_HEALTH=0`
+disables it); it never injects anything into a child.
 Every child transcript is persisted as a session file in
 a `children/` directory next to the parent's (opt out with
 `IMP_CHILD_SESSIONS=0`). Wall-clock: no clock in the REPL (Ctrl+C is the

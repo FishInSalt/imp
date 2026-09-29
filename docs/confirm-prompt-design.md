@@ -2,9 +2,10 @@
 
 Status: APPROVED — independent adversarial review closed after five rounds
 (NEEDS REVISION → CONFIRMED WITH NOTES → CONFIRMED WITH NOTES → NEEDS REVISION →
-CONFIRMED); every fold is recorded in §13. Phase 1 (host-only) may start
-immediately; Phase 2 (seam + guardian consumer) follows its own implementation
-cycle against the same document.
+CONFIRMED); every fold is recorded in §13. **Phase 1 is implemented** on
+`feat/confirm-prompt-phase1` (§7 records the implementation facts and the gate
+results); Phase 2 (seam + guardian consumer) follows its own implementation cycle
+against the same document.
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -385,8 +386,27 @@ interface ConfirmOptions {
 
 ## 7. Phase 1 — host-only: scope, files, acceptance
 
-Files: `src/repl/repl.ts` (D1), `src/repl/shell.ts` (D2-D5), tests
-`test/repl-tui.test.ts`, `test/repl-confirm.test.ts`, `test/guardian.test.ts`.
+**Status: IMPLEMENTED** (branch `feat/confirm-prompt-phase1`, on top of this
+document's branch). Recorded implementation facts:
+
+- D1 keeps the title note and writes the detail note only when `this.select` is
+  null (`src/repl/repl.ts`); the picker host's detail lives in the picker.
+- D2-D5 live in `src/repl/shell.ts`: `numbered = options.filterable !== true`,
+  labels `"N. <label>"`, a blank row above the items, `pickerAffordance(n)` under
+  them, and a `numberKey` hook consulted by the pre-focus listener right after
+  `filterKey`.
+- Red-first evidence: 7 failing pins before the change (the D1 picker-host
+  assertion, six marker/affordance pins, one new pin); 164/164 green in the two
+  focused files after.
+- Marker sites: **all ten** asserted sites needed the numbering form — including
+  the two `/model` sites (`test/repl-tui.test.ts:1520,1721`). `/model` is **not**
+  filterable (`src/repl/commands.ts:1503-1506`; the `filterable: true` at `:1439`
+  belongs to `/resume`), so D4's rule numbers it like the confirm.
+- Gates (unmasked): lint 0, typecheck 0, full suite 0 (**127 files / 2466
+  tests**), build 0.
+
+Files: `src/repl/repl.ts` (D1), `src/repl/shell.ts` (D2-D5), `CHANGELOG.md`, tests
+`test/repl-tui.test.ts`, `test/repl-confirm.test.ts`.
 
 Acceptance criteria (scriptable):
 
@@ -598,6 +618,15 @@ was traced on both host kinds (text host: detail note + preview note, each once;
 TUI: detail and preview in the picker, each once); no contradiction remains across
 D7/D8/§8/§9/§10. One cosmetic note folded: D1's snippet now mentions that Phase 2
 adds the preview note above the detail line.
+
+**Phase 1 implementation notes (post-review, `feat/confirm-prompt-phase1`).** No
+contract change: the two discoveries are facts about the existing code, recorded
+in §7. (a) `/model` is not a filterable picker, so D4's rule numbers it — the ten
+marker sites all changed; the document's earlier assumption in prose that only
+nine would change was wrong in the other direction and is corrected in §7.
+(b) The worktree needed `npm run build` before the suite: sixteen tests spawn
+`bin/imp.js` → `dist/cli.js`, which is gitignored and was absent in a fresh
+worktree — not a code defect, but worth knowing for any gate run here.
 
 **Final review status:** APPROVED — Phase 1 may start immediately; Phase 2 follows
 its own implementation cycle.

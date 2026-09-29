@@ -62,9 +62,9 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 			"Yes, don't ask again this session",
 			"No",
 		]);
-		// the note lines keep message + detail (the dim second line)
+		// the note lines keep the title only — the picker carries the detail (Phase 1 D1)
 		expect(host.output()).toContain("▪ confirm: [guardian] allow this bash command?");
-		expect(host.output()).toContain("  rm -rf node_modules");
+		expect(host.output()).not.toContain("  rm -rf node_modules");
 		// same key again: approved WITHOUT a second picker, with an audit note
 		await expect(
 			host.confirm.handler("[guardian] allow this bash command?", "again", {
@@ -76,6 +76,20 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 			"▪ confirm: [guardian] allow this bash command? — allowed for this session",
 		);
 		expect(host.questions).toEqual([]); // the [y/N] path never fired
+	});
+
+	it("#confirm-prompt: a no-picker host keeps BOTH notes — the detail note is its only carrier (Phase 1 D1)", async () => {
+		const host = makeConfirmHost({ select: false });
+		await expect(
+			host.confirm.handler(
+				"[guardian] allow this bash command?",
+				"rm -rf node_modules\nwhy it matched: risky",
+			),
+		).resolves.toBe(true);
+		expect(host.questions).toEqual(["proceed? [y/N] "]); // the ask path ran
+		expect(host.picks).toHaveLength(0);
+		expect(host.output()).toContain("▪ confirm: [guardian] allow this bash command?");
+		expect(host.output()).toContain("  rm -rf node_modules"); // the only place it reaches this host
 	});
 
 	it("a different sessionKey still prompts", async () => {

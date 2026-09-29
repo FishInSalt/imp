@@ -9,6 +9,17 @@ All notable changes to imp are documented here. The format follows
 
 ### Changed
 
+- **Confirm prompt surface, Phase 1 (#confirm-prompt).** The guardian-style
+  approval ask is legible now: the transcript keeps one `▪ confirm:` record line
+  (the dim detail note is written only where no picker exists — readline,
+  no-host and print paths are byte-identical), the picker numbers its rows
+  (`→ 1. Yes`) on non-filterable pickers, digits `1`–`9` answer directly, and a
+  dim affordance line sits under the items
+  (`(↑/↓ move · enter select · esc cancel · 1-3 quick pick)`). Filterable
+  pickers are untouched: digits stay query characters and no hint row is added.
+  Design + five adversarial review rounds: `docs/confirm-prompt-design.md`
+  (Phase 2, the extension-facing seam, follows separately).
+
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
   TUI transcript carry a marker — green `✓` for successes, red `✗` for
   failures — with a dim wall-time suffix when the call took ≥1s

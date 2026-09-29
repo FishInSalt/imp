@@ -474,9 +474,13 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						`cannot resume child "${launch.childId}": this host does not expose the launch-environment facts needed to validate it.\n${RESUME_REFUSAL_TAIL}`,
 					);
 				}
-				// Pinned for the whole attempt (impl review F-4b): there is no
-				// yield point between this read and runSubagent today — if one
-				// is ever added, re-capture the pair here (design §8.2).
+				// Pinned for the whole attempt (impl review F-4b, corrected in
+				// owner round 4): a yield point DOES exist between this read
+				// and the attempt (validateChildContinuation, the lease) — the
+				// attempt running on THIS captured instance is what keeps the
+				// record and the call consistent. Do not move the read after
+				// the await, and do not re-read inside the attempt (design
+				// §8.2).
 				const liveProvider = options.getProvider();
 				const mismatch = providerMismatch(launch.model.providerName, liveProvider.name);
 				if (mismatch !== undefined) {

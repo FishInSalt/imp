@@ -454,7 +454,7 @@ is disclosed.
 ### 8.1 The finding
 
 src/core/tools/task.ts, fresh dispatch: the model binding is resolved and
-saved at 712-713, then the path awaits (resolveRepoState / 
+saved at 712-713, then the path awaits (resolveRepoState /
 createChildWorktree, 738-744), and only at 848 does the attempt read
 `provider: options.getProvider()`. `/model` may run in the parent while a
 spawn is in flight; the runner updates `providerName` and `provider` in one
@@ -514,10 +514,15 @@ provider/model or the recorded identity (`rec.binding` and the request's
 `model`/`modelReference` all come from the captured pair). This residual
 is an owner-accepted scope boundary, not a defect.
 
-Resume-path note (implementation review F-4b): the resume branch reads
-`liveProvider` once (task.ts:477) and uses it at the attempt; there is NO
-yield point between the two today, so no window exists — a comment at the
-read pins that invariant ("if a yield point is added, re-capture").
+Resume-path note (implementation review F-4b; corrected per owner
+round 4): the resume branch reads `liveProvider` once (task.ts:477) and
+uses that captured instance at the attempt. A yield point DOES exist
+between the two (`await validateChildContinuation(...)`, plus the lease
+acquisition), so a /model swap can happen in that window — the attempt
+still runs on the CAPTURED instance, and that capture (not the absence of
+a window) is the correctness argument. The comment at the read pins the
+invariant: do not move the read after the await, and do not re-read the
+provider inside the attempt.
 
 ### 8.3 Test (red-first)
 
@@ -651,3 +656,61 @@ superseded; repair rule unchanged); §16 gets the round-3 log entry.
   exists (and the F5-b test exercises exactly that order and passes); the
   review's suggested `pending.has(id)` guard is equivalent to rules 2+3.
   No gap; no change.
+
+## 12. Owner round 4, F-5b: the turn-boundary rule (blocking)
+
+### 12.1 The finding
+
+The ordered pass (section 9) validates each result against an EARLIER
+declaration, but never checks whether a NEW turn (user or assistant
+message) began while calls were still awaiting results. Owner repros, all
+currently ACCEPTED (launched true, one provider call; confirmed with the
+real OpenAI adapter against a local fake HTTP service that the wrong
+order reaches the request body):
+
+- assistant: call c1 -> assistant: another reply -> toolResult c1 -> user.
+- a user message inserted between a call and its result.
+- a new batch of tool calls while the previous batch is unresolved.
+
+End-of-scan `pending` checks cannot catch these: the late results balance
+the sets, so `missing` is empty and the scan returns repairable.
+
+### 12.2 The rule
+
+At every message boundary, BEFORE processing that message: if it is a
+user or assistant message and `pending` is non-empty, REFUSE — "a new
+<role> message begins a turn while tool call(s) <ids> are still awaiting
+results — the transcript cannot be paired unambiguously (start a new task
+instead)". This is checked per message, not only at the end, and runs in
+the read-only scan phase (before any transcript modification and before
+any provider call).
+
+Interaction with the crash-tail rule (unchanged): the repairable tail
+shape has by definition NO user/assistant message after the unresolved
+batch (only toolResult messages), so the boundary rule cannot fire on it;
+T14/T16 keep their behavior. Result-order tolerance within one batch
+(parallel completion) is unaffected: toolResult messages never trigger
+the boundary rule. Legitimate grammar invariant (verified against the
+loop): between an assistant call batch and its toolResult message the
+loop appends nothing else; capped children have their outstanding calls
+closed by fillMissingToolResults before the run ends. Compaction heads
+snap to user/assistant, so a retained tail cannot begin mid-pair.
+
+### 12.3 Tests (red-first)
+
+- F5-d: call c1, then another assistant message, then result c1, then a
+  user message -> refused at the second assistant message; zero provider
+  calls; transcript bytes unchanged.
+- F5-e: call c1, then a user message, then result c1 -> refused at the
+  user message; zero provider calls.
+- F5-f: call c1, then a second assistant message with call c2, then the
+  results -> refused at the second assistant message; zero provider calls.
+- F5-g (positive control): one batch (c1, c2) whose results arrive
+  OUT OF ORDER in a single toolResult message -> accepted (guards against
+  over-refusal; green before and after).
+- T14/T16 (tail repair / non-tail refusal) stay green, as do F5-a/b/c
+  and the ordering controls from section 9.
+
+All three refusal cases use the echo tool in both harnesses so the
+recorded pool rebuilds identically and the scan — not tools-drift — is
+what refuses. On the current code all three are accepted (red evidence).

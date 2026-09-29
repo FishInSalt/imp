@@ -29,7 +29,7 @@ import { buildTaskRecord } from "../src/core/task-record.js";
 import { createTaskTool, type TaskToolOptions, taskResult } from "../src/core/tools/task.js";
 import type { Tool, ToolExecuteResult } from "../src/core/tools/types.js";
 import { createWriteTool } from "../src/core/tools/write.js";
-import type { LLMRequest } from "../src/provider/types.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
 
 const SYSTEM = "PARENT SYSTEM\n- Date: 2026-09-29";
@@ -75,6 +75,9 @@ interface HarnessArgs {
 	getToolsForChild?: TaskToolOptions["getToolsForChild"];
 	onToolCall?: TaskToolOptions["onToolCall"];
 	onBeforeResumeLease?: TaskToolOptions["onBeforeResumeLease"];
+	/** SA-08 round 3 (F-4): override the getter so a test can swap the
+	 *  provider inside the async spawn window. */
+	getProvider?: () => LLMProvider;
 	withEnv?: boolean;
 }
 
@@ -83,7 +86,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 	const provider = scriptedProvider(args.scripts ?? [], sink, args.providerName ?? "anthropic");
 	const system = args.system ?? SYSTEM;
 	const task = createTaskTool({
-		getProvider: () => provider,
+		getProvider: args.getProvider ?? (() => provider),
 		getModel: () => "parent-wire",
 		getModelReference: () => "anthropic/parent-wire",
 		getSystem: () => system,
@@ -901,7 +904,12 @@ describe("SA-07 resume", () => {
 
 	it("T23: a capped child resumes with a fresh turn budget", async () => {
 		const { base, cwd, parent } = await fixture();
-		const loopStep = assistant([{ type: "toolCall", id: "cap", name: "echo", arguments: { message: "x" } }]);
+		// SA-08 round 3: the scripted provider replays its last step, so the
+		// call id must be generated per invocation — real providers never
+		// reuse an id, and the ordered pairing refuses duplicates.
+		let capCall = 0;
+		const loopStep = () =>
+			assistant([{ type: "toolCall", id: `cap-${capCall++}`, name: "echo", arguments: { message: "x" } }]);
 		const { tool } = countingEcho();
 		const first = await dispatchAndPersist({
 			session: parent,
@@ -1195,6 +1203,40 @@ describe("SA-07 resume", () => {
 		expect(existsSync(worktreePath)).toBe(true); // resume never removes it
 	}, 30_000);
 
+	it("SA-08/F4-a: a provider swap during the spawn window does not reroute the attempt", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-prov-swap-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const sinkA: LLMRequest[] = [];
+		const sinkB: LLMRequest[] = [];
+		const providerA = scriptedProvider([assistant([{ type: "text", text: "first pass done" }])], sinkA, "anthropic");
+		const providerB = scriptedProvider([assistant([{ type: "text", text: "should not run" }])], sinkB, "anthropic");
+		let current: LLMProvider = providerA;
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getProvider: () => current,
+			getToolsForChild: () => {
+				// The deterministic /model swap: inside the async spawn window
+				// (after resolution + worktree creation, before the attempt).
+				current = providerB;
+				return [];
+			},
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		// The DISCRIMINATING assertion: the attempt ran on the captured
+		// provider pair, not the swapped one.
+		expect(sinkA).toHaveLength(1);
+		expect(JSON.stringify(sinkA[0]?.messages)).toContain("first pass");
+		expect(sinkB).toHaveLength(0);
+		expect(first.taskRecord?.binding?.reference).toBe("anthropic/parent-wire");
+	}, 30_000);
+
 	it("SA-08/F2-a: a worktree child's cwd must sit inside the verified worktree (tampered cwd refused)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-cwd-"));
 		const repo = await gitRepoWithSeed(base);
@@ -1481,6 +1523,117 @@ describe("SA-07 resume", () => {
 		expect(second.isError ?? false).toBe(false);
 		expect(second.taskRecord?.launched).toBe(true);
 	}, 30_000);
+
+	it("SA-08/F5-a: a tool result with no preceding call is refused (zero provider calls)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "ghost", toolName: "echo", content: "orphaned", isError: false }],
+		});
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("has no preceding tool call");
+		expect(sink).toHaveLength(before); // zero provider calls
+	});
+
+	it("SA-08/F5-b: a tool result recorded before its call is refused (zero provider calls)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "early", toolName: "echo", content: "before the call", isError: false }],
+		});
+		child.appendMessage(assistant([{ type: "toolCall", id: "early", name: "echo", arguments: { message: "x" } }]));
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("has no preceding tool call");
+		expect(sink).toHaveLength(before); // zero provider calls
+	});
+
+	it("SA-08/F5-c: a trailing call reusing a completed id is refused, and no repair is appended", async () => {
+		const { base, cwd, parent } = await fixture();
+		const echo = countingEcho();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [echo.tool],
+			scripts: [
+				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hé" } }]),
+				assistant([{ type: "text", text: "done" }]),
+			],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		// Reuse the ACTUAL completed call id from the first-pass transcript.
+		const entries = SessionStore.open(transcript.path).getEntries();
+		let completedId: string | undefined;
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			for (const block of entry.message.blocks) {
+				if (block.type === "toolCall") completedId = block.id;
+			}
+		}
+		if (completedId === undefined) throw new Error("no completed call id in the transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(
+			assistant([{ type: "toolCall", id: completedId, name: "echo", arguments: { message: "again" } }]),
+		);
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [echo.tool], // the recorded pool must rebuild identically
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("declared more than once");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no repair appended
+	});
 
 	it("T3-fresh: the fresh result discloses the child id as a handle", async () => {
 		const { base, cwd, parent } = await fixture();

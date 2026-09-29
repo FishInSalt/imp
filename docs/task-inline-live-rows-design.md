@@ -211,9 +211,10 @@ Resolver wiring, teardown, and purity:
   never throw. This optionality is required, not defensive.
 - The resolver is a **pure read** of the shell's already-computed row map: it
   must not call `setActivity`/`renderActivity`, mutate the transcript, or create
-  a fold. It runs inside the append closure (`src/repl/transcript.ts:66-72`),
-  which then calls `appendChild` and `onUpdate`; re-entering the render path
-  there would corrupt the append.
+  a fold. It runs inside the append closure (the callback passed to
+  `createToolSink`, `src/repl/transcript.ts:79-97`), which then calls
+  `appendChild` and `onUpdate`; re-entering the render path there would corrupt
+  the append.
 
 Tool_call ids are **not** unique within a run: `src/provider/openai-completions.ts:431`
 synthesizes `call_${tc.index}` when the provider omits ids, and one `runTurn`
@@ -377,10 +378,12 @@ width sweep does not know the new field.
 1. **Transcript re-render cost.** Live rows live in the transcript, which the
    TUI re-lays out on change; the activity region only re-rendered a small
    container. Mitigation: fixed three single-line rows of constant height, the
-   identical-content skip in §5.3, and a coarse elapsed cadence (the seconds
-   string drives the only expected per-tick change). Acceptance: pin the number
-   of `requestRender` calls over a fixed number of ticks in a test, so the cost
-   is per-second, not per-120ms.
+   identical-content skip in §5.3 (plus the fold's `liveRevision` cache), and a
+   coarse elapsed cadence (the seconds string drives the only expected per-tick
+   change). Acceptance: consciously **dropped** in implementation — a
+   `requestRender`-count test would be brittle against `Date.now()` cadence and
+   the 16ms render throttle. The per-second bound is enforced structurally by
+   the identical-content skip plus the cache key, not by a test.
 2. **Scroll-away.** A long-running task's header can scroll off the top; its
    live row goes with it. This is the accepted cost of B1 (the activity region
    was always visible). No mitigation in this batch; call it out in the

@@ -337,8 +337,11 @@ New/updated coverage (extend `test/repl-tui.test.ts` and
    `new TranscriptSink()` + `transcript.toolSink.start(...)`, and replay) must
    not throw and must render without live rows.
 9. Shared-sink ownership: the trust-ask shell's teardown must not clobber the
-   real shell's resolver (mirror the existing `onUpdate` guard test), and the
-   resolver must be installed before the first fold is created.
+   real shell's resolver (mirror the existing `onUpdate` guard test). Assert the
+   resolver is installed before the *REPL shell's own first task fold*, not
+   globally — the transcript is shared across shells and replay
+   (`src/repl/trust-ask.ts:43-56`), so a global assertion is ambiguous when a
+   predecessor shell has already started and stopped on the same sink.
 10. Resolver purity: a resolver that is a pure read does not re-enter the render
     path (assert no `setActivity`/`renderActivity` recursion).
 

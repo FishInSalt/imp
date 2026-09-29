@@ -913,6 +913,14 @@ consistent; the byte pin D12 invalidates is `test/repl-tui.test.ts:763`
  the span"), which becomes a plain-reset assertion. Plus every frame pin that includes
 the activity rows or the picker's leading rows.
 
+**Decision-object pins (found only when the full suite ran).** Three pins compare
+`emitToolCall`'s returned decision *exactly*, so D9's attached `source` breaks
+them: `test/extensions-registry.test.ts:217` (`source: "gate"`), `:238`
+(`source: "broken_gate"` — the E9 case registers its own extension), and
+`test/extensions-loader.test.ts:356` (`source: "asker"`). The string counts above
+were the whole inventory at design time; these three were invisible to a
+focused-file run.
+
 ### 15.7 Degradation matrix (must not change)
 
 Print / no-host: D9 changes the record-line bytes on every host (intended);
@@ -987,3 +995,8 @@ Branch `feat/confirm-prompt-phase3` from `000d72c` in the confirm worktree; this
 amendment goes through an independent adversarial review before implementation;
 implementation is red-first; an independent implementation check follows; then
 `--no-ff` merge plus a ledger entry. Phases 1-2 remain untouched and revertible.
+
+Implementation was split into two waves (D9; then D10-D12). Wave 1 was verified
+with the focused test files only and missed three decision-object pins that the
+full suite caught; from Wave 2 on, every wave runs the whole suite (`vitest run`)
+before it is called done.

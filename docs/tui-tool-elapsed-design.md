@@ -26,6 +26,17 @@
   marker-less (D4's condition list loses the `elapsed >= 1000` gate; the
   time gate moves into the renderer). Branch:
   `fix/tui-tool-elapsed-check-always`.
+- **Amendment 3 (owner decision, 2026-09-29): failed calls carry the red
+  ✗ marker and the time.** After using Amendment 2 the owner asked for
+  failures to show elapsed time and a per-row ✗. The call-row suffix
+  becomes terminal-state-dependent: successes keep the green `✓`; failed
+  results render a red ` ✗` in the same slot, with the dim time appended
+  when ≥1s (sub-second keeps the bare marker — symmetric with `✓`; the
+  time is an owner extension beyond legacy parity, which showed `✗`
+  without a duration, `src/render.ts:635`). The sink's `isError`
+  suppression is removed and the update carries a new host-owned
+  `failed` field; replay/orphan/interrupted stay marker-less. Branch:
+  `fix/tui-tool-elapsed-error-marker`.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -79,21 +90,25 @@ unconditional for measured successes; the time stays ≥ 1s-gated).
    in-flight state and is unchanged. Transcript rows stay settle-only.
 2. **Legacy shell and print mode byte-for-byte unchanged** — no edits to
    `src/render.ts` rendering paths; the legacy completion format stays as is.
-3. **No duration on errors, interruptions, or aborts** — parity with the
-   pre-series line (errors carried `✗`, never a duration). A timed-out
-   command's own error text already states its timeout.
+3. **No duration on interruptions or aborts** — that parity stands.
+   Errors now DO carry the marker and, ≥1s, a duration (Amendment 3,
+   owner decision — an extension beyond legacy parity, which showed `✗`
+   and never timed errors); a timed-out command's own error text still
+   states its timeout.
 4. **No replay/resume backfill** — stored sessions have no timing data and
    no live measurement; replayed blocks render exactly as they do today
-   (no `✓`, no duration — owner-confirmed scope, Amendment 2).
+   (no `✓`/`✗`, no duration — owner-confirmed scope, amendments 2-3).
 5. **No session/model/extension impact** — `ToolBlock` is presentation-only
    (never persisted, never sent to the model); no schema, context, or print
    output change.
 6. **No configuration knob** — no env var or setting; display-only, always
    on in TUI.
-7. **No per-row ✗ marker** — failure status stays the `⎿ failed` row.
-   The completion **✓ is the success marker, unconditional for measured
-   successful calls** (Amendment 2; glyph restored by Amendment 1); the
-   ✗ prohibition stands.
+7. **Marker scope**: the failure **✗ is restored on the error call row**
+   (Amendment 3, owner decision) alongside the red `⎿ failed` result row
+   and fold, which remain the failure-detail surface; ✗ appears only
+   there (no per-row ✗ elsewhere), and the success **✓ stays
+   unconditional for measured successful calls** (Amendment 2; glyph
+   restored by Amendment 1).
 8. **No child-tool rows** — child tool calls never reach the transcript
    (activity only); the `task` tool row is a normal top-level tool and does
    get a duration.
@@ -113,30 +128,36 @@ a row of the call block's 3-row collapsed budget; noisier).
 ### D2 — Form
 
 Suffix appended at the end of the call block's **first row** (amendments 1
-and 2, owner decisions 2026-09-29 — the legacy-literal form):
+through 3, owner decisions 2026-09-29 — the legacy-literal form):
 `● bash  echo first ✓ 2.3s`; for sub-second calls the suffix is the bare
-marker `● bash  echo first ✓`.
+marker `● bash  echo first ✓`; failed calls render the red variant —
+`● bash  fail ✗ 5.0s` (bare `● bash  fail ✗` sub-second; Amendment 3).
 
-- Suffix text (Amendment 2): the **green `✓` is unconditional** for
-  measured successful calls; the **dim duration is appended only ≥ 1s**:
-  ` ✓` + (` X.Ys` when `elapsedMs >= 1000`). One leading space before the
-  marker; when a duration follows, a space separates it (pre-series
-  completion line rendered exactly `green("✓")` + conditional
-  ` ` + `dim(X.Ys)`; Amendment 1 restored the marker glyph, Amendment 2
-  restored its ungated presence). Suffix width `s` is therefore **7
-  columns with time, 2 columns bare** (` ✓`). Original choice and
+- Suffix text (amendments 2-3): for measured calls the marker is
+  **unconditional** — green `✓` when the result succeeded, red `✗` when
+  the block's `failed` field is set (terminal-state-dependent); the
+  **dim duration is appended only ≥ 1s**: `<marker>` + (` X.Ys` when
+  `elapsedMs >= 1000`). One leading space before the marker; when a
+  duration follows, a space separates it (pre-series success line
+  rendered `green("✓")` + conditional ` ` + `dim(X.Ys)`; pre-series
+  error lines rendered `red("✗")` + message with no duration — the time
+  on failures is the Amendment 3 owner extension). Suffix width `s` is
+  **7 columns with time, 2 columns bare** (` ✓` / ` ✗`; both glyphs are
+  1 column). Original choice and
   alternatives considered: `· ` + dim (matches the dim-metadata
   separator idiom, but reads as metadata rather than a completion marker —
   overridden by the owner), bare ` 2.3s` (reads as command text),
   parenthesized `(2.3s)`.
 - Implementation plumbing (Amendment 1 review round 1): the suffix is a
-  **mixed-style string** — green `✓` (+ plain space + dim duration when
-  present) — so the render sites must **not** wrap it in an additional
-  `DIM` (unlike the original all-dim ` · ` form); `durW`/`reserve`
+  **mixed-style string** — the styled marker (`✓` green / `✗` red;
+  + plain space + dim duration when present) — so the render sites must
+  **not** wrap it in an additional `DIM` (unlike the original all-dim
+  ` · ` form); `durW`/`reserve`
   continue to measure the plain text (7 or 2 columns; `visibleWidth`
   strips ANSI), and `emit`'s `firstSuffix` parameter receives the
   pre-styled text. `tool-block.ts` gains a local green escape
-  (`src/format.ts`'s `green()` is not currently imported there).
+  (`src/format.ts`'s `green()` is not currently imported there; the red
+escape already exists as `RED`).
 - Format (new pure helper, proposed `src/format.ts` `formatToolElapsed(ms)`):
   - `ms < 60_000`: tenths **floored** — `Math.floor(ms/100)/10` with one
     decimal (`2.3s`, `1.0s`; 59.999s → `59.9s`, never `60.0s`).
@@ -146,11 +167,12 @@ marker `● bash  echo first ✓`.
     `847.3s` on long `task`/build rows. (Pure legacy parity — always
     `X.Ys` — is the noted alternative; rejected as unreadable for
     multi-minute subagent runs.)
-- Gate (Amendment 2): the **duration text** renders only when the
+- Gate (amendments 2-3): the **duration text** renders only when the
   measured wall time ≥ 1000ms (parity with the pre-series line); the
-  **`✓` marker is not gated** — it renders whenever the call completed
-  with a live measurement (sub-second calls show the bare marker,
-  matching the pre-series `● bash $ ls ✓`).
+  **marker is not gated** — it renders whenever the call completed with
+  a live measurement (sub-second calls show the bare marker, matching
+  the pre-series `● bash $ ls ✓`; the same gate applies to both `✓` and
+  `✗`, Amendment 3).
 - Placement invariants (pinned by tests; implementation must satisfy these,
   not a specific code path):
   - I1: no row emitted by `ToolBlockFold.render` may exceed the
@@ -188,15 +210,17 @@ marker `● bash  echo first ✓`.
     (Amendment 2) it is true only at the exact equality
     `header == w - 2`. The two-space separator is never rendered in
     these branches.
-  - I5: only input blocks (`call` rendering) can carry it; output/diff
-    blocks ignore the field.
+  - I5: only input blocks (`call` rendering) can carry `elapsedMs` and
+    `failed`; output/diff blocks ignore both fields (`failed` selects
+    the ✗/✓ glyph only; it never colors other rows).
   - I6: `finalize()`'s interruption update is constructed with
-    `elapsedMs: undefined` explicitly (defense in depth over D4's
+    `elapsedMs: undefined` and `failed: undefined` explicitly (defense in
+    depth over D4's
     ordering argument: `end` sets the terminal flag before any update,
     and finalize only touches non-terminal entries, so a post-`end`
     entry never reaches it). Pinned by a unit where the appended input
-    block is mutated to carry `elapsedMs`, then finalize runs: the
-    update callback receives a block with `elapsedMs === undefined` and
+    block is mutated to carry `elapsedMs` and `failed`, then finalize
+    runs: the update callback receives a block with both `undefined` and
     the interrupted row renders no suffix.
 - Interaction: when the first row already carries a semantic summary
   (`…  summary`), the suffix follows it (last on the row) and the
@@ -219,19 +243,21 @@ inside `createToolSink` with an injectable clock:
 
 ### D4 — Mechanism (input-block update at end)
 
-- New optional field on `ToolBlock`: `elapsedMs?: number` (host-owned,
+- New optional fields on `ToolBlock`: `elapsedMs?: number` and
+  `failed?: boolean` (host-owned,
   presentation-only, never in `sections`/`metadata`/raw payload).
 - Sink lifecycle: `start()` records `startedAt` in the entry; at
   `end(result, replay)` — **after** the terminal flag is set, **before**
   the output block is appended — the sink calls `update(entry.input,
-  { ...entry.input, elapsedMs })` when ALL of:
+  { ...entry.input, elapsedMs, failed? })` when ALL of:
   - `replay !== true` (no resume backfill);
-  - `result.isError !== true`;
   - the entry saw a `start` and an emitted input block (orphan `end`
     without `start` shows no marker);
   - an elapsed measurement exists — Amendment 2 removed the ≥1000ms gate
-    from the sink: sub-second live successes also update, carrying the
-    bare `✓`; the time gate lives in the renderer (D2).
+    from the sink and Amendment 3 removed the `isError !== true` gate:
+    every measured live completion updates — successes with `failed`
+    absent/undefined, failures with `failed: true`; the time gate lives
+    in the renderer (D2) and the marker glyph is selected by `failed`.
 - Reuse of the existing update callback (`createToolSink` signature
   already exposes it; current sole use is the finalize interruption
   update, `src/repl/tool-presentation.ts:649-668`). The
@@ -251,19 +277,21 @@ inside `createToolSink` with an injectable clock:
   here.
 - Interrupted rows: finalize already marks the entry terminal, so a later
   `end` cannot add a duration; an `end` that arrives before finalize adds
-  nothing new (no result path shows durations). I6 additionally clears
-  the field structurally in finalize's update.
+  nothing new (no result path shows durations — until Amendment 3's
+  error durations, which also arrive only via a live `end`). I6 clears
+  both fields structurally in finalize's update.
 - Duplicate `end`/`start` behavior is unchanged (IDs are lifecycle events).
 
 ## Files touched (implementation forecast)
 
 - `src/format.ts` — `formatToolElapsed` (pure; unit-tested).
-- `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs`; sink timing
-  and end-time update call (Amendment 2: the ≥1000ms sink gate is
-  removed — every measured live success updates).
+- `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs` + `failed`;
+  sink timing and end-time update call (Amendment 2: the ≥1000ms sink
+  gate is removed — every measured live success updates; Amendment 3:
+  the `isError` gate is removed too and the update carries `failed`).
 - `src/repl/components/tool-block.ts` — suffix rendering per D2
   invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
-  green escape).
+  green escape; Amendment 3: ✗/✓ marker selection by `failed`).
 - `src/repl/transcript.ts` — optional clock option passthrough only.
 - `src/cli.ts` — no change expected (defaults).
 - Docs: this file; `CHANGELOG.md` Unreleased entry; `PROJECT_PLAN.md`
@@ -290,6 +318,10 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
   and ANSI pins (` ${GREEN}✓${RESET}`, no dim text); the header-only
   boundary moves to `header + 2` (shows at `w == header + 2`, omits at
   `w == header + 1`);
+- failed calls (Amendment 3): `failed: true` + sub-second → bare red `✗`
+  (plain + ANSI pins, ` ${RED}✗${RESET}`); + ≥1s → `✗ 2.3s`; `failed:
+  true` without `elapsedMs` → no suffix (the marker stays
+  measurement-gated); the I1 sweep includes failed folds;
 - with semantic summary present: suffix last;
 - multi-line command: suffix on the first row, continuation rows unchanged;
 - header-only call (no path/body): `● name ✓ 2.3s`;
@@ -323,13 +355,14 @@ Unit — `createToolSink` with injected clock:
   elapsed (pathological injected clock) → bare ` ✓`, never `-0.5s` — the
   renderer keys the time text on `elapsedMs >= 1000`, not on field
   presence (Amendment 2 review round 1, finding 4);
-- error result → no update;
+- error result → exactly one update with `elapsedMs` and `failed: true`
+  (Amendment 3; the previous no-update rule is reversed);
 - `end(result, true)` (replay) → no update even if slow;
 - orphan end without start → no update;
 - finalize-then-end and end-then-finalize → no duration either way;
 - mutated-input finalize pin (I6): an appended input block that carries
-  `elapsedMs` (mutated by the test) yields a finalize update whose
-  block has `elapsedMs === undefined`, and the interrupted row renders
+  `elapsedMs` and `failed` (mutated by the test) yields a finalize update
+  whose block has both `=== undefined`, and the interrupted row renders
   no suffix;
 - append-only consumer (no update callback) → no crash, blocks unchanged;
 - duplicate end → no second update.
@@ -345,7 +378,9 @@ returning — no real waits:
   (Amendment 2); this harness runs a constant clock, so the concrete
   elapsed is `0` — pin `elapsedMs === 0` and do not adjust the clock to
   a non-zero value (the zero-elapsed path must stay covered);
-- error tool → no suffix;
+- error tool (Amendment 3): the call row ends with `✗ 5.0s` (the
+  failing stand-in advances the clock 5000ms); `elapsedMs === 5000` and
+  `failed === true`;
 - resume/replay frames → no suffix.
 
 Regression:
@@ -380,6 +415,8 @@ Amendment 2 is a follow-up on the same surface).
    if left unpinned?
 6. Amendment 2: any consumer, pin, or arithmetic beyond the renderer's
    time gate that implicitly assumed `elapsedMs >= 1000`?
+7. Amendment 3: any state where `failed` can go stale (end after
+   finalize, duplicate end, clear mid-run) or leak onto output blocks?
 
 ## Review log
 

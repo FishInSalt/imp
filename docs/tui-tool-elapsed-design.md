@@ -6,14 +6,26 @@
 - Baseline: `f1fcc54` (main)
 - Status: IMPLEMENTED + REVIEWED — design review CONFIRMED (round 4,
   2026-09-29); implementation review APPROVE WITH CORRECTIONS (P3 folds
-  applied). Manual terminal acceptance pending. Implementation commits:
-  dc4f068 (code + tests), 0e41b95 (CHANGELOG), 252a345 (review folds).
+  applied); manual terminal acceptance passed 2026-09-29 (owner).
+  Implementation commits: dc4f068 (code + tests), 0e41b95 (CHANGELOG),
+  252a345 (review folds).
 - **Amendment 1 (owner decision, 2026-09-29): the suffix form becomes the
   legacy-literal ` ✓ 2.3s` (green check + dim time) instead of the original
   ` · 2.3s`.** Glyph width is identical (`✓` = 1 column, suffix = 7
   columns), so every I1-I6 budget, floor, and boundary stands numerically
   unchanged. Branch: `fix/tui-tool-elapsed-check-glyph`; targeted design
   review round recorded in the review log.
+- **Amendment 2 (owner decision, 2026-09-29): the completion ✓ becomes
+  unconditional for measured successful calls.** The owner used the
+  shipped form and reported that sub-second calls show no marker at all —
+  the port had tied the ✓ to the ≥1000ms gate. The legacy truth is a
+  green `✓` on **every** successful completion, with the duration
+  appended only when ≥1s (`src/render.ts:637-640`; pins
+  `● bash $ ls ✓` and `✓ 12.4s`). <1s: bare ` ✓` (2 columns); ≥1s:
+  ` ✓ X.Ys` (7 columns, unchanged). Replay/error/interrupted stay
+  marker-less (D4's condition list loses the `elapsed >= 1000` gate; the
+  time gate moves into the renderer). Branch:
+  `fix/tui-tool-elapsed-check-always`.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -32,9 +44,12 @@ duration is the piece this backlog item restores.
 - **Pre-`#tool-display` TUI**: the renderer's byte stream fed the transcript
   sink (no `toolSink`; `ffd643d^:src/cli.ts:482` runs the renderer with
   `liveTools:false` + `toolStyle:"one-line"`). The completion line was
-  `● bash $ ls ✓ 2.3s` — `src/render.ts:637-640`: green `✓` plus a dim
-  duration, shown only when the call took ≥ 1s, one decimal (`seconds >= 1 ?
-  \` ${dim(seconds.toFixed(1)+"s")}\` : ""`). `startedAt` is recorded
+  `● bash $ ls ✓ 2.3s` — `src/render.ts:637-640`: the green `✓` was
+  **unconditional on success** (`green("✓")` sits outside the gate; fast
+  calls rendered a bare `● bash $ ls ✓`, pin `test/render.test.ts:42`),
+  and a dim duration was appended only when the call took ≥ 1s, one
+  decimal (`seconds >= 1 ? \` ${dim(seconds.toFixed(1)+"s")}\` : ""`).
+  `startedAt` is recorded
   unconditionally (`src/render.ts:556-558`), so the duration reached the
   transcript even with `liveTools:false`. Error lines show `✗` and no
   duration (`src/render.ts:635`).
@@ -53,8 +68,10 @@ duration is the piece this backlog item restores.
 
 ## Goal
 
-A completed top-level tool call in the TUI transcript shows how long the call
-took, in the current block visual language, for calls ≥ 1s.
+A completed top-level tool call in the TUI transcript carries the legacy
+completion marker — a green `✓` — and, for calls ≥ 1s, also how long the
+call took, in the current block visual language (Amendment 2: the ✓ is
+unconditional for measured successes; the time stays ≥ 1s-gated).
 
 ## Non-goals (explicit)
 
@@ -65,16 +82,18 @@ took, in the current block visual language, for calls ≥ 1s.
 3. **No duration on errors, interruptions, or aborts** — parity with the
    pre-series line (errors carried `✗`, never a duration). A timed-out
    command's own error text already states its timeout.
-4. **No replay/resume backfill** — stored sessions have no timing data;
-   replayed blocks must render exactly as they do today.
+4. **No replay/resume backfill** — stored sessions have no timing data and
+   no live measurement; replayed blocks render exactly as they do today
+   (no `✓`, no duration — owner-confirmed scope, Amendment 2).
 5. **No session/model/extension impact** — `ToolBlock` is presentation-only
    (never persisted, never sent to the model); no schema, context, or print
    output change.
 6. **No configuration knob** — no env var or setting; display-only, always
    on in TUI.
 7. **No per-row ✗ marker** — failure status stays the `⎿ failed` row.
-   The completion **✓ is restored as the duration suffix** (Amendment 1,
-   owner decision); the ✗ prohibition stands.
+   The completion **✓ is the success marker, unconditional for measured
+   successful calls** (Amendment 2; glyph restored by Amendment 1); the
+   ✗ prohibition stands.
 8. **No child-tool rows** — child tool calls never reach the transcript
    (activity only); the `task` tool row is a normal top-level tool and does
    get a duration.
@@ -93,28 +112,31 @@ a row of the call block's 3-row collapsed budget; noisier).
 
 ### D2 — Form
 
-Suffix appended at the end of the call block's **first row** (Amendment 1,
-owner decision 2026-09-29 — the legacy-literal form):
-`● bash  echo first ✓ 2.3s`.
+Suffix appended at the end of the call block's **first row** (amendments 1
+and 2, owner decisions 2026-09-29 — the legacy-literal form):
+`● bash  echo first ✓ 2.3s`; for sub-second calls the suffix is the bare
+marker `● bash  echo first ✓`.
 
-- Suffix text: ` ✓ ` + formatted duration — one leading space, **green
-  `✓`**, one space, **dim duration** (`src/render.ts`'s pre-series
-  completion line rendered exactly `green("✓")` + ` ` + `dim(X.Ys)`; the
-  owner elected to restore that marker form). Glyph width is identical to
-  the original `·` choice (`✓` = 1 column, suffix = 7 columns), so every
-  I1-I6 budget, floor, and boundary is numerically unchanged. Original
-  choice and alternatives considered: `· ` + dim (matches the dim-metadata
+- Suffix text (Amendment 2): the **green `✓` is unconditional** for
+  measured successful calls; the **dim duration is appended only ≥ 1s**:
+  ` ✓` + (` X.Ys` when `elapsedMs >= 1000`). One leading space before the
+  marker; when a duration follows, a space separates it (pre-series
+  completion line rendered exactly `green("✓")` + conditional
+  ` ` + `dim(X.Ys)`; Amendment 1 restored the marker glyph, Amendment 2
+  restored its ungated presence). Suffix width `s` is therefore **7
+  columns with time, 2 columns bare** (` ✓`). Original choice and
+  alternatives considered: `· ` + dim (matches the dim-metadata
   separator idiom, but reads as metadata rather than a completion marker —
   overridden by the owner), bare ` 2.3s` (reads as command text),
   parenthesized `(2.3s)`.
-- Implementation plumbing (amendment review round 1): the suffix is a
-  **mixed-style string** — green `✓` + `" "` + dim duration — so the
-  render sites must **not** wrap it in an additional `DIM` (unlike the
-  original all-dim ` · ` form); `durW`/`reserve` continue to measure the
-  plain `" ✓ X.Ys"` text (7 columns; `visibleWidth` strips ANSI), and
-  `emit`'s `firstSuffix` parameter receives the pre-styled text.
-  `tool-block.ts` gains a local green escape (`src/format.ts`'s `green()`
-  is not currently imported there).
+- Implementation plumbing (Amendment 1 review round 1): the suffix is a
+  **mixed-style string** — green `✓` (+ plain space + dim duration when
+  present) — so the render sites must **not** wrap it in an additional
+  `DIM` (unlike the original all-dim ` · ` form); `durW`/`reserve`
+  continue to measure the plain text (7 or 2 columns; `visibleWidth`
+  strips ANSI), and `emit`'s `firstSuffix` parameter receives the
+  pre-styled text. `tool-block.ts` gains a local green escape
+  (`src/format.ts`'s `green()` is not currently imported there).
 - Format (new pure helper, proposed `src/format.ts` `formatToolElapsed(ms)`):
   - `ms < 60_000`: tenths **floored** — `Math.floor(ms/100)/10` with one
     decimal (`2.3s`, `1.0s`; 59.999s → `59.9s`, never `60.0s`).
@@ -124,8 +146,11 @@ owner decision 2026-09-29 — the legacy-literal form):
     `847.3s` on long `task`/build rows. (Pure legacy parity — always
     `X.Ys` — is the noted alternative; rejected as unreadable for
     multi-minute subagent runs.)
-- Gate: shown only when the measured wall time ≥ 1000ms (parity with the
-  pre-series line; sub-second calls stay clean).
+- Gate (Amendment 2): the **duration text** renders only when the
+  measured wall time ≥ 1000ms (parity with the pre-series line); the
+  **`✓` marker is not gated** — it renders whenever the call completed
+  with a live measurement (sub-second calls show the bare marker,
+  matching the pre-series `● bash $ ls ✓`).
 - Placement invariants (pinned by tests; implementation must satisfy these,
   not a specific code path):
   - I1: no row emitted by `ToolBlockFold.render` may exceed the
@@ -157,9 +182,12 @@ owner decision 2026-09-29 — the legacy-literal form):
   - I4: collapse/expand/raw state never removes an eligible suffix —
     **I3 width omission is its only non-gating absence**. In the
     header-only fallback branches (`visibleWidth(prefix) >= w`), the row
-    is `header` alone with no suffix — `header + suffix` cannot fit
-    there (`prefix = header + "  "` and `s >= 6 > 2` by construction) —
-    and the two-space separator is never rendered in these branches.
+    carries the suffix exactly when `addHeader`'s fit check holds
+    (`visibleWidth(header) + s <= w`): with `s = 7` this is never true
+    there (`header >= w - 2`); with the bare marker `s = 2`
+    (Amendment 2) it is true only at the exact equality
+    `header == w - 2`. The two-space separator is never rendered in
+    these branches.
   - I5: only input blocks (`call` rendering) can carry it; output/diff
     blocks ignore the field.
   - I6: `finalize()`'s interruption update is constructed with
@@ -200,8 +228,10 @@ inside `createToolSink` with an injectable clock:
   - `replay !== true` (no resume backfill);
   - `result.isError !== true`;
   - the entry saw a `start` and an emitted input block (orphan `end`
-    without `start` shows no duration);
-  - elapsed ≥ 1000ms.
+    without `start` shows no marker);
+  - an elapsed measurement exists — Amendment 2 removed the ≥1000ms gate
+    from the sink: sub-second live successes also update, carrying the
+    bare `✓`; the time gate lives in the renderer (D2).
 - Reuse of the existing update callback (`createToolSink` signature
   already exposes it; current sole use is the finalize interruption
   update, `src/repl/tool-presentation.ts:649-668`). The
@@ -251,11 +281,16 @@ Unit — `formatToolElapsed` table:
 
 Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
 - typical single-row: `● bash  echo first ✓ 2.3s`;
+- sub-second completion (e.g. 400ms): bare `● bash  echo first ✓` — plain
+  and ANSI pins (` ${GREEN}✓${RESET}`, no dim text); the header-only
+  boundary moves to `header + 2` (shows at `w == header + 2`, omits at
+  `w == header + 1`);
 - with semantic summary present: suffix last;
 - multi-line command: suffix on the first row, continuation rows unchanged;
 - header-only call (no path/body): `● name ✓ 2.3s`;
 - narrow terminal: suffix omitted (I3) with the boundary pins
-  (`budget - s == 8` shows / `== 7` omits); the assertion is
+  (`budget - s == 8` shows / `== 7` omits; restated for both `s` values —
+  fast `s = 2`, slow `s = 7`); the assertion is
   `rows.every((r) => visibleWidth(r) <= w)` — the pi-tui throw contract,
   stronger than "no visible overflow";
 - expanded and raw modes: suffix still on the first row (I4);
@@ -274,7 +309,8 @@ Unit — `createToolSink` with injected clock:
 - end ≥1s after start → exactly one update with `elapsedMs`, before the
   output append, input block identity preserved through the WeakMap rekey
   contract;
-- <1s → no update; error result → no update;
+- <1s live success → exactly one update with the sub-second `elapsedMs`
+  (Amendment 2); error result → no update;
 - `end(result, true)` (replay) → no update even if slow;
 - orphan end without start → no update;
 - finalize-then-end and end-then-finalize → no duration either way;
@@ -292,7 +328,8 @@ Integration — TUI harness: `startTuiRepl`
 returning — no real waits:
 - clock-advanced tool → the frame contains the call row with the
   `✓ 2.3s` suffix;
-- fast tool → no suffix (existing frames unchanged);
+- fast tool → the call row ends with the bare `✓` and no time; the
+  update carries the sub-second `elapsedMs` (Amendment 2);
 - error tool → no suffix;
 - resume/replay frames → no suffix.
 
@@ -324,6 +361,8 @@ owner-facing and will be listed as pending until the owner confirms.
    right injection surface for tests?
 5. Test plan gaps: which edge above is most likely to hide a real defect
    if left unpinned?
+6. Amendment 2: any consumer, pin, or arithmetic beyond the renderer's
+   time gate that implicitly assumed `elapsedMs >= 1000`?
 
 ## Review log
 

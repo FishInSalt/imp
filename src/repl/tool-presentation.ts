@@ -108,12 +108,17 @@ export interface SourceEvidence {
 }
 export interface ToolBlock {
 	/** #tui-tool-elapsed: completed-call wall time, set by the sink at end on
-	 *  live, non-error input blocks (never on replayed, errored, or
+	 *  live input blocks — successes and errors alike (never on replayed or
 	 *  interrupted blocks, never on output blocks). The renderer shows the
-	 *  bare ✓ for any measured call and adds the time text only ≥1000ms
+	 *  bare marker for any measured call and adds the time text only ≥1000ms
 	 *  (Amendment 2). Presentation-only: not persisted, never sent to the
 	 *  model. See docs/tui-tool-elapsed-design.md. */
 	elapsedMs?: number;
+	/** #tui-tool-elapsed (Amendment 3): true when the completed call's result
+	 *  was an error, so the renderer draws the red ✗ marker instead of the
+	 *  green ✓ (meaningful only together with `elapsedMs`; distinct from
+	 *  `error`, which marks interrupted blocks). */
+	failed?: boolean;
 	promotedEvidence?: SourceEvidence;
 	titleExitEvidence?: SourceEvidence & { title: string };
 	summaryOwnership?: {
@@ -672,12 +677,17 @@ export function createToolSink(
 			entry.terminal = true;
 			// #tui-tool-elapsed: the call row carries its completion marker and
 			// wall time once the call completes. Set the terminal flag first
-			// (above), update before the output append, and skip replay/error/
-			// orphan entries (design D4; Amendment 2 removed the ≥1000ms gate —
-			// the renderer decides between the bare ✓ and ✓+time).
+			// (above), update before the output append, and skip replay/orphan
+			// entries (design D4; Amendment 2 removed the ≥1000ms gate and
+			// Amendment 3 the isError gate — the renderer picks ✗ vs ✓ by
+			// `failed` and decides between bare marker and marker+time).
 			const elapsed = entry.startedAt === undefined ? undefined : clock() - entry.startedAt;
-			if (elapsed !== undefined && !replay && result.isError !== true && entry.input !== undefined)
-				update?.(entry.input, { ...entry.input, elapsedMs: elapsed });
+			if (elapsed !== undefined && !replay && entry.input !== undefined)
+				update?.(entry.input, {
+					...entry.input,
+					elapsedMs: elapsed,
+					failed: result.isError === true ? true : undefined,
+				});
 			if (!entry.input) {
 				entry.input = entry.record
 					? preparedInputBlock(entry.record)
@@ -707,8 +717,10 @@ export function createToolSink(
 						...input,
 						title: `${input.title} · interrupted (no result)`,
 						error: true,
-						// I6: an interrupted row never carries a duration, structurally.
+						// I6: an interrupted row never carries a duration or marker,
+						// structurally.
 						elapsedMs: undefined,
+						failed: undefined,
 					});
 				}
 			} finally {

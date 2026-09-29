@@ -2464,7 +2464,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("#tui-tool-elapsed: fast calls show the bare ✓; failed calls show neither marker nor time", async () => {
+	it("#tui-tool-elapsed: fast calls show the bare ✓; failed calls show the ✗ with the time", async () => {
 		const fast: Tool = {
 			name: "bash",
 			description: "fast stand-in",
@@ -2518,13 +2518,18 @@ describe("runRepl with shell:tui", () => {
 		env2.terminal.data("go\r");
 		await waitUntil(() => env2.terminal.frameSince(0).includes("done"), 8000);
 		await settle();
-		expect(env2.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
+		// Amendment 3: the failed call carries the red ✗ and its 5.0s time.
+		const failedFold = env2.transcript.toolFolds.find((f) => f.block.kind === "input");
+		expect(failedFold?.block.elapsedMs).toBe(5000);
+		expect(failedFold?.block.failed).toBe(true);
 		const callLine2 = env2.terminal
 			.frameSince(0)
 			.split("\n")
 			.find((l) => l.includes("● bash"));
 		expect(callLine2).toBeTruthy();
 		expect(callLine2 ?? "").not.toContain("✓");
+		expect(callLine2 ?? "").toContain("✗");
+		expect(callLine2 ?? "").toContain("5.0s");
 		env2.terminal.data("/exit\r");
 		await expect(env2.repl).resolves.toBe(0);
 	});
@@ -3035,7 +3040,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("debt clearance: error results fold too — no red ⎿ line, the ● ✗ line stays, expand works", async () => {
+	it("debt clearance: error results fold too — the ⎿ failed status stays, expand works", async () => {
 		const failing: Tool = {
 			name: "bash",
 			description: "test bash stand-in",

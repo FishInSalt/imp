@@ -83,6 +83,16 @@ launch parse incl. the a3aaa72 derivation check, duplicate refusal). The
 fix adds no new parsing semantics — it re-runs the same one under the lock.
 The pre-lease validation remains as the no-side-effect early refusal.
 
+**Refusal record semantics (implementation review C-1).** Every post-lease
+refusal (the four re-resolution checks and the pre-existing history
+refusal) returns before any transcript mutation and before any provider
+call. The SA-03 rejection shape (launched:false, zero turns, no child
+reference) is therefore accurate: no work ran and there is nothing to
+account for, so such a record contributes nothing to usage totals or the
+lifetime line by design. An `attempted`/incomplete marker was considered
+and rejected — it would fabricate unknown work where none exists. The
+refusal itself stays visible in the tool result.
+
 ### 1.3 Deliberately not re-validated
 
 - `executionState` / parent-side records: those reads use the parent store;
@@ -304,9 +314,10 @@ is disclosed.
   this reopening). Named explicitly so the scope choice is visible, not
   implicit (review correction C-7).
 - `onBeforeResumeLease` is an inert test seam in production wiring.
-- The launch deep-equality refusal is strict serialization equality: any
-  external in-place header rewrite (even semantically equal with different
-  key order) is refused. No supported flow rewrites a header.
+- The launch header comparison is canonical structural equality
+  (key-sorted; implementation review C-2): any value change in an external
+  rewrite refuses, while key order alone does not (guard test SA-08/F1-b).
+  No supported flow rewrites a header at all.
 - F-2's containment uses `realpathSync` at validation time; a worktree
   swapped AFTER validation but before/while the attempt runs remains a
   pre-existing TOCTOU outside this finding (the attempt is not a sandbox).
@@ -340,3 +351,17 @@ is disclosed.
   C-4 (realpath throw/root/case policies made explicit), C-5 (symlink
   test shape), C-6 (implementation-time fixture grep), C-7 (parent-session
   writer class named). No rejection-level defect found.
+- 2026-09-29: post-implementation adversarial review of 4efd495..ea3e469
+  (fresh context, read-only, budgeted) — **APPROVE WITH CORRECTIONS**.
+  Independently verified: no residual pre-lease snapshot reads after the
+  rebind (all six downstream sites enumerated), lease release on every
+  post-acquire return, the containment edge cases (root, trailing
+  separator, `/wt-other` prefix, realpath throw), the shared predicate's
+  consumers (usage-totals pricing + parse gate only), the seam's
+  production inertness (runner.ts:529 does not set it), and that exactly
+  the five intended cases are red at 4efd495 and green at ea3e469 with no
+  weakened expectations. Corrections: C-1 disposition documented in §1.2
+  (nothing ran -> nothing to account; the alternative marker would
+  fabricate unknown work), C-2 fixed (order-insensitive canonical
+  comparison + SA-08/F1-b guard), C-3 informational. Fold gates: 125
+  files / 2361 tests green.

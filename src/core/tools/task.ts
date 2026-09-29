@@ -201,6 +201,20 @@ function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string 
 	return "";
 }
 
+/** SA-08 reopened F-1 (review C-2): order-insensitive structural equality —
+ *  a rewritten launch header still refuses (any value change), but key order
+ *  alone does not (no serialization coupling). */
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (typeof value === "object" && value !== null) {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
+		return `{${entries.join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
 /** SA-03: transcript facts — only what the store can attest to. `writeFailed`
  *  is the observed-failure flag (message appends AND compaction checkpoints);
  *  an unpersisted store WITHOUT an observed failure is `no-content`, never a
@@ -545,7 +559,11 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					// authoritative child state now that we hold the single-writer
 					// lease, refuse if the identity moved, and rebind `file` so every
 					// downstream read (repair, history, session, append, transcript,
-					// taskResult) uses the reopened store.
+					// taskResult) uses the reopened store. These refusals precede
+					// any transcript mutation and any provider call: nothing ran,
+					// so the SA-03 rejection shape (launched:false, zero turns) is
+					// correct and there is no work to account for (implementation
+					// review C-1 disposition, design §5).
 					const reopened = findChildByLaunch(parentStore, check.childId);
 					if (!reopened.ok) {
 						return refuse(
@@ -557,7 +575,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 							`cannot resume child "${launch.childId}": the id now resolves to a different file than the one that was validated and leased (${reopened.file.filePath})\n${RESUME_REFUSAL_TAIL}`,
 						);
 					}
-					if (JSON.stringify(reopened.file.launch) !== JSON.stringify(launch)) {
+					if (canonicalJson(reopened.file.launch) !== canonicalJson(launch)) {
 						return refuse(
 							`cannot resume child "${launch.childId}": the child session header changed while the attempt was being prepared\n${RESUME_REFUSAL_TAIL}`,
 						);

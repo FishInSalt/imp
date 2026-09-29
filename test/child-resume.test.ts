@@ -304,6 +304,39 @@ describe("SA-07 resume", () => {
 		expect(ours?.parentId).toBe(theirs?.id);
 	});
 
+	it("SA-08/F1-b: a key-order-only header rewrite does not refuse (canonical comparison)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "resumed answer" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		const childId = childIdOf(first);
+		const transcript = first.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		// Top-level key order reversed — semantically identical, and the
+		// post-lease comparison must not confuse serialization with change.
+		const raw = readFileSync(transcript.path, "utf8");
+		const nl = raw.indexOf("\n");
+		if (nl <= 0) throw new Error("no header line");
+		const header = JSON.parse(raw.slice(0, nl)) as Record<string, unknown>;
+		const reordered = Object.fromEntries(Object.entries(header).reverse());
+		writeFileSync(transcript.path, `${JSON.stringify(reordered)}${raw.slice(nl)}`);
+
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
+	});
+
 	it("R2a: a complete entry without a trailing newline is TERMINATED (kept), not lost", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-torn-"));
 		const filePath = path.join(base, "torn.jsonl");

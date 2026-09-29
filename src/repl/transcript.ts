@@ -62,6 +62,12 @@ export class TranscriptSink implements Component {
 	 *  "latest writer wins" is safe because the shell only addresses currently
 	 *  running tasks (tool_call ids are not unique across assistant messages). */
 	private inputFoldById = new Map<string, ToolBlockFold>();
+	/** #tool-result-follows-call: the transcript entry holding a tool_call id's
+	 *  input fold, so that call's result block can be spliced directly after it
+	 *  instead of landing at the end of the transcript (concurrent `task` calls
+	 *  emit every start before any end). Cleared in clear(): a stale anchor would
+	 *  splice at position 0. */
+	private inputEntryById = new Map<string, Entry>();
 	/** #task-inline-live-rows (B1): pulled by the append callback when a task's
 	 *  fold is created after the shell already published its rows
 	 *  (trackActivity precedes renderer.event). A PUBLIC field mirroring
@@ -81,20 +87,29 @@ export class TranscriptSink implements Component {
 				fold.setRawArguments(this.rawToolArguments);
 				this.inputFolds.set(block, fold);
 				this.toolFolds.push(fold);
-				if (block.kind === "input") {
-					// A provider may reuse a tool_call id across assistant messages
-					// (`call_${index}`); the previous fold for this id is settled and must
-					// not keep live rows. The shell's push for the new task ran BEFORE this
-					// fold existed, so it may have painted onto that superseded fold.
-					const displaced = this.inputFoldById.get(block.id);
-					if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
-					this.inputFoldById.set(block.id, fold);
-					// #task-inline-live-rows (B1): pull the rows the shell published
-					// before this fold existed, so the first paint is complete.
-					const rows = this.taskLiveRowsResolver?.(block.id) ?? null;
-					if (rows !== null) fold.setLiveRows(rows);
+				if (block.kind !== "input") {
+					// #tool-result-follows-call: a result belongs directly under its own
+					// call. Concurrency-safe calls (only `task`) emit every tool_start
+					// before any tool_end, so appending would strand all results below all
+					// headers. Falls back to append when the call has no known entry
+					// (orphan result) or the anchor was cleared.
+					const anchor = this.inputEntryById.get(block.id);
+					if (anchor !== undefined && this.insertEntryAfter(anchor, fold)) return;
+					this.appendChild(fold);
+					return;
 				}
-				this.appendChild(fold);
+				// A provider may reuse a tool_call id across assistant messages
+				// (`call_${index}`); the previous fold for this id is settled and must
+				// not keep live rows. The shell's push for the new task ran BEFORE this
+				// fold existed, so it may have painted onto that superseded fold.
+				const displaced = this.inputFoldById.get(block.id);
+				if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
+				this.inputFoldById.set(block.id, fold);
+				// #task-inline-live-rows (B1): pull the rows the shell published
+				// before this fold existed, so the first paint is complete.
+				const rows = this.taskLiveRowsResolver?.(block.id) ?? null;
+				if (rows !== null) fold.setLiveRows(rows);
+				this.inputEntryById.set(block.id, this.appendEntry(fold));
 			},
 			(previous, next) => {
 				const fold = this.inputFolds.get(previous);
@@ -112,6 +127,7 @@ export class TranscriptSink implements Component {
 		this.toolSink.clear();
 		this.inputFolds = new WeakMap();
 		this.inputFoldById.clear();
+		this.inputEntryById.clear();
 		this.rawToolArguments = false;
 		this.toolFolds.length = 0;
 		this.generation++;
@@ -124,9 +140,29 @@ export class TranscriptSink implements Component {
 	}
 
 	appendChild(component: Component): void {
+		this.appendEntry(component);
+	}
+
+	/** #tool-result-follows-call: the append path's settle boundary, but returning
+	 *  the pushed entry so a result fold can be positioned after its own call. */
+	private appendEntry(component: Component): Entry {
 		this.settleBoundary();
-		this.entries.push({ type: "component", component });
+		const entry: Entry = { type: "component", component };
+		this.entries.push(entry);
 		this.onUpdate?.();
+		return entry;
+	}
+
+	/** #tool-result-follows-call: place a result fold directly after its call's
+	 *  input fold. Returns false when the anchor is no longer in the transcript
+	 *  (cleared between the call and its result), so the caller appends instead. */
+	private insertEntryAfter(anchor: Entry, component: Component): boolean {
+		this.settleBoundary();
+		const at = this.entries.indexOf(anchor);
+		if (at === -1) return false;
+		this.entries.splice(at + 1, 0, { type: "component", component });
+		this.onUpdate?.();
+		return true;
 	}
 
 	/** #task-inline-live-rows (B1): publish a running task's live rows to its

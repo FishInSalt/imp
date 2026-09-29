@@ -530,3 +530,87 @@ describe("TranscriptSink.feedUser — pi-style user blocks", () => {
 		shell.close();
 	});
 });
+
+describe("TranscriptSink tool result placement (#tool-result-follows-call)", () => {
+	const rows = (transcript: TranscriptSink): string[] => transcript.render(80).map(stripEscapes);
+	const at = (text: string[], needle: string): number => text.findIndex((row) => row.includes(needle));
+
+	it("each result renders directly under its own call when starts and ends interleave", () => {
+		const transcript = new TranscriptSink();
+		// executeChunk (src/core/loop.ts) emits every tool_start of a
+		// concurrency-safe chunk before any tool_end, so appending results at the
+		// end would strand both below both headers.
+		transcript.toolSink.start("a", "task", { agent: "scout", prompt: "PROMPT-A" });
+		transcript.toolSink.start("b", "task", { agent: "scout", prompt: "PROMPT-B" });
+		transcript.toolSink.end({ toolCallId: "a", toolName: "task", content: "RESULT-A", isError: false });
+		transcript.toolSink.end({ toolCallId: "b", toolName: "task", content: "RESULT-B", isError: false });
+		const text = rows(transcript);
+		expect(at(text, "PROMPT-A")).toBeLessThan(at(text, "RESULT-A"));
+		expect(at(text, "RESULT-A")).toBeLessThan(at(text, "PROMPT-B"));
+		expect(at(text, "PROMPT-B")).toBeLessThan(at(text, "RESULT-B"));
+	});
+
+	it("attachment is by call, not by arrival: reverse end order renders the same", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("a", "task", { agent: "scout", prompt: "PROMPT-A" });
+		transcript.toolSink.start("b", "task", { agent: "scout", prompt: "PROMPT-B" });
+		// The loop emits ends in call order; this proves the sink does not depend on
+		// it — each result follows its own anchor wherever the anchor sits.
+		transcript.toolSink.end({ toolCallId: "b", toolName: "task", content: "RESULT-B", isError: false });
+		transcript.toolSink.end({ toolCallId: "a", toolName: "task", content: "RESULT-A", isError: false });
+		const text = rows(transcript);
+		expect(at(text, "PROMPT-A")).toBeLessThan(at(text, "RESULT-A"));
+		expect(at(text, "RESULT-A")).toBeLessThan(at(text, "PROMPT-B"));
+		expect(at(text, "PROMPT-B")).toBeLessThan(at(text, "RESULT-B"));
+	});
+
+	it("a serial call still renders header then result (append == attach)", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("s", "bash", { command: "echo hi" });
+		transcript.toolSink.end({ toolCallId: "s", toolName: "bash", content: "hi", isError: false });
+		const text = rows(transcript);
+		expect(at(text, "●")).toBeLessThan(at(text, "⎿"));
+	});
+
+	it("an orphan result (no call seen) still lands after its own stub, at the end", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("a", "task", { agent: "scout", prompt: "PROMPT-A" });
+		transcript.toolSink.end({ toolCallId: "orphan", toolName: "task", content: "LONELY", isError: false });
+		transcript.toolSink.end({ toolCallId: "a", toolName: "task", content: "RESULT-A", isError: false });
+		const text = rows(transcript);
+		expect(at(text, "Arguments unavailable")).toBeLessThan(at(text, "LONELY"));
+		expect(at(text, "RESULT-A")).toBeLessThan(at(text, "Arguments unavailable"));
+	});
+
+	it("a cleared transcript drops its anchors: a later result appends, never splices at the top", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("call_0", "task", { agent: "scout", prompt: "OLD" });
+		transcript.toolSink.end({
+			toolCallId: "call_0",
+			toolName: "task",
+			content: "OLD-RESULT",
+			isError: false,
+		});
+		transcript.clear();
+		transcript.toolSink.finalize();
+		transcript.feedUser("new session");
+		// A provider that omits ids reuses `call_${index}`; this result has no call.
+		transcript.toolSink.end({ toolCallId: "call_0", toolName: "task", content: "ORPHAN", isError: false });
+		const text = rows(transcript);
+		expect(at(text, "new session")).toBeGreaterThanOrEqual(0);
+		expect(at(text, "new session")).toBeLessThan(at(text, "ORPHAN"));
+		expect(text.some((row) => row.includes("OLD-RESULT"))).toBe(false);
+	});
+
+	it("a running task's live row sits above its own result (#task-inline-live-rows)", () => {
+		const transcript = new TranscriptSink();
+		transcript.taskLiveRowsResolver = (key) => (key === "t" ? ["pending #1 scout 3s"] : null);
+		transcript.toolSink.start("t", "task", { agent: "scout", prompt: "PROMPT-T" });
+		expect(at(rows(transcript), "pending #1 scout 3s")).toBeGreaterThanOrEqual(0);
+		transcript.setTaskLiveRows("t", null);
+		transcript.toolSink.end({ toolCallId: "t", toolName: "task", content: "DONE-T", isError: false });
+		const text = rows(transcript);
+		expect(text.some((row) => row.includes("pending #"))).toBe(false);
+		expect(at(text, "PROMPT-T")).toBeLessThan(at(text, "DONE-T"));
+	});
+});

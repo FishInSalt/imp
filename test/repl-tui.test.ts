@@ -1879,6 +1879,13 @@ describe("runRepl with shell:tui", () => {
 		first.resolve();
 		await frameContains(env, "parallel done");
 		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "a", "b"]);
+		// #tool-result-follows-call: the fold ARRAY stays arrival-ordered (ctrl+o
+		// walks it), but each result RENDERS under its own call.
+		const rendered = env.transcript.render(80).map(stripAnsi);
+		const atRow = (needle: string) => rendered.findIndex((row) => row.includes(needle));
+		expect(atRow('"id": "a"')).toBeLessThan(atRow("a result"));
+		expect(atRow("a result")).toBeLessThan(atRow('"id": "b"'));
+		expect(atRow('"id": "b"')).toBeLessThan(atRow("b result"));
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
 		env.transcript.toolSink.start("c", "read", { path: "new" });
@@ -1896,6 +1903,12 @@ describe("runRepl with shell:tui", () => {
 			session,
 		);
 		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "a", "b"]);
+		// replay reproduces the live grouping: result under its own call.
+		const replayed = env.transcript.render(80).map(stripAnsi);
+		const atReplay = (needle: string) => replayed.findIndex((row) => row.includes(needle));
+		expect(atReplay('"id": "a"')).toBeLessThan(atReplay("a result"));
+		expect(atReplay("a result")).toBeLessThan(atReplay('"id": "b"'));
+		expect(atReplay('"id": "b"')).toBeLessThan(atReplay("b result"));
 		env.terminal.data("\x0f");
 		await waitUntil(() => env.transcript.toolFolds.every((f) => f.isExpanded()));
 		env.terminal.data("/new\r");

@@ -83,9 +83,9 @@ bookkeeping with the *entry* of that fold, and change the append callback:
 
 - block kind `input`: append the fold as today, and record its entry in a new
   `inputEntryById: Map<string, Entry>`. `appendChild` returns `void` today
-  (`transcript.ts:126-130`), so it gains a private sibling that returns the
-  pushed entry (or the push is inlined); the public `appendChild` keeps its
-  signature for its `shell.ts:792` caller.
+  (`transcript.ts:126-130`), so it gains a private sibling that still calls
+  `settleBoundary()` first and returns the pushed entry; the public
+  `appendChild` keeps its signature for its `shell.ts:792` caller.
 - any other kind (`output`, `diff`): if `inputEntryById` has the block's id,
   insert the new fold's entry **immediately after** the anchor entry instead of
   appending at the end; otherwise append (unknown/orphan result — unchanged).
@@ -232,3 +232,24 @@ Findings folded in:
 6. (nit) `addFold`/`showResultFold` do not interact with the change; now §4.5.
 7. (nit) the test mechanism (rendered positions, not array order) is now
    specified in §7.1.
+
+**Round 2 — confirmation (same reviewer, resumed), verdict CONFIRMED.** All
+seven folds re-verified against source; the corrected citations re-checked
+line-for-line; the splice simulation re-run (both completion orders plus the
+`/new` orphan). Two nits, both non-blocking: the private sibling must still
+call `settleBoundary()` (now stated in §4.1), and the `-1` fallback and the
+mandatory `clear()` overlap as defense in depth (kept deliberately; §4.1's
+parenthetical reconciles them).
+
+## 9. Implementation notes
+
+- `src/repl/transcript.ts`: `inputEntryById`, `appendEntry` (returns the pushed
+  entry), `insertEntryAfter` (returns false when the anchor is gone),
+  `clear()` clears the new map.
+- Tests: `test/repl-fold.test.ts` gains a `TranscriptSink tool result
+  placement` block (6 cases: interleaved starts/ends, reverse end order, serial
+  unchanged, orphan, cleared transcript, live-row-over-result); the
+  reverse-completion test in `test/repl-tui.test.ts:1837` gains rendered-order
+  assertions for both the live run and the replay. Three of the new cases are
+  red before the change (verified by reverting `transcript.ts`).
+- Gate: 127 files / 2468 tests, lint 0, typecheck (both configs) 0, build 0.

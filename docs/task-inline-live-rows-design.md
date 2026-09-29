@@ -183,9 +183,36 @@ stand unchanged.
   shell's resolver reads its own current per-task row map, which the snapshot
   push has already populated (`trackActivity` precedes `renderer.event`,
   §5.4).
-- Both are reset in `clear()` (`src/repl/transcript.ts:85`); `inputFoldById` is
-  also cleared in `finalize()` (run boundary), matching `createToolSink`'s own
-  per-run `entries` (`src/repl/tool-presentation.ts:707-727`).
+- `inputFoldById` is cleared in `clear()` (`src/repl/transcript.ts:85`). No
+  `finalize()` hook is needed and none is added: the resolver retains no per-id
+  payload, and the map only ever holds the newest input fold for an id — exactly
+  the fold a currently running task owns. (`createToolSink.finalize` is invoked
+  on the sink object directly — `src/repl/repl.ts:699, 1277`,
+  `src/render.ts:259` — and the transcript's `createToolSink` seam
+  (`src/repl/transcript.ts:65-82`) exposes no finalize callback, so a
+  finalize-clearing requirement would not be implementable; it is also
+  unnecessary for the reason above.)
+
+Resolver wiring, teardown, and purity:
+
+- `TuiShell.start()` installs the resolver, mirroring `transcript.onUpdate`
+  (`src/repl/shell.ts:270`), so it is set before the first fold is ever created —
+  in the live and the replay paths alike. `stopTerminal()` unbinds it behind the
+  same ownership guard as `boundOnUpdate` (`src/repl/shell.ts:1080-1082`): the
+  **same `TranscriptSink` is handed from the one-shot trust-ask shell to the real
+  REPL shell** (`src/repl/shell.ts:1076-1079`), so a successor shell's resolver
+  must not be clobbered by the predecessor's teardown (and vice versa).
+- The append callback calls the resolver optionally —
+  `this.taskLiveRowsResolver?.(block.id) ?? null` — so bare-sink paths that have
+  no shell (tests construct `new TranscriptSink()` and call
+  `transcript.toolSink.start(...)`, e.g. `test/repl-tui.test.ts:239`,
+  `test/task-live-display.test.ts:53`) and any fold created before `start()`
+  never throw. This optionality is required, not defensive.
+- The resolver is a **pure read** of the shell's already-computed row map: it
+  must not call `setActivity`/`renderActivity`, mutate the transcript, or create
+  a fold. It runs inside the append closure (`src/repl/transcript.ts:66-72`),
+  which then calls `appendChild` and `onUpdate`; re-entering the render path
+  there would corrupt the append.
 
 Tool_call ids are **not** unique within a run: `src/provider/openai-completions.ts:431`
 synthesizes `call_${tc.index}` when the provider omits ids, and one `runTurn`
@@ -235,7 +262,11 @@ revision guard means this also avoids cache invalidation).
   fold, `renderActivity` has already computed and stored that task's rows, so
   the resolver returns them and they are painted at creation — no gap, no second
   push required, and the resolver never creates a fold (the append callback is
-  the only fold creator). The 120ms ticker re-syncs afterwards.
+  the only fold creator). The 120ms ticker re-syncs afterwards. This holds on the
+  normal event path only: `fillMissingToolResults` (`src/core/loop.ts:269-281`)
+  synthesizes results without emitting `tool_end`, so an aborted task's rows
+  persist until the turn-end idle push — pre-existing behavior, covered by the
+  abort case in §6.
 - **Child events.** Each `tool_start`/`tool_end` from a source updates the
   snapshot and re-pushes; the shell refreshes the rows.
 - **Task end.** `trackActivity`'s `tool_end` branch deletes the agent rows and
@@ -302,6 +333,14 @@ New/updated coverage (extend `test/repl-tui.test.ts` and
    `src/render.ts`).
 7. Fold cache: `setLiveRows` with identical content does not invalidate; with
    changed content it does; output folds ignore it.
+8. Bare sink: creating an input fold with no resolver installed (a plain
+   `new TranscriptSink()` + `transcript.toolSink.start(...)`, and replay) must
+   not throw and must render without live rows.
+9. Shared-sink ownership: the trust-ask shell's teardown must not clobber the
+   real shell's resolver (mirror the existing `onUpdate` guard test), and the
+   resolver must be installed before the first fold is created.
+10. Resolver purity: a resolver that is a pure read does not re-enter the render
+    path (assert no `setActivity`/`renderActivity` recursion).
 
 Assertion impact is **not** a blanket "existing tests keep passing". Two tests
 drive `shell.setActivity` on a fold-less sink (`makeShell`) and read the rows
@@ -334,9 +373,9 @@ width sweep does not know the new field.
    changelog.
 3. **Snapshot→fold ordering at start.** §5.2/§5.4 use a pull resolver, so the
    transcript keeps no per-id row payload and a reused id cannot carry rows into
-   a later fold. What remains to verify is that the resolver is set before the
-   first fold is created and that the append callback stays the only fold
-   creator.
+   a later fold. The resolver is installed in `TuiShell.start()`, is called
+   optionally by the append callback, and is a pure read (§5.2); the append
+   callback stays the only fold creator.
 4. **Ordinal determinism** relies on `trackActivity` pushing the parent snapshot
    before any source replaces it (§5.5). If that invariant is considered too
    implicit, the alternative is a monotonic `seq` on `ActivityAgentLine` used to

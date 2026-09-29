@@ -4,8 +4,8 @@
 - Branch: `feat/tui-tool-elapsed` (this document's review; implementation follows
   on the same branch)
 - Baseline: `f1fcc54` (main)
-- Status: DRAFT v3 — rounds 1-2 folded (see Review log); awaiting
-  round-3 re-review.
+- Status: DRAFT v4 — rounds 1-3 folded; NOTES from round 3 folded
+  (N-A/N-B); awaiting final confirmation.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -128,15 +128,18 @@ Dim suffix appended at the end of the call block's **first row**:
     pins: `budget - s == 8` shows, `== 7` omits. The inline command body
     path threads the reduction into `emit` for its **first row only**
     (`w - visibleWidth(current) - s`); continuation rows keep
-    `w - visibleWidth(current)` so their indentation and grapheme
-    `consumed` accounting (feeding `summaryVisible`) stay unchanged.
+    `w - visibleWidth(current)`; the reduction applies to the first
+    row's wrap width **and** to `emit`'s first-row
+    `consumed`/`summaryVisible` scan — otherwise the occurrence silently
+    drops out of `summaryVisible` and the omission/`… more` accounting
+    desyncs. Continuation rows' indentation and grapheme `consumed`
+    accounting stay unchanged.
   - I4: collapse/expand/raw state never removes an eligible suffix —
     **I3 width omission is its only non-gating absence**. In the
-    header-only fallback branches (`visibleWidth(prefix) >= w`), emit
-    `header + suffix` when `visibleWidth(header) + s <= w`, otherwise
-    `header` alone with no suffix; the two-space separator is never
-    rendered in these branches (a header of width `w - 1` or `w` never
-    carries a suffix).
+    header-only fallback branches (`visibleWidth(prefix) >= w`), the row
+    is `header` alone with no suffix — `header + suffix` cannot fit
+    there (`prefix = header + "  "` and `s >= 6 > 2` by construction) —
+    and the two-space separator is never rendered in these branches.
   - I5: only input blocks (`call` rendering) can carry it; output/diff
     blocks ignore the field.
   - I6: `finalize()`'s interruption update is constructed with
@@ -239,7 +242,9 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
   accounting unchanged;
 - omission-notice parity: a collapsed pathFirst row carrying a suffix
   emits the same omission/`… more` marker as the identical block without
-  the suffix (`summaryVisible` accounting unchanged);
+  the suffix, and the same holds for a multi-row inline command body
+  (first-row wrap width and the `consumed`/`summaryVisible` scan both
+  reduced by `s`);
 - output/diff blocks with the field set: no suffix (I5);
 - `updateBlock` re-render reflects a newly set/removed `elapsedMs`.
 
@@ -324,6 +329,18 @@ owner-facing and will be listed as pending until the owner confirms.
   vs `emit`'s first-row reserve mechanics — restated with the
   continuation-row constraint and a pin), N2 (I1 pin scoped to
   `ToolBlockFold.render`). All folded in revision 3.
+
+- Round 3 (same reviewer, targeted, 2026-09-29): **CONFIRMED WITH
+  NOTES** — finding 2, finding 5, N1, N2 all FIXED (verified against
+  `tool-block.ts:300-339`/`:381-396` and `tool-presentation.ts:640-695`;
+  the I6 pin shown red-able on the baseline). N-A (P3): I4's
+  "emit `header + suffix`" clause is arithmetically dead in those
+  branches — reworded unconditionally. N-B (P2): the first-row `-s`
+  reduction must also reach `emit`'s `consumed`/`summaryVisible` scan —
+  folded into I3, and the omission-parity pin extended to the multi-row
+  inline-body case. Both folded in revision 4 (implementation may
+  proceed; N-B folded before implementation so the parity pin is not
+  self-defeating).
 
 ## Process
 

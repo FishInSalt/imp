@@ -201,21 +201,32 @@ After the existing `probeWorktreeIdentity` result:
    record cwd as `wt.path` or `path.join(wt.path, cwdRelative)`, so their
    strings compare equal without folding. (Review correction C-4.)
 5. Directory type (owner round 2, F-2b): after existence, the cwd must
-   RESOLVE to a directory — `statSync` follows symlinks — in BOTH branches
-   (worktree and non-worktree). A regular file, a symlink whose final
-   object is a file, or a stat failure refuses with the new code
-   `cwd-not-directory` (message carries the stat error when there is one);
-   a dangling symlink is already `cwd-missing` (existsSync is false). In
-   the worktree branch the dirness check runs BEFORE the containment
-   check, so a file inside the worktree gets the precise code rather than
-   a containment verdict. Non-worktree children get the same check after
-   their existing cwd-drift/cwd-missing steps. A symlink to a directory
-   that stays inside the worktree remains usable (F2-g positive control).
+   RESOLVE to a directory — `statSync` follows symlinks — in BOTH branches.
+   A regular file, a symlink whose final object is a file, or a stat
+   failure refuses with the new code `cwd-not-directory` (message carries
+   the stat error when there is one); a dangling symlink is already
+   `cwd-missing` (existsSync is false). Precisely (design-review
+   corrections folded):
+   - Placement, worktree branch: `existsSync` -> dirness -> containment.
+     Dirness FIRST is load-bearing: containment alone ACCEPTS a
+     symlink-inside-the-worktree whose final object is a file inside it
+     (F2-e).
+   - Placement, non-worktree branch: `cwd-drift` (unchanged) ->
+     `existsSync` -> dirness — never ahead of the drift comparison.
+   - `statSync` failure mapping: ENOENT -> `cwd-missing` (a path that
+     vanished between the pre-check and the stat is an existence verdict);
+     any other error -> `cwd-not-directory` with the error text. EACCES on
+     the `existsSync` pre-check itself -> `cwd-missing` (existence could
+     not be established).
+   - A symlink to a directory that stays inside the worktree remains
+     usable (F2-g positive control).
+   - `statSync` must be added to the `node:fs` import (child-launch.ts:2).
    Rationale (owner's finding): a file cwd passes existsSync, realpathSync
    and containment but cannot host an execution environment; the attempt
    must refuse before any provider call. This also covers a previously
    legitimate subdirectory replaced by a file between attempts — no race
-   is needed for the failure.
+   is needed for the failure. The new stat inherits the pre-existing
+   stat-to-execution TOCTOU class already named in §5.
 
 Explicitly in range: the worktree root and any subdirectory of it at any
 depth (the fresh-dispatch relative-position construction). Out of range:
@@ -243,10 +254,19 @@ inside the worktree.
   review correction C-5) → refused.
 - Directory-type cases (F-2b, owner round 2): F2-d/F2-e/F2-f above, each
   asserting the refusal and that no provider call happened; F2-g is the
-  symlink-to-directory positive control. The F1-b regression is reworked
-  to reorder `header.launch` INSIDE the `onBeforeResumeLease` seam, so it
-  exercises the two-read comparison path (the old `JSON.stringify`
-  implementation would fail it; the owner's non-blocking test-gap note).
+  symlink-to-directory positive control. Fixture requirements
+  (design-review corrections): F2-d/F2-e MUST keep the worktree alive
+  (the first pass writes, as in T26b) or the refusal would come from a
+  `worktree-*` reason and the test would pass for the wrong mechanism;
+  F2-f MUST pass `options.cwd` equal to the original directory string or
+  the resume's `cwd-drift` comparison fires first.
+- The F1-b regression is reworked to reorder `header.launch` ON DISK
+  inside the `onBeforeResumeLease` seam, so it exercises the two-read
+  comparison path. It is a GUARD, not red-first: the ea3e469 stringify
+  generation would refuse it (verified), the pre-fix generation had no
+  comparison at all, and the current canonical comparison accepts it —
+  its job is to stop a future simplification from reintroducing
+  order-sensitive equality (the owner's non-blocking test-gap note).
 - Positive control: a legitimate subdirectory-parent worktree child (cwd =
   join(wt.path, rel)) resumes unchanged → accepted (guards against
   over-refusal).
@@ -356,7 +376,7 @@ is disclosed.
 | F2-e | worktree cwd = symlink inside the worktree to a file inside | accepted (P2) | refused `cwd-not-directory`, zero provider calls |
 | F2-f | non-worktree cwd directory replaced by a file between attempts | accepted (P2) | refused `cwd-not-directory`, zero provider calls |
 | F2-g | worktree cwd = symlink inside the worktree to a directory inside | accepted | accepted (no over-refusal) |
-| F1-b' | launch key order changed between the two reads (via the seam) | would refuse under `JSON.stringify` | accepted under canonical comparison |
+| F1-b' | launch key order changed between the two reads (via the seam) | guard only (ea3e469 stringify generation would refuse; pre-fix has no comparison) | accepted under canonical comparison |
 | F3-a | tampered TaskRecord binding, parse | parsed | null |
 | F3-b | tampered TaskRecord binding, reopen + aggregate | priced, complete | unpriced, `incomplete.child` |
 | — | full suite (125 files) | green | green |
@@ -401,3 +421,17 @@ is disclosed.
   `cwd-not-directory`), with the F1-b regression reworked onto the seam
   (non-blocking test-gap note). This delta's pre-implementation review is
   recorded below.
+- 2026-09-29 (owner round 2 delta): pre-implementation adversarial review
+  of 94e5e12 — **APPROVE WITH CORRECTIONS**. Verified: existsSync/statSync
+  semantics for every shape (file, symlink-to-file, dangling, ENOENT
+  race), F2-f's reachability through the non-worktree drift check
+  (options.cwd must equal the original directory string), the fixture
+  traps (F2-d/e must keep the worktree alive), and that the seam-time
+  reorder must rewrite the on-disk header. Folded: explicit placement in
+  both branches, ENOENT->cwd-missing mapping, EACCES-on-pre-check note,
+  F2-d/e/f fixture requirements, F2-e load-bearing note, statSync import
+  note, F1-b guard labeling. One review claim was checked against the
+  tree and does NOT hold: task.ts:578 at 94e5e12 already compares headers
+  with `canonicalJson` (from eb7fa2d), not `JSON.stringify` — the review
+  read the ea3e469 generation; the guard is still valuable against a
+  revert, as labeled.

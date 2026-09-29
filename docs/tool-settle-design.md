@@ -422,4 +422,17 @@ leave it alone is that it never ran, not that the marker would flip).
   swallowed by the REPL and surfaces as a downstream `waitUntil` timeout), and
   §6.10 now records that a settle-path throw discards results phase 3 would have
   preserved.
+
+  **Round 2 — confirmation (same reviewer, resumed), verdict NEEDS-FIXES on test
+  hygiene only.** Findings 1, 2 and 4 were verified closed and nothing
+  load-bearing remained unpinned; two in-mock assertions and a spy leak were
+  left. Folded in: every mid-run assertion now captures into a variable and is
+  asserted in the test body (mutation A now reports a real `AssertionError`, and
+  the sibling test no longer fails with it), and the `setActivity` spy is
+  restored through `onTestFinished` so a failing test cannot leave a second
+  wrapper on the already-mocked method (the unhandled `RangeError` the reviewer
+  produced under mutation A is gone). The reviewer's nit that the child-sourced
+  case pins the observable rather than the cited `prepareResult` mechanism is
+  accepted and recorded: the child arm is untouched by this batch, so the
+  observable (no fold, no record consumption) is the property that matters.
 - Gate: 127 files / 2478 tests, lint 0, typecheck (both configs) 0, build 0.

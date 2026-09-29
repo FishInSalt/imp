@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, AssistantMessage, UserMessage } from "../src/core/messages.js";
 import { createSession } from "../src/core/session/manager.js";
@@ -2369,18 +2369,22 @@ describe("runRepl with shell:tui", () => {
 			seen.push(snapshot);
 			realSetActivity.call(this, snapshot);
 		});
+		// Restore even when an assertion fails, or the spy leaks into the sibling
+		// test and stacks a second wrapper on the already-mocked method.
+		onTestFinished(() => spy.mockRestore());
 		const lastAgents = (): string[] => (seen.at(-1)?.agents ?? []).map((a) => a.taskToolId);
 		const original = env.runner.runTurn.bind(env.runner);
 		// Captured inside the run and asserted below: an assertion thrown inside the
 		// mocked runTurn is swallowed by the REPL and surfaces as a downstream
 		// waitUntil timeout, hiding the real cause (code-review finding 3).
 		let mid: { agents: string[]; folds: [string, string][]; rendered: string } | undefined;
+		let starts: string[] | undefined;
 		let childFolds: [number, number] | undefined;
 		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
 			const emit = options.onEvent!;
 			for (const id of ["t1", "t2"])
 				emit({ type: "tool_start", toolCallId: id, name: "task", args: { agent: "scout", prompt: id } });
-			expect(lastAgents()).toEqual(["t1", "t2"]);
+			starts = lastAgents();
 			const t2 = {
 				toolCallId: "t2",
 				toolName: "task",
@@ -2429,6 +2433,7 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		// t2's own runtime and result rendered while t1 was still running; only
 		// t1's row survived the settle.
+		expect(starts).toEqual(["t1", "t2"]);
 		expect(mid?.folds).toEqual([
 			["t1", "input"],
 			["t2", "input"],
@@ -2450,7 +2455,6 @@ describe("runRepl with shell:tui", () => {
 		]);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
-		spy.mockRestore();
 	});
 
 	it("#tool-settle: a non-task concurrency-safe row is cleared by its own settle", async () => {
@@ -2464,13 +2468,17 @@ describe("runRepl with shell:tui", () => {
 			seen.push(snapshot);
 			realSetActivity.call(this, snapshot);
 		});
+		// Restore even when an assertion fails, or the spy leaks into the sibling
+		// test and stacks a second wrapper on the already-mocked method.
+		onTestFinished(() => spy.mockRestore());
 		const lastTools = (): string[] => (seen.at(-1)?.tools ?? []).map((t) => t.id);
 		const original = env.runner.runTurn.bind(env.runner);
 		let mid: string[] | undefined;
+		let starts: string[] | undefined;
 		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
 			const emit = options.onEvent!;
 			emit({ type: "tool_start", toolCallId: "h1", name: "held", args: { message: "x" } });
-			expect(lastTools()).toEqual(["h1"]);
+			starts = lastTools();
 			emit({
 				type: "tool_settled",
 				result: { toolCallId: "h1", toolName: "held", content: "H1", isError: false },
@@ -2488,10 +2496,10 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		// The plain (non-task) row is deleted by the settle arm, not only the task
 		// branch — the reason the two events share one condition.
+		expect(starts).toEqual(["h1"]);
 		expect(mid).toEqual([]);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
-		spy.mockRestore();
 	});
 
 	it("each concurrent task's live rows sit under its own header in launch order", async () => {

@@ -77,7 +77,8 @@ export interface ConfirmOptions {
 	/** The request being decided, rendered in the transcript's call-header idiom
 	 *  instead of prose. The host sanitizes both fields, styles `warnSpans` with
 	 *  its own alert color, and shows the command exactly once on every surface:
-	 *  in the picker where one exists, as one plain note line otherwise. */
+	 *  in the picker where one exists, as one plain note (newlines preserved)
+	 *  otherwise. */
 	preview?: CommandPreview;
 }
 

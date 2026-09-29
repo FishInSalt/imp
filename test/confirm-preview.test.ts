@@ -68,6 +68,17 @@ describe("#confirm-prompt Phase 2: command preview rendering", () => {
 		expect(line).toContain("echo red ok");
 	});
 
+	it("closes every style it opens — no row can end inside the alert span", () => {
+		// the alert span reaches the end: the last byte closes it
+		expect(renderCommandHeader(preview({ warnSpans: [[10, 28]] })).endsWith("\x1b[0m")).toBe(true);
+		// the alert span sits mid-line: nothing is open at the end, no stray reset
+		const middle = renderCommandHeader(preview({ warnSpans: [[0, 6]] }));
+		expect(middle.endsWith("\x1b[0m")).toBe(false);
+		expect(middle.endsWith(" node_modules && npm i")).toBe(true);
+		// three opens (marker, name, alert), three closes
+		expect(middle.split("\x1b[0m")).toHaveLength(4);
+	});
+
 	it("the plain form is the note surface's carrier: no ANSI, same idiom", () => {
 		expect(commandPreviewText(preview({ warnSpans: [[0, 16]] }))).toBe(
 			"● bash  rm -rf node_modules && npm i",

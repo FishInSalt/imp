@@ -334,7 +334,8 @@ interface ConfirmOptions {
   prefix and passes `why it matched: …` as the detail). The host guarantees the
   command is shown **exactly once** on every surface:
   - TUI: a styled row under the title, before the items;
-  - text hosts (readline, no-host, print): one plain note line, so the command
+  - text hosts (readline, no-host, print): one plain note (its own newlines
+    preserved), so the command
     is not lost where the styled row does not exist (D8).
 - `preview.kind === "command"` renders `● <tool>  <text>` in the transcript's
   call-header idiom: dim `●`, bold tool name, two spaces, then the text;
@@ -357,7 +358,7 @@ interface ConfirmOptions {
   defensive stance `applyWarnSpans` already takes (`src/format.ts:168-192`).
 - **Both `tool` and `text` pass through `sanitizeDisplay`**
   (`src/repl/tool-presentation.ts:14`) before rendering. The transcript header
-  sanitizes the same way (`src/repl/components/tool-block.ts:409,412`), and
+  sanitizes the same way (`src/repl/components/tool-block.ts:483,486`), and
   pi-tui's `Text` preserves control bytes instead of stripping them
   (`node_modules/@earendil-works/pi-tui/dist/components/text.js:54-55`), so a
   command string containing ESC sequences would otherwise reach the terminal
@@ -468,8 +469,12 @@ implementation facts and the three deviations from the text below:
   (warn spans are now command-relative), `rememberLabel: "this directory"` at the
   write gate, and the `command: …` prefix is gone from the detail — so the command
   appears exactly once.
-- Red-first evidence: 9 pins red on the pre-change code (5 guardian option pins,
-  2 confirm pins, 2 preview pins); 219/219 green in the five focused files after.
+- Red-first evidence: 9 pins red at the time of the red run (5 guardian option pins,
+  2 confirm pins, 2 preview pins — the byte-pin file did not exist yet);
+  reverting all four source files at the FINAL pin set reds **15** tests
+  (`test/confirm-preview.test.ts` 6, `test/guardian.test.ts` 5,
+  `test/repl-confirm.test.ts` 2, `test/repl-tui.test.ts` 2 — re-verified by the
+  implementation check). 219/219 green in the five focused files after.
 - Gates (unmasked): lint 0, typecheck 0, full suite 0 (**128 files / 2483
   tests**), build 0. One flake observed once under load (an unrelated
   `login-dialog` device-code test); it passes in isolation and on re-run.
@@ -693,8 +698,24 @@ reproduce at 127 files / 2466 tests.
 **Final review status:** APPROVED — Phase 1 may start immediately; Phase 2 follows
 its own implementation cycle.
 
-## 14. Process
+**Phase 2 implementation check** (independent, fresh context, commit `56f5e21`) —
+verdict **APPROVE WITH CORRECTIONS**, all four items folded on the same branch:
 
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| D1 | P2 | The "9 pins red" figure was taken before the byte-pin file existed; reverting the FINAL pin set reds 15 | Folded: §8 records both numbers and the reason |
+| D2 | P3 | D7's citation for the transcript header's own sanitization was stale (`:409,412`) | Folded: `:483,486` |
+| D3 | P3 | "one plain note line" overstates the text-host form for a multi-line command | Folded: this document and the `preview` comment now say "one plain note (newlines preserved)" |
+| D4 | P3 | No pin guarded the reset discipline — a mutation dropping the trailing reset went unnoticed (0 pins red) | Folded: a pin asserts that an alert span reaching the end is closed, a mid-line span leaves nothing open, and opens equal closes |
+
+The check also confirmed: the contract is additive with exactly one
+`CommandPreview` definition; the span arithmetic always satisfies `styled()`'s
+sorted/non-overlapping contract (pathological inputs probed); no path renders the
+command twice; four mutations were each caught (3+1+1 pins for three of them, the
+fourth now pinned); the gates reproduce at 128 files / 2483 tests; and the
+`login-dialog` flake observed once did not reproduce in 13 runs.
+
+## 14. Process
 - Work happens in the `/Users/z/Z/Agent_demo/imp-confirm-design` worktree. The
   shared checkout at `/Users/z/Z/Agent_demo/imp` belongs to another session;
   that session's branch `feat/task-inline-live-rows` merged into `main` as

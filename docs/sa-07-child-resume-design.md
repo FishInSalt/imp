@@ -289,6 +289,13 @@ reads keep their lenient rules (SA-06 discipline).
 
 ### 6.1 Tool-pairing scan (read-only first)
 
+> REVISION (owner round 3, 2026-09-29): the set-based collection below is
+> SUPERSEDED by the order-aware single pass in
+> docs/sa-08-reopened-fixes-design.md §9 — a result with no preceding
+> call, a result before its call, and a duplicated call id all refused;
+> the crash-tail repair rule itself is unchanged. The text below is kept
+> as history.
+
 Scan the effective history's messages: collect required toolCall ids from
 assistant messages (`blocks[].type === "toolCall"`) and observed result ids
 (`toolResult` messages' `results[].toolCallId`). Let `M` be the missing set.
@@ -1263,3 +1270,24 @@ Three fresh-context read-only tracks over the integrated main (4a2976b):
   gate only, shared tool-pool selection, lease guarantees held under
   adversarial probing, no background framework / retry loop / provider
   migration introduced.
+
+### SA-08 REOPENED (owner integration review, 2026-09-29)
+
+The owner's independent review of the integrated delivery overturned the
+closure record above with two P1s and one P2, each independently
+reproduced: F-1 a resume can run on a pre-lease history snapshot (a
+completed round from another executor is missed and the append forks);
+F-2 worktree identity validation never constrains the executed cwd;
+F-3 the TaskRecord billing identity is not derivation-checked even though
+the launch record now is. Fix design:
+docs/sa-08-reopened-fixes-design.md (its own pre-implementation review is
+recorded there). The closure record above stays as history; SA-08 is open
+until the fixes pass acceptance.
+
+### Owner round 3 (2026-09-29)
+
+F-4 (SA-02 fresh-path provider capture) and F-5 (§6.1 order-aware pairing
+revision) are designed in docs/sa-08-reopened-fixes-design.md §8-§9; the
+§6.1 revision pointer above supersedes the set-based collection phase.
+Red evidence, implementation and reviews are recorded in that document's
+round-3 log.

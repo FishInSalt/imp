@@ -158,6 +158,11 @@ export interface TaskToolOptions {
 	worktreeBaseDir?: string;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
+	/** Test-only seam (SA-08 reopened F-1): invoked after validation and
+	 *  before the single-writer lease is acquired in the resume branch, so a
+	 *  test can deterministically interleave another executor's completed
+	 *  round between the lookup and the acquire. Production never sets it. */
+	onBeforeResumeLease?: () => void | Promise<void>;
 }
 
 /** SA-01: what the cleanup attempt did — drives the result text (design §D5). */
@@ -194,6 +199,20 @@ function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string 
 	if (cleanup.state === "failed") return cleanupFailureNote(cleanup.errors, wt);
 	if (cleanup.state === "kept") return keptForSafetyNote(cleanup.assessment, wt);
 	return "";
+}
+
+/** SA-08 reopened F-1 (review C-2): order-insensitive structural equality —
+ *  a rewritten launch header still refuses (any value change), but key order
+ *  alone does not (no serialization coupling). */
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (typeof value === "object" && value !== null) {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
+		return `{${entries.join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
 }
 
 /** SA-03: transcript facts — only what the store can attest to. `writeFailed`
@@ -445,7 +464,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					}
 					return refuse(`${output}\n${RESUME_REFUSAL_TAIL}`);
 				}
-				const file = found.file;
+				let file = found.file;
 				const launch = file.launch;
 
 				// §4.1 step 3: current environment + provider-identity gate.
@@ -455,6 +474,13 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						`cannot resume child "${launch.childId}": this host does not expose the launch-environment facts needed to validate it.\n${RESUME_REFUSAL_TAIL}`,
 					);
 				}
+				// Pinned for the whole attempt (impl review F-4b, corrected in
+				// owner round 4): a yield point DOES exist between this read
+				// and the attempt (validateChildContinuation, the lease) — the
+				// attempt running on THIS captured instance is what keeps the
+				// record and the call consistent. Do not move the read after
+				// the await, and do not re-read inside the attempt (design
+				// §8.2).
 				const liveProvider = options.getProvider();
 				const mismatch = providerMismatch(launch.model.providerName, liveProvider.name);
 				if (mismatch !== undefined) {
@@ -508,6 +534,11 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					return refuse(output);
 				}
 
+				// SA-08 reopened F-1: test seam — the deterministic interleaving
+				// point (another executor completes here) that the fix must
+				// survive. Inert in production (never set).
+				if (options.onBeforeResumeLease !== undefined) await options.onBeforeResumeLease();
+
 				// §4.1 step 5: single-writer lease, AND-ed with resumable.
 				const acquired = acquireChildLease(file.filePath, attemptId);
 				if (!acquired.ok) {
@@ -528,6 +559,40 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						leaseAnomaly = true;
 						attemptAbort.abort();
 					});
+
+					// SA-08 reopened F-1: the lookup snapshot must not outlive the
+					// lease. Another executor may have completed a round between the
+					// first lookup/validation and our acquire — re-resolve the
+					// authoritative child state now that we hold the single-writer
+					// lease, refuse if the identity moved, and rebind `file` so every
+					// downstream read (repair, history, session, append, transcript,
+					// taskResult) uses the reopened store. These refusals precede
+					// any transcript mutation and any provider call: nothing ran,
+					// so the SA-03 rejection shape (launched:false, zero turns) is
+					// correct and there is no work to account for (implementation
+					// review C-1 disposition, design §5).
+					const reopened = findChildByLaunch(parentStore, check.childId);
+					if (!reopened.ok) {
+						return refuse(
+							`cannot resume child "${launch.childId}": ${reopened.message}\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (reopened.file.filePath !== file.filePath) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the id now resolves to a different file than the one that was validated and leased (${reopened.file.filePath})\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (canonicalJson(reopened.file.launch) !== canonicalJson(launch)) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the child session header changed while the attempt was being prepared\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (reopened.file.messageCount === 0) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the child session contains no conversation content — nothing to continue\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					file = reopened.file;
 
 					// §4.1 steps 6–7: repair + effective history (nothing mutates
 					// the child file before the repair's own append-safe step).
@@ -651,8 +716,16 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// rejected configuration must not create a worktree, a child session,
 			// or a provider call. Wire requests use binding.wireModelId; every
 			// metadata lookup uses binding.reference.
+			// SA-08 round 3 (F-4): the provider INSTANCE is pinned in the same
+			// synchronous step — /model can swap provider+family while this
+			// spawn awaits (worktree creation), and the attempt must use the
+			// pair that was recorded, not a later swap (design §8). These two
+			// reads must stay FIRST and ADJACENT: nothing that can yield may
+			// precede them, and nothing may be inserted between them.
+			const parentReference = options.getModelReference?.() ?? options.getModel();
+			const provider = options.getProvider();
 			const resolution = resolveChildModel({
-				parentReference: options.getModelReference?.() ?? options.getModel(),
+				parentReference,
 				override: agent?.model,
 				agentName: agent?.name,
 			});
@@ -787,7 +860,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				rec.launched = true;
 				outcome = await runSubagent({
 					autoCompact: options.getAutoCompact?.(),
-					provider: options.getProvider(),
+					provider,
 					model: binding.wireModelId,
 					modelReference: binding.reference,
 					system: options.getSystem(),

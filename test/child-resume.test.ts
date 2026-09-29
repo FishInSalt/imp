@@ -11,6 +11,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -19,6 +20,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { AgentDefinition } from "../src/core/agents/registry.js";
+import { acquireChildLease } from "../src/core/child-lease.js";
 import { lifetimeUsageLine } from "../src/core/child-resume.js";
 import { createSession, sessionsDirFor } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
@@ -27,7 +29,7 @@ import { buildTaskRecord } from "../src/core/task-record.js";
 import { createTaskTool, type TaskToolOptions, taskResult } from "../src/core/tools/task.js";
 import type { Tool, ToolExecuteResult } from "../src/core/tools/types.js";
 import { createWriteTool } from "../src/core/tools/write.js";
-import type { LLMRequest } from "../src/provider/types.js";
+import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
 
 const SYSTEM = "PARENT SYSTEM\n- Date: 2026-09-29";
@@ -72,6 +74,10 @@ interface HarnessArgs {
 	getSessionOverride?: () => SessionStore | null;
 	getToolsForChild?: TaskToolOptions["getToolsForChild"];
 	onToolCall?: TaskToolOptions["onToolCall"];
+	onBeforeResumeLease?: TaskToolOptions["onBeforeResumeLease"];
+	/** SA-08 round 3 (F-4): override the getter so a test can swap the
+	 *  provider inside the async spawn window. */
+	getProvider?: () => LLMProvider;
 	withEnv?: boolean;
 }
 
@@ -80,7 +86,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 	const provider = scriptedProvider(args.scripts ?? [], sink, args.providerName ?? "anthropic");
 	const system = args.system ?? SYSTEM;
 	const task = createTaskTool({
-		getProvider: () => provider,
+		getProvider: args.getProvider ?? (() => provider),
 		getModel: () => "parent-wire",
 		getModelReference: () => "anthropic/parent-wire",
 		getSystem: () => system,
@@ -92,6 +98,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 		cwd: args.cwd,
 		...(args.getToolsForChild === undefined ? {} : { getToolsForChild: args.getToolsForChild }),
 		...(args.onToolCall === undefined ? {} : { onToolCall: args.onToolCall }),
+		...(args.onBeforeResumeLease === undefined ? {} : { onBeforeResumeLease: args.onBeforeResumeLease }),
 		...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
 		...(args.withEnv === false
 			? {}
@@ -166,6 +173,36 @@ function childIdOf(result: ToolExecuteResult): string {
 	return childId;
 }
 
+/** SA-08 reopened F-2: rewrite ONLY the header line's launch.cwd — the
+ *  tamper shape (worktree block stays valid, execution cwd diverges). */
+function rewriteHeaderCwd(filePath: string, cwd: string): void {
+	const raw = readFileSync(filePath, "utf8");
+	const nl = raw.indexOf("\n");
+	if (nl <= 0) throw new Error("no header line");
+	const header = JSON.parse(raw.slice(0, nl)) as { launch: { cwd: string } };
+	header.launch.cwd = cwd;
+	writeFileSync(filePath, `${JSON.stringify(header)}${raw.slice(nl)}`);
+}
+
+/** SA-08 reopened F-2: a real repo (optionally with a seeded subdirectory). */
+async function gitRepoWithSeed(base: string, sub?: string): Promise<string> {
+	const repo = path.join(base, "repo");
+	const seedDir = sub === undefined ? repo : path.join(repo, sub);
+	mkdirSync(seedDir, { recursive: true });
+	const { spawnSync } = await import("node:child_process");
+	const rgit = (args: string[]) => {
+		const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+		if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+	};
+	rgit(["init", "-q", "-b", "main"]);
+	rgit(["config", "user.email", "t@imp.dev"]);
+	rgit(["config", "user.name", "t"]);
+	writeFileSync(path.join(seedDir, "seed.txt"), "committed\n", "utf8");
+	rgit(["add", "."]);
+	rgit(["commit", "-qm", "seed"]);
+	return repo;
+}
+
 async function fixture(): Promise<{ base: string; cwd: string; parent: SessionStore }> {
 	const base = await mkdtemp(path.join(tmpdir(), "imp-resume-"));
 	const cwd = await mkdtemp(path.join(tmpdir(), "imp-resume-cwd-"));
@@ -208,6 +245,106 @@ describe("SA-07 resume", () => {
 		expect(JSON.stringify(sink[1]?.messages)).toContain("first task");
 		const childrenDir = path.join(sessionsDirFor(cwd, base), "children");
 		expect(readdirSync(childrenDir).filter((f) => f.endsWith(".jsonl"))).toHaveLength(1);
+	});
+
+	it("SA-08/F1-a: a completed round between lookup and lease is seen (deterministic interleaving)", async () => {
+		const { base, cwd, parent } = await fixture();
+		let txPath = "";
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "resumed answer" }]),
+			],
+			onBeforeResumeLease: () => {
+				// The other executor: acquire, complete one round, release —
+				// strictly between our lookup/validation and our acquire. The
+				// seam runs before our acquire, so this is protocol-legal.
+				const other = acquireChildLease(txPath, "interleave-attempt");
+				expect(other.ok).toBe(true);
+				if (!other.ok) return;
+				const store = SessionStore.open(txPath);
+				store.appendMessage(user("other executor instruction"));
+				store.appendMessage(assistant([{ type: "text", text: "other executor answer" }]));
+				other.lease.release();
+			},
+		});
+		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		const childId = childIdOf(first);
+		const transcript = first.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		txPath = transcript.path;
+		persistRecord(parent, first);
+
+		const second = await task.execute({ resume: childId, prompt: "resume prompt" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+
+		// (a) the attempt's wire request carries the interleaved round.
+		expect(JSON.stringify(sink[1]?.messages)).toContain("other executor instruction");
+		// (b) no fork: both rounds are on the effective chain, and our
+		// instruction chains onto the other round's last entry.
+		const reopened = SessionStore.open(txPath);
+		const messages = reopened.buildContext().messages;
+		const userTexts = messages
+			.filter((m) => m.role === "user")
+			.map((m) => (typeof m.content === "string" ? m.content : ""));
+		expect(userTexts).toContain("other executor instruction");
+		expect(userTexts).toContain("resume prompt");
+		const entries = reopened.getEntries();
+		const theirs = entries.find(
+			(e) =>
+				e.type === "message" &&
+				e.message.role === "assistant" &&
+				JSON.stringify(e.message).includes("other executor answer"),
+		);
+		const ours = entries.find(
+			(e) => e.type === "message" && e.message.role === "user" && e.message.content === "resume prompt",
+		);
+		expect(ours?.parentId).toBe(theirs?.id);
+	});
+
+	it("SA-08/F1-b: a launch key-order change between the two reads is accepted (canonical guard)", async () => {
+		const { base, cwd, parent } = await fixture();
+		let txPath = "";
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "resumed answer" }]),
+			],
+			onBeforeResumeLease: () => {
+				// Reorder the launch object's keys ON DISK between the two reads:
+				// a comparison coupled to serialization order would refuse here;
+				// canonical equality must not. Guard, not red-first (see design).
+				const raw = readFileSync(txPath, "utf8");
+				const nl = raw.indexOf("\n");
+				if (nl <= 0) throw new Error("no header line");
+				const header = JSON.parse(raw.slice(0, nl)) as { launch: Record<string, unknown> } & Record<
+					string,
+					unknown
+				>;
+				header.launch = Object.fromEntries(Object.entries(header.launch).reverse());
+				writeFileSync(txPath, `${JSON.stringify(header)}${raw.slice(nl)}`);
+			},
+		});
+		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		const childId = childIdOf(first);
+		const transcript = first.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		txPath = transcript.path;
+		persistRecord(parent, first);
+
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
 	});
 
 	it("R2a: a complete entry without a trailing newline is TERMINATED (kept), not lost", async () => {
@@ -709,7 +846,11 @@ describe("SA-07 resume", () => {
 		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
 		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(refused.isError).toBe(true);
-		expect(refused.output).toContain("inconsistent beyond a crash tail");
+		// Owner round 4: shapes carrying a later user/assistant message refuse
+		// at the BOUNDARY (the tail wording now covers only pure toolResult
+		// tails); behavior is unchanged — refusal, no mutation, no calls.
+		expect(refused.output).toContain("still awaiting results");
+		expect(refused.output).toContain("old-call");
 		expect(readFileSync(transcript.path, "utf8")).toBe(before); // refusals mutate nothing
 	});
 
@@ -731,10 +872,18 @@ describe("SA-07 resume", () => {
 			role: "toolResult",
 			results: [{ toolCallId: "new-call", toolName: "echo", content: "ok", isError: false }],
 		});
-		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
+		const before = sink.length;
 		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(refused.isError).toBe(true);
-		expect(refused.output).toContain("inconsistent beyond a crash tail");
+		// Owner round 4: boundary wording (the second assistant message begins
+		// a turn while old-call still awaits results).
+		expect(refused.output).toContain("still awaiting results");
+		expect(refused.output).toContain("old-call");
+		// The refusal predates any repair or provider call (impl-review fold).
+		expect(sink).toHaveLength(before);
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore);
 	});
 
 	it("T22: recorded tool calls are never re-executed by history restoration", async () => {
@@ -767,7 +916,12 @@ describe("SA-07 resume", () => {
 
 	it("T23: a capped child resumes with a fresh turn budget", async () => {
 		const { base, cwd, parent } = await fixture();
-		const loopStep = assistant([{ type: "toolCall", id: "cap", name: "echo", arguments: { message: "x" } }]);
+		// SA-08 round 3: the scripted provider replays its last step, so the
+		// call id must be generated per invocation — real providers never
+		// reuse an id, and the ordered pairing refuses duplicates.
+		let capCall = 0;
+		const loopStep = () =>
+			assistant([{ type: "toolCall", id: `cap-${capCall++}`, name: "echo", arguments: { message: "x" } }]);
 		const { tool } = countingEcho();
 		const first = await dispatchAndPersist({
 			session: parent,
@@ -1060,6 +1214,600 @@ describe("SA-07 resume", () => {
 		expect(second.output).toContain("(the previous attempt recorded: kept-work)");
 		expect(existsSync(worktreePath)).toBe(true); // resume never removes it
 	}, 30_000);
+
+	it("SA-08/F4-a: a provider swap during the spawn window does not reroute the attempt", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-prov-swap-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const sinkA: LLMRequest[] = [];
+		const sinkB: LLMRequest[] = [];
+		const providerA = scriptedProvider(
+			[assistant([{ type: "text", text: "first pass done" }])],
+			sinkA,
+			"anthropic",
+		);
+		const providerB = scriptedProvider(
+			[assistant([{ type: "text", text: "should not run" }])],
+			sinkB,
+			"anthropic",
+		);
+		let current: LLMProvider = providerA;
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getProvider: () => current,
+			getToolsForChild: () => {
+				// The deterministic /model swap: inside the async spawn window
+				// (after resolution + worktree creation, before the attempt).
+				current = providerB;
+				return [];
+			},
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		// The DISCRIMINATING assertion: the attempt ran on the captured
+		// provider pair, not the swapped one.
+		expect(sinkA).toHaveLength(1);
+		expect(JSON.stringify(sinkA[0]?.messages)).toContain("first pass");
+		expect(sinkB).toHaveLength(0);
+		expect(first.taskRecord?.binding?.reference).toBe("anthropic/parent-wire");
+	}, 30_000);
+
+	it("SA-08/F2-a: a worktree child's cwd must sit inside the verified worktree (tampered cwd refused)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-cwd-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const transcript = first.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		// Tamper: keep the valid worktree identity, point the execution cwd
+		// at an unrelated directory.
+		const unrelated = path.join(base, "unrelated");
+		mkdirSync(unrelated, { recursive: true });
+		rewriteHeaderCwd(transcript.path, unrelated);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("worktree-cwd-outside");
+		expect(second.output).toContain(unrelated);
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
+	}, 30_000);
+
+	it("SA-08/F2-b: a cwd symlink inside the worktree that resolves outside is refused", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-link-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		// A symlinked path component INSIDE the worktree resolving outside
+		// (the probe side owns the symlinked-worktree-root case).
+		const outside = path.join(base, "outside");
+		mkdirSync(outside, { recursive: true });
+		const link = path.join(worktreePath, "linked");
+		symlinkSync(outside, link);
+		rewriteHeaderCwd(transcript.path, link);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("worktree-cwd-outside");
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
+	}, 30_000);
+
+	it("SA-08/F2-c: a legitimate subdirectory-parent worktree child still resumes (no over-refusal)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-sub-"));
+		const repo = await gitRepoWithSeed(base, "pkg");
+		const sub = path.join(repo, "pkg");
+		const parent = createSession(sub, base);
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: sub,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "second pass done" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		// Subdirectory parents keep their relative position inside the worktree.
+		expect(first.taskRecord?.cwd).toBe(path.join(worktreePath, "pkg"));
+		persistRecord(parent, first);
+
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.cwd).toBe(path.join(worktreePath, "pkg"));
+	}, 30_000);
+
+	it("SA-08/F2-d: a plain file as the worktree child's cwd is refused (zero provider calls)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-file-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		const fileCwd = path.join(worktreePath, "plain.txt");
+		writeFileSync(fileCwd, "not a directory\n", "utf8");
+		rewriteHeaderCwd(transcript.path, fileCwd);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+	}, 30_000);
+
+	it("SA-08/F2-e: a symlink inside the worktree whose final object is a file is refused", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkfile-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		// The symlink's target is INSIDE the worktree, so containment alone
+		// would accept it — dirness-first is the load-bearing check.
+		const target = path.join(worktreePath, "plain.txt");
+		writeFileSync(target, "not a directory\n", "utf8");
+		const link = path.join(worktreePath, "link.txt");
+		symlinkSync(target, link);
+		rewriteHeaderCwd(transcript.path, link);
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+	}, 30_000);
+
+	it("SA-08/F2-f: a non-worktree cwd that became a file between attempts is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [
+				assistant([{ type: "text", text: "child done" }]),
+				assistant([{ type: "text", text: "should not run" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		persistRecord(parent, first);
+
+		// The directory the child ran in is replaced by a plain file. The
+		// caller's cwd string is unchanged, so the drift comparison passes
+		// and the type check is what must refuse.
+		rmSync(cwd, { recursive: true, force: true });
+		writeFileSync(cwd, "not a directory\n", "utf8");
+
+		const requestsBefore = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran — checked FIRST
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("cwd-not-directory");
+	});
+
+	it("SA-08/F2-g: a symlink inside the worktree to a directory inside still resumes (no over-refusal)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkdir-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			getToolsForChild: (cwd: string) => [createWriteTool({ cwd })],
+			scripts: [
+				assistant([
+					{ type: "toolCall", id: "w1", name: "write", arguments: { path: "kept.txt", content: "work\n" } },
+				]),
+				assistant([{ type: "text", text: "first pass done" }]),
+				assistant([{ type: "text", text: "second pass done" }]),
+			],
+		});
+		const first = await task.execute({ prompt: "first pass", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.isError ?? false).toBe(false);
+		const childId = childIdOf(first);
+		const worktreePath = first.taskRecord?.worktree?.path;
+		const transcript = first.taskRecord?.transcript;
+		if (worktreePath === undefined) throw new Error("no worktree path");
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		persistRecord(parent, first);
+
+		const real = path.join(worktreePath, "real");
+		mkdirSync(real, { recursive: true });
+		const alias = path.join(worktreePath, "alias");
+		symlinkSync(real, alias);
+		rewriteHeaderCwd(transcript.path, alias);
+
+		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
+	}, 30_000);
+
+	it("SA-08/F5-a: a tool result with no preceding call is refused (zero provider calls)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "ghost", toolName: "echo", content: "orphaned", isError: false }],
+		});
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("has no preceding tool call");
+		expect(sink).toHaveLength(before); // zero provider calls
+	});
+
+	it("SA-08/F5-b: a tool result recorded before its call is refused (zero provider calls)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "early", toolName: "echo", content: "before the call", isError: false }],
+		});
+		child.appendMessage(
+			assistant([{ type: "toolCall", id: "early", name: "echo", arguments: { message: "x" } }]),
+		);
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("has no preceding tool call");
+		expect(sink).toHaveLength(before); // zero provider calls
+	});
+
+	it("SA-08/F5-c: a trailing call reusing a completed id is refused, and no repair is appended", async () => {
+		const { base, cwd, parent } = await fixture();
+		const echo = countingEcho();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [echo.tool],
+			scripts: [
+				assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hé" } }]),
+				assistant([{ type: "text", text: "done" }]),
+			],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		// Reuse the ACTUAL completed call id from the first-pass transcript.
+		const entries = SessionStore.open(transcript.path).getEntries();
+		let completedId: string | undefined;
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			for (const block of entry.message.blocks) {
+				if (block.type === "toolCall") completedId = block.id;
+			}
+		}
+		if (completedId === undefined) throw new Error("no completed call id in the transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(
+			assistant([{ type: "toolCall", id: completedId, name: "echo", arguments: { message: "again" } }]),
+		);
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [echo.tool], // the recorded pool must rebuild identically
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("declared more than once");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no repair appended
+	});
+
+	it("SA-08/F5-d: a new assistant turn while a call awaits results is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-d", name: "echo", arguments: {} }]));
+		child.appendMessage(assistant([{ type: "text", text: "another turn" }]));
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "cross-d", toolName: "echo", content: "late", isError: false }],
+		});
+		child.appendMessage(user("continue"));
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-d");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-e: a user message inserted between a call and its result is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-e", name: "echo", arguments: {} }]));
+		child.appendMessage(user("interjected"));
+		child.appendMessage({
+			role: "toolResult",
+			results: [{ toolCallId: "cross-e", toolName: "echo", content: "late", isError: false }],
+		});
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-e");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-f: a second batch while the first still awaits results is refused", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-f1", name: "echo", arguments: {} }]));
+		child.appendMessage(assistant([{ type: "toolCall", id: "cross-f2", name: "echo", arguments: {} }]));
+		// BOTH results arrive, so the sets balance — the current code accepts
+		// this; the boundary rule must refuse at the second assistant message.
+		child.appendMessage({
+			role: "toolResult",
+			results: [
+				{ toolCallId: "cross-f2", toolName: "echo", content: "r2", isError: false },
+				{ toolCallId: "cross-f1", toolName: "echo", content: "r1", isError: false },
+			],
+		});
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "should not run" }])],
+		});
+		const before = sink.length;
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(true);
+		expect(second.output).toContain("still awaiting results");
+		expect(second.output).toContain("cross-f1");
+		expect(sink).toHaveLength(before); // zero provider calls
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore); // no mutation
+	});
+
+	it("SA-08/F5-g: out-of-order results within one batch stay legal (no over-refusal)", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { result } = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "done" }])],
+		});
+		const childId = childIdOf(result);
+		const transcript = result.taskRecord?.transcript;
+		if (transcript === undefined || transcript.present === false) throw new Error("no transcript");
+		const child = SessionStore.open(transcript.path);
+		child.appendMessage(
+			assistant([
+				{ type: "toolCall", id: "batch1", name: "echo", arguments: {} },
+				{ type: "toolCall", id: "batch2", name: "echo", arguments: {} },
+			]),
+		);
+		child.appendMessage({
+			role: "toolResult",
+			results: [
+				{ toolCallId: "batch2", toolName: "echo", content: "r2", isError: false },
+				{ toolCallId: "batch1", toolName: "echo", content: "r1", isError: false },
+			],
+		});
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "resumed fine" }])],
+		});
+		const second = await task.execute({ resume: childId, prompt: "continue please" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(second.isError ?? false).toBe(false);
+		expect(second.taskRecord?.launched).toBe(true);
+	});
 
 	it("T3-fresh: the fresh result discloses the child id as a handle", async () => {
 		const { base, cwd, parent } = await fixture();

@@ -92,7 +92,26 @@ function toWireMessages(
 	reasoningReplay: { fillEmpty: boolean } | null = null,
 ): WireMessage[] {
 	const wire: WireMessage[] = [{ role: "system", content: system }];
+	// SA-08 round 5 (F-6): a batch may be split across consecutive toolResult
+	// messages (the round-4 pairing rules allow it; the crash-tail repair
+	// produces it). Images must therefore be buffered across the RUN and
+	// flushed as ONE user message only when the run ends — a user message
+	// between the run's tool messages would leave the batch incomplete on the
+	// wire (design §13.2).
+	let pendingImages: WireUserPart[] = [];
+	const flushPendingImages = (): void => {
+		if (pendingImages.length === 0) return;
+		wire.push({
+			role: "user",
+			// pi parity: the hoisted message leads with a text part — a textless
+			// user message is the shape strict OpenAI-compatible gateways reject
+			// (pi openai-completions.ts:1434-1444).
+			content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...pendingImages],
+		});
+		pendingImages = [];
+	};
 	for (const msg of messages) {
+		if (msg.role !== "toolResult") flushPendingImages();
 		switch (msg.role) {
 			case "user":
 				wire.push({ role: "user", content: toUserParts(msg.content) });
@@ -138,8 +157,8 @@ function toWireMessages(
 			case "toolResult": {
 				// pi parity (openai-completions.ts 1377–1430): chat-completions
 				// tool messages cannot carry images — text goes in the tool
-				// message, images are hoisted into ONE following user message.
-				const hoisted: WireUserPart[] = [];
+				// message, images are buffered for the run-ending user message
+				// (round 5: deferred past ALL tool messages of the batch).
 				for (const r of msg.results) {
 					let text = "";
 					let hasImages = false;
@@ -151,7 +170,7 @@ function toWireMessages(
 							if (block.type === "text") texts.push(block.text);
 							else {
 								hasImages = true;
-								hoisted.push({
+								pendingImages.push({
 									type: "image_url",
 									image_url: { url: `data:${block.mimeType};base64,${block.data}` },
 								});
@@ -165,15 +184,6 @@ function toWireMessages(
 						content: text !== "" ? text : hasImages ? "(see attached image)" : "(no tool output)",
 					});
 				}
-				if (hoisted.length > 0) {
-					// pi parity: the hoisted message leads with a text part — a
-					// textless user message is the shape strict OpenAI-compatible
-					// gateways reject (pi openai-completions.ts:1434-1444).
-					wire.push({
-						role: "user",
-						content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...hoisted],
-					});
-				}
 				break;
 			}
 			default: {
@@ -182,6 +192,7 @@ function toWireMessages(
 			}
 		}
 	}
+	flushPendingImages();
 	return wire;
 }
 

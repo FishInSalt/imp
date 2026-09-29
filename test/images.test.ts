@@ -1,8 +1,10 @@
+import { rmSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildContinuationHistory } from "../src/core/child-resume.js";
 import { estimateTokens } from "../src/core/compaction.js";
 import {
 	type AgentMessage,
@@ -10,6 +12,7 @@ import {
 	type ContentBlock,
 	contentText,
 } from "../src/core/messages.js";
+import { SessionStore } from "../src/core/session/store.js";
 import { detectSupportedImageMimeType } from "../src/core/tools/image-sniff.js";
 import { createReadTool } from "../src/core/tools/read.js";
 import { createAnthropicProvider } from "../src/provider/anthropic.js";
@@ -557,6 +560,128 @@ describe("M13 openai-completions wire", () => {
 		const raw = JSON.stringify(captured[0]?.body);
 		expect(raw).not.toContain("image_url");
 		expect(raw).toContain("(tool image omitted: model does not support images)");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SA-08 round 5 (F-6): the hoisted image message must wait for the WHOLE
+// toolResult run — a user message between a batch's tool messages is the
+// order the internal boundary rule refuses (design §13).
+// ---------------------------------------------------------------------------
+
+const imageContent = (b64: string): ContentBlock[] => [
+	{ type: "text", text: "Read image file [image/png]" },
+	{ type: "image", data: b64, mimeType: "image/png" },
+];
+
+function batchTurn(slots: Array<{ id: string; content: string | ContentBlock[] }>): AgentMessage[] {
+	return [
+		{ role: "user", content: "look at the files" },
+		{
+			role: "assistant",
+			blocks: slots.map((slot) => ({
+				type: "toolCall" as const,
+				id: slot.id,
+				name: "read",
+				arguments: { path: `${slot.id}.bin` },
+			})),
+			usage: { inputTokens: 1, outputTokens: 1 },
+			stopReason: "tool_use",
+		},
+		...slots.map(
+			(slot): AgentMessage => ({
+				role: "toolResult",
+				results: [{ toolCallId: slot.id, toolName: "read", content: slot.content, isError: false }],
+			}),
+		),
+	];
+}
+
+async function driveOpenai(
+	messages: AgentMessage[],
+): Promise<Array<{ role: string; content?: unknown; tool_call_id?: string }>> {
+	captured.length = 0;
+	script = { status: 200, chunks: openaiChunks() };
+	const provider = createOpenAICompletionsProvider({ baseUrl, apiKey: "k" });
+	await drive(provider, { system: "s", model: "gpt-4o", messages, tools: [], maxTokens: 16 });
+	return (
+		(captured[0]?.body?.messages as Array<{ role: string; content?: unknown; tool_call_id?: string }>) ?? []
+	);
+}
+
+describe("SA-08 F6 wire order (round 5)", () => {
+	it("F6-a: a split batch hoists the image only after ALL tool results", async () => {
+		const messages = await driveOpenai(
+			batchTurn([
+				{ id: "t1", content: imageContent("QUJD") },
+				{ id: "t2", content: "plain text result" },
+			]),
+		);
+		expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool", "user"]);
+		expect(messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id)).toEqual(["t1", "t2"]);
+		expect(messages[5]?.content).toEqual([
+			{ type: "text", text: "Attached image(s) from tool result:" },
+			{ type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+		]);
+	});
+
+	it("F6-b: the crash-tail repair's synthetic result precedes the hoisted image", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-f6b-"));
+		try {
+			const store = SessionStore.create(path.join(base, "child.jsonl"), base, "f6b");
+			store.appendMessage({ role: "user", content: "look at the files" });
+			store.appendMessage({
+				role: "assistant",
+				blocks: [
+					{ type: "toolCall", id: "t1", name: "read", arguments: { path: "t1.bin" } },
+					{ type: "toolCall", id: "t2", name: "read", arguments: { path: "t2.bin" } },
+				],
+				usage: { inputTokens: 1, outputTokens: 1 },
+				stopReason: "tool_use",
+			});
+			store.appendMessage({
+				role: "toolResult",
+				results: [{ toolCallId: "t1", toolName: "read", content: imageContent("QUJD"), isError: false }],
+			});
+			const history = buildContinuationHistory(store);
+			if (!history.ok) throw new Error(history.problem);
+			expect(history.repairs.join("; ")).toContain("1 interrupted tool call(s)");
+			const messages = await driveOpenai(history.messages);
+			expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool", "user"]);
+			expect(messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id)).toEqual(["t1", "t2"]);
+			expect(JSON.stringify(messages[5]?.content)).toContain("data:image/png;base64,QUJD");
+		} finally {
+			rmSync(base, { recursive: true, force: true });
+		}
+	});
+
+	it("F6-c: only the LAST result carrying an image keeps the tool-first order (control)", async () => {
+		const messages = await driveOpenai(
+			batchTurn([
+				{ id: "t1", content: "plain text result" },
+				{ id: "t2", content: imageContent("QUJD") },
+			]),
+		);
+		expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool", "user"]);
+		expect(messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id)).toEqual(["t1", "t2"]);
+	});
+
+	it("F6-d: images from several results merge into ONE user message after the run", async () => {
+		const messages = await driveOpenai(
+			batchTurn([
+				{ id: "t1", content: imageContent("QUJD") },
+				{ id: "t2", content: imageContent("REVG") },
+			]),
+		);
+		expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool", "user"]);
+		const imageUsers = messages.filter(
+			(m) => m.role === "user" && JSON.stringify(m.content).includes("image_url"),
+		);
+		expect(imageUsers).toHaveLength(1);
+		const raw = JSON.stringify(imageUsers[0]?.content);
+		expect(raw).toContain("data:image/png;base64,QUJD");
+		expect(raw).toContain("data:image/png;base64,REVG");
+		expect(raw.indexOf("QUJD")).toBeLessThan(raw.indexOf("REVG"));
 	});
 });
 

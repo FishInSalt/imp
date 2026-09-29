@@ -15,10 +15,18 @@ const dim = "\x1b[2m";
 const reset = "\x1b[0m";
 const bold = "\x1b[1m";
 const green = "\x1b[32m";
+const red = "\x1b[31m";
 const plain = (rows: string[]) => rows.map(sanitizeDisplay);
-const input = (name: string, args: unknown, hook: unknown, elapsedMs?: number): ToolBlockFold => {
+const input = (
+	name: string,
+	args: unknown,
+	hook: unknown,
+	elapsedMs?: number,
+	failed?: boolean,
+): ToolBlockFold => {
 	const block = preparedInputBlock(prepareCall("id", name, args, () => hook as never));
 	if (elapsedMs !== undefined) block.elapsedMs = elapsedMs;
+	if (failed !== undefined) block.failed = failed;
 	return new ToolBlockFold(block);
 };
 const rowsFit = (fold: ToolBlockFold, w: number) => fold.render(w).every((row) => visibleWidth(row) <= w);
@@ -62,6 +70,22 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, -500).render(40))).toEqual([
 			"● bash  echo ok ✓",
 		]);
+	});
+
+	it("keeps the marker measurement-gated on failed blocks (Amendment 3)", () => {
+		const fold = input("bash", { command: "echo ok" }, bashPresentation, undefined, true);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo ok"]);
+	});
+
+	it("renders the red ✗ marker for failed calls (Amendment 3)", () => {
+		const bare = input("bash", { command: "echo ok" }, bashPresentation, 400, true);
+		expect(plain(bare.render(40))).toEqual(["● bash  echo ok ✗"]);
+		expect(bare.render(40)[0]).toBe(`${dim}●${reset} ${bold}bash${reset}  echo ok ${red}✗${reset}`);
+		const timed = input("bash", { command: "echo ok" }, bashPresentation, 2300, true);
+		expect(plain(timed.render(40))).toEqual(["● bash  echo ok ✗ 2.3s"]);
+		expect(timed.render(40)[0]).toBe(
+			`${dim}●${reset} ${bold}bash${reset}  echo ok ${red}✗${reset} ${dim}2.3s${reset}`,
+		);
 	});
 
 	it("renders no suffix without elapsedMs (regression)", () => {
@@ -108,6 +132,7 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 	it("never exceeds the width on any row for any width (I1)", () => {
 		const folds = [
 			input("bash", { command: "echo ok" }, bashPresentation, 2300),
+			input("bash", { command: "echo ok" }, bashPresentation, 2300, true),
 			input("bash", { command: "echo ok" }, bashPresentation, 400),
 			input("read", { path: "src/very/long/path/to/some/deeply/nested/file.ts" }, readPresentation, 2300),
 			input("bash", { command: "echo first\necho last" }, bashPresentation, 2300),
@@ -145,6 +170,15 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		fastOmitted.setExpanded(true);
 		fastOmitted.setRawArguments(true);
 		expect(plain(fastOmitted.render(7))[0]).toBe("● read");
+		// Amendment 3: the same equality holds for the red marker.
+		const failShown = input("read", { path: "src/a.ts" }, readPresentation, 400, true);
+		failShown.setExpanded(true);
+		failShown.setRawArguments(true);
+		expect(plain(failShown.render(8))[0]).toBe("● read ✗");
+		const failOmitted = input("read", { path: "src/a.ts" }, readPresentation, 400, true);
+		failOmitted.setExpanded(true);
+		failOmitted.setRawArguments(true);
+		expect(plain(failOmitted.render(7))[0]).toBe("● read");
 	});
 
 	it("keeps the suffix on the first row when expanded", () => {
@@ -164,12 +198,17 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		expect(plain(fold.render(40))[0]).not.toContain("✓");
 		fold.updateBlock({ ...fold.block, elapsedMs: 2300 });
 		expect(plain(fold.render(40))[0]).toContain(" ✓ 2.3s");
+		fold.updateBlock({ ...fold.block, failed: true });
+		expect(plain(fold.render(40))[0]).toContain(" ✗ 2.3s");
 	});
 
-	it("ignores the field on output blocks (I5)", () => {
+	it("ignores the fields on output blocks (I5)", () => {
 		const out = outputBlock(result());
 		out.elapsedMs = 2300;
-		expect(plain(new ToolBlockFold(out).render(40)).join("\n")).not.toContain("✓");
+		out.failed = true;
+		const rows = plain(new ToolBlockFold(out).render(40)).join("\n");
+		expect(rows).not.toContain("✓");
+		expect(rows).not.toContain("✗");
 	});
 
 	it("keeps omission notices in parity with and without the suffix", () => {
@@ -191,7 +230,7 @@ describe("createToolSink end-time duration (#tui-tool-elapsed)", () => {
 		let now = 0;
 		const log: string[] = [];
 		const blocks: Parameters<Parameters<typeof createToolSink>[0]>[0][] = [];
-		const updates: { prev: unknown; next: { elapsedMs?: number; title: string } }[] = [];
+		const updates: { prev: unknown; next: { elapsedMs?: number; failed?: boolean; title: string } }[] = [];
 		const sink = createToolSink(
 			(block) => {
 				log.push(`append:${block.kind}`);
@@ -215,6 +254,7 @@ describe("createToolSink end-time duration (#tui-tool-elapsed)", () => {
 		expect(updates).toHaveLength(1);
 		expect(updates[0]!.prev).toBe(blocks[0]);
 		expect(updates[0]!.next.elapsedMs).toBe(2300);
+		expect(updates[0]!.next.failed).toBeUndefined();
 	});
 
 	it("fires for any measured live success, sub-second included (Amendment 2)", () => {
@@ -228,13 +268,17 @@ describe("createToolSink end-time duration (#tui-tool-elapsed)", () => {
 		}
 	});
 
-	it("does not fire for errors, replay, orphans, or duplicates", () => {
+	it("fires for live errors with failed: true (Amendment 3)", () => {
 		const errors = harness();
 		errors.sink.start("t1", "bash", { command: "x" });
 		errors.add(2000);
 		errors.sink.end(result(true));
-		expect(errors.updates).toHaveLength(0);
+		expect(errors.updates).toHaveLength(1);
+		expect(errors.updates[0]!.next.elapsedMs).toBe(2000);
+		expect(errors.updates[0]!.next.failed).toBe(true);
+	});
 
+	it("does not fire for replay, orphans, or duplicates", () => {
 		const replay = harness();
 		replay.sink.start("t1", "bash", { command: "x" });
 		replay.add(2000);
@@ -268,13 +312,15 @@ describe("createToolSink end-time duration (#tui-tool-elapsed)", () => {
 		expect(appended).toEqual(["input", "output"]);
 	});
 
-	it("finalize clears any elapsedMs from the interrupted block (I6)", () => {
+	it("finalize clears elapsedMs and failed from the interrupted block (I6)", () => {
 		const { sink, blocks, updates } = harness();
 		sink.start("t1", "bash", { command: "x" });
 		blocks[0]!.elapsedMs = 2300; // simulate any future writer leaving a stale field
+		blocks[0]!.failed = true;
 		sink.finalize();
 		expect(updates).toHaveLength(1);
 		expect(updates[0]!.next.title).toContain("interrupted");
 		expect(updates[0]!.next.elapsedMs).toBeUndefined();
+		expect(updates[0]!.next.failed).toBeUndefined();
 	});
 });

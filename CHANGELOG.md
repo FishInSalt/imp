@@ -10,11 +10,12 @@ All notable changes to imp are documented here. The format follows
 ### Changed
 
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
-  TUI transcript carry a green `✓` with a dim wall-time suffix when the call
-  took ≥1s (`● bash  npm test ✓ 2.3s`; `1m03s` minute form); sub-second calls
-  show the bare `✓` (Amendment 2). Errors, interruptions, and replayed
-  history carry none; legacy and print rendering are unchanged. Design +
-  adversarial review: `docs/tui-tool-elapsed-design.md`.
+  TUI transcript carry a marker — green `✓` for successes, red `✗` for
+  failures — with a dim wall-time suffix when the call took ≥1s
+  (`● bash  npm test ✓ 2.3s`; `1m03s` minute form); sub-second calls show
+  the bare marker (amendments 2-3). Interruptions and replayed history carry
+  none; legacy and print rendering are unchanged. Design + adversarial
+  review: `docs/tui-tool-elapsed-design.md`.
 
 - **Loop health monitoring + uncapped children (#loop-health).** Subagents no
   longer stop at a 60-turn wall (`CHILD_MAX_TURNS` removed; owner decisions

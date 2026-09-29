@@ -476,6 +476,13 @@ const provider = options.getProvider();
 const resolution = resolveChildModel({ parentReference, override: agent?.model, agentName: agent?.name });
 ```
 
+(Design-review FC-1: these two reads must be the FIRST statements of the
+resolution step, before `resolveChildModel`, and the captured `provider`
+const is used verbatim at the attempt; nothing that can yield may precede
+the pair read. FC-5: the capture lives inside the execute handler — one
+read per invocation, never hoisted to module scope, so back-to-back spawns
+each inherit their own instant.)
+
 The attempt uses the captured `provider` (replacing the late
 `options.getProvider()` at 848). No other fresh-path consumer reads the
 provider INSTANCE: the pool rebuild and capability decisions consume
@@ -494,17 +501,26 @@ path's `providerMismatch`. Adding a fresh-spawn name-agreement refusal
 would be new behavior beyond this finding; it is recorded as a known limit
 (§5-class) rather than implemented.
 
+Scope precision (design-review FC-2): this pins the provider/model pair
+for ATTEMPT CONSTRUCTION only. `getAutoCompact()` (847) and the `onEvent`
+emission context (853-861) still read live runner state at attempt time —
+pre-existing, outside this finding, recorded as a known limit alongside
+§5. The claim is NOT "the whole spawn is pinned".
+
 ### 8.3 Test (red-first)
 
 F4-a: a worktree child whose provider is swapped exactly inside the async
 window — the test harness's `getToolsForChild` callback (invoked after
 worktree creation, before the attempt) flips the getter's current provider
-from A to B. Assertions: A received the attempt's request (its sink has
-one entry containing the prompt), B received ZERO requests, and the record
-still carries the A-side binding (anthropic/parent-wire). Red on the
-current code: the late read sends the attempt to B (B's sink gets the
-call). Harness plumbing: HarnessArgs gains an optional
-`getProvider?: () => LLMProvider` (tests only).
+from A to B. The DISCRIMINATING assertion (design-review FC-3): A's sink
+has exactly one entry containing the prompt (plus B's sink empty — the
+record-binding assertion alone also holds for a stale binding and is not
+discriminating). Red on the current code: the late read at 848 sends the
+attempt to B. Harness plumbing (FC-4): the LOCAL
+`test/child-resume.test.ts` HarnessArgs gains an optional
+`getProvider?: () => LLMProvider`; the related mid-flight test in
+test/task-tool.test.ts:331 uses its own inline wiring and is untouched.
+FC-5: per-invocation capture only.
 
 ## 9. Owner round 3, F-5: order-aware tool pairing (SA-07 §6.1 revision)
 
@@ -542,6 +558,15 @@ Walking the effective history's messages in order, maintain `pending`
    result for <id> is recorded more than once".
 4. otherwise: match (remove from `pending`).
 
+Implementation precision (design-review FC-6/FC-7/FC-8): F5-a and F5-b
+share ONE refusal string (the tests assert the shared substring; the two
+shapes are intentionally indistinguishable at the message level). The scan
+keeps THREE distinct structures — `seenCallIds` (rule 1), `matchedIds`
+(rule 3), `pending` (the missing set) — do not unify them. Invariants:
+a matched id is removed from `pending`, so it can never appear in
+`missing`; a duplicate id refuses before the crash-tail rule runs, so the
+two can never interact.
+
 After the pass: `missing` = `pending`. Empty → proceed. Non-empty → the
 UNCHANGED crash-tail rule: every missing id belongs to the LAST assistant
 message and every message after it is a toolResult → repairable (repair
@@ -558,10 +583,14 @@ constraints above.
   sink unchanged.
 - F5-b: append toolResult(id X) then assistant(toolCall X) → refused,
   sink unchanged.
-- F5-c: first pass completes a real call/result pair (echo tool); append a
-  trailing assistant(toolCall, same id) → refused (duplicate), no repair
-  appended. On the current code all three are accepted (F5-c also without
-  a repair), which is the red evidence.
+- F5-c: the first pass completes a real call/result pair (countingEcho);
+  the test reads the ACTUAL call id from that transcript and appends a
+  trailing assistant(toolCall, that exact id) → refused (duplicate), and
+  the file is byte-compared to prove NO repair was appended (design-review
+  FC-11: without id reuse the test cannot be red).
+- "Zero provider calls" is asserted as a length-marker comparison
+  (`sink.length` captured after the first pass and unchanged after the
+  refused resume), never `sink` empty (FC-12).
 - Positive controls stay green: T14 (single trailing orphan → repaired),
   T16 (orphan beyond the crash tail → refused), T22 (valid pairing).
 
@@ -569,3 +598,23 @@ constraints above.
 
 sa-07 design §6.1 gets a revision pointer to this section (set semantics
 superseded; repair rule unchanged); §16 gets the round-3 log entry.
+
+## 10. Round-3 review log (pre-implementation)
+
+- 2026-09-29: fresh-context adversarial review of 5d6a489 (§8-§9) —
+  **APPROVE WITH CORRECTIONS**, no rejection-level defect. Independently
+  verified: the late-read window at task.ts:848 (red-able); the runner's
+  synchronous provider/providerName swap (runner.ts:1157-1158) making the
+  adjacent pair read coherent; every legitimate transcript shape against
+  the ordered scan (compaction head snap, synthetic repair results,
+  parallel results out of order, multiple results per message, matched +
+  trailing new call, text+toolCall blocks) — no over-refusal; T14/T16/T22
+  stay green; scanToolPairs has exactly one call site. Folded: FC-1
+  (pair read first, provider const verbatim at the attempt), FC-2 (scope
+  narrowed to attempt construction; onEvent/getAutoCompact residual
+  windows recorded as known limits), FC-3 (F4-a's discriminating
+  assertion), FC-4 (correct harness named), FC-5 (per-invocation
+  capture), FC-6/FC-7/FC-8 (shared refusal string; three distinct
+  structures; matched-pending invariants), FC-11 (F5-c must reuse the
+  actual first-pass call id and prove no repair), FC-12 (length-marker
+  sink assertion).

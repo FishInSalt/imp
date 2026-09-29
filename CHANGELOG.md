@@ -10,10 +10,10 @@ All notable changes to imp are documented here. The format follows
 ### Changed
 
 - **Task live view in its own header (#task-inline-live-rows).** A running
-  `task` call's live overview (the `└─ pending #N …` line with the agent, the
-  elapsed time and the child's tool count) moved out of the bottom activity
-  region and into the transcript, directly under that call's own `● task`
-  header. Concurrent subagents therefore read top to bottom in launch order —
+  `task` call's live overview (the `└─ pending #N …` line with the agent and
+  the elapsed time, plus its `N tool starts · last: …` row) moved out of the
+  bottom activity region and into the transcript, directly under that call's
+  own `● task` header. Concurrent subagents therefore read top to bottom in launch order —
   header, its own live line, its own result — instead of all headers stacked
   above all overview rows.
 

@@ -113,8 +113,9 @@ What v1 adds: detection of the concrete degenerate patterns both references
 guard against (repeated identical calls, repeated failed mutations), honest
 surfacing of the child's existing compaction-failure state, and live
 user-visible notes for both loops. (Amendment 1, §9: a third intended
-pattern — `tool-open`, a call left open too long — shipped and was removed
-the same day; the wall it replaced never saw hung tools either (§1.1), and
+pattern — `tool-open`, a call left open too long — was merged to main
+(unreleased) and removed the same day; the wall it replaced never saw hung
+tools either (§1.1), and
 the signal could not honestly distinguish a hang from a slow tool or a
 pending human decision.) What v1 does **not** add: any acting channel. Child facts reach the parent model only
 at settle (task results are built after `runSubagent` returns —
@@ -286,7 +287,7 @@ export function createLoopHealth(options: {
   (`src/core/loop.ts` `executeToolBatch` early returns). With `tool-open`
   gone there is nothing pending across an abort — settle-time `dispose()`
   closes the monitor, and the observable contract stands: after the attempt
-  settles, nothing further is produced (tests 3/7 re-scoped).
+  settles, nothing further is produced (§6 items 3, 7).
 - Concurrency: one monitor instance per child attempt; no shared mutable
   state; each child's events carry its own `sourceId`, which is also the REPL
   dedup key.
@@ -510,7 +511,7 @@ is ever written; no main-agent context is ever written.
   `src/extensions/` must stay empty (test item).
 - Abort with an open tool: `tool_start` without `tool_end` is a legal stream
   shape; with `tool-open` removed (Amendment 1) nothing is pending across an
-  abort; the settle-time dispose closes the monitor (tests 3/7 re-scoped).
+  abort; the settle-time dispose closes the monitor (§6 items 3, 7).
 - Rejected paths: no monitor exists (nothing ran) — no facts, no notes.
 
 ## 5. Change list
@@ -539,13 +540,14 @@ is ever written; no main-agent context is ever written.
 
 | File | Change | Est. lines |
 |---|---|---|
-| `src/core/health.ts` | delete `tool-open` machinery: `toolOpenMs` threshold + `IMP_HEALTH_TOOL_OPEN_MS`; `onToolStart`/`openTimers`; the `tool_start` branch in `observe()`; timer clearing in `dispose()` (the closed flag and `callInfo` clearing stay — `callInfo` still feeds mutation details). `HealthCode`/`healthSignalText` keep `"tool-open"` marked legacy read-only. | ~-45 |
-| `src/core/tools/task.ts` | keep the `tool-open` arm in `healthSuffix` (legacy read-only comment). | ~0 |
-| `src/core/task-record.ts` | keep `"tool-open"` accepted by `isHealthSignal` (legacy read-only comment; whole-array `every()` semantics — `:275-313`). | ~0 |
-| `test/health.test.ts` | delete the tool-open/fake-timer tests (old item 3); re-scope the abort/dispose contract (old item 7); add: `observe(tool_start)` is a no-op (no signals, no timers); the legacy renderer arm still renders. | ~-40 |
+| `src/core/health.ts` | delete `tool-open` machinery: `toolOpenMs` threshold + `IMP_HEALTH_TOOL_OPEN_MS`; `onToolStart`/`openTimers`; the `tool_start` branch in `observe()`; timer clearing in `dispose()` (the closed flag and `callInfo` clearing stay — `callInfo` still feeds mutation details); `formatElapsed` (single-use helper — dead once the timer goes) and the stale doc comments (module header `:8`, `count` `:23`, `observe` `:64`). `HealthCode`/`healthSignalText` keep `"tool-open"` marked legacy read-only. | ~-50 |
+| `src/core/tools/task.ts` | keep the `tool-open` arm in `healthSuffix` (legacy read-only comment); fix the stale "≤4 lines" doc comment (`:931`) → three. | ~2 |
+| `src/core/task-record.ts` | keep `"tool-open"` accepted by `isHealthSignal` (legacy read-only comment; whole-array `every()` semantics — `:275-313`); fix the stale "≤4 entries" doc comment (`:55`) → three. | ~2 |
+| `test/health.test.ts` | delete the `describe("tool-open")` block (its dispose assertions re-scope into the lifecycle block — §6 item 7's mirror); drop the now-dead `start(...)` calls in the mutation block; update the §6-16 sweep to the src-scoped rule; add: `observe(tool_start)` is a no-op (no signals, no timers); the legacy renderer arm still renders. | ~-40 |
 | `test/subagent.test.ts` | delete the `IMP_HEALTH_TOOL_OPEN_MS` abort-with-open-tool test (its subject is gone). | ~-15 |
 | `test/task-record.test.ts` | add: a legacy `tool-open` entry parses and keeps the whole array (compatibility pin). | ~+8 |
-| `CHANGELOG.md` | Unreleased entry: "four conditions … a tool left open ≥10 minutes" → three conditions (the final shape — `tool-open` never shipped). | ~2 |
+| `CHANGELOG.md` | Unreleased entry: "four conditions … a tool left open ≥10 minutes" → three conditions (final shape; `tool-open` reached main unreleased but never shipped in a release — the changelog describes only the three signals). | ~2 |
+| `README.md` | the loop-health blurb (`:393-395`): "repeated identical tool calls, repeated failed edits, a tool left open too long" → drop the third pattern. | ~2 |
 | `PROJECT_PLAN.md` | ledger entry at merge; backlog bullet for the TUI tool-elapsed display. | ~6 |
 
 ## 6. Test plan
@@ -600,10 +602,13 @@ is ever written; no main-agent context is ever written.
     earlier "identical stdout" e2e intent).
 16. Grep tests: no `src/extensions/` reference to the health variant; no
     remaining `CHILD_MAX_TURNS` reference outside docs/history; no
-    `tool-open` producer references remain (`onToolStart`, `openTimers`,
-    `toolOpenMs`, `IMP_HEALTH_TOOL_OPEN_MS` gone — the legacy read-only arms
-    in `health.ts` / `task.ts` / `task-record.ts` are the only permitted
-    mentions, each carrying a legacy comment).
+    `tool-open` producer references remain **in `src/`** (`onToolStart`,
+    `openTimers`, `toolOpenMs`, and the `IMP_HEALTH_TOOL_OPEN_MS` env read
+    gone — the legacy read-only arms in `health.ts` / `task.ts` /
+    `task-record.ts` are the only permitted `src/` mentions, each carrying
+    a legacy comment). Test files legitimately keep the removed env-name
+    string (the leftover-env test, item 3) and legacy fixtures — the sweep
+    follows the existing dynamic-needle pattern (`test/health.test.ts:379+`).
 17. Update the old pins. All six cap-relying live-child sites were audited
     (`scriptedProvider` repeats its last step forever, so once uncapped they
     spin past the 15s/30s `vitest` timeouts):
@@ -688,7 +693,8 @@ is ever written; no main-agent context is ever written.
     (mutation-streak "matches pi" only in the integer), P1-3 (health lines in
     four terminal shapes), P1-4 (supersession incomplete — sa-07 pinned
     behavior becomes false), P1-5 (malformed advisory field must not null the
-    record), P1-6 (abort/dispose ordering for `tool-open`), plus P2/P3
+    record), P1-6 (abort/dispose ordering for `tool-open`; historical —
+    removed by Amendment 1), plus P2/P3
     precision items.
   - Track B (implementation surface): APPROVE WITH CORRECTIONS — F1
     (`test/task-tool.test.ts:1996-2010` and `test/child-resume.test.ts:922-945`
@@ -730,7 +736,8 @@ is ever written; no main-agent context is ever written.
   - Track A (design conformance): APPROVE WITH CORRECTIONS — every
     substantive requirement FULFILLED with evidence; corrections were
     test-completeness (design §6 items 7/8 absent, the unref assertion
-    missing) plus P3 coverage/documentation notes.
+    missing — historical, both re-scoped by Amendment 1) plus P3
+    coverage/documentation notes.
   - Track B (adversarial): APPROVE WITH CORRECTIONS — no P0/P1. Folded:
     P2-1 (the synchronous `observe()`/`note()` paths were unguarded — a
     cyclic-args event could crash the run; now swallowed under the
@@ -740,7 +747,8 @@ is ever written; no main-agent context is ever written.
     signals were the internal mutable objects; now clones — `emit` is a
     first-fire snapshot, later growth updates only the outcome facts).
     Accepted/documented: P3-1 (an open-tool timer can fire during the
-    overflow compact window; observation-only, default T=10 min) and P3-3
+    overflow compact window; observation-only, default T=10 min —
+    historical, `tool-open` removed by Amendment 1) and P3-3
     (cosmetic commit-message count).
   - Episode worth recording: the track-B reviewer child was itself stopped by
     the still-running OLD host build's 60-turn wall mid-review — a live

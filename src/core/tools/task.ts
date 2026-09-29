@@ -474,6 +474,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						`cannot resume child "${launch.childId}": this host does not expose the launch-environment facts needed to validate it.\n${RESUME_REFUSAL_TAIL}`,
 					);
 				}
+				// Pinned for the whole attempt (impl review F-4b): there is no
+				// yield point between this read and runSubagent today — if one
+				// is ever added, re-capture the pair here (design §8.2).
 				const liveProvider = options.getProvider();
 				const mismatch = providerMismatch(launch.model.providerName, liveProvider.name);
 				if (mismatch !== undefined) {
@@ -712,8 +715,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// SA-08 round 3 (F-4): the provider INSTANCE is pinned in the same
 			// synchronous step — /model can swap provider+family while this
 			// spawn awaits (worktree creation), and the attempt must use the
-			// pair that was recorded, not a later swap (design §8). The two
-			// reads must stay first; nothing that can yield may precede them.
+			// pair that was recorded, not a later swap (design §8). These two
+			// reads must stay FIRST and ADJACENT: nothing that can yield may
+			// precede them, and nothing may be inserted between them.
 			const parentReference = options.getModelReference?.() ?? options.getModel();
 			const provider = options.getProvider();
 			const resolution = resolveChildModel({

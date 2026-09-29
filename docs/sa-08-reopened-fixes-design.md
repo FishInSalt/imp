@@ -507,6 +507,18 @@ emission context (853-861) still read live runner state at attempt time —
 pre-existing, outside this finding, recorded as a known limit alongside
 §5. The claim is NOT "the whole spawn is pinned".
 
+Consequence, stated explicitly (implementation review F-4c): a /model swap
+in this window can change the child's AUTO-COMPACTION decision or event
+context while `binding` stays pinned. It does NOT change the wire
+provider/model or the recorded identity (`rec.binding` and the request's
+`model`/`modelReference` all come from the captured pair). This residual
+is an owner-accepted scope boundary, not a defect.
+
+Resume-path note (implementation review F-4b): the resume branch reads
+`liveProvider` once (task.ts:477) and uses it at the attempt; there is NO
+yield point between the two today, so no window exists — a comment at the
+read pins that invariant ("if a yield point is added, re-capture").
+
 ### 8.3 Test (red-first)
 
 F4-a: a worktree child whose provider is swapped exactly inside the async
@@ -618,3 +630,24 @@ superseded; repair rule unchanged); §16 gets the round-3 log entry.
   structures; matched-pending invariants), FC-11 (F5-c must reuse the
   actual first-pass call id and prove no repair), FC-12 (length-marker
   sink assertion).
+
+## 11. Round-3 review log (post-implementation)
+
+- 2026-09-29: fresh-context adversarial implementation review of
+  073b3e2..999aa54 — **APPROVE WITH CORRECTIONS**, no code rework.
+  Independently verified: the capture is first/adjacent and per-invocation
+  (runner.ts:1157-1158 coherence argument re-checked); F4-a is
+  discriminating (old code lands the request in sinkB); the ordered scan
+  against the loop's real append grammar (one toolResult batch after each
+  call, fillMissingToolResults closes capped children, compaction heads,
+  synthetic repairs) with no over-refusal; T23's unique-id fixture is a
+  legitimate artifact correction with unchanged expectations; F5-c reads
+  the real id and byte-compares the transcript. Folded: F-4a (comment now
+  requires first AND adjacent), F-4b (resume read pinned in a comment +
+  this record), F-4c (consequence of the residual window stated).
+  One review claim was checked and does NOT hold: F-5a ("an orphan result
+  whose id collides with a later call is silently dropped") — under rule 2
+  the result refuses AT ITS POSITION because no preceding declaration
+  exists (and the F5-b test exercises exactly that order and passes); the
+  review's suggested `pending.has(id)` guard is equivalent to rules 2+3.
+  No gap; no change.

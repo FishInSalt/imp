@@ -872,13 +872,18 @@ describe("SA-07 resume", () => {
 			role: "toolResult",
 			results: [{ toolCallId: "new-call", toolName: "echo", content: "ok", isError: false }],
 		});
-		const { task } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
+		const rawBefore = readFileSync(transcript.path, "utf8");
+		const { task, sink } = harness({ session: parent, baseDir: base, cwd, scripts: [] });
+		const before = sink.length;
 		const refused = await task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(refused.isError).toBe(true);
 		// Owner round 4: boundary wording (the second assistant message begins
 		// a turn while old-call still awaits results).
 		expect(refused.output).toContain("still awaiting results");
 		expect(refused.output).toContain("old-call");
+		// The refusal predates any repair or provider call (impl-review fold).
+		expect(sink).toHaveLength(before);
+		expect(readFileSync(transcript.path, "utf8")).toBe(rawBefore);
 	});
 
 	it("T22: recorded tool calls are never re-executed by history restoration", async () => {

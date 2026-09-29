@@ -746,3 +746,19 @@ what refuses. On the current code all three are accepted (red evidence).
   re-read invariant. One review claim does not hold as stated: §8.2 does
   NOT mention `transcriptFor` (that word appears only in §1's rebind
   notes) — nothing to drop there.
+- 2026-09-29: post-implementation review of ced0c1d — **APPROVE WITH
+  CORRECTIONS** (one test-hygiene item, folded: T17 now asserts transcript
+  byte-equality and zero provider calls like T16). Independently verified:
+  the boundary check's placement/wording, no over-refusal against the loop
+  grammar and compaction heads, the disproved 'late declaration' claim is
+  covered two ways, F5-d/e/f red for the accepted-shape reason at 5da0473,
+  and diff --check clean across the delivery range.
+- Observed intermittency (unrelated to this delta, recorded for honesty):
+  during the fold's first full-suite run, test/login-dialog.test.ts case
+  17b failed once under full parallelism; the file alone is 16/16 and 17b
+  repeated green 3/3, and the next full run was green. Mechanism: the
+  suite's frameEventually polls with a fixed 6000ms budget
+  (test/login-dialog.test.ts:22, :521) and can starve under load — the
+  same signature as the owner's round-3 observation. Not modified here
+  (outside the delivery's scope); a candidate separate fix is a larger
+  budget or an injectable poll timer.

@@ -142,22 +142,50 @@ interface ToolPairScan {
 }
 
 function scanToolPairs(messages: readonly AgentMessage[]): ToolPairScan {
-	const declared: Array<{ id: string; name: string }> = [];
-	const declaredIds = new Set<string>();
-	const resolved = new Set<string>();
+	// SA-08 round 3 (F-5): validate the pairing in message ORDER with three
+	// distinct structures (design §9). A duplicate call id, a result with no
+	// PRECEDING call, and a repeated result cannot be paired unambiguously —
+	// they refuse; only the confirmed crash tail is repairable.
+	const seenCallIds = new Set<string>();
+	const matchedIds = new Set<string>();
+	const pending = new Map<string, { id: string; name: string }>();
 	for (const message of messages) {
 		if (message.role === "assistant") {
 			for (const block of message.blocks) {
-				if (block.type === "toolCall" && !declaredIds.has(block.id)) {
-					declaredIds.add(block.id);
-					declared.push({ id: block.id, name: block.name });
+				if (block.type !== "toolCall") continue;
+				if (seenCallIds.has(block.id)) {
+					return {
+						missing: [],
+						repairable: false,
+						problem: `tool call ${block.id} is declared more than once — the transcript cannot be paired unambiguously (start a new task instead)`,
+					};
 				}
+				seenCallIds.add(block.id);
+				pending.set(block.id, { id: block.id, name: block.name });
 			}
 		} else if (message.role === "toolResult") {
-			for (const result of message.results) resolved.add(result.toolCallId);
+			for (const result of message.results) {
+				const id = result.toolCallId;
+				if (!seenCallIds.has(id)) {
+					return {
+						missing: [],
+						repairable: false,
+						problem: `a tool result for ${id} has no preceding tool call — the transcript is not continuable (start a new task instead)`,
+					};
+				}
+				if (matchedIds.has(id)) {
+					return {
+						missing: [],
+						repairable: false,
+						problem: `the tool result for ${id} is recorded more than once — the transcript is not continuable (start a new task instead)`,
+					};
+				}
+				matchedIds.add(id);
+				pending.delete(id);
+			}
 		}
 	}
-	const missing = declared.filter(({ id }) => !resolved.has(id));
+	const missing = [...pending.values()];
 	if (missing.length === 0) return { missing, repairable: true };
 
 	// The only repairable shape: the crash tail — every missing id belongs to

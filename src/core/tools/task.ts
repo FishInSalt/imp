@@ -709,8 +709,15 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// rejected configuration must not create a worktree, a child session,
 			// or a provider call. Wire requests use binding.wireModelId; every
 			// metadata lookup uses binding.reference.
+			// SA-08 round 3 (F-4): the provider INSTANCE is pinned in the same
+			// synchronous step — /model can swap provider+family while this
+			// spawn awaits (worktree creation), and the attempt must use the
+			// pair that was recorded, not a later swap (design §8). The two
+			// reads must stay first; nothing that can yield may precede them.
+			const parentReference = options.getModelReference?.() ?? options.getModel();
+			const provider = options.getProvider();
 			const resolution = resolveChildModel({
-				parentReference: options.getModelReference?.() ?? options.getModel(),
+				parentReference,
 				override: agent?.model,
 				agentName: agent?.name,
 			});
@@ -845,7 +852,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				rec.launched = true;
 				outcome = await runSubagent({
 					autoCompact: options.getAutoCompact?.(),
-					provider: options.getProvider(),
+					provider,
 					model: binding.wireModelId,
 					modelReference: binding.reference,
 					system: options.getSystem(),

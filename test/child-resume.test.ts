@@ -1209,8 +1209,16 @@ describe("SA-07 resume", () => {
 		const parent = createSession(repo, base);
 		const sinkA: LLMRequest[] = [];
 		const sinkB: LLMRequest[] = [];
-		const providerA = scriptedProvider([assistant([{ type: "text", text: "first pass done" }])], sinkA, "anthropic");
-		const providerB = scriptedProvider([assistant([{ type: "text", text: "should not run" }])], sinkB, "anthropic");
+		const providerA = scriptedProvider(
+			[assistant([{ type: "text", text: "first pass done" }])],
+			sinkA,
+			"anthropic",
+		);
+		const providerB = scriptedProvider(
+			[assistant([{ type: "text", text: "should not run" }])],
+			sinkB,
+			"anthropic",
+		);
 		let current: LLMProvider = providerA;
 		const { task } = harness({
 			session: parent,
@@ -1571,7 +1579,9 @@ describe("SA-07 resume", () => {
 			role: "toolResult",
 			results: [{ toolCallId: "early", toolName: "echo", content: "before the call", isError: false }],
 		});
-		child.appendMessage(assistant([{ type: "toolCall", id: "early", name: "echo", arguments: { message: "x" } }]));
+		child.appendMessage(
+			assistant([{ type: "toolCall", id: "early", name: "echo", arguments: { message: "x" } }]),
+		);
 		const { task, sink } = harness({
 			session: parent,
 			baseDir: base,

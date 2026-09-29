@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
 import path from "node:path";
-import type { ChildModelBinding } from "./child-model.js";
+import { type ChildModelBinding, isModelBinding } from "./child-model.js";
 import { type SessionEntry, type SessionHeader, SessionStore } from "./session/store.js";
 import { collectTaskRecords, type TaskRecordStatus, taskRecordsInEntry } from "./task-record.js";
 import { probeWorktreeIdentity } from "./worktree.js";
@@ -233,16 +233,10 @@ function isHash(value: unknown): value is string {
 }
 
 function isBinding(value: unknown): boolean {
-	if (!isRecord(value)) return false;
-	if (!isName(value.providerName) || !isName(value.wireModelId) || !isName(value.reference)) {
-		return false;
-	}
-	// SA-08 integration review A-1: the three fields drive DIFFERENT
-	// subsystems on resume (wireModelId -> the request, reference -> pricing/
-	// compaction metadata, providerName -> the endpoint gate). A record whose
-	// reference does not derive from the other two would run one model on the
-	// wire while pricing it as another — reject at this read boundary.
-	return value.reference === `${value.providerName}/${value.wireModelId}`;
+	// SA-08 reopened F-3: one shared derivation rule with TaskRecord's
+	// isBinding (a3aaa72's launch-side rule generalized).
+	if (value === undefined) return false;
+	return isModelBinding(value);
 }
 
 function isAgent(value: unknown): boolean {
@@ -721,6 +715,7 @@ export type ContinuationCode =
 	| "model-drift"
 	| "cwd-drift"
 	| "cwd-missing"
+	| "worktree-cwd-outside"
 	| "worktree-repo-missing"
 	| "worktree-missing"
 	| "worktree-replaced"
@@ -755,6 +750,26 @@ export interface CurrentChildEnvironment {
 
 function sameBinding(a: ChildModelBinding, b: ChildModelBinding): boolean {
 	return a.providerName === b.providerName && a.wireModelId === b.wireModelId && a.reference === b.reference;
+}
+
+/** SA-08 reopened F-2: separator-exact containment of the RESOLVED cwd
+ *  inside the RESOLVED worktree path (no `/wt-other` false positives; the
+ *  filesystem root keeps its single separator). */
+function cwdInsideWorktree(cwd: string, worktreePath: string): { ok: boolean; detail?: string } {
+	let realCwd: string;
+	let realWt: string;
+	try {
+		realCwd = realpathSync(cwd);
+		realWt = realpathSync(worktreePath);
+	} catch (err) {
+		return {
+			ok: false,
+			detail: `could not resolve the paths: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
+	const prefix = realWt.endsWith(path.sep) ? realWt : `${realWt}${path.sep}`;
+	if (realCwd === realWt || realCwd.startsWith(prefix)) return { ok: true };
+	return { ok: false, detail: `resolved to ${realCwd}, outside ${realWt}` };
 }
 
 /** Compare recorded fingerprints against the current environment; every
@@ -917,6 +932,27 @@ export async function validateChildContinuation(
 		});
 		if (!probe.ok) reasons.push({ code: probe.code, message: probe.message });
 		else if (probe.detail !== undefined) diagnostics.push(probe.detail);
+		// SA-08 reopened F-2: the validated worktree identity must constrain
+		// the EXECUTION cwd — the tool pool, the permission gate, and events
+		// all run with launch.cwd, and fresh dispatch builds it as the
+		// worktree root or a subdirectory of it (subdirectory parents keep
+		// their relative position). Symlinks resolve before containment.
+		if (!existsSync(launch.cwd)) {
+			reasons.push({
+				code: "cwd-missing",
+				message: `the recorded execution cwd ${launch.cwd} no longer exists`,
+			});
+		} else if (probe.ok) {
+			const containment = cwdInsideWorktree(launch.cwd, launch.worktree.path);
+			if (!containment.ok) {
+				reasons.push({
+					code: "worktree-cwd-outside",
+					message: `the recorded execution cwd ${launch.cwd} is not inside the verified worktree ${launch.worktree.path}${
+						containment.detail === undefined ? "" : ` (${containment.detail})`
+					} — the validated environment and the execution environment must agree`,
+				});
+			}
+		}
 	}
 
 	const verdict: ChildContinuationVerdict = {

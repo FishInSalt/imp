@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
-import { SessionStore } from "../src/core/session/store.js";
 import type { SessionEntry } from "../src/core/session/store.js";
+import { SessionStore } from "../src/core/session/store.js";
 import {
 	buildTaskRecord,
 	type TaskRecord,
@@ -263,7 +263,7 @@ describe("SA-05 usage totals", () => {
 		expect(view.incomplete.summarizer).toBe(true);
 	});
 
-	it("prices each producer independently: an unknown child reference stays unpriced beside a priced parent", () => {
+	it("prices each producer independently: an unpriced child reference stays unpriced beside a priced parent", () => {
 		const entries: SessionEntry[] = [
 			assistantEntry("a1", null, 1_000_000, 0, { modelReference: "known/model-a" }),
 			taskResultEntry(
@@ -271,7 +271,10 @@ describe("SA-05 usage totals", () => {
 				"a1",
 				taskRecord(
 					{ inputTokens: 2_000_000, outputTokens: 0 },
-					{ binding: { providerName: "anthropic", wireModelId: "m", reference: "unknown/model-b" } },
+					// SA-08 reopened F-3: the identity must be derived
+					// (anthropic/model-b) — it stays unpriced because the rate
+					// table below does not know it.
+					{ binding: { providerName: "anthropic", wireModelId: "model-b", reference: "anthropic/model-b" } },
 				),
 			),
 		];
@@ -280,7 +283,7 @@ describe("SA-05 usage totals", () => {
 		);
 		expect(priced.usd).toBeCloseTo(1, 10);
 		expect(priced.unpriced.inputTokens).toBe(2_000_000);
-		expect(priced.byModel.find((m) => m.reference === "unknown/model-b")?.priced).toBe(false);
+		expect(priced.byModel.find((m) => m.reference === "anthropic/model-b")?.priced).toBe(false);
 	});
 
 	it("SA-08/F3-b: a tampered record identity survives neither reopen nor pricing", async () => {

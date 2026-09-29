@@ -1,4 +1,4 @@
-import type { ChildModelBinding } from "./child-model.js";
+import { type ChildModelBinding, isModelBinding } from "./child-model.js";
 import type { SessionEntry } from "./session/store.js";
 
 /**
@@ -199,10 +199,11 @@ function isOptionalStringArray(v: unknown): boolean {
 }
 
 function isBinding(v: unknown): boolean {
-	if (v === undefined) return true;
-	if (typeof v !== "object" || v === null) return false;
-	const b = v as Record<string, unknown>;
-	return isString(b.providerName) && isString(b.wireModelId) && isString(b.reference);
+	// SA-08 reopened F-3: same derivation rule as launch records — the three
+	// fields drive different subsystems (wire request, pricing metadata,
+	// endpoint gate), so a disagreeing triple is never usable for attribution.
+	if (v === undefined) return true; // binding is optional on a task record
+	return isModelBinding(v);
 }
 
 function isTranscript(v: unknown): boolean {

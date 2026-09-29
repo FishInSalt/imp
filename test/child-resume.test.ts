@@ -1188,13 +1188,14 @@ describe("SA-07 resume", () => {
 		mkdirSync(unrelated, { recursive: true });
 		rewriteHeaderCwd(transcript.path, unrelated);
 
+		const requestsBefore = sink.length;
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
 		});
 		expect(second.isError ?? false).toBe(true);
 		expect(second.output).toContain("worktree-cwd-outside");
 		expect(second.output).toContain(unrelated);
-		expect(sink).toHaveLength(1); // the attempt never ran
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
 	}, 30_000);
 
 	it("SA-08/F2-b: a cwd symlink inside the worktree that resolves outside is refused", async () => {
@@ -1234,12 +1235,13 @@ describe("SA-07 resume", () => {
 		symlinkSync(outside, link);
 		rewriteHeaderCwd(transcript.path, link);
 
+		const requestsBefore = sink.length;
 		const second = await task.execute({ resume: childId, prompt: "second pass" }, signal(), {
 			toolCallId: "call-2",
 		});
 		expect(second.isError ?? false).toBe(true);
 		expect(second.output).toContain("worktree-cwd-outside");
-		expect(sink).toHaveLength(1); // the attempt never ran
+		expect(sink).toHaveLength(requestsBefore); // the attempt never ran
 	}, 30_000);
 
 	it("SA-08/F2-c: a legitimate subdirectory-parent worktree child still resumes (no over-refusal)", async () => {

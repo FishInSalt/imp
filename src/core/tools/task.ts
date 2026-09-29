@@ -450,7 +450,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					}
 					return refuse(`${output}\n${RESUME_REFUSAL_TAIL}`);
 				}
-				const file = found.file;
+				let file = found.file;
 				const launch = file.launch;
 
 				// §4.1 step 3: current environment + provider-identity gate.
@@ -538,6 +538,36 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						leaseAnomaly = true;
 						attemptAbort.abort();
 					});
+
+					// SA-08 reopened F-1: the lookup snapshot must not outlive the
+					// lease. Another executor may have completed a round between the
+					// first lookup/validation and our acquire — re-resolve the
+					// authoritative child state now that we hold the single-writer
+					// lease, refuse if the identity moved, and rebind `file` so every
+					// downstream read (repair, history, session, append, transcript,
+					// taskResult) uses the reopened store.
+					const reopened = findChildByLaunch(parentStore, check.childId);
+					if (!reopened.ok) {
+						return refuse(
+							`cannot resume child "${launch.childId}": ${reopened.message}\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (reopened.file.filePath !== file.filePath) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the id now resolves to a different file than the one that was validated and leased (${reopened.file.filePath})\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (JSON.stringify(reopened.file.launch) !== JSON.stringify(launch)) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the child session header changed while the attempt was being prepared\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					if (reopened.file.messageCount === 0) {
+						return refuse(
+							`cannot resume child "${launch.childId}": the child session contains no conversation content — nothing to continue\n${RESUME_REFUSAL_TAIL}`,
+						);
+					}
+					file = reopened.file;
 
 					// §4.1 steps 6–7: repair + effective history (nothing mutates
 					// the child file before the repair's own append-safe step).

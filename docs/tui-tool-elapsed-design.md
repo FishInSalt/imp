@@ -4,7 +4,8 @@
 - Branch: `feat/tui-tool-elapsed` (this document's review; implementation follows
   on the same branch)
 - Baseline: `f1fcc54` (main)
-- Status: DRAFT — awaiting independent adversarial design review (round 1).
+- Status: DRAFT v2 — round 1 independent adversarial review returned
+  NEEDS-FIXES; all findings folded (see Review log); awaiting re-review.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -107,20 +108,34 @@ Dim suffix appended at the end of the call block's **first row**:
   pre-series line; sub-second calls stay clean).
 - Placement invariants (pinned by tests; implementation must satisfy these,
   not a specific code path):
-  - I1: the suffix never causes a row to exceed the terminal width.
-  - I2: the suffix never wraps to its own row and never truncates other
-    content beyond the width-reservation rule below.
-  - I3: the first row's other content (path preview / header / first
-    command chunk) gets its width budget **after** the suffix width is
-    reserved; when the remaining budget would fall below 8 visible
-    columns, the suffix is omitted entirely (path keeps today's full
-    budget) rather than mangling the row.
-  - I4: collapse/expand/raw state never removes an eligible suffix; it
-    stays on the first row in every mode.
+  - I1: no rendered row may exceed the terminal width — pi-tui **throws**
+    on oversize lines (`@earendil-works/pi-tui` render check), so unit
+    pins assert `visibleWidth(row) <= w` for every emitted row.
+  - I2: the suffix never wraps to its own row; it is omitted instead.
+  - I3: the suffix width is reserved **from the first row's existing
+    budget before that row's content is laid out** — never appended on
+    top of an already-spent budget (the collapsed path-preview row
+    currently fills exactly `w - visibleWidth(prefix)`, so a post-hoc
+    append would overflow and trip the I1 throw). Concretely:
+    `budget = w - visibleWidth(prefix)`; with a suffix of width `s`, if
+    `budget - s >= 8`, the first row's content (path preview `ellipsize`,
+    wrapped first chunk, inline command body via a reserve argument
+    threaded into `emit`'s first row, and the expanded/raw pathFirst
+    first row) is laid out within `budget - s`, and the suffix closes the
+    row; otherwise the suffix is omitted and the full budget stands.
+    Boundary pins: `budget - s == 8` shows, `== 7` omits.
+  - I4: collapse/expand/raw state never removes an eligible suffix —
+    **I3 width omission is its only non-gating absence**. In particular
+    the header-only fallback rows (`visibleWidth(prefix) >= w` paths)
+    emit `header + suffix` when that fits, else omit.
   - I5: only input blocks (`call` rendering) can carry it; output/diff
     blocks ignore the field.
+  - I6: `finalize()`'s interruption update explicitly sets
+    `elapsedMs: undefined` (structural, in addition to D4's ordering
+    argument).
 - Interaction: when the first row already carries a semantic summary
-  (`…  summary`), the suffix follows it (last on the row).
+  (`…  summary`), the suffix follows it (last on the row) and the
+  summary's fit check includes the suffix width.
 
 ### D3 — Measurement
 
@@ -129,9 +144,10 @@ inside `createToolSink` with an injectable clock:
 
 - `createToolSink(append, update?, clock?)`; `clock` defaults to `Date.now`.
 - `TranscriptSink` gains an optional `{ clock }` constructor option,
-  threaded through (production `cli.ts` passes nothing — default; tests
-  inject a controllable clock, precedent `Renderer.clock`,
-  `src/render.ts:69-70`).
+  threaded through to `createToolSink` (precedent `Renderer.clock`,
+  `src/render.ts:69-70`). The option exists for test injection only:
+  production constructs `new TranscriptSink()` at `src/cli.ts:519` with
+  the default — no production call site changes.
 - Semantics are honest wall time of the call as observed by the renderer —
   it includes approval-gate waits and other stalls. No attribution claims;
   the display is a fact, not a diagnosis.
@@ -158,9 +174,18 @@ inside `createToolSink` with an injectable clock:
   so no new transcript-side plumbing is required beyond what finalize
   already uses. Append-only consumers (no `update` callback) silently show
   no duration — same documented limitation as interruption styling.
+- Replay suppression rides the `replay` flag the Renderer hands to
+  `end(result, replay)` (`src/repl/replay.ts:50` sets `replayTools:
+  true` on the replay Renderer). It is a Renderer-option property, not a
+  sink lifecycle property: the sink cannot independently distinguish
+  replayed from live events beyond that flag, so a future caller that
+  spawns a Renderer with `replayTools: true` alongside live tool events
+  would suppress legitimate durations — noted as a coupling, not solved
+  here.
 - Interrupted rows: finalize already marks the entry terminal, so a later
   `end` cannot add a duration; an `end` that arrives before finalize adds
-  nothing new (no result path shows durations).
+  nothing new (no result path shows durations). I6 additionally clears
+  the field structurally in finalize's update.
 - Duplicate `end`/`start` behavior is unchanged (IDs are lifecycle events).
 
 ## Files touched (implementation forecast)
@@ -190,9 +215,14 @@ Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
 - with semantic summary present: suffix last;
 - multi-line command: suffix on the first row, continuation rows unchanged;
 - header-only call (no path/body): `● name · 2.3s`;
-- narrow terminal: suffix omitted (I3), no oversize row, path not below
-  floor; exact boundary of the reservation;
+- narrow terminal: suffix omitted (I3) with the boundary pins
+  (`budget - s == 8` shows / `== 7` omits); the assertion is
+  `rows.every((r) => visibleWidth(r) <= w)` — the pi-tui throw contract,
+  stronger than "no visible overflow";
 - expanded and raw modes: suffix still on the first row (I4);
+- omission-notice parity: a collapsed pathFirst row carrying a suffix
+  emits the same omission/`… more` marker as the identical block without
+  the suffix (`summaryVisible` accounting unchanged);
 - output/diff blocks with the field set: no suffix (I5);
 - `updateBlock` re-render reflects a newly set/removed `elapsedMs`.
 
@@ -207,10 +237,13 @@ Unit — `createToolSink` with injected clock:
 - append-only consumer (no update callback) → no crash, blocks unchanged;
 - duplicate end → no second update.
 
-Integration — TUI harness (`test/repl-tui.test.ts` `startTuiRepl` gains an
-optional clock, passed to `TranscriptSink`):
-- slow tool (fake clock advanced inside execute) → frame contains the call
-  row with `· 2.3s`-style suffix;
+Integration — TUI harness: `startTuiRepl`
+(`test/repl-tui.test.ts:1341`) gains an optional `clock` passed to
+`new TranscriptSink({ clock })` (`:1365`), and a scratch tool whose
+`execute` advances that clock synchronously (e.g. `now += 2300`) before
+returning — no real waits:
+- clock-advanced tool → the frame contains the call row with the
+  `· 2.3s` suffix;
 - fast tool → no suffix (existing frames unchanged);
 - error tool → no suffix;
 - resume/replay frames → no suffix.
@@ -242,6 +275,24 @@ owner-facing and will be listed as pending until the owner confirms.
    right injection surface for tests?
 5. Test plan gaps: which edge above is most likely to hide a real defect
    if left unpinned?
+
+## Review log
+
+- Round 1 (independent adversarial, fresh context, 2026-09-29):
+  **NEEDS-FIXES** — P0: D2's reserve rule overshoots when the collapsed
+  first-row budget is already spent (`ellipsize(pathText, w - prefix)`
+  fills exactly `w`; a post-hoc append exceeds width and pi-tui throws),
+  and I2/I3 were self-contradictory for that case; P1: I4 violated on
+  the header-only fallback rows, and the integration clock-injection
+  sketch was not realizable in `startTuiRepl`; P2: replay suppression is
+  a Renderer-option property (unstated coupling), and finalize's block
+  spread could carry a stale field; P3: width pins should assert the
+  throw contract, omission-notice parity unpinned. All folded in
+  revision 2 (I3 rewritten budget-first, I4 exception narrowed, I6
+  added, integration sketch corrected, pins added). Reviewer verified
+  correct: history claims (pre-series TUI displayed `✓ 2.3s`; drop
+  incidental), D4 lifecycle mechanics (duplicate/orphan/finalize/
+  clear), `ToolBlock` non-persistence, separator idiom.
 
 ## Process
 

@@ -258,8 +258,9 @@ inside `createToolSink` with an injectable clock:
 ## Files touched (implementation forecast)
 
 - `src/format.ts` — `formatToolElapsed` (pure; unit-tested).
-- `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs`; sink timing,
-  gate, and end-time update call.
+- `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs`; sink timing
+  and end-time update call (Amendment 2: the ≥1000ms sink gate is
+  removed — every measured live success updates).
 - `src/repl/components/tool-block.ts` — suffix rendering per D2
   invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
   green escape).
@@ -267,7 +268,11 @@ inside `createToolSink` with an injectable clock:
 - `src/cli.ts` — no change expected (defaults).
 - Docs: this file; `CHANGELOG.md` Unreleased entry; `PROJECT_PLAN.md`
   ledger + backlog close at merge; README only if a display section
-  exists (none found).
+  exists (none found). Amendment 2 additionally updates the stale
+  `src/format.ts:141` comment ("The sink gates the ≥1s display rule" —
+  the gate moves to the renderer) and the `ToolBlock.elapsedMs` doc
+  comment at `src/repl/tool-presentation.ts:108-111`, plus the
+  CHANGELOG/ledger `≥1s only` wording it invalidates.
 
 ## Test plan (red-first)
 
@@ -310,7 +315,15 @@ Unit — `createToolSink` with injected clock:
   output append, input block identity preserved through the WeakMap rekey
   contract;
 - <1s live success → exactly one update with the sub-second `elapsedMs`
-  (Amendment 2); error result → no update;
+  (Amendment 2); the existing `gates at 1000ms` sink pin
+  (`test/tui-tool-elapsed.test.ts:188-200`, cases `[999, false]` /
+  `[1000, true]`) is superseded: 999 now fires (bare ✓), 1000 carries the
+  time;
+- zero elapsed (`elapsedMs == 0`) → bare ` ✓`, never `0.0s`; negative
+  elapsed (pathological injected clock) → bare ` ✓`, never `-0.5s` — the
+  renderer keys the time text on `elapsedMs >= 1000`, not on field
+  presence (review finding 4);
+- error result → no update;
 - `end(result, true)` (replay) → no update even if slow;
 - orphan end without start → no update;
 - finalize-then-end and end-then-finalize → no duration either way;
@@ -328,8 +341,10 @@ Integration — TUI harness: `startTuiRepl`
 returning — no real waits:
 - clock-advanced tool → the frame contains the call row with the
   `✓ 2.3s` suffix;
-- fast tool → the call row ends with the bare `✓` and no time; the
-  update carries the sub-second `elapsedMs` (Amendment 2);
+- fast tool → the call row ends with the bare `✓` and no time
+  (Amendment 2); this harness runs a constant clock, so the concrete
+  elapsed is `0` — pin `elapsedMs === 0` and do not adjust the clock to
+  a non-zero value (the zero-elapsed path must stay covered);
 - error tool → no suffix;
 - resume/replay frames → no suffix.
 
@@ -342,9 +357,10 @@ Regression:
 
 Unmasked gate commands (lint exit code read directly — pipeline masking is
 a recorded incident): `npm run lint; echo $?`; typecheck (both tsconfigs);
-full test suite (expected: 126 files / 2412 tests baseline + new pins);
-`npm run build`. Manual terminal acceptance of the TUI rendering is
-owner-facing and will be listed as pending until the owner confirms.
+full test suite (expected: 126 files / 2412 tests baseline + new pins;
+the Amendment 2 batch re-runs all gates unmasked on its final tree);
+`npm run build`. Manual terminal acceptance: passed 2026-09-29 (owner;
+Amendment 2 is a follow-up on the same surface).
 
 ## Open questions for the reviewer
 

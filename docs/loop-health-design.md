@@ -19,7 +19,9 @@
   removed** — the firing condition cannot distinguish a gate wait, a healthy
   slow tool, and a true hang; producer removed, legacy read-only arms kept
   (§9). Drafted on `fix/loop-health-remove-tool-open`; design review of this
-  amendment pending (folded into §9 when closed).
+  amendment review closed 2026-09-29: fresh-context adversarial reviewer,
+  three passes — `NEEDS-FIXES` on `c8ae8e4` → `CONFIRMED WITH NOTES` on
+  `fec0ab0` → `CONFIRMED` on `7999ebe`; all findings folded (§9).
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -833,4 +835,13 @@ is ever written; no main-agent context is ever written.
   (whole-array `every()` drop semantics verified at
   `src/core/task-record.ts:275-313`). Accepted limitation: §7. Backlog: TUI
   tool-elapsed display (PROJECT_PLAN, 2026-09-29). Design review of this
-  amendment: [pending — folded here when closed].
+  amendment: closed 2026-09-29 — fresh-context adversarial review, three
+  passes: round 1 `NEEDS-FIXES` on `c8ae8e4` (P1: README.md missing from
+  the change list; P2: "shipped" vs "never shipped" contradiction, §6 item
+  16 unsatisfiable as written, dead `formatElapsed`/stale comments not in
+  the change list, test-item mislabels; P3: stale `≤4` comments, dead
+  `start()` calls, §9 history tags), folded in `fec0ab0`; round 2
+  `CONFIRMED WITH NOTES` on `fec0ab0` (residual P2: the facts-contract
+  first-fire test's vehicle depends on the removed producer — rewrite
+  instruction added to the change list; P3 cite `:64`→`:67`), folded in
+  `7999ebe`; round 3 `CONFIRMED` on `7999ebe`. Implementation may start.

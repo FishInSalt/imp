@@ -1060,8 +1060,9 @@ with the leanings below.
   *different* name into the divider, and no extension-facing API changes.
 - New shared component `src/repl/components/section-rule.ts`:
   `export class SectionRule implements Component`, constructed with an optional
-  label. It generalises the private `DialogBorder`
-  (`src/repl/login-dialog.ts:40-46`, "pi's DynamicBorder").
+  label. It follows the same rendering shape as the private `DialogBorder`
+  (`src/repl/login-dialog.ts:40-46`, "pi's DynamicBorder") without folding it in
+  (O8).
 - Render contract (`render(width)`), and `implements Component` requires
   `invalidate(): void` as well (empty — the rule caches nothing, exactly like
   `DialogBorder`, `src/repl/login-dialog.ts:41`):
@@ -1177,6 +1178,15 @@ and found seven documentation/test-plan gaps, all folded:
 | 5 | P3 | §16.6 mischaracterised `repl-confirm.test.ts:50` (a comment, not an assertion) | Folded: `:51,64` are the assertions; `:50` needs a comment rewrite |
 | 6 | P3 | `Component` also requires `invalidate()`, absent from the render contract | Folded: added to D14 |
 | 7 | P3 | On narrow terminals the clipped label would render as `─ … ─` | Folded: fallback threshold is now `avail < 2` → plain dashes |
+
+**Round 2** (independent adversarial review of `c7ab53e`, same base) — verdict
+**CONFIRMED**. All seven round-1 findings verified in the body of §16, the render
+contract re-derived exact for widths 1-12 with labels of 1 to 500 characters
+(ASCII and CJK), the D11 pin scan complete (`test/repl-tui.test.ts:4574`, `:4618`
+break; `:857-858` sit below the list and are unaffected; `repl-confirm.test.ts`
+has no frame pins). One P3 wording note — D14 said `SectionRule` "generalises"
+`DialogBorder` while O8 keeps it private — folded by rewording to "follows the
+same rendering shape … without folding it in".
 
 Round-1 checks that found nothing to change: every line ref at `f417fba`; the
 D5 child-order invariant and the `applyFilter` refilter pin; the queued-select

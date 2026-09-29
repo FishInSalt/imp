@@ -1347,3 +1347,69 @@ describe("queue on provider failure (handed back, never dropped)", () => {
 		expect(await env.repl).toBe(0);
 	});
 });
+
+describe("health notes (#loop-health)", () => {
+	const echo: Tool = {
+		name: "echo",
+		description: "echoes",
+		parameters: Type.Object({ message: Type.String() }),
+		async execute() {
+			return { output: "ok" };
+		},
+	};
+
+	it("main loop: one deduped dim note for a repeat-loop run; health never reaches the model", async () => {
+		const steps: ScriptStep[] = [];
+		for (let i = 0; i < 6; i++) {
+			steps.push(
+				assistant(
+					[{ type: "toolCall", id: `h${i}`, name: "echo", arguments: { message: "again" } }],
+					"tool_use",
+				),
+			);
+		}
+		steps.push(reply("done"));
+		const env = await startRepl({ scripts: steps, tools: [echo] });
+		await waitUntil(() => env.output().includes("Tips for getting started:"));
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("done"));
+		const out = env.output();
+		expect(out).toContain('▪ health: repeated identical tool calls ×5 (last: echo {"message":"again"})');
+		expect(out.split("▪ health:").length - 1).toBe(1); // first fire only
+		expect(JSON.stringify(env.requests)).not.toContain("repeat-loop"); // display-only
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("child: the note carries the agent-or-task label; dedup is per source", async () => {
+		const childSteps: ScriptStep[] = [];
+		for (let i = 0; i < 5; i++) {
+			childSteps.push(
+				assistant(
+					[{ type: "toolCall", id: `c${i}`, name: "echo", arguments: { message: "again" } }],
+					"tool_use",
+				),
+			);
+		}
+		childSteps.push(reply("child done"));
+		const env = await startRepl({
+			scripts: [
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "task", arguments: { prompt: "loop the child" } }],
+					"tool_use",
+				),
+				...childSteps,
+				reply("parent done"),
+			],
+			tools: [echo],
+		});
+		await waitUntil(() => env.output().includes("Tips for getting started:"));
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("parent done"));
+		const out = env.output();
+		expect(out).toContain("▪ health: task: repeated identical tool calls ×5");
+		expect(out.split("▪ health:").length - 1).toBe(1);
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+});

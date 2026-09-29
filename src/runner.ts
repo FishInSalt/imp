@@ -11,6 +11,7 @@ import {
 	summarizeBranchSegment,
 } from "./core/compaction.js";
 import { loadContextFiles } from "./core/context-files.js";
+import { createLoopHealth, healthEnabled } from "./core/health.js";
 import { createRunLogger, type RunLogger } from "./core/logger.js";
 import type { AgentEvent, RunAgentLoopResult } from "./core/loop.js";
 import { runAgentLoop, synthesizeMissingToolResults } from "./core/loop.js";
@@ -1354,6 +1355,12 @@ class RunnerImpl implements Runner {
 		// reaches the CURRENT turn's tap through this holder (task children run
 		// strictly inside the turn, so one slot is enough; cleared in finally).
 		this.turnEventTap = options.onEvent ?? null;
+		// #loop-health (design §4.1): one observation-only monitor per main run;
+		// it observes the same stream the REPL sees and relays first fires as
+		// `health` events. Disposed in the finally below.
+		const health = healthEnabled()
+			? createLoopHealth({ emit: (signal) => options.onEvent?.({ type: "health", signal }) })
+			: undefined;
 		try {
 			const result = await runAgentLoop({
 				provider,
@@ -1413,6 +1420,7 @@ class RunnerImpl implements Runner {
 				// and tap tool_end for observers — fire-and-forget, isolated by the
 				// registry (E10), never blocking the loop.
 				onEvent: (event) => {
+					health?.observe(event);
 					options.onEvent?.(event);
 					if (event.type === "tool_end") {
 						const { result } = event;
@@ -1443,6 +1451,7 @@ class RunnerImpl implements Runner {
 			throw err;
 		} finally {
 			this.turnEventTap = null; // the holder is turn-scoped
+			health?.dispose();
 		}
 	}
 

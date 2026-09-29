@@ -77,7 +77,7 @@ export const TASK_RECORD_VERSION = 1;
 
 export type TaskRecordStatus =
   | "completed"      // the child loop ended normally — NOT verified task success
-  | "max_iterations" // hit CHILD_MAX_TURNS; text (if any) is a wrap-up answer
+  | "max_iterations" // hit an explicit turn cap; #loop-health removed the child wall (legacy for old records)
   | "aborted"        // parent signal (Ctrl+C)
   | "timeout"        // the child's own clock fired
   | "crash"          // provider/protocol error; partial text may exist

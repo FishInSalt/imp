@@ -48,6 +48,27 @@ function countingEcho(): { tool: Tool; calls: () => number } {
 	return { tool, calls: () => calls };
 }
 
+/** #loop-health test vehicle: a tool that holds until its signal aborts
+ *  (the child clock fires), for driving a settled-but-not-completed attempt. */
+function holdingEcho(): { tool: Tool; calls: () => number } {
+	let calls = 0;
+	const tool: Tool = {
+		name: "echo",
+		description: "holds until aborted",
+		parameters: Type.Object({ message: Type.String() }),
+		async execute(_args, signal) {
+			calls += 1;
+			if (!signal.aborted) {
+				await new Promise<void>((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+			}
+			return { output: "held" };
+		},
+	};
+	return { tool, calls: () => calls };
+}
+
 function otherTool(): Tool {
 	return {
 		name: "other",
@@ -914,23 +935,22 @@ describe("SA-07 resume", () => {
 		expect(JSON.stringify(sink[0]?.messages)).toContain("echo: x"); // its RECORDED result is in context
 	});
 
-	it("T23: a capped child resumes with a fresh turn budget", async () => {
+	it("T23: a settled non-completed child resumes with a fresh turn budget", async () => {
 		const { base, cwd, parent } = await fixture();
-		// SA-08 round 3: the scripted provider replays its last step, so the
-		// call id must be generated per invocation — real providers never
-		// reuse an id, and the ordered pairing refuses duplicates.
-		let capCall = 0;
-		const loopStep = () =>
-			assistant([{ type: "toolCall", id: `cap-${capCall++}`, name: "echo", arguments: { message: "x" } }]);
-		const { tool } = countingEcho();
+		// #loop-health: no live child can produce max_iterations anymore (the
+		// 60-turn wall is gone). A holding tool + the child clock drives the
+		// same "settled, not completed" first attempt (timeout); the resume
+		// and lifetime assertions stay exactly as before.
+		const { tool } = holdingEcho();
 		const first = await dispatchAndPersist({
 			session: parent,
 			baseDir: base,
 			cwd,
 			tools: [tool],
-			scripts: [loopStep],
+			timeoutMs: 1000,
+			scripts: [assistant([{ type: "toolCall", id: "hold-1", name: "echo", arguments: { message: "x" } }])],
 		});
-		expect(first.result.taskRecord?.status).toBe("max_iterations");
+		expect(first.result.taskRecord?.status).toBe("timeout");
 		const childId = childIdOf(first.result);
 		const { task } = harness({
 			session: parent,
@@ -944,6 +964,40 @@ describe("SA-07 resume", () => {
 		expect(second.output).toContain("wrap up");
 		expect(second.output).toContain("(child: 1 turns"); // THIS attempt only
 		expect(second.output).toContain("(child lifetime: 2 attempts");
+	}, 30_000);
+
+	it("T23b: a resumed attempt carries only its own health facts", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { tool } = countingEcho();
+		const loopSteps: ScriptStep[] = [];
+		for (let i = 0; i < 5; i++) {
+			loopSteps.push(
+				assistant([{ type: "toolCall", id: `h${i}`, name: "echo", arguments: { message: "again" } }]),
+			);
+		}
+		loopSteps.push(assistant([{ type: "text", text: "wrapped" }]));
+		const first = await dispatchAndPersist({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [tool],
+			scripts: loopSteps,
+		});
+		expect(first.result.taskRecord?.health).toHaveLength(1);
+		expect(first.result.taskRecord?.health?.[0]).toMatchObject({ code: "repeat-loop", count: 5 });
+		const childId = childIdOf(first.result);
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [tool],
+			scripts: [assistant([{ type: "text", text: "clean resume" }])],
+		});
+		const second = await task.execute({ resume: childId, prompt: "finish" }, signal());
+		expect(second.isError ?? false).toBe(false);
+		expect(second.output).toContain("clean resume");
+		expect(second.output).not.toContain("[task] health:"); // THIS attempt only
+		expect(second.taskRecord?.health).toBeUndefined();
 	}, 30_000);
 
 	it("T4b: crashed and timed-out children are settled and resumable", async () => {
@@ -1834,6 +1888,7 @@ describe("SA-07 resume", () => {
 				summarizerCalls: 0,
 				incomplete: false,
 			},
+			health: [],
 		};
 		expect(taskResult(outcome, null).output).not.toContain("child session id:");
 	});

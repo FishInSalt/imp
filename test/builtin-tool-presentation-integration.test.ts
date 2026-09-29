@@ -240,6 +240,7 @@ describe("actual builtin presentation integration", () => {
 							summarizerCalls: 0,
 							incomplete: false,
 						},
+						health: [],
 						reason: "test",
 					},
 					null,

@@ -180,8 +180,9 @@ describe("runSubagent between-turn compaction (no session — sessions disabled)
 
 		expect(outcome.status).toBe("completed");
 		expect(outcome.text).toBe("all done");
-		// turn budget intact: 3 tool turns + the final text — compaction bought
-		// context room, not extra turns (CHILD_MAX_TURNS never resets)
+		// turn count intact: 3 tool turns + the final text — compaction bought
+		// context room, not extra turns (#loop-health removed the child wall;
+		// the counter still never resets on splice)
 		expect(outcome.turns).toBe(4);
 
 		const counts = messageCounts(routed.loopRequests);
@@ -538,6 +539,9 @@ describe("M7 review coverage: repeat compactions, session-path retry, failure ca
 
 			expect(outcome.status).toBe("completed");
 			expect(outcome.text).toBe("gave up quietly");
+			// #loop-health: the give-up is reported as a health fact now.
+			expect(outcome.health).toHaveLength(1);
+			expect(outcome.health[0]).toMatchObject({ code: "compaction-failures", count: 3 });
 			// exactly 3 summarizer attempts — the cap stopped the bleeding
 			expect(routed.summaryRequests).toHaveLength(3);
 			// one teaching note, once

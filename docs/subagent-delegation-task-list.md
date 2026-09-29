@@ -28,7 +28,7 @@ Do not treat the following as authorization to launch paid model calls, change g
 - Fresh children have their own conversation history, but inherit the parent's assembled system prompt and append the agent profile.
 - Normal children cannot call `task`; the parent remains responsible for delegation.
 - Delegation is synchronous from the parent model's perspective. Consecutive `task` calls run in chunks of at most five, with results emitted in call order.
-- The child turn cap is 60 per loop invocation. One overflow-recovery restart can run a second loop. TTY defaults to no child clock; non-TTY defaults to 60 minutes. Timeout precedence is call argument, agent configuration, then mode default.
+- ~~The child turn cap is 60 per loop invocation.~~ **#loop-health (2026-09-29, docs/loop-health-design.md) removed the child turn cap** — children are uncapped; degenerate loops are addressed by the shared loop-health monitor (observation-only: task-result lines + TaskRecord `health` + interactive notes). Timeout semantics are unchanged: one overflow-recovery restart still runs a second loop; TTY defaults to no child clock; non-TTY defaults to 60 minutes; timeout precedence is call argument, agent configuration, then mode default.
 - No budget-driven wrap-up prompts or tool-budget blocking are injected into the child.
 - Child tools still pass through the parent's permission gate with the child's actual cwd.
 - Worktree children use rebuilt builtin tools, not the parent's cwd-bound extension tools. A worktree is not a filesystem security sandbox.

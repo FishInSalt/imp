@@ -70,6 +70,7 @@ function outcome(overrides: Partial<SubagentOutcome>): SubagentOutcome {
 			summarizerCalls: 0,
 			incomplete: false,
 		},
+		health: [],
 		...overrides,
 	};
 }
@@ -81,6 +82,44 @@ describe("taskResult contract (§3)", () => {
 			output: "answer text\n\n(child: 2 turns, 10 in / 5 out)",
 			isError: false,
 		});
+	});
+
+	it("#loop-health: one line per signal, appended last, in all four terminal shapes", () => {
+		const health = [
+			{ code: "repeat-loop" as const, count: 5, turn: 5, detail: 'bash "npm test"' },
+			{ code: "mutation-failure-streak" as const, count: 3, turn: 2, detail: "edit src/a.ts" },
+		];
+		const success = taskResult(outcome({ status: "completed", text: "answer text", health }), null);
+		expect(success.isError).toBe(false);
+		expect(success.output).toContain(
+			'[task] health: repeated identical tool calls ×5 (last: bash "npm test") — the child may be looping; verify the result before relying on it.',
+		);
+		expect(success.output).toContain(
+			"[task] health: 3 consecutive failed edits (last: edit src/a.ts) — the child may be stuck; verify the result before relying on it.",
+		);
+		expect(success.output.indexOf("(child: 2 turns")).toBeLessThan(success.output.indexOf("[task] health:"));
+		expect(success.output.match(/\[task\] health:/g)).toHaveLength(2); // one line per signal
+
+		const aborted = taskResult(
+			outcome({ status: "aborted", text: undefined, health }),
+			null,
+			1000,
+			"task words",
+		);
+		expect(aborted.isError).toBe(true);
+		expect(aborted.output.trimEnd().endsWith("verify the result before relying on it.")).toBe(true);
+
+		const crash = taskResult(outcome({ status: "crash", text: undefined, reason: "boom", health }), null);
+		expect(crash.isError).toBe(true);
+		expect(crash.output).toContain("task failed after");
+		expect(crash.output.trimEnd().endsWith("verify the result before relying on it.")).toBe(true);
+
+		const noText = taskResult(outcome({ status: "max_iterations", text: undefined, health }), null);
+		expect(noText.isError).toBe(false);
+		expect(noText.output.trimEnd().endsWith("verify the result before relying on it.")).toBe(true);
+
+		const clean = taskResult(outcome({ status: "completed", text: "answer text" }), null);
+		expect(clean.output).not.toContain("[task] health:");
 	});
 
 	it("trailer with cache read includes the cache segment", () => {
@@ -1374,12 +1413,13 @@ describe("cap-hit transcript handoff (e2e)", () => {
 			sessionBaseDir: baseDir,
 			cwd: repo,
 			worktreeBaseDir: path.join(baseDir, "wt"),
-			getToolsForCwd: () => [echo], // worktree children get a per-cwd echo pool
+			getToolsForCwd: () => [holdingTool(gate())], // holds: the child clock ends the run
 		});
 		const result = await wtTask.execute(
-			{ prompt: "the original task words", worktree: true },
+			{ prompt: "the original task words", worktree: true, timeoutMs: 1000 },
 			new AbortController().signal,
 		);
+		expect(result.output).toContain("task timed out after 1s");
 		expect(result.output).toContain('the child\'s task was: "the original task words"');
 		// SA-07: the result now also carries the resume handle line, which
 		// legitimately mentions "worktree" — scope the leak check to the
@@ -1387,16 +1427,21 @@ describe("cap-hit transcript handoff (e2e)", () => {
 		expect(result.output).not.toContain("[worktree]"); // the notice must not leak into the excerpt
 	}, 30000);
 
-	it("no-text max_iterations renders the REAL child file path and the file exists (15)", async () => {
-		// Drive a capped child through the tool: every turn is a tool call, so
-		// 60 turns pass with no final text — incident A's shape.
+	it("no-text crash renders the REAL child file path and the file exists (15)", async () => {
+		// #loop-health: the no-text max_iterations shape is unreachable with a
+		// live child (no wall); its rendering is pinned by the direct
+		// taskResult tests above. This e2e keeps the real-filepath coverage on
+		// the crash-no-text shape instead.
 		const toolCallStep = assistant([
 			{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } },
 		]);
+		const boom = (): never => {
+			throw new Error("provider down");
+		};
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
 		const parent = createSession(baseDir, baseDir);
 		const task = createTaskTool({
-			getProvider: () => scriptedProvider([toolCallStep]),
+			getProvider: () => scriptedProvider([toolCallStep, boom]),
 			getModel: () => "m",
 			getSystem: () => "",
 			getTools: () => [echo],
@@ -1404,8 +1449,8 @@ describe("cap-hit transcript handoff (e2e)", () => {
 			sessionBaseDir: baseDir,
 		});
 		const result = await task.execute({ prompt: "loop forever" }, new AbortController().signal);
-		expect(result.isError).toBe(false);
-		expect(result.output).toContain("child spent all 60 turns");
+		expect(result.isError).toBe(true);
+		expect(result.output).toContain("task failed after");
 		// the rendered path is a real file on disk with the child's messages
 		const m = result.output.match(/transcript:\n {2}(\S+\.jsonl)/);
 		expect(m).not.toBeNull();
@@ -1566,7 +1611,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		expect(result.output).toContain("worktree cleanup failed");
 	});
 
-	it("I6: the 60-turn cap keeps the child's written work (worktree + trailer)", async () => {
+	it("I6: an interrupted child keeps its written work (worktree + trailer)", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i6-"));
 		await seedRepo(root);
 		const task = createTaskTool({
@@ -1577,7 +1622,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 							type: "toolCall",
 							id: "w1",
 							name: "write",
-							arguments: { path: "capped.txt", content: "work before the cap" },
+							arguments: { path: "capped.txt", content: "work before the stop" },
 						},
 					]),
 					assistant([{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } }]),
@@ -1587,14 +1632,14 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 			getTools: () => [],
 			getSession: () => null,
 			cwd: root,
-			getToolsForCwd: (cwd) => [createWriteTool({ cwd }), echo],
+			getToolsForCwd: (cwd) => [createWriteTool({ cwd }), holdingTool(gate())],
 			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i6-base-${Date.now()}`),
 		});
 		const result = await task.execute(
-			{ prompt: "write then loop", worktree: true },
+			{ prompt: "write then hold", worktree: true, timeoutMs: 1000 },
 			new AbortController().signal,
 		);
-		expect(result.output).toContain("without producing a final answer");
+		expect(result.output).toContain("task timed out after 1s");
 		expect(result.output).toContain("changes kept in worktree");
 	}, 30000);
 
@@ -1993,20 +2038,44 @@ describe("task record (SA-03)", () => {
 		expect(result.taskRecord?.textPresent).toBe(false);
 	});
 
-	it("T3/T4: cap-with-text and cap-without-text both report max_iterations honestly", async () => {
-		const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "again" } };
+	it("T26: health facts land in the record only when they fired", async () => {
+		const steps: ScriptStep[] = [];
+		for (let i = 0; i < 5; i++) {
+			steps.push(
+				assistant(
+					[{ type: "toolCall", id: `h${i}`, name: "echo", arguments: { message: "again" } }],
+					"tool_use",
+				),
+			);
+		}
+		steps.push(assistant([{ type: "text", text: "done" }]));
+		const dirty = await recordHarness({ scripts: steps, tools: [echo] }).task.execute(
+			{ prompt: "go" },
+			new AbortController().signal,
+		);
+		expect(dirty.taskRecord?.health).toHaveLength(1);
+		expect(dirty.taskRecord?.health?.[0]).toMatchObject({ code: "repeat-loop", count: 5, turn: 5 });
+		const clean = await recordHarness({}).task.execute({ prompt: "go" }, new AbortController().signal);
+		expect(clean.taskRecord?.health).toBeUndefined();
+	});
+
+	it("T3/T4: timeout-with-text and timeout-without-text record honest terminal facts", async () => {
+		// #loop-health: no live child can produce max_iterations anymore (the
+		// wall is gone); a holding tool + the child clock drives the same
+		// "settled, not completed" record shape instead.
+		const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "hold" } };
 		const withText = await recordHarness({
 			scripts: [assistant([{ type: "text", text: "wrap-up" }, toolCall], "tool_use")],
-			tools: [echo],
-		}).task.execute({ prompt: "go" }, new AbortController().signal);
+			tools: [holdingTool(gate())],
+		}).task.execute({ prompt: "go", timeoutMs: 1000 }, new AbortController().signal);
 		expect(withText.taskRecord).toBeDefined();
-		expect(withText.taskRecord).toMatchObject({ status: "max_iterations", textPresent: true, turns: 60 });
+		expect(withText.taskRecord).toMatchObject({ status: "timeout", textPresent: true, turns: 1 });
 		const withoutText = await recordHarness({
 			scripts: [assistant([toolCall], "tool_use")],
-			tools: [echo],
-		}).task.execute({ prompt: "go" }, new AbortController().signal);
-		expect(withoutText.taskRecord).toMatchObject({ status: "max_iterations", textPresent: false, turns: 60 });
-		expect(withoutText.isError).toBe(false); // the isError mapping is unchanged
+			tools: [holdingTool(gate())],
+		}).task.execute({ prompt: "go", timeoutMs: 1000 }, new AbortController().signal);
+		expect(withoutText.taskRecord).toMatchObject({ status: "timeout", textPresent: false, turns: 1 });
+		expect(withoutText.isError).toBe(true); // timeout keeps its isError shape
 	}, 30000);
 
 	it("T5/T6: crash with and without partial text", async () => {

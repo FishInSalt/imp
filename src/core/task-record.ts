@@ -1,4 +1,5 @@
 import { type ChildModelBinding, isModelBinding } from "./child-model.js";
+import type { HealthCode } from "./health.js";
 import type { SessionEntry } from "./session/store.js";
 
 /**
@@ -25,7 +26,7 @@ export const TASK_RECORD_VERSION = 1;
 
 export type TaskRecordStatus =
 	| "completed" // the child loop ended normally — NOT verified task success
-	| "max_iterations" // hit CHILD_MAX_TURNS; text (if any) is a wrap-up answer
+	| "max_iterations" // legacy: hit an explicit turn cap; #loop-health removed the child wall
 	| "aborted" // parent signal (Ctrl+C)
 	| "timeout" // the child's own clock fired
 	| "crash" // provider/protocol error; partial text may exist
@@ -47,6 +48,17 @@ export interface TaskRecordWorktree {
 	branch: string;
 	disposition: "removed" | "kept-work" | "kept-unknown" | "removal-failed";
 	/** Bounded summary of the assessment/errors. */
+	detail?: string;
+}
+
+/** #loop-health: one detected condition for the attempt. Producer-bounded
+ *  (deduped by code, ≤4 entries, detail ≤120 chars); an additive optional
+ *  field on the record — old records parse unchanged, and a malformed
+ *  `health` is DROPPED at parse time, never record-nulling (design §4.3). */
+export interface TaskRecordHealthSignal {
+	code: HealthCode;
+	count: number;
+	turn: number;
 	detail?: string;
 }
 
@@ -93,6 +105,8 @@ export interface TaskRecordInput extends TaskRecordTerminal {
 	timeoutMs?: number;
 	transcript?: TaskRecordTranscript;
 	worktree?: TaskRecordWorktree;
+	/** #loop-health: detection facts — present only when something fired. */
+	health?: readonly TaskRecordHealthSignal[];
 }
 
 export interface TaskRecord extends TaskRecordInput {
@@ -109,9 +123,10 @@ function bound(text: string, max = MAX_DETAIL_CHARS): string {
 }
 
 /** Assemble a record from explicit inputs — stamps version + timestamp and
- *  bounds the free-text fields. No prose input exists by construction: every
- *  field comes from a runtime object. Optional fields are omitted (not set to
- *  undefined) when absent. */
+ *  bounds the free-text fields. Every field comes from a runtime object;
+ *  #loop-health `health.detail` is runtime-produced and producer-bounded
+ *  (≤120 code points). Optional fields are omitted (not set to undefined)
+ *  when absent. */
 export function buildTaskRecord(input: TaskRecordInput): TaskRecord {
 	const record: TaskRecord = {
 		version: TASK_RECORD_VERSION,
@@ -140,6 +155,9 @@ export function buildTaskRecord(input: TaskRecordInput): TaskRecord {
 				: { ...input.worktree, detail: bound(input.worktree.detail) };
 	}
 	if (input.usage !== undefined) record.usage = { ...input.usage };
+	if (input.health !== undefined && input.health.length > 0) {
+		record.health = input.health.map((signal) => ({ ...signal }));
+	}
 	return record;
 }
 
@@ -236,6 +254,28 @@ function isWorktree(v: unknown): boolean {
 	);
 }
 
+function isHealthSignal(v: unknown): boolean {
+	if (typeof v !== "object" || v === null) return false;
+	const h = v as Record<string, unknown>;
+	return (
+		(h.code === "repeat-loop" ||
+			h.code === "mutation-failure-streak" ||
+			h.code === "tool-open" ||
+			h.code === "compaction-failures") &&
+		typeof h.count === "number" &&
+		Number.isFinite(h.count) &&
+		h.count > 0 &&
+		typeof h.turn === "number" &&
+		Number.isFinite(h.turn) &&
+		h.turn >= 0 &&
+		isOptionalString(h.detail)
+	);
+}
+
+function isHealth(v: unknown): boolean {
+	return v === undefined || (Array.isArray(v) && v.every(isHealthSignal));
+}
+
 function isUsage(v: unknown): boolean {
 	if (v === undefined) return true;
 	if (typeof v !== "object" || v === null) return false;
@@ -267,5 +307,9 @@ export function parseTaskRecord(value: unknown): TaskRecord | null {
 	}
 	if (!isBinding(r.binding) || !isOptionalStringArray(r.tools)) return null;
 	if (!isTranscript(r.transcript) || !isWorktree(r.worktree) || !isUsage(r.usage)) return null;
+	// #loop-health (design §4.3): a malformed `health` is DROPPED, never
+	// record-nulling — the parser returns the raw object via a cast below, so
+	// the drop must delete the key explicitly.
+	if (!isHealth(r.health)) delete (r as { health?: unknown }).health;
 	return r as unknown as TaskRecord;
 }

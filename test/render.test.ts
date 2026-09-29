@@ -368,3 +368,12 @@ describe("render display channel (prompt-audit P1, impl review P3-4)", () => {
 		expect(text).not.toContain("Edited a.ts: 1 edit applied.");
 	});
 });
+
+describe("health events (print-safe, #loop-health)", () => {
+	it("writes zero bytes and changes no state", () => {
+		const out = collector();
+		const r = new Renderer({ write: out.write, ansi: true, liveTools: true, toolStyle: "one-line" });
+		r.event({ type: "health", signal: { code: "repeat-loop", count: 5, turn: 5, detail: "x" } });
+		expect(out.output()).toBe("");
+	});
+});

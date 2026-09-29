@@ -5,6 +5,7 @@ import { firstLine } from "../../format.js";
 import type { ProviderName } from "../../provider/resolve.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
+import { canonicalJson } from "../canonical.js";
 import {
 	buildChildLaunch,
 	findChildByLaunch,
@@ -23,6 +24,7 @@ import {
 	RESUME_REFUSAL_TAIL,
 } from "../child-resume.js";
 import { defaultChildTimeoutMs, MAX_BYTES } from "../constants.js";
+import { type HealthSignal, healthSignalText } from "../health.js";
 import type { AgentEvent, ToolCallDecision } from "../loop.js";
 import type { AgentMessage } from "../messages.js";
 import { createChildSession } from "../session/manager.js";
@@ -31,6 +33,7 @@ import { childUsageTrailer, runSubagent, type SubagentOutcome } from "../subagen
 import {
 	buildTaskRecord,
 	collectTaskRecords,
+	type TaskRecordHealthSignal,
 	type TaskRecordTerminal,
 	type TaskRecordTranscript,
 	type TaskRecordWorktree,
@@ -199,20 +202,6 @@ function cleanupOutcomeNote(cleanup: CleanupOutcome, wt: ChildWorktree): string 
 	if (cleanup.state === "failed") return cleanupFailureNote(cleanup.errors, wt);
 	if (cleanup.state === "kept") return keptForSafetyNote(cleanup.assessment, wt);
 	return "";
-}
-
-/** SA-08 reopened F-1 (review C-2): order-insensitive structural equality —
- *  a rewritten launch header still refuses (any value change), but key order
- *  alone does not (no serialization coupling). */
-function canonicalJson(value: unknown): string {
-	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-	if (typeof value === "object" && value !== null) {
-		const entries = Object.entries(value as Record<string, unknown>)
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
-		return `{${entries.join(",")}}`;
-	}
-	return JSON.stringify(value) ?? "null";
 }
 
 /** SA-03: transcript facts — only what the store can attest to. `writeFailed`
@@ -392,6 +381,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				launched?: boolean;
 				transcript?: TaskRecordTranscript;
 				worktree?: TaskRecordWorktree;
+				health?: readonly TaskRecordHealthSignal[];
 			} = {};
 			// Resolve the named agent (if any) before any side effects.
 			const wanted = typeof args.agent === "string" && args.agent !== "" ? args.agent : undefined;
@@ -422,6 +412,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					textPresent: terminal.textPresent,
 					transcript: rec.transcript,
 					worktree: rec.worktree,
+					health: rec.health,
 					usage: terminal.usage,
 				}),
 			});
@@ -648,6 +639,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 							: undefined,
 					});
 					rec.transcript = transcriptFor(file.store, childSessions, transcriptWriteFailed);
+					rec.health = outcome.health;
 					if (launch.worktree !== undefined) {
 						rec.worktree = {
 							path: launch.worktree.path,
@@ -895,6 +887,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			}
 			rec.childId = session?.header.id;
 			rec.transcript = transcriptFor(session, childSessions, transcriptWriteFailed);
+			rec.health = outcome.health;
 			if (wt !== undefined && cleanup !== undefined) rec.worktree = worktreeRecord(wt, cleanup);
 
 			// SA-03: terminal facts straight from the runtime outcome.
@@ -934,6 +927,29 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 	};
 }
 
+/** #loop-health (design §4.3): one line per detected signal, appended as the
+ *  last block of every terminal shape (never on `rejected`); ≤4 lines by the
+ *  producer's dedup. `isError` semantics are untouched. */
+function healthBlock(health: readonly HealthSignal[]): string | undefined {
+	if (health.length === 0) return undefined;
+	return health
+		.map((signal) => `[task] health: ${healthSignalText(signal)}${healthSuffix(signal)}`)
+		.join("\n");
+}
+
+function healthSuffix(signal: HealthSignal): string {
+	switch (signal.code) {
+		case "repeat-loop":
+			return " — the child may be looping; verify the result before relying on it.";
+		case "mutation-failure-streak":
+			return " — the child may be stuck; verify the result before relying on it.";
+		case "tool-open":
+			return " — a single tool call held the child for that long.";
+		case "compaction-failures":
+			return " — later turns ran without context compression.";
+	}
+}
+
 /** Map a child outcome to the §3 result contract (#subagent-softlanding rev 4
  *  layered honesty). Exported for tests. `originalPrompt` is args.prompt BEFORE
  *  the worktree notice is appended — the excerpt must show the task, not the
@@ -971,6 +987,8 @@ export function taskResult(
 		lines.push("Re-dispatch with a narrower prompt, or read the transcript and continue the work yourself.");
 		return lines.join("\n");
 	};
+	const healthText = healthBlock(outcome.health);
+	const withHealth = (text: string): string => (healthText === undefined ? text : `${text}\n\n${healthText}`);
 
 	if (outcome.status === "aborted" || outcome.status === "timeout") {
 		const lead =
@@ -978,14 +996,16 @@ export function taskResult(
 				? `task timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s`
 				: "task aborted before completion";
 		return {
-			output: `${lead} (${outcome.turns} turns ran). ${handoff()}`,
+			output: withHealth(`${lead} (${outcome.turns} turns ran). ${handoff()}`),
 			isError: true,
 		};
 	}
 
 	if (outcome.status === "crash" && outcome.text === undefined) {
 		return {
-			output: `task failed after ${outcome.turns} turns: ${outcome.reason ?? "unknown error"}. ${handoff()}`,
+			output: withHealth(
+				`task failed after ${outcome.turns} turns: ${outcome.reason ?? "unknown error"}. ${handoff()}`,
+			),
 			isError: true,
 		};
 	}
@@ -1000,7 +1020,9 @@ export function taskResult(
 		// max_iterations / crash with no assistant text anywhere: layered-C
 		// no-text form — honest failure report with full recovery guidance.
 		return {
-			output: `[task] child spent all ${outcome.turns} turns without producing a final answer (it was still calling tools on the last turn). ${handoff()}`,
+			output: withHealth(
+				`[task] child spent all ${outcome.turns} turns without producing a final answer (it was still calling tools on the last turn). ${handoff()}`,
+			),
 			isError: false,
 		};
 	}
@@ -1022,6 +1044,7 @@ export function taskResult(
 	}
 	parts.push(childUsageTrailer(outcome.turns, outcome.usage));
 	if (continueLine !== undefined) parts.push(continueLine);
+	if (healthText !== undefined) parts.push(healthText);
 	return { output: parts.join("\n\n"), isError: false };
 }
 

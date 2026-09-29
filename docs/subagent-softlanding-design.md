@@ -1,6 +1,7 @@
 # 子代理软着陆设计 rev 3 —— 零注入 + 后备墙 + 失败信息保全
 
 状态：rev 4（2026-09-24，双路对抗审查 A/B 的 NEEDS-FIXES 全部折入；用户确认"REPL 不限时 + print 模式默认 60min"）· 批次 `feat/subagent-softlanding`
+后续修订：#loop-health（2026-09-29，docs/loop-health-design.md）删除了本设计的 60 轮后备墙（§2.1）并取代 §5 的烧钱上限/极端风险条目；时钟与 timeoutMs 优先级维持本设计。本文件保留为历史记录。
 前置：M5 子代理设计（docs/m5-subagents-design.md）、#compaction-ux 批
 参照系（三方实测源码，2026-09-24）：
 - **pi-subagents 扩展 v0.69.0**（本机 `~/.pi/agent/npm/node_modules/pi-subagents`）
@@ -37,6 +38,8 @@
 ## 2. 方案
 
 ### 2.1 层 A —— 轮墙调整：40 → 60，降格为后备墙
+
+> 历史章节：#loop-health（2026-09-29）已删除这道墙（见文首注），以下为当时的决策记录；其中对现行行为的描述不再成立。
 
 - `CHILD_MAX_TURNS: 40 → 60`（constants.ts:13）
 - 定位从"预算主机制"降格为"防退化循环的后备墙"（对齐 CC fork 的 200 防呆墙定位；CC 内建不设墙，imp 保留一道是因为 imp 无子代理观测/steer 通道——结构上裸奔面更大）

@@ -9,6 +9,20 @@ All notable changes to imp are documented here. The format follows
 
 ### Changed
 
+- **Loop health monitoring + uncapped children (#loop-health).** Subagents no
+  longer stop at a 60-turn wall (`CHILD_MAX_TURNS` removed; owner decisions
+  2026-09-29: no numeric valve, no prompt injection). A shared,
+  observation-only loop-health monitor now runs in both the subagent engine
+  and the main loop and detects four conditions from the existing event
+  stream: repeated identical tool-call turns, repeated failed `edit`/`write`
+  attempts, a tool left open ≥10 minutes, and the child's
+  compaction-failure backstop. Child facts surface honestly (task-result
+  lines + a `health` field on the TaskRecord); first fires render one dim
+  REPL note (`▪ health: …`; `IMP_HEALTH=0` disables; thresholds overridable
+  via `IMP_HEALTH_*` env). Nothing is injected into any model context; print
+  stdout is unchanged. Design + two-track adversarial review:
+  `docs/loop-health-design.md`.
+
 - **Startup model resolution (#startup-model-resolution).** A machine whose
   only credential belongs to a non-anthropic family no longer demands a
   manual `/model` in every new session:

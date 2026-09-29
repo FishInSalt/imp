@@ -1,8 +1,10 @@
 # Confirm prompt surface (design)
 
-Status: CONFIRMED WITH NOTES through round 3; round 4 closed the remaining Phase 2
-file-placement defect (R-1). Awaiting one short round-5 confirmation; Phase 1 may
-be implemented in parallel (no open Phase 1 finding).
+Status: APPROVED — independent adversarial review closed after five rounds
+(NEEDS REVISION → CONFIRMED WITH NOTES → CONFIRMED WITH NOTES → NEEDS REVISION →
+CONFIRMED); every fold is recorded in §13. Phase 1 (host-only) may start
+immediately; Phase 2 (seam + guardian consumer) follows its own implementation
+cycle against the same document.
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -171,6 +173,7 @@ picker is available**:
 ```ts
 this.renderer.note(`▪ confirm: ${message}`);
 // The picker carries the detail itself; hosts without one have only this line.
+// (Phase 2 adds the plain preview note above it — D7.)
 if (this.select === null && detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
 ```
 
@@ -589,9 +592,15 @@ REVISION**: one substantive documentation defect, Phase 2 only.
 | R-1 | P2 | The fold put the text-host "plain preview note" in `src/repl/shell.ts`, which never runs on text hosts, and omitted `src/repl/repl.ts` from Phase 2 — yet `rememberLabel` must land there too, because the option labels are built from `CONFIRM_ITEMS` (`src/repl/repl.ts:234-238`, passed at `:279`) | Folded: §8 file list and the §9 Phase 2 rows now name `src/repl/repl.ts` for both duties; the text-host pin is placed in `test/repl-confirm.test.ts` (the `repl-tui` harness always drives a `TuiShell`) |
 | R-2 | P3 | "same alert pair (`WARN_START`/`WARN_END`)" mismatched the actual mechanism: the wrap path consumes `span.style` and appends its own `RESET` (`src/repl/components/tool-block.ts:16-27`); `WARN_END` belongs to `applyWarnSpans` | Folded: D7 restates the mapping as `{start, end, style}` and names where `WARN_END` applies |
 
-Round-4 confirmation of the round-3 folds that hold: the division-of-labour rule
-is logically sound on both host kinds, `renderCommandHeader`'s home and signature
-are right, and R1/R4 are clean.
+**Round 5** (final confirmation of the round-4 fold, `e54e99c`) — verdict
+**CONFIRMED**. Both R-1 and R-2 verified against the code; the division of labour
+was traced on both host kinds (text host: detail note + preview note, each once;
+TUI: detail and preview in the picker, each once); no contradiction remains across
+D7/D8/§8/§9/§10. One cosmetic note folded: D1's snippet now mentions that Phase 2
+adds the preview note above the detail line.
+
+**Final review status:** APPROVED — Phase 1 may start immediately; Phase 2 follows
+its own implementation cycle.
 
 ## 14. Process
 

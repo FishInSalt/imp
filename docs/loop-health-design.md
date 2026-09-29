@@ -4,11 +4,11 @@
 - Branch: `docs/loop-health-design` (design only); implementation branch TBD
   (`feat/loop-health` proposed)
 - Baseline: `faf4b55` (main)
-- Status: REVIEWED (rev 3) — two-track adversarial review closed 2026-09-29:
-  round 1 NEEDS-FIXES / APPROVE WITH CORRECTIONS, round 2 CONFIRMED WITH
-  NOTES, round 3 CONFIRMED (both tracks). Implementation gate: the owner's
-  sign-off on decisions A/B (§3). Until that sign-off, no code, test, or
-  runtime change is authorized by this document.
+- Status: REVIEWED (rev 3) + OWNER SIGNED. Two-track adversarial review closed
+  2026-09-29 (round 1 NEEDS-FIXES / APPROVE WITH CORRECTIONS, round 2
+  CONFIRMED WITH NOTES, round 3 CONFIRMED — both tracks). Owner decisions A/B
+  signed 2026-09-29: **A = no numeric valve; B = no injection.**
+  Implementation proceeds on `feat/loop-health`.
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -146,7 +146,10 @@ Non-goals (with reason):
   binding.
 - Main-agent caps unchanged (interactive unlimited; print 100).
 
-## 3. Owner decisions (proposed; explicit sign-off required before implementation)
+## 3. Owner decisions (SIGNED OFF 2026-09-29)
+
+Owner accepted the proposals below as written (A = no numeric valve;
+B = no injection).
 
 **A. Last-resort valve after the cap is removed.** Proposed: **none** — no new
 numeric valve. Remaining termination surfaces: Ctrl+C (TTY); per-call

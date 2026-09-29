@@ -209,25 +209,28 @@ export default function (api) {
 			}
 			if (matched) {
 				const effective = matched.rule;
-				// Whole command for approval semantics; the matched part highlighted
-				// so the risky fragment is visible at a glance in the picker.
-				const label = "command: ";
+				// Phase 2 (#confirm-prompt D7): the command travels as a structured
+				// preview — the picker renders it in the transcript's call-header idiom
+				// and its warn spans are command-relative — while the detail carries only
+				// the reason, so the command is shown exactly once on every surface.
 				let span;
 				if (matched.match !== undefined && matched.match.index !== undefined) {
 					span = [matched.match.index, matched.match.index + matched.match[0].length];
 				} else if (matched.span !== undefined) {
 					span = matched.span;
 				}
-				const warnSpans =
-					span !== undefined
-						? { warnSpans: [[label.length + span[0], label.length + span[1]]] }
-						: {};
-				const detail = `${label}${command}\nwhy it matched: ${effective.reason}`;
+				const detail = `why it matched: ${effective.reason}`;
 				// sessionKey "guardian:bash:<pattern>" — one remembered decision per
 				// matched pattern, so "don't ask again" covers this shape, not all bash
 				const approved = await api.confirm("[guardian] allow this bash command?", detail, {
 					sessionKey: `guardian:bash:${effective.test.source}`,
-					...warnSpans,
+					rememberLabel: "this command pattern",
+					preview: {
+						kind: "command",
+						tool: "bash",
+						text: command,
+						...(span !== undefined ? { warnSpans: [span] } : {}),
+					},
 				});
 				if (approved) return undefined; // the human said yes — run it
 				return { block: true, reason: effective.reason }; // declined: same teaching text as before
@@ -243,7 +246,7 @@ export default function (api) {
 				const approved = await api.confirm(
 					`[guardian] allow writing outside ${cwd}?`,
 					`path: ${event.args.path}\nwhy it matched: the target is outside the caller's working directory`,
-					{ sessionKey: `guardian:write:${cwd}` },
+					{ sessionKey: `guardian:write:${cwd}`, rememberLabel: "this directory" },
 				);
 				if (approved) return undefined; // the human said yes — run it
 				return {

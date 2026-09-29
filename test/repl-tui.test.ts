@@ -859,6 +859,72 @@ describe("TuiShell selector", () => {
 		shell.close();
 	});
 
+	it("#confirm-prompt (Phase 2): the command preview renders once in the call-header idiom, warn span colored, no completion suffix (D7)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "[guardian] allow this bash command?",
+			detail: "why it matched: recursive force delete",
+			preview: { kind: "command", tool: "bash", text: "rm -rf node_modules && npm i", warnSpans: [[0, 16]] },
+			items: [{ label: "Yes" }, { label: "No" }],
+		});
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("● bash  rm -rf node_modules && npm i");
+		// exactly one header and exactly one occurrence of the command across the picker
+		expect(frame.split("● bash").length - 1).toBe(1);
+		expect(frame.split("rm -rf node_modules").length - 1).toBe(1);
+		// the warn span is host-colored (byte-exact pin lives in
+		// test/confirm-preview.test.ts — the TUI splits a styled row across writes)
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\x1b[1;31m");
+		// a call that has not run never carries the completion suffix
+		expect(frame).not.toContain("✓");
+		expect(frame).not.toContain("2.3s");
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#confirm-prompt (Phase 2): malformed previews render nothing and never throw (D7)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const hostile = { kind: "diff", tool: 7, text: null, warnSpans: [[-5, 10 ** 6]] } as unknown as {
+			kind: "command";
+			tool: string;
+			text: string;
+		};
+		const chosen = shell.select({ title: "allow?", preview: hostile, items: [{ label: "Yes" }] });
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("→ 1. Yes"); // the picker still rendered
+		expect(frame).not.toContain("●"); // and the bad preview drew nothing
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#confirm-prompt (Phase 2): control bytes are stripped and a long command stays inside the width (D7)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const hostile = `echo \x1b[31mred\x1b[0m\x07 ${"x".repeat(200)}`;
+		const chosen = shell.select({
+			preview: { kind: "command", tool: "bash", text: hostile },
+			items: [{ label: "Yes" }],
+		});
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).not.toContain("\x1b"); // sanitized before rendering
+		expect(frame).toContain("echo red"); // the ANSI escape is consumed whole, the text survives
+		for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
 	it("Esc and Ctrl+C cancel to null — the machine interrupt never fires", async () => {
 		const { terminal, shell, events } = makeShell();
 		shell.start();

@@ -29,6 +29,7 @@ import {
 	parseCommand,
 } from "./commands.js";
 import { buildFoldFromDiff } from "./components/fold.js";
+import { commandPreviewText } from "./components/tool-block.js";
 import type { ReplOutput } from "./input.js";
 import { ReplInput } from "./input.js";
 import type {
@@ -230,12 +231,18 @@ function entryLabel(entry: QueueEntry): string {
 	return isBangLine(entry.text) ? "bash" : entry.mode === "followUp" ? "follow-up" : "steer";
 }
 
-/** The three-option confirm picker (M10): approve, approve for the session, decline. */
-const CONFIRM_ITEMS: SelectItemOption[] = [
-	{ label: "Yes" },
-	{ label: "Yes, don't ask again this session" },
-	{ label: "No" },
-];
+/** The three-option confirm picker (M10): approve, approve for the session,
+ *  decline. `rememberLabel` (#confirm-prompt Phase 2 D7) names what the session
+ *  memory covers, in the extension's own words — the host still owns the memory
+ *  itself, keyed by `sessionKey`. */
+function confirmItems(rememberLabel?: string): SelectItemOption[] {
+	const stock = "Yes, don't ask again this session";
+	return [
+		{ label: "Yes" },
+		{ label: rememberLabel === undefined || rememberLabel === "" ? stock : `${stock} (${rememberLabel})` },
+		{ label: "No" },
+	];
+}
 
 /**
  * The interactive side of api.confirm: one host created before extension
@@ -275,12 +282,20 @@ export class TtyConfirm {
 		// no-host and print paths this note is the ONLY place the gated command and
 		// its reason reach the user.
 		if (select === null && detail !== undefined && detail !== "") this.renderer.note(`  ${detail}`);
+		// #confirm-prompt (Phase 2 D7): without a picker the preview still reaches
+		// the user — one plain line, no ANSI (the picker surface styles it, and the
+		// extension has dropped the command from the detail, so it appears once).
+		if (select === null) {
+			const previewText = commandPreviewText(options?.preview);
+			if (previewText !== "") this.renderer.note(`  ${previewText}`);
+		}
 		if (select !== null) {
 			const choice = await select({
 				title: message,
 				detail,
 				warnSpans: options?.warnSpans,
-				items: CONFIRM_ITEMS,
+				preview: options?.preview,
+				items: confirmItems(options?.rememberLabel),
 			});
 			if (choice === null) return false; // cancelled picker declines, like Ctrl+C at the ask
 			if (choice === 1 && sessionKey !== undefined) this.sessionAllowed.add(sessionKey);

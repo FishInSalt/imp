@@ -2,10 +2,9 @@
 
 Status: APPROVED — independent adversarial review closed after five rounds
 (NEEDS REVISION → CONFIRMED WITH NOTES → CONFIRMED WITH NOTES → NEEDS REVISION →
-CONFIRMED); every fold is recorded in §13. **Phase 1 is implemented** on
-`feat/confirm-prompt-phase1` (§7 records the implementation facts and the gate
-results); Phase 2 (seam + guardian consumer) follows its own implementation cycle
-against the same document.
+CONFIRMED); every fold is recorded in §13. **Phase 1 and Phase 2 are both
+implemented** (§7 and §8 record the implementation facts, deviations and gate
+results); Phase 2 awaits its independent implementation check.
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -69,21 +68,21 @@ Four defects are visible in that single frame:
 | Fact | Evidence |
 |---|---|
 | Entry point: extensions call `api.confirm(message, detail, options)` | `src/extensions/types.ts:105`; guardian call sites `examples/extensions/guardian.mjs:228` (bash gate) and `:243` (write gate) |
-| Host: `TtyConfirm.handler` writes `renderer.note` lines, then opens the picker | `src/repl/repl.ts:265-283` (title note `:271`, detail note `:272`, `select` call `:275-280`) |
+| Host: `TtyConfirm.handler` writes `renderer.note` lines, then opens the picker | `src/repl/repl.ts:272-300` (title note `:278`, the picker-conditional detail note `:285`, `select` call `:293`) |
 | The notes go to the output stream, so they are the only detail carrier on non-TUI hosts | `src/render.ts` `note()`; `test/repl-confirm.test.ts:67` asserts the detail note for the picker host, `:127` the probe of the no-picker path |
-| Options are a host constant, identical for every gate | `src/repl/repl.ts:234-238` (`Yes` / `Yes, don't ask again this session` / `No`) |
-| Picker primitive: `TuiShell.select` — title, dim detail, `warnSpans`, items, optional type-to-filter | `src/repl/shell.ts:827-972`; `SelectOptions` at `src/repl/line-input.ts:31-51` |
-| Warn spans: extension supplies plain offsets, host owns color | `src/repl/shell.ts:861`; `src/format.ts:162-192` (`WARN_START = \x1b[0m\x1b[1;31m`) |
+| Options are a host constant, identical for every gate | `src/repl/repl.ts:238-244` (`confirmItems`: `Yes` / `Yes, don't ask again this session` / `No`) |
+| Picker primitive: `TuiShell.select` — title, dim detail, `warnSpans`, items, optional type-to-filter | `src/repl/shell.ts:829-979`; `SelectOptions` at `src/repl/line-input.ts:31-51` |
+| Warn spans: extension supplies plain offsets, host owns color | `src/repl/shell.ts:863`; `src/format.ts:162-192` (`WARN_START = \x1b[0m\x1b[1;31m`) |
 | Theme is the identity map — the picker rows carry no color | `src/repl/shell.ts:81-92` (`tuiEditorTheme`) |
-| The editor hint row (and notice row) are blanked while a selector owns focus | `src/repl/shell.ts:1194-1205` (`updatePlaceholder`, `blocked` at `:1198`); hide/restore comments at `:965` and `:882` |
+| The editor hint row (and notice row) are blanked while a selector owns focus | `src/repl/shell.ts:1201-1212` (`updatePlaceholder`, `blocked` at `:1205`); hide/restore comments at `:972` and `:889` |
 | Picker keys: up/down, Enter, Esc/Ctrl+C only — no digits, no letter hotkeys | `node_modules/@earendil-works/pi-tui/dist/components/select-list.js:67` (up), `:84` (cancel); row marker `"→ "` at `:91` |
-| The shell's pre-focus listener runs before the focused component sees a key | `tui.js` `inputListeners` ordering; imp's listener carries `filterKey` at `src/repl/shell.ts:920` |
-| `Container.addChild` is append-only; the filter path rebuilds the list by remove+append | `node_modules/@earendil-works/pi-tui/dist/tui.js` (`addChild` push); `src/repl/shell.ts:898` (`applyFilter`) |
+| The shell's pre-focus listener runs before the focused component sees a key | `tui.js` `inputListeners` ordering; imp's listener carries `filterKey` at `src/repl/shell.ts:927` |
+| `Container.addChild` is append-only; the filter path rebuilds the list by remove+append | `node_modules/@earendil-works/pi-tui/dist/tui.js` (`addChild` push); `src/repl/shell.ts:905` (`applyFilter`) |
 | `select` is shared: project-trust ask, `/settings`, `/model`, other command pickers | `src/repl/trust-ask.ts:59`; `src/repl/commands.ts:580,628,1109,1271` |
-| Session memory is host-side, keyed by `sessionKey` | `src/repl/repl.ts:257` (set), `:267` (short-circuit), `:282` (remember); `ConfirmOptions` at `src/extensions/types.ts:48-59` |
-| Note lines are pinned by tests | `test/repl-confirm.test.ts:66` (title), `:67` (detail — the only detail pin), `:76` and `test/repl-tui.test.ts:2068` (the `— allowed for this session` suffix, unaffected by D1) |
-| Picker marker is pinned by tests | `test/repl-tui.test.ts:703,726,778,779,1043,1044,1049,1078,1595,1796` — ten sites; `:726` is an ordering assertion, the other nine are marker assertions |
-| Legacy asks must stay byte-identical; no-host hosts decline with one teaching line | `test/repl-confirm.test.ts:127`; `src/extensions/registry.ts:93-94` (written at `:356`) |
+| Session memory is host-side, keyed by `sessionKey` | `src/repl/repl.ts:264` (set), `:274` (short-circuit), `:301` (remember); `ConfirmOptions` at `src/extensions/types.ts:48-59` |
+| Note lines are pinned by tests | `test/repl-confirm.test.ts:66` (title), `:67` (detail — the only detail pin), `:76` and `test/repl-tui.test.ts:2139` (the `— allowed for this session` suffix, unaffected by D1) |
+| Picker marker is pinned by tests | `test/repl-tui.test.ts:703,726,778,779,1109,1110,1115,1144,1661,1862` — ten sites; `:726` is an ordering assertion, the other nine are marker assertions |
+| Legacy asks must stay byte-identical; no-host hosts decline with one teaching line | `test/repl-confirm.test.ts:166`; `src/extensions/registry.ts:93-94` (written at `:356`) |
 | Guardian's write gate passes an exact options object | `test/guardian.test.ts:107` (`toEqual({ sessionKey: "guardian:write:/tmp/imp-wt-9" })`) |
 
 ## 3. External reference (what pi and Claude Code do)
@@ -163,7 +162,7 @@ rounds).
 ### D1 — record policy: one title line, and the detail note only where no picker carries it
 
 `TtyConfirm.handler` is the single handler for **every** host: TUI picker,
-readline `[y/N]`, and the no-host fallback. Its two notes (`repl.ts:271-272`) run
+readline `[y/N]`, and the no-host fallback. Its two notes (`repl.ts:275-278`) run
 unconditionally today, before the picker check at `:275` and the ask check at
 `:284`. On the readline and no-host paths there is no picker, so the detail note
 is the **only** place the gated command and its reason reach the user.
@@ -182,17 +181,17 @@ Consequences:
 
 - TUI: title once in the transcript, detail inside the picker (defect 1 fixed).
 - readline / no-host / print: byte-identical to today (non-goal kept).
-- The session-memory suffix line (`— allowed for this session`, `repl.ts:268`)
+- The session-memory suffix line (`— allowed for this session`, `repl.ts:275`)
   is untouched.
 
 Test impact, corrected after round-1 P2 and round-2 N1: the **only** detail-note
 pin is `test/repl-confirm.test.ts:67` (`:66` is the title assertion, `:68` is a
-comment); `:76` and `test/repl-tui.test.ts:2068` pin the suffix (unaffected).
+comment); `:76` and `test/repl-tui.test.ts:2139` pin the suffix (unaffected).
 New guard: a test asserting the detail note **is** written when `select` is
 absent.
 
 Known transient (round-2 N5): a TUI confirm *queued* behind another picker
-(`src/repl/shell.ts:836`) writes the title note immediately but its detail
+(`src/repl/shell.ts:838`) writes the title note immediately but its detail
 only when the picker actually opens — and if the shell closes before that, the
 detail is never shown. This is accepted and documented rather than worked
 around: today's duplicate-note behavior is the thing being removed, and no
@@ -201,7 +200,7 @@ predicate exists to distinguish "queued" from "no picker".
 ### D2 — affordance line, inside the picker, on non-filterable pickers only
 
 While a picker owns focus the editor hint row is blanked on purpose
-(`src/repl/shell.ts:1194-1205`, M10 review P2#5), so the affordance must live
+(`src/repl/shell.ts:1201-1212`, M10 review P2#5), so the affordance must live
 **inside** the picker box, as a dim line under the items. Copy follows the
 existing hint style (lowercase, parenthesized, `·` separated —
 `src/repl/shell.ts:175-182`):
@@ -211,7 +210,7 @@ existing hint style (lowercase, parenthesized, `·` separated —
 ```
 
 The range shown is computed from the item count (§6 D3): today the confirm
-carries three items (`src/repl/repl.ts:234-238`), so it reads `1-3`; a picker
+carries three items (`src/repl/repl.ts:238-244`), so it reads `1-3`; a picker
 with more items widens the range up to `1-9`.
 
 Rules:
@@ -220,7 +219,7 @@ Rules:
   picker keeps its `filter:` row and gets no digit range (a digit there is a
   query character, D3).
 - The dim call passes the ANSI flag explicitly — `dim(text, true)` — matching
-  the detail block at `src/repl/shell.ts:861`; the `dim()` default probes
+  the detail block at `src/repl/shell.ts:863`; the `dim()` default probes
   `process.stdout.isTTY` (`src/format.ts:9`) and would make frames non-deterministic
   under the test terminal.
 - The numeric range is computed from the item count (D3/D4).
@@ -239,7 +238,7 @@ numbers before the list ever scrolls. Consequences to state explicitly:
   avoids colliding with the type-to-filter habit.
 
 Implementation: the shell's pre-focus listener (which already carries `filterKey`,
-`src/repl/shell.ts:920-950`) runs before the focused component receives a key
+`src/repl/shell.ts:927-957`) runs before the focused component receives a key
 (pi-tui `inputListeners` ordering, round-1 checked), so digit handling belongs
 next to `filterKey`, gated on `selector !== null` and the picker not being
 filterable.
@@ -254,14 +253,14 @@ showing the hint without numbers would be lying.
 Blast radius, corrected after round-1 P2 — **ten** sites, all in
 `test/repl-tui.test.ts`:
 
-- nine marker assertions (`:703,778,779,1043,1044,1049,1078,1595,1796`) become
+- nine marker assertions (`:703,778,779,1109,1110,1115,1144,1661,1862`) become
   `<marker> <n>. <label>`;
 - `:726` is a **different** kind of assertion — an ordering check
   (`indexOf("why it matched") < indexOf("→ Yes")`) whose needle must change to
   `"→ 1. Yes"`; it does not follow the prefix rule.
 
 The label prefix is presentation only: the row's identity stays the original
-index in `SelectItemOption.value` (`src/repl/shell.ts:846-850`), which is what
+index in `SelectItemOption.value` (`src/repl/shell.ts:848-852`), which is what
 `finish()` resolves. A wider search found no picker-marker assertions outside
 that file (round-1 checked).
 
@@ -288,7 +287,7 @@ Rules: exactly one blank row before the items and none between the items and the
 hint; the blank row and the hint row are added **only on non-filterable
 pickers**, so the item list stays the last child for filterable ones —
 `Container.addChild` is append-only and `applyFilter` rebuilds the list by
-remove+append (`src/repl/shell.ts:898`), so a hint appended after the list
+remove+append (`src/repl/shell.ts:905`), so a hint appended after the list
 would leave a refiltered list *below* the hint (round-1 P2). Pin a test that
 refiltering keeps the list below nothing else. Every row honors the terminal
 width (enforcement pattern: `test/repl-tui.test.ts:732`, `:299`); the item list
@@ -335,7 +334,8 @@ interface ConfirmOptions {
   prefix and passes `why it matched: …` as the detail). The host guarantees the
   command is shown **exactly once** on every surface:
   - TUI: a styled row under the title, before the items;
-  - text hosts (readline, no-host, print): one plain note line, so the command
+  - text hosts (readline, no-host, print): one plain note (its own newlines
+    preserved), so the command
     is not lost where the styled row does not exist (D8).
 - `preview.kind === "command"` renders `● <tool>  <text>` in the transcript's
   call-header idiom: dim `●`, bold tool name, two spaces, then the text;
@@ -358,7 +358,7 @@ interface ConfirmOptions {
   defensive stance `applyWarnSpans` already takes (`src/format.ts:168-192`).
 - **Both `tool` and `text` pass through `sanitizeDisplay`**
   (`src/repl/tool-presentation.ts:14`) before rendering. The transcript header
-  sanitizes the same way (`src/repl/components/tool-block.ts:409,412`), and
+  sanitizes the same way (`src/repl/components/tool-block.ts:483,486`), and
   pi-tui's `Text` preserves control bytes instead of stripping them
   (`node_modules/@earendil-works/pi-tui/dist/components/text.js:54-55`), so a
   command string containing ESC sequences would otherwise reach the terminal
@@ -370,7 +370,7 @@ interface ConfirmOptions {
   with the host's alert style, and wraps through `wrappedRows(text, width, spans)`
   (`:73`). Note the mechanism: `styled()` applies `span.style` and appends its own
   `RESET` (`:16-27`) — `WARN_END` (`src/format.ts:163`) belongs to the
-  `applyWarnSpans` path (the detail block, `src/repl/shell.ts:861`) and is **not**
+  `applyWarnSpans` path (the detail block, `src/repl/shell.ts:863`) and is **not**
   consumed by the wrap path. Width follows the existing enforcement pattern
   (`test/repl-tui.test.ts:742`).
 - Degradation (D8) applies: hosts without a picker ignore both fields.
@@ -380,7 +380,7 @@ interface ConfirmOptions {
 | Host | Behavior with the new fields | Evidence |
 |---|---|---|
 | TUI picker | renders them (Phase 2) | n/a |
-| Legacy readline ask | ignored; `proceed? [y/N]` byte-identical, the detail note still written (D1), and `preview` printed as one plain note line | `test/repl-confirm.test.ts:127`, new guard |
+| Legacy readline ask | ignored; `proceed? [y/N]` byte-identical, the detail note still written (D1), and `preview` printed as one plain note line | `test/repl-confirm.test.ts:166`, new guard |
 | No interactive host (print, tests) | same as readline: the one `imp:` teaching line, resolves false; `preview`/`detail` reach the transcript as plain notes | `src/extensions/registry.ts:93-94` |
 | Subagent call in-process | same host, same queue as the parent | `test/repl-tui.test.ts:1031` |
 
@@ -412,7 +412,7 @@ document's branch). Recorded implementation facts:
   Both new pins were mutation-verified (empty `Text` → blank-row pin red;
   unconditional chrome → child-order pin red).
 - Marker sites: **all ten** asserted sites needed the numbering form — including
-  the two `/model` sites (`test/repl-tui.test.ts:1595,1796`). `/model` is **not**
+  the two `/model` sites (`test/repl-tui.test.ts:1661,1862`). `/model` is **not**
   filterable (`src/repl/commands.ts:1503-1506`; the `filterable: true` at `:1439`
   belongs to `/resume`), so D4's rule numbers it like the confirm.
 - Gates (unmasked): lint 0, typecheck 0, full suite 0 (**127 files / 2466
@@ -428,7 +428,7 @@ Acceptance criteria (scriptable):
    appears in both regions, and the detail does not (D1).
 2. **No-picker host:** the title *and* detail notes are both written
    (byte-identical to today), the readline probe at
-   `test/repl-confirm.test.ts:127` still passes unchanged (D1, non-goal §5),
+   `test/repl-confirm.test.ts:166` still passes unchanged (D1, non-goal §5),
    and a `preview` appears as one plain note line (D7, D8).
 3. While a non-filterable picker is open: the affordance line is present, digits
    `1..n` select item `n-1`, Enter selects the highlighted row, ↑/↓ move, Esc
@@ -443,16 +443,51 @@ Acceptance criteria (scriptable):
 
 ## 8. Phase 2 — seam + consumer: scope, files, acceptance
 
+**Status: IMPLEMENTED** (branch `feat/confirm-prompt-phase2`). Recorded
+implementation facts and the three deviations from the text below:
+
+- The seam is exactly the two optional fields; no extension API signature
+  changed. `CommandPreview` lives in `src/extensions/types.ts` (the contract) and
+  `SelectOptions.preview` imports that type, so there is one definition.
+- **Deviation 1 (mechanism): wrapping is `Text`'s, not `wrappedRows`.**
+  `renderCommandHeader(preview)` takes the preview object and returns **one styled
+  string**; the `Text` block that carries it wraps it exactly like the detail
+  block (the house mechanism for block content). Same user-visible result — width
+  honored, header never repeated — with no width plumbing and no span-order risk.
+  A second export, `commandPreviewText(preview)`, is the plain (no-ANSI) carrier
+  for text hosts.
+- **Deviation 2 (sanitization scope): control SEQUENCES are consumed.**
+  Sanitization is the shared `sanitizeDisplay`, which consumes ANSI/CSI/OSC
+  sequences whole; a bare C0 byte follows the house policy (as on every other
+  surface, a lone BEL survives). The acceptance line below is read as "control
+  sequences are consumed" — the security-relevant part, pinned.
+- **Deviation 3 (pin placement):** the byte-exact pins live in the new
+  `test/confirm-preview.test.ts`, not in the TUI test: the TUI writes a styled row
+  in fragments, so an exact-byte assertion there is unreliable. The TUI test keeps
+  the layout pins (idiom rendered once, no `✓`/elapsed, width honored).
+- Guardian: `preview` + `rememberLabel: "this command pattern"` at the bash gate
+  (warn spans are now command-relative), `rememberLabel: "this directory"` at the
+  write gate, and the `command: …` prefix is gone from the detail — so the command
+  appears exactly once.
+- Red-first evidence: 9 pins red at the time of the red run (5 guardian option pins,
+  2 confirm pins, 2 preview pins — the byte-pin file did not exist yet);
+  reverting all four source files at the FINAL pin set reds **15** tests
+  (`test/confirm-preview.test.ts` 6, `test/guardian.test.ts` 5,
+  `test/repl-confirm.test.ts` 2, `test/repl-tui.test.ts` 2 — re-verified by the
+  implementation check). 219/219 green in the five focused files after.
+- Gates (unmasked): lint 0, typecheck 0, full suite 0 (**128 files / 2483
+  tests**), build 0. One flake observed once under load (an unrelated
+  `login-dialog` device-code test); it passes in isolation and on re-run.
+
 Files: `src/extensions/types.ts` (D7), **`src/repl/repl.ts`** (`TtyConfirm`
-builds the option labels from `CONFIRM_ITEMS` at `:234-238`, passed at `:279`, so
-`rememberLabel` lands here; the plain `preview` note on text hosts belongs to the
-same handler, `:265-291`), `src/repl/components/tool-block.ts` (new exported
-`renderCommandHeader` helper), `src/repl/shell.ts` (the picker-side preview row),
-`examples/extensions/guardian.mjs` (pass both at the bash gate and drop its
-`command: …` prefix; `rememberLabel` at the write gate), `test/repl-tui.test.ts`,
-`test/repl-confirm.test.ts` (the text-host preview note — `test/repl-tui.test.ts`
-always drives a `TuiShell`, so it cannot reach a text host),
-`test/guardian.test.ts`.
+builds the option labels (`confirmItems`), so `rememberLabel` lands here; the
+plain `preview` note on text hosts belongs to the same handler),
+`src/repl/components/tool-block.ts` (`renderCommandHeader`, `commandPreviewText`),
+`src/repl/shell.ts` (the picker-side preview row), `src/repl/line-input.ts`
+(`SelectOptions.preview`), `examples/extensions/guardian.mjs` (pass both at the
+bash gate and drop its `command: …` prefix; `rememberLabel` at the write gate),
+`test/confirm-preview.test.ts` (new), `test/repl-tui.test.ts`,
+`test/repl-confirm.test.ts`, `test/guardian.test.ts`, `CHANGELOG.md`.
 
 Round-4 correction: an earlier draft listed only `shell.ts` for Phase 2. The
 shell never runs on text hosts (`TuiShell` exists only when the input implements
@@ -512,7 +547,7 @@ Phase 1:
 - RED: digits in a filterable picker narrow the query and no hint row is added.
 - RED: refiltering keeps the list last (child order, D5).
 - GUARD (green before and after): the no-picker path still writes both notes;
-  legacy ask bytes (`test/repl-confirm.test.ts:127`); no-host teaching line
+  legacy ask bytes (`test/repl-confirm.test.ts:166`); no-host teaching line
   (`:137`, assertion at `:143-144`); Esc/Ctrl+C cancel; queue-not-decline
   (`test/repl-tui.test.ts:1031`); width wraps (`:742`).
 
@@ -526,8 +561,8 @@ Phase 2:
   command wraps inside the box width (round-2 N2).
 - RED: `detail` + `preview` together render the command exactly once, and a text
   host (`test/repl-confirm.test.ts`; `makeConfirmHost` builds one when
-  `args.select === false`, and the Phase 1 guard test at `:82` already exercises
-  that shape) prints the preview as one plain note line (round-3 R2, located in
+  `args.select === false` — the "no-picker host keeps BOTH notes" test already
+  exercises that shape) prints the preview as one plain note line (round-3 R2, located in
   round 4).
 - RED: guardian's bash gate passes a preview and a remember label.
 - RED/updated: `test/guardian.test.ts:107` includes `rememberLabel` (currently an
@@ -663,8 +698,24 @@ reproduce at 127 files / 2466 tests.
 **Final review status:** APPROVED — Phase 1 may start immediately; Phase 2 follows
 its own implementation cycle.
 
-## 14. Process
+**Phase 2 implementation check** (independent, fresh context, commit `56f5e21`) —
+verdict **APPROVE WITH CORRECTIONS**, all four items folded on the same branch:
 
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| D1 | P2 | The "9 pins red" figure was taken before the byte-pin file existed; reverting the FINAL pin set reds 15 | Folded: §8 records both numbers and the reason |
+| D2 | P3 | D7's citation for the transcript header's own sanitization was stale (`:409,412`) | Folded: `:483,486` |
+| D3 | P3 | "one plain note line" overstates the text-host form for a multi-line command | Folded: this document and the `preview` comment now say "one plain note (newlines preserved)" |
+| D4 | P3 | No pin guarded the reset discipline — a mutation dropping the trailing reset went unnoticed (0 pins red) | Folded: a pin asserts that an alert span reaching the end is closed, a mid-line span leaves nothing open, and opens equal closes |
+
+The check also confirmed: the contract is additive with exactly one
+`CommandPreview` definition; the span arithmetic always satisfies `styled()`'s
+sorted/non-overlapping contract (pathological inputs probed); no path renders the
+command twice; four mutations were each caught (3+1+1 pins for three of them, the
+fourth now pinned); the gates reproduce at 128 files / 2483 tests; and the
+`login-dialog` flake observed once did not reproduce in 13 runs.
+
+## 14. Process
 - Work happens in the `/Users/z/Z/Agent_demo/imp-confirm-design` worktree. The
   shared checkout at `/Users/z/Z/Agent_demo/imp` belongs to another session;
   that session's branch `feat/task-inline-live-rows` merged into `main` as

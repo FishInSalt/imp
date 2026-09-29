@@ -20,7 +20,7 @@ import {
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
-import { activityCount, activityText, ToolActivity } from "./components/tool-block.js";
+import { activityCount, activityText, renderCommandHeader, ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
 import type {
@@ -862,6 +862,11 @@ export class TuiShell implements LineInput {
 			// The outer dim wraps the whole block; span coloring rides inside it.
 			box.addChild(new Text(dim(applyWarnSpans(options.detail, spans, true), true), 0, 0));
 		}
+		// #confirm-prompt (Phase 2 D7): the extension's command preview renders in
+		// the transcript's call-header idiom, above the items. Malformed previews
+		// render nothing (the helper returns "").
+		const previewHeader = renderCommandHeader(options.preview);
+		if (previewHeader !== "") box.addChild(new Text(previewHeader, 0, 0));
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;
 		const queryRow = new Text("", 0, 0);

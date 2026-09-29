@@ -74,6 +74,80 @@ export function* wrappedRows(text: string, width: number, spans: StyleSpan[] = [
 	for (const row of physicalRows(text, width)) yield styled(row.text, spans, row.start);
 }
 
+/** The host's alert color for extension-declared spans, without a leading reset
+ *  (`styled` closes each span itself). */
+const WARN = "\x1b[1;31m";
+
+/** Clip, drop and sort extension-declared offsets; overlaps merge — the host
+ *  never trusts extension math (the same stance `applyWarnSpans` takes). */
+function alertRanges(spans: unknown, length: number): Array<[number, number]> {
+	if (!Array.isArray(spans)) return [];
+	const cleaned: Array<[number, number]> = [];
+	for (const candidate of spans) {
+		if (!Array.isArray(candidate) || candidate.length < 2) continue;
+		const [rawStart, rawEnd] = candidate as [unknown, unknown];
+		if (typeof rawStart !== "number" || typeof rawEnd !== "number") continue;
+		if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
+		const start = Math.max(0, Math.floor(rawStart));
+		const end = Math.min(length, Math.floor(rawEnd));
+		if (start < end) cleaned.push([start, end]);
+	}
+	cleaned.sort((a, b) => a[0] - b[0]);
+	const merged: Array<[number, number]> = [];
+	for (const [start, end] of cleaned) {
+		const last = merged[merged.length - 1];
+		if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end);
+		else merged.push([start, end]);
+	}
+	return merged;
+}
+
+/** Split a preview into its sanitized header name and body, or undefined when it
+ *  is unusable (wrong kind, non-string or empty fields) — malformed previews
+ *  render nothing. */
+function splitPreview(preview: unknown): { name: string; body: string; spans: unknown } | undefined {
+	if (typeof preview !== "object" || preview === null) return undefined;
+	const fields = preview as { kind?: unknown; tool?: unknown; text?: unknown; warnSpans?: unknown };
+	if (fields.kind !== "command") return undefined;
+	if (typeof fields.tool !== "string" || typeof fields.text !== "string") return undefined;
+	// A tool name never spans lines (the transcript header does the same).
+	const name = sanitizeDisplay(fields.tool).replace(/[\n\r\u2028\u2029]/gu, " ");
+	const body = sanitizeDisplay(fields.text);
+	if (name === "" || body === "") return undefined;
+	return { name, body, spans: fields.warnSpans };
+}
+
+/** #confirm-prompt (Phase 2 D7): the plain one-line form of a command preview
+ *  (`● tool  text`, no ANSI) — the note surface's carrier on hosts without a
+ *  picker. Returns "" for anything unusable. */
+export function commandPreviewText(preview: unknown): string {
+	const parts = splitPreview(preview);
+	return parts === undefined ? "" : `● ${parts.name}  ${parts.body}`;
+}
+
+/** #confirm-prompt (Phase 2 D7): render a command preview in the transcript's
+ *  call-header idiom — dim `●`, bold tool name, two spaces, then the command.
+ *  Both fields are sanitized (pi-tui's `Text` preserves control bytes), the warn
+ *  spans are styled with the host's own alert color and closed with a reset, and
+ *  no completion suffix is added: the call has not run. Wrapping is left to the
+ *  `Text` block that carries the result (the same mechanism the detail block
+ *  uses), so a long command wraps without repeating the header. Returns "" for
+ *  anything unusable. */
+export function renderCommandHeader(preview: unknown): string {
+	const parts = splitPreview(preview);
+	if (parts === undefined) return "";
+	const decoration = "● ";
+	const head = `${decoration}${parts.name}  `;
+	const spans: StyleSpan[] = [
+		{ start: 0, end: 1, style: DIM },
+		{ start: decoration.length, end: decoration.length + parts.name.length, style: BOLD },
+	];
+	for (const [start, end] of alertRanges(parts.spans, parts.body.length)) {
+		spans.push({ start: head.length + start, end: head.length + end, style: WARN });
+	}
+	return styled(`${head}${parts.body}`, spans);
+}
+
 function ellipsize(text: string, width: number): string {
 	if (visibleWidth(text) <= width) return text;
 	let out = "";

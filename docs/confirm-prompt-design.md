@@ -1025,3 +1025,134 @@ before it is called done.
 
 An independent implementation check followed (`§15.12`); its pin gaps were folded
 with mutation-verified pins before the merge.
+
+## 16. Amendment A2 — the picker's own rule (Phase 4)
+
+Base `f417fba` (main after the Phase 3 acceptance ledger). Phase 3 merged as
+`eb6e064` and the owner accepted it by eye on 2026-09-30 (`2e5a55e`, merge
+`f417fba`). The owner then asked for two adjustments; both are owner-approved
+with the leanings below.
+
+### 16.1 Problem
+
+| # | Observation | Evidence |
+|---|---|---|
+| P5 | The picker title's ` · guardian` tag is redundant — the record line above already names the caller | owner, 2026-09-30; the tag renders at `src/repl/shell.ts:881-889` |
+| P6 | The transcript and the picker are separated only by a blank row; the owner asked for a horizontal rule, ideally naming the extension | owner, 2026-09-30 |
+
+### 16.2 Decisions
+
+#### D13 — the picker title is the extension's words, nothing appended
+
+- `src/repl/shell.ts:881-889`: the title renders as `options.title` again; the
+  ` · <attribution>` tag is removed (bytes exactly as before Phase 3 D9).
+- `SelectOptions.attribution` (`src/repl/line-input.ts:41`) stays — the value now
+  feeds D14's rule label, and `sanitizeDisplay` moves with it.
+- Text hosts are unaffected: they have no title surface, and the transcript
+  record line keeps `▪ confirm: guardian — …` (owner decision: the name stays
+  there, because that line is the only provenance carrier on readline/no-host/
+  print, and it is the transcript's history).
+
+#### D14 — a labeled rule opens every picker (host-drawn, host-labeled)
+
+- The label is the **host-held** attribution from D9, never extension-authored:
+  the same value the record line uses. An extension therefore cannot write a
+  *different* name into the divider, and no extension-facing API changes.
+- New shared component `src/repl/components/section-rule.ts`:
+  `export class SectionRule implements Component`, constructed with an optional
+  label. It generalises the private `DialogBorder`
+  (`src/repl/login-dialog.ts:40-46`, "pi's DynamicBorder").
+- Render contract (`render(width)`):
+  - absent/empty label, or `width < 5` → `dim("─".repeat(width))`;
+  - otherwise the label is `sanitizeDisplay`-ed, clipped with `truncateToWidth`
+    to `max(1, width - 4)`, and the row is
+    `dim("─"×left) + " " + label + " " + dim("─"×right)` with
+    `left = max(1, floor((width - (labelWidth + 2)) / 2))` and
+    `right = max(1, width - (labelWidth + 2) - left)` — at least one dash on each
+    side, the label centred;
+  - dashes faint, label at normal weight (D12: decision content normal, chrome
+    faint).
+- Placement (base `f417fba`): the generic picker box gets the rule **between** its
+  leading `Spacer(1)` (`src/repl/shell.ts:879`) and its title (`:880`); the
+  session tree gets it inside `boxWrapper` between `:1148` and `:1149`.
+- **Not** placed above the login dialog: it already renders `DialogBorder` above
+  and below its content (`src/repl/login-dialog.ts:73,97`), so a third rule would
+  be decoration. Its D11 blank row stays.
+- Layout (owner-approved): record note → blank row → rule → title.
+- Phase 1 D5's "list stays the last child" invariant is untouched (the rule
+  precedes the title, not the list).
+
+### 16.3 Not doing
+
+- Nothing else from §15 changes: the record line keeps the name, the blank row
+  stays, the preview and its alert span stay.
+- Not making the rule extension-authored, configurable, or themeable (no API
+  change); not retrofitting the login dialog's borders.
+
+### 16.4 Files touched (forecast)
+
+`src/repl/components/section-rule.ts` (new), `src/repl/shell.ts` (title block and
+the two box sites), `test/repl-tui.test.ts`, `CHANGELOG.md`, and this document.
+`src/repl/line-input.ts` and `src/repl/repl.ts` are unchanged.
+
+### 16.5 Test plan (red-first; each pin mutation-verified)
+
+1. **D13**: a picker with an attribution renders the bare title (no ` · `, no
+   stray space), and the frame's rule carries the label.
+2. **D14 order**: with an attribution the generic picker's rows are
+   blank → rule → title, in that order; the session tree gets an unlabeled rule
+   above its first row; the login dialog gains no host rule (it still shows
+   exactly its own two).
+3. **D14 bytes**: the labeled rule's exact shape (dim dashes, plain label, dim
+   dashes, every run closed); a hostile attribution (`\x1b[31m`) reaching the
+   label is sanitized — this replaces the Phase 3 title-tag sanitation pin
+   (`test/repl-tui.test.ts:800-810`).
+4. **D14 edges**: `width < 5` → plain rule; empty label → plain rule; an
+   over-wide label is clipped and `visibleWidth(row) <= width` always holds.
+
+Each pin must be RED against the pre-change code, and the shared-behaviour pins
+are additionally proven by reverting the implementation and re-running (the
+Phase 3 rule: a pin that survives its own mutation is not a pin).
+
+### 16.6 Re-pin inventory (counts at `f417fba`)
+
+`test/repl-tui.test.ts:771-798` (the title tag) becomes the rule-label pin;
+`:800-810` (hostile attribution) points at the label instead of the title;
+`test/repl-confirm.test.ts:50-51,64` keep asserting that `attribution` reaches
+`select()` — unchanged by D13/D14; the Phase 3 D11 pins still expect the blank
+row, which stays.
+
+### 16.7 Degradation matrix (must not change)
+
+Text hosts (readline, no-host, print/`--print`) never construct TUI components,
+so D13/D14 are TUI-only; the record line keeps `guardian — ` on every host; the
+no-picker teaching line and the plain preview note are untouched; `--print`
+output stays ANSI-free.
+
+### 16.8 Acceptance (manual, owner)
+
+Expected frame (approved in conversation): record note → blank row → labeled rule
+→ bare title → reason (normal weight) → red-spanned preview → blank row → items →
+affordance. A `/resume` (or `/tree`) picker shows an **unlabeled** rule; the
+login dialog shows no host-added rule.
+
+### 16.9 Open questions for the reviewer
+
+| # | Question |
+|---|---|
+| O7 | Centred label vs left-anchored after two dashes: is centring worth the arithmetic (odd/even widths, wide characters), and does `right = max(1, …)` ever overflow `width`? |
+| O8 | Should the login dialog's `DialogBorder` rows reuse `SectionRule` (one implementation), or stay private? |
+| O9 | Label at normal weight (D12's argument: it says who asks) or faint like the dashes? |
+| O10 | Rule *plus* the D11 blank row — intended airiness, or one element too many? |
+
+### 16.10 Review log (A2)
+
+**Round 1** — pending (independent adversarial review of this section at
+`f417fba`).
+
+### 16.11 Process
+
+Branch `feat/confirm-prompt-phase4` from `f417fba`; this amendment passes an
+independent adversarial review before implementation; implementation is
+red-first with mutation-verified pins; an independent implementation check
+follows; then `--no-ff` merge plus a ledger entry. Phase 3 stays revertible.

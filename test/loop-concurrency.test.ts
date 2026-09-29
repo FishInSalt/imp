@@ -296,3 +296,134 @@ describe("tool concurrency (M5b design §6)", () => {
 		]);
 	});
 });
+
+describe("#tool-settle: per-call timing", () => {
+	/** Gated concurrency-safe tool; `held.count` lets the test wait for both
+	 *  executions to be in flight before releasing them one at a time. */
+	function heldTool(state: { count: number }, gates: Record<string, Gate>): Tool {
+		return {
+			name: "held",
+			description: "gated",
+			parameters: Type.Object({ message: Type.String() }),
+			concurrencySafe: true,
+			async execute(args) {
+				state.count++;
+				await gates[String(args.message)]?.promise;
+				return { output: `${String(args.message)} done` };
+			},
+		};
+	}
+
+	const twoCalls = assistant(
+		["a", "b"].map((id) => ({
+			type: "toolCall" as const,
+			id,
+			name: "held",
+			arguments: { message: id },
+		})),
+		"tool_use",
+	);
+
+	it("measures each concurrent call at its own settle, not the chunk's wall time", async () => {
+		const a = gate();
+		const b = gate();
+		const state = { count: 0 };
+		// a starts at 1000, b starts at 1000, a settles at 3000, b at 9000 — a
+		// chunk-wide window would report 8000 for both.
+		const ticks = [1000, 1000, 3000, 9000];
+		let tick = 0;
+		const events: AgentEvent[] = [];
+		const history: AgentMessage[] = [];
+		const run = runAgentLoop({
+			provider: scriptedProvider([twoCalls, finalText]),
+			model: "m",
+			system: "",
+			tools: [heldTool(state, { a, b })],
+			history,
+			clock: () => ticks[tick++] ?? 0,
+			onEvent: (event) => events.push(event),
+		});
+		await waitUntil(() => state.count === 2);
+		a.resolve();
+		await waitUntil(() => events.some((e) => e.type === "tool_settled" && e.result.toolCallId === "a"));
+		b.resolve();
+		await run;
+
+		const settled = events.flatMap((e) => (e.type === "tool_settled" ? [e.result] : []));
+		expect(settled.map((r) => [r.toolCallId, r.durationMs])).toEqual([
+			["a", 2000],
+			["b", 8000],
+		]);
+		// The authoritative tool_end still fires in call order, after the chunk.
+		const ends = events.flatMap((e) => (e.type === "tool_end" ? [e.result] : []));
+		expect(ends.map((r) => [r.toolCallId, r.durationMs])).toEqual([
+			["a", 2000],
+			["b", 8000],
+		]);
+		// ...and the measurement never enters history.
+		const persisted = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+		expect(persisted.map((r) => r.toolCallId)).toEqual(["a", "b"]);
+		expect(persisted.some((r) => "durationMs" in r)).toBe(false);
+	});
+
+	it("a serial call emits no settle event and carries no measurement", async () => {
+		const serial: Tool = {
+			name: "held",
+			description: "serial",
+			parameters: Type.Object({ message: Type.String() }),
+			async execute(args) {
+				return { output: `${String(args.message)} done` };
+			},
+		};
+		const events: AgentEvent[] = [];
+		await runAgentLoop({
+			provider: scriptedProvider([twoCalls, finalText]),
+			model: "m",
+			system: "",
+			tools: [serial],
+			history: [],
+			clock: () => 1,
+			onEvent: (event) => events.push(event),
+		});
+		expect(events.some((e) => e.type === "tool_settled")).toBe(false);
+		const ends = events.flatMap((e) => (e.type === "tool_end" ? [e.result] : []));
+		expect(ends.map((r) => r.toolCallId)).toEqual(["a", "b"]);
+		expect(ends.every((r) => r.durationMs === undefined)).toBe(true);
+	});
+});
+
+describe("#tool-settle: calls that never ran", () => {
+	it("a schema-refused call in a chunk emits no settle event but still gets its tool_end", async () => {
+		const tool: Tool = {
+			name: "held",
+			description: "requires a message",
+			parameters: Type.Object({ message: Type.String() }),
+			concurrencySafe: true,
+			async execute(args) {
+				return { output: `${String(args.message)} done` };
+			},
+		};
+		const mixed = assistant(
+			[
+				{ type: "toolCall" as const, id: "bad", name: "held", arguments: {} },
+				{ type: "toolCall" as const, id: "good", name: "held", arguments: { message: "ok" } },
+			],
+			"tool_use",
+		);
+		const events: AgentEvent[] = [];
+		await runAgentLoop({
+			provider: scriptedProvider([mixed, finalText]),
+			model: "m",
+			system: "",
+			tools: [tool],
+			history: [],
+			clock: () => 7000,
+			onEvent: (event) => events.push(event),
+		});
+		expect(events.flatMap((e) => (e.type === "tool_settled" ? [e.result.toolCallId] : []))).toEqual(["good"]);
+		const ends = events.flatMap((e) => (e.type === "tool_end" ? [e.result] : []));
+		expect(ends.map((r) => r.toolCallId)).toEqual(["bad", "good"]);
+		expect(ends[0]?.durationMs).toBeUndefined();
+		expect(ends[0]?.isError).toBe(true);
+	});
+});

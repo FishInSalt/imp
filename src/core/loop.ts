@@ -19,6 +19,11 @@ export type AgentEvent =
 	| LLMEvent
 	| { type: "tool_start"; toolCallId: string; name: string; args: unknown }
 	| { type: "tool_end"; result: ToolResult }
+	/** #tool-settle: one concurrency-safe chunk call settled. **Display-only** —
+	 *  the authoritative, call-ordered `tool_end` still follows in phase 3.
+	 *  Reaches no extension sink (the dispatchers gate on `tool_end`) and is
+	 *  never forwarded to the print/legacy Renderer. */
+	| { type: "tool_settled"; result: ToolResult }
 	/** #loop-health: a first-fire health signal, emitted by the callers'
 	 *  monitors (never by the loop) and relayed to the interactive REPL.
 	 *  It is not an M4 extension event and reaches no extension sink. */
@@ -66,6 +71,10 @@ export interface RunAgentLoopOptions {
 	) => ToolCallDecision | void | undefined | Promise<ToolCallDecision | void | undefined>;
 	onEvent?: (event: AgentEvent) => void;
 	signal?: AbortSignal;
+	/** #tool-settle: clock used to measure a concurrency-safe call's own
+	 *  execution time. Injectable for deterministic tests; production passes
+	 *  nothing and gets Date.now, matching TranscriptSink's default. */
+	clock?: () => number;
 	/**
 	 * SA-04: optional attempt ledger. When present, every `message_end` report
 	 * is recorded for the attempt and a started stream that ends without one
@@ -130,6 +139,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		onEvent,
 		signal,
 		usageLedger,
+		clock = Date.now,
 	} = options;
 
 	if (userMessage !== undefined && userMessage !== "") {
@@ -245,7 +255,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		}
 
 		const results: ToolResult[] = [];
-		await executeToolBatch(toolCalls, toolMap, signal, onToolCall, onEvent, results);
+		await executeToolBatch(toolCalls, toolMap, signal, onToolCall, onEvent, results, clock);
 
 		// Abort can stop mid-batch: synthesize results for tools that never ran,
 		// so history (and the persisted session) always has complete tool_use →
@@ -378,6 +388,7 @@ async function executeToolBatch(
 	onToolCall: RunAgentLoopOptions["onToolCall"],
 	onEvent: RunAgentLoopOptions["onEvent"],
 	results: ToolResult[],
+	clock: () => number,
 ): Promise<void> {
 	const isSafe = (name: string) => toolMap.get(name)?.concurrencySafe === true;
 	let i = 0;
@@ -408,6 +419,7 @@ async function executeToolBatch(
 				onToolCall,
 				onEvent,
 				results,
+				clock,
 			);
 		}
 	}
@@ -424,6 +436,7 @@ async function executeChunk(
 	onToolCall: RunAgentLoopOptions["onToolCall"],
 	onEvent: RunAgentLoopOptions["onEvent"],
 	results: ToolResult[],
+	clock: () => number,
 ): Promise<void> {
 	// Phase 1 — serial, in call order: tool_start, validation, gate. Gates see
 	// a deterministic, non-interleaved sequence instead of racing under Promise.all.
@@ -457,7 +470,19 @@ async function executeChunk(
 	// Phase 2 — the approved subset runs concurrently. Abort-aware tools settle
 	// fast on Ctrl+C; a settled-but-unemitted result can never be dropped.
 	if (signal?.aborted) return; // approved, never executed: fillMissing closes
-	const settled = await Promise.all(plans.map((plan) => ("run" in plan ? plan.run(signal) : plan.result)));
+	// #tool-settle: measure each call at its own settle point — the phase-3
+	// buffer otherwise makes every call report the batch's wall time — and let
+	// the display update now. The authoritative tool_end still follows in phase 3.
+	const settled = await Promise.all(
+		plans.map(async (plan) => {
+			if (!("run" in plan)) return plan.result;
+			const startedAt = clock();
+			const result = await plan.run(signal);
+			const measured: ToolResult = { ...result, durationMs: clock() - startedAt };
+			onEvent?.({ type: "tool_settled", result: measured });
+			return measured;
+		}),
+	);
 	// Phase 3 — call-order emission: deterministic tool_end and result order.
 	for (const result of settled) {
 		results.push(persistableResult(result));
@@ -471,8 +496,9 @@ async function executeChunk(
  *  SA-03 taskRecord is the deliberate opposite: program metadata that MUST
  *  reach history — the spread below keeps it while removing display. */
 function persistableResult(result: ToolResult): ToolResult {
-	if (result.display === undefined) return result;
-	const { display: _display, ...rest } = result;
+	if (result.display === undefined && result.durationMs === undefined) return result;
+	// #tool-settle: `durationMs` shares `display`'s lifecycle — events only.
+	const { display: _display, durationMs: _durationMs, ...rest } = result;
 	return rest;
 }
 

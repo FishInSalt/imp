@@ -402,3 +402,29 @@ describe("health events (print-safe, #loop-health)", () => {
 		expect(lineB).not.toContain("health");
 	});
 });
+
+describe("#tool-settle: the settle event is not printable", () => {
+	it("Renderer.event ignores tool_settled: the bytes are identical with and without it", () => {
+		const replay = (withSettle: boolean): string => {
+			const sink = collector();
+			const renderer = new Renderer({
+				write: sink.write,
+				ansi: false,
+				liveTools: false,
+				toolStyle: "one-line",
+			});
+			renderer.event({ type: "tool_start", toolCallId: "a", name: "bash", args: { command: "ls" } });
+			if (withSettle)
+				renderer.event({
+					type: "tool_settled",
+					result: { toolCallId: "a", toolName: "bash", content: "out", isError: false, durationMs: 1500 },
+				});
+			renderer.event({ type: "tool_end", result: okResult("out", "a") });
+			renderer.endRun();
+			return sink.output();
+		};
+		const without = replay(false);
+		expect(replay(true)).toBe(without);
+		expect(without).toContain("out"); // the run rendered something to compare
+	});
+});

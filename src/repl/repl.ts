@@ -668,6 +668,18 @@ class ReplMachine {
 						this.healthNote(event.signal, info);
 						return;
 					}
+					// #tool-settle: a concurrency-safe chunk call settling updates its
+					// own display now (row, marker, result fold) instead of waiting for
+					// the call-ordered tool_end. Top-level only: a child's settle would
+					// race its own tool_end through prepareResult's orphan fallback.
+					// Never routed to the Renderer — print/legacy stay on tool_end.
+					if (event.type === "tool_settled") {
+						if (info === undefined) {
+							this.trackActivity(event, info);
+							this.toolSink?.end(event.result);
+						}
+						return;
+					}
 					this.trackActivity(event, info);
 					// Top-level events feed the Renderer; subagent-sourced ones
 					// (info set) go to the activity region only — M5's
@@ -1228,7 +1240,11 @@ class ReplMachine {
 					startedAtMs: Date.now(),
 				});
 			this.pushActivity();
-		} else if (event.type === "tool_end") {
+		} else if (event.type === "tool_end" || event.type === "tool_settled") {
+			// #tool-settle: a settle event runs this same arm, so a non-task
+			// concurrency-safe row is deleted here too — not only the task block.
+			// Both arrivals are idempotent (Map.delete/Set.add and an unchanged
+			// pushActivity snapshot).
 			this.activityTools.delete(event.result.toolCallId);
 			if (event.result.toolName === "task") {
 				this.closedParents.add(event.result.toolCallId);

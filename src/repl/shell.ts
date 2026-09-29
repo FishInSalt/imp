@@ -20,6 +20,7 @@ import {
 } from "../tui.js";
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
+import { SectionRule } from "./components/section-rule.js";
 import { activityCount, activityText, renderCommandHeader, ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
@@ -877,15 +878,16 @@ export class TuiShell implements LineInput {
 		// the picker — a Spacer (an empty Text renders zero rows). Leading, so the
 		// list stays the LAST child (Phase 1 D5).
 		box.addChild(new Spacer(1));
+		// #confirm-prompt (Phase 4 D14): the rule opens the box, between the blank
+		// row and the title. The label is the host-held attribution (D13 removed
+		// the title tag; the name now rides here). Unconditional: every picker box
+		// gets the rule, unattributed → plain dashes.
+		box.addChild(new SectionRule(options.attribution));
 		if (options.title !== undefined && options.title !== "") {
-			// #confirm-prompt (Phase 3 D9): the caller name rides after the title as a
-			// faint tag (host-derived, sanitizeDisplay because the value reaches the
-			// terminal raw). No attribution — the title's bytes are unchanged.
-			const tag =
-				options.attribution === undefined || options.attribution === ""
-					? ""
-					: dim(` · ${sanitizeDisplay(options.attribution)}`, true);
-			box.addChild(new Text(options.title + tag, 0, 0));
+			// #confirm-prompt (Phase 4 D13): the title is the extension's words
+			// alone — the ` · <attribution>` tag is gone, bytes exactly as before
+			// Phase 3 D9.
+			box.addChild(new Text(options.title, 0, 0));
 		}
 		// The confirm detail rides in the picker (not just transcript notes):
 		// Text wraps + preserves newlines, so the gated command and its reason
@@ -1144,8 +1146,11 @@ export class TuiShell implements LineInput {
 			);
 			// #confirm-prompt (Phase 3 D11): one blank row between the transcript and
 			// the tree box — a Spacer (never an empty Text).
+			// #confirm-prompt (Phase 4 D14): an unlabeled rule between the blank row
+			// and the box (TreeSelectRequest carries no attribution).
 			const boxWrapper = new Container();
 			boxWrapper.addChild(new Spacer(1));
+			boxWrapper.addChild(new SectionRule());
 			boxWrapper.addChild(box);
 			this.setSelector({ teardown: () => finish(null) });
 			this.updatePlaceholder();

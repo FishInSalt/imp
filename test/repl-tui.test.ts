@@ -17,13 +17,20 @@ import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { Fold } from "../src/repl/components/fold.js";
+import { SectionRule } from "../src/repl/components/section-rule.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { replaySession } from "../src/repl/replay.js";
 import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
 import * as toolPresentation from "../src/repl/tool-presentation.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
-import { type AutocompleteSlashCommand, StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
+import {
+	type AutocompleteSlashCommand,
+	StdinBuffer,
+	type Terminal,
+	truncateToWidth,
+	visibleWidth,
+} from "../src/tui.js";
 import {
 	assistant,
 	gate,
@@ -768,11 +775,12 @@ describe("TuiShell selector", () => {
 		shell.close();
 	});
 
-	it("#confirm-prompt (Phase 3 D9): an attribution tag renders after the picker title, faint", async () => {
+	it("#confirm-prompt (Phase 4 D13/D14): the title is bare and the rule carries the host label", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		// plain-title picker (no attribution): today's bytes exactly — no separator tag
+		// plain-title picker (no attribution): the title is unchanged, and the
+		// rule is unlabeled (plain dashes)
 		void shell.select({
 			title: "plain picker",
 			items: [{ label: "alpha" }, { label: "beta" }],
@@ -791,26 +799,40 @@ describe("TuiShell selector", () => {
 		});
 		await settle();
 		const frame = withTag.terminal.frameSince(0);
-		expect(frame).toContain("allow this bash command? · guardian");
-		// faint: the tag rides inside a dim run (`\x1b[2m · guardian`)
-		expect(withTag.terminal.writes.join("")).toContain("\x1b[2m \u00b7 guardian");
+		// D13: the title is the extension's words alone — no ` · <attribution>` tag
+		expect(frame).toContain("allow this bash command?");
+		expect(frame).not.toContain("allow this bash command? · ");
+		// D14: the row above the title is the labeled rule, not the raw title
+		const lines = frame.split("\n");
+		const titleAt = lines.findIndex((l) => l.trim() === "allow this bash command?");
+		expect(titleAt).toBeGreaterThan(0);
+		// exact bytes at width 80: left = right = 35 dashes, label in the middle
+		expect(lines[titleAt - 1]).toBe(`${"─".repeat(35)} guardian ${"─".repeat(35)}`);
+		// faint dashes around a normal-weight label (D12 split)
+		expect(withTag.terminal.writes.join("")).toContain(`\x1b[2m${"─".repeat(35)}\x1b[0m guardian `);
 		withTag.shell.close();
 	});
 
-	it("#confirm-prompt (Phase 3 D9): a hostile attribution is sanitized — no raw escape reaches the terminal", async () => {
+	it("#confirm-prompt (Phase 4 D14): a hostile attribution is sanitized in the rule label — no raw escape reaches the terminal", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
 		void shell.select({
 			title: "allow this bash command?",
 			// an SGR escape plus a bold-marker: sanitizeDisplay must strip the
-			// CSI sequence, leaving only the host's own dim codes around the tag.
+			// CSI sequence, leaving only the plain label text inside the rule.
 			attribution: "bad\x1b[31mname\x1b[1m",
 			items: [{ label: "Yes" }],
 		});
 		await settle();
 		const raw = terminal.writes.join("");
-		expect(raw).toContain("\u00b7 badname"); // the visible text survives, sanitized
+		const frame = terminal.frameSince(0);
+		// D14: the label survives sanitized, surrounded by dashes — no `·`
+		const lines = frame.split("\n");
+		const ruleAt = lines.findIndex((l) => l.includes("badname"));
+		expect(ruleAt).toBeGreaterThan(-1);
+		expect(lines[ruleAt]).toContain(" badname ");
+		expect(lines[ruleAt]).not.toContain("\u00b7");
 		expect(raw).not.toContain("\x1b[31m"); // the injected color never reaches the terminal
 		expect(raw).not.toContain("\x1b[1m"); // nor the injected bold
 		shell.close();
@@ -4561,8 +4583,11 @@ describe("D10 — no live tool rows while a picker is open", () => {
 	});
 });
 
-describe("D11 — one blank line before a picker box", () => {
-	it("the generic picker leaves an empty row between the transcript and the title", async () => {
+// #confirm-prompt (Phase 4 D14): the D11 blank row stays, and the rule is
+// inserted between it and the title — the row above the title is now the
+// rule, not the blank. Layout: blank → rule → title.
+describe("D11/D14 — a blank row and a rule before a picker box", () => {
+	it("the generic picker strips blank → rule → title", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
@@ -4570,28 +4595,37 @@ describe("D11 — one blank line before a picker box", () => {
 		await settle(150);
 		const lines = terminal.frameSince(0).split("\n");
 		const titleAt = lines.findIndex((l) => l.trim() === "pick a model");
-		expect(titleAt).toBeGreaterThan(0);
-		expect(lines[titleAt - 1]?.trim()).toBe(""); // D11: a blank row precedes the title
+		expect(titleAt).toBeGreaterThan(1);
+		expect(lines[titleAt - 1]).toBe("─".repeat(80)); // D14: the unlabeled rule
+		expect(lines[titleAt - 2]?.trim()).toBe(""); // D11: a blank row precedes the rule
 		shell.close();
 	});
 
-	it("the login dialog leaves an empty row between the transcript and its title", async () => {
+	it("the login dialog leaves an empty row between the transcript and its title (no host rule added)", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
+		const mark = terminal.writes.length;
 		void shell.openLoginDialog({ title: "Login to Z.AI", run: () => new Promise<void>(() => {}) });
 		await settle(150);
-		const lines = terminal.frameSince(0).split("\n");
+		const lines = terminal.frameSince(mark).split("\n");
 		const titleAt = lines.findIndex((l) => l.includes("Login to Z.AI"));
 		expect(titleAt).toBeGreaterThan(1);
 		// the dialog opens with a border rule, then the title — the blank row
 		// D11 adds sits directly above that rule.
 		expect(lines[titleAt - 1]).toContain("─");
 		expect(lines[titleAt - 2]?.trim()).toBe("");
+		// D14: the login dialog gets nothing new — it still renders exactly its
+		// own two DialogBorder rows (dim; the editor box's plain rules are the
+		// only other `─` rows in this frame).
+		const dimRule = `\x1b[2m${"─".repeat(80)}\x1b[0m`;
+		const raw = terminal.writes.slice(mark).join("");
+		const dimRules = raw.split(dimRule).length - 1;
+		expect(dimRules).toBe(2);
 		shell.close();
 	});
 
-	it("the session tree leaves an empty row between the transcript and its title", async () => {
+	it("the session tree gets an unlabeled rule between the blank row and the box", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
@@ -4614,9 +4648,80 @@ describe("D11 — one blank line before a picker box", () => {
 		await settle(150);
 		const lines = terminal.frameSince(0).split("\n");
 		const titleAt = lines.findIndex((l) => l.includes("session tree title"));
-		expect(titleAt).toBeGreaterThan(0);
-		expect(lines[titleAt - 1]?.trim()).toBe("");
+		expect(titleAt).toBeGreaterThan(1);
+		expect(lines[titleAt - 1]).toBe("─".repeat(80)); // D14: the unlabeled tree rule
+		expect(lines[titleAt - 2]?.trim()).toBe(""); // D11: a blank row precedes the rule
 		shell.close();
+	});
+
+	it("a titleless picker still gains an unlabeled rule above its first row", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		void shell.select({ items: [{ label: "alpha" }, { label: "beta" }] });
+		await settle(150);
+		const lines = terminal.frameSince(0).split("\n");
+		const firstRowAt = lines.findIndex((l) => l.includes("alpha"));
+		expect(firstRowAt).toBeGreaterThan(1);
+		// D14: the rule is unconditional — even a titleless picker gets it. The
+		// picker's own blank row (Phase 1 D5, above the numbered items) sits
+		// between the rule and the first row.
+		expect(lines[firstRowAt - 1]?.trim()).toBe("");
+		expect(lines[firstRowAt - 2]).toBe("─".repeat(80));
+		shell.close();
+	});
+});
+
+// #confirm-prompt (Phase 4 D14): the rule component in isolation — exact
+// bytes, the narrow/empty fallbacks, and the width contract.
+describe("D14 — SectionRule render contract", () => {
+	it("an absent or empty label renders plain dim dashes", () => {
+		expect(new SectionRule().render(10)).toEqual([`\x1b[2m${"─".repeat(10)}\x1b[0m`]);
+		expect(new SectionRule("").render(10)).toEqual([`\x1b[2m${"─".repeat(10)}\x1b[0m`]);
+	});
+
+	it("a labeled rule is dim dashes, a plain label, dim dashes", () => {
+		// width 20, label "tui" (3): left = floor((20-5)/2) = 7, right = 20-5-7 = 8
+		const row = new SectionRule("tui").render(20)[0] ?? "";
+		expect(row).toBe(`\x1b[2m${"─".repeat(7)}\x1b[0m tui \x1b[2m${"─".repeat(8)}\x1b[0m`);
+	});
+
+	it("a label wider than avail is clipped to width - 4", () => {
+		const row = new SectionRule("a".repeat(60)).render(20)[0] ?? "";
+		// avail = 16: truncateToWidth clips the label to 16 (13 'a' + "...";
+		// its own reset codes ride inside), left = floor((20-18)/2) = 1, right = 1
+		expect(row).toBe(`\x1b[2m─\x1b[0m ${"a".repeat(13)}\x1b[0m...\x1b[0m \x1b[2m─\x1b[0m`);
+		expect(visibleWidth(row)).toBe(20);
+	});
+
+	it("a sanitized escape is stripped from the label", () => {
+		const row = new SectionRule("\x1b[31mred\x1b[1m").render(20)[0] ?? "";
+		expect(row).not.toContain("\x1b[31m");
+		expect(row).not.toContain("\x1b[1m");
+		expect(row).toContain(" red ");
+	});
+
+	it("avail < 2 (width < 5) falls back to plain dashes", () => {
+		expect(new SectionRule("tui").render(4)).toEqual([`\x1b[2m${"─".repeat(4)}\x1b[0m`]);
+		expect(new SectionRule("tui").render(1)).toEqual([`\x1b[2m─\x1b[0m`]);
+	});
+
+	it("the label threshold is exact in both directions (avail 1 plain, avail 2 labelled)", () => {
+		// avail = width - 4. The implementation check found both off-by-ones green:
+		// `avail < 3` and `avail < 1`. These two rows pin the boundary.
+		expect(new SectionRule("tui").render(5)).toEqual([`\x1b[2m${"─".repeat(5)}\x1b[0m`]);
+		const clipped = truncateToWidth("tui", 2);
+		expect(new SectionRule("tui").render(6)[0]).toBe(`\x1b[2m─\x1b[0m ${clipped} \x1b[2m─\x1b[0m`);
+		expect(visibleWidth(clipped)).toBe(2);
+	});
+
+	it("visibleWidth(row) === width for a range of widths and labels", () => {
+		for (const width of [5, 6, 7, 12, 20, 80]) {
+			for (const label of ["x", "tui", "guardian", "龍龍龍龍", "a".repeat(200)]) {
+				const row = new SectionRule(label).render(width)[0] ?? "";
+				expect(visibleWidth(row)).toBe(width);
+			}
+		}
 	});
 });
 

@@ -47,7 +47,8 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		const host = makeConfirmHost();
 		await host.confirm.handler("allow this bash command?", "why it matched: risky", undefined, "guardian");
 		expect(host.output()).toContain("▪ confirm: guardian — allow this bash command?");
-		// the picker title carries the same host-derived attribution (D9)
+		// the picker carries the same host-derived attribution (D9), which now
+		// labels the picker's SectionRule (Phase 4 D14) — the title stays bare
 		expect(host.picks[0]?.attribution).toBe("guardian");
 		// without a source the bytes are exactly today's (no separator appears)
 		await host.confirm.handler("plain question");

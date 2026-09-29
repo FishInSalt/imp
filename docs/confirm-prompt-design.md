@@ -767,12 +767,15 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 - Record line (`src/repl/repl.ts:278`, and the remembered variant `:274`):
   `▪ confirm: <source> — <message>` when `source` is present, else today's bytes
   exactly.
-- Picker title (`src/repl/shell.ts:855`): appended faint ` · <source>`. The tag
-  needs a carrier, because `title` is a plain string: `SelectOptions`
-  (`src/repl/line-input.ts:32-45`, host-internal) gains an optional
-  `source?: string`, set **only** by the confirm path (`repl.ts:293-294`). Other
-  `ctx.select` callers (`commands.ts:628,1547,1599`, `trust-ask.ts:59`) pass no
-  `source`, so unrelated pickers are unaffected. The value is host-derived and
+- Picker title (`src/repl/shell.ts:855`): when a tag is present that row renders
+  `title + dim(" · " + sanitizeDisplay(attribution))`. The tag needs a carrier,
+  because `title` is a plain string: `SelectOptions`
+  (`src/repl/line-input.ts:32-56`, host-internal) gains an optional
+  `attribution?: string`, set **only** by the confirm path (`repl.ts:293-294`).
+  The name avoids the existing `sourceId` (`line-input.ts:170`) and the observer
+  `source` (`repl.ts:1169`), which mean something else. Other `ctx.select`
+  callers (`commands.ts:628,1547,1599`, `trust-ask.ts:59`) pass none, so
+  unrelated pickers are unaffected. The value is host-derived and
   pattern-validated but still goes through `sanitizeDisplay`.
 - Block path: `ToolCallDecision` (`src/core/loop.ts:101`, declared in core by
   design) gains an optional `source?: string`; `emitToolCall`
@@ -825,8 +828,8 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 
 - Add a leading `new Spacer(1)` to each selector surface's box: the generic
   picker (`Container` at `:854-882`, whose first child is currently the title at
-  `:855`), the login dialog (`new LoginDialog` at `:997`, added at `:1028`), and
-  the session tree (`new TreeSelectorBox` at `:1086`, added at `:1106`).
+  `:855`), the login dialog (`new LoginDialog` at `:997`, added at `:1027`), and
+  the session tree (`new TreeSelectorBox` at `:1086`, added at `:1105`).
 - Phase 1 D5's "the list stays the last child" invariant is unaffected: a leading
   spacer precedes the title, not the list.
 - Use `Spacer`, not an empty `Text` (`:878-880`: an empty `Text` renders zero
@@ -867,7 +870,7 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 `src/core/loop.ts` (decision type, both block strings),
 `src/repl/repl.ts` (record lines),
 `src/repl/shell.ts` (title tag, detail weight, suppression, spacers),
-`src/repl/line-input.ts` (`SelectOptions.source`),
+`src/repl/line-input.ts` (`SelectOptions.attribution`),
 `src/format.ts` (`applyWarnSpans` optional argument),
 `examples/extensions/guardian.mjs` (three prefixes),
 plus `test/` and `CHANGELOG.md`.
@@ -891,13 +894,21 @@ lands (the Phase 1/2 discipline).
 
 ### 15.6 Re-pin inventory (counts at `000d72c`)
 
-`[guardian]` 20 occurrences in `test/`; `blocked by an extension` 17
-(`test/extensions-repl.test.ts` 11, `test/loop-hooks.test.ts` 5,
-`test/loop-concurrency.test.ts` 1); confirm-detail pins
-`test/repl-tui.test.ts` 5 / `test/repl-confirm.test.ts` 6;
-`test/repl-tui.test.ts:756` computes detail span offsets from its own `detail`
-(which carries a `command: ` prefix, `:755`) and stays internally consistent;
-the byte pin D12 actually invalidates is `test/repl-tui.test.ts:763`
+`[guardian]` appears 20 times in `test/`, but 18 of those are test-supplied
+literals (`confirm.handler("[guardian] …")`, `select({ title: "[guardian] …" })`)
+that D9 leaves alone; only two pins exercise the module and must flip:
+`test/guardian.test.ts:134` (the confirm message) and `:198` (the block reason).
+
+`blocked by an extension` appears 17 times; **13 break** —
+`test/extensions-repl.test.ts` 11 and `test/loop-hooks.test.ts:187-192,216-219`
+(both call `beginExtension`, so the registry attaches a source). Four do **not**:
+they call a raw `onToolCall` closure with no registry
+(`test/loop-hooks.test.ts:136,175,181`, `test/loop-concurrency.test.ts:205`), so
+they keep the `an extension` fallback and stay byte-identical.
+
+Confirm-detail pins `test/repl-tui.test.ts` 5 / `test/repl-confirm.test.ts` 6;
+`test/repl-tui.test.ts:755-756` supplies its own `detail` and stays internally
+consistent; the byte pin D12 invalidates is `test/repl-tui.test.ts:763`
 (`expect(raw).toContain("\x1b[0m\x1b[2m")` — "the dim environment resumes after
  the span"), which becomes a plain-reset assertion. Plus every frame pin that includes
 the activity rows or the picker's leading rows.
@@ -949,6 +960,26 @@ Round-1 checks that found nothing to change: `confirm`'s single caller and
 `tool_start` preceding the gate; the counts in §15.6; the selector set/clear
 sites; the picker box's first child being the title; the leading-spacer vs D5
 invariant; `NO_CONFIRM_LINE` and the plain preview note.
+
+**Round 2** (independent adversarial review of `9a57cfa`, same base) — verdict
+**CONFIRMED WITH NOTES**. All eight round-1 dispositions verified in the body of
+§15, and every new reference re-derived exactly. Five documentation-level
+findings, folded:
+
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| N1 | P2 | §15.6 counted all 17 `blocked by an extension` sites as re-pins; four call a raw `onToolCall` closure (no registry, so no source) and keep the fallback | Folded: 13 break / 4 do not, with sites |
+| N2 | P2 | §15.6 gave no attribution for the 20 `[guardian]` hits — 18 are test-supplied literals that survive | Folded: the two genuine pins named |
+| N3 | P3 | D11's "added at" lines were off by one (`:1028`/`:1106` are `setFocus` calls) | Folded: `:1027`/`:1105` |
+| N4 | P3 | D9 cited `SelectOptions` as `:32-45` (it runs to `:56`) and left the tag's render site implicit | Folded: range corrected; the render expression written out |
+| N5 | P3 | `SelectOptions.source` collided in reading with `sourceId` and the observer `source` | Folded: renamed `attribution` |
+
+Round-2 checks that found nothing to change: both block strings; the five
+declarations; handler-returned decisions carrying the source; D10's ranges and
+the narrowed rule; that one `setSelector` covers every path (including `close()`
+and the `pendingSelects` drain, which re-enters `closed`-guarded entries);
+D11's three boxes and the D5 invariant; D12's mechanism; and the absence of new
+contradictions with §6-§12.
 
 ### 15.11 Process
 

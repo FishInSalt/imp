@@ -2459,7 +2459,7 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
 		await settle();
 		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBe(2300);
-		expect(env.terminal.frameSince(0)).toContain("· 2.3s");
+		expect(env.terminal.frameSince(0)).toContain("✓ 2.3s");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2490,7 +2490,7 @@ describe("runRepl with shell:tui", () => {
 				.frameSince(0)
 				.split("\n")
 				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("·");
+		).not.toContain("✓");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 
@@ -2521,7 +2521,7 @@ describe("runRepl with shell:tui", () => {
 				.frameSince(0)
 				.split("\n")
 				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("·");
+		).not.toContain("✓");
 		env2.terminal.data("/exit\r");
 		await expect(env2.repl).resolves.toBe(0);
 	});
@@ -2562,7 +2562,7 @@ describe("runRepl with shell:tui", () => {
 				.frameSince(0)
 				.split("\n")
 				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("·");
+		).not.toContain("✓");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

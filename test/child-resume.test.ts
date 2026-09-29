@@ -322,7 +322,10 @@ describe("SA-07 resume", () => {
 				const raw = readFileSync(txPath, "utf8");
 				const nl = raw.indexOf("\n");
 				if (nl <= 0) throw new Error("no header line");
-				const header = JSON.parse(raw.slice(0, nl)) as { launch: Record<string, unknown> } & Record<string, unknown>;
+				const header = JSON.parse(raw.slice(0, nl)) as { launch: Record<string, unknown> } & Record<
+					string,
+					unknown
+				>;
 				header.launch = Object.fromEntries(Object.entries(header.launch).reverse());
 				writeFileSync(txPath, `${JSON.stringify(header)}${raw.slice(nl)}`);
 			},

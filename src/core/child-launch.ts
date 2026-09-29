@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	lstatSync,
+	openSync,
+	readdirSync,
+	readSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import path from "node:path";
 import { type ChildModelBinding, isModelBinding } from "./child-model.js";
 import { type SessionEntry, type SessionHeader, SessionStore } from "./session/store.js";
@@ -715,6 +724,7 @@ export type ContinuationCode =
 	| "model-drift"
 	| "cwd-drift"
 	| "cwd-missing"
+	| "cwd-not-directory"
 	| "worktree-cwd-outside"
 	| "worktree-repo-missing"
 	| "worktree-missing"
@@ -750,6 +760,34 @@ export interface CurrentChildEnvironment {
 
 function sameBinding(a: ChildModelBinding, b: ChildModelBinding): boolean {
 	return a.providerName === b.providerName && a.wireModelId === b.wireModelId && a.reference === b.reference;
+}
+
+/** SA-08 reopened F-2b (owner round 2): the execution cwd must RESOLVE to a
+ *  directory (symlinks followed). Returns the refusal, or undefined when the
+ *  cwd is usable. ENOENT here means the path vanished between the
+ *  existsSync pre-check and this stat — an existence verdict, not a type
+ *  verdict (design §2.2 item 5). */
+function cwdDirectoryProblem(
+	cwd: string,
+): { code: "cwd-missing" | "cwd-not-directory"; detail: string } | undefined {
+	try {
+		if (statSync(cwd).isDirectory()) return undefined;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+			return { code: "cwd-missing", detail: "it vanished between the existence check and the type check" };
+		}
+		return {
+			code: "cwd-not-directory",
+			detail: `its type could not be confirmed: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
+	return { code: "cwd-not-directory", detail: "it is not a directory" };
+}
+
+function cwdProblemMessage(code: "cwd-missing" | "cwd-not-directory", cwd: string, detail: string): string {
+	return code === "cwd-missing"
+		? `the recorded execution cwd ${cwd} no longer exists (${detail})`
+		: `the recorded execution cwd ${cwd} cannot be used: ${detail}`;
 }
 
 /** SA-08 reopened F-2: separator-exact containment of the RESOLVED cwd
@@ -919,6 +957,16 @@ export async function validateChildContinuation(
 				code: "cwd-missing",
 				message: `the recorded execution cwd ${launch.cwd} no longer exists`,
 			});
+		} else {
+			// SA-08 reopened F-2b: existence alone is not enough — a file is
+			// not an execution environment.
+			const problem = cwdDirectoryProblem(launch.cwd);
+			if (problem !== undefined) {
+				reasons.push({
+					code: problem.code,
+					message: cwdProblemMessage(problem.code, launch.cwd, problem.detail),
+				});
+			}
 		}
 	} else {
 		const probe = await probeWorktreeIdentity({
@@ -942,15 +990,25 @@ export async function validateChildContinuation(
 				code: "cwd-missing",
 				message: `the recorded execution cwd ${launch.cwd} no longer exists`,
 			});
-		} else if (probe.ok) {
-			const containment = cwdInsideWorktree(launch.cwd, launch.worktree.path);
-			if (!containment.ok) {
+		} else {
+			// SA-08 reopened F-2b: dirness FIRST — containment alone accepts a
+			// symlink inside the worktree whose final object is a file (F2-e).
+			const problem = cwdDirectoryProblem(launch.cwd);
+			if (problem !== undefined) {
 				reasons.push({
-					code: "worktree-cwd-outside",
-					message: `the recorded execution cwd ${launch.cwd} is not inside the verified worktree ${launch.worktree.path}${
-						containment.detail === undefined ? "" : ` (${containment.detail})`
-					} — the validated environment and the execution environment must agree`,
+					code: problem.code,
+					message: cwdProblemMessage(problem.code, launch.cwd, problem.detail),
 				});
+			} else if (probe.ok) {
+				const containment = cwdInsideWorktree(launch.cwd, launch.worktree.path);
+				if (!containment.ok) {
+					reasons.push({
+						code: "worktree-cwd-outside",
+						message: `the recorded execution cwd ${launch.cwd} is not inside the verified worktree ${launch.worktree.path}${
+							containment.detail === undefined ? "" : ` (${containment.detail})`
+						} — the validated environment and the execution environment must agree`,
+					});
+				}
 			}
 		}
 	}

@@ -296,7 +296,7 @@ inside `createToolSink` with an injectable clock:
   sink timing and end-time update call (Amendment 2: the ≥1000ms sink
   gate is removed — every measured live success updates; Amendment 3:
   the `isError` gate is removed too and the update carries `failed`);
-  the `ToolBlock.elapsedMs` doc comment (`:110-113`) is updated — drop
+  the `ToolBlock.elapsedMs` doc comment (`:110-115`) is updated — drop
   `non-error`/`errored`; document `failed` as its own field.
 - `src/repl/components/tool-block.ts` — suffix rendering per D2
   invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
@@ -517,6 +517,18 @@ Amendment 2 is a follow-up on the same surface).
   Round 2 (same reviewer, targeted): **CONFIRMED** — six findings FIXED;
   fold-internal nits (dangling finding reference, two off-by-N line
   anchors, stale baseline counts) folded on close.
+
+- Amendment 3 (owner-directed, 2026-09-29): failed calls carry the red ✗
+  marker and, ≥1s, the time; the sink's `isError` gate is removed and
+  the update carries `failed`; replay/orphan/interrupted stay
+  marker-less. Round 1 (same reviewer, adversarial): **CONFIRMED WITH
+  NOTES** — 2×P2 (stale `ToolBlock.elapsedMs` doc comment; the
+  `failed`-vs-`error` field distinction undocumented — caught before an
+  implementer could key the ✗ on the interrupted `error` field) + 3×P3
+  (I5 pin for output+`failed`; stale test titles; header-only ✗ boundary
+  pin) — all folded in revision 2. Round 2 (same reviewer, targeted):
+  **CONFIRMED** — five findings FIXED; two cosmetic notas (line-range
+  precision, this log entry) folded on close.
 
 ## Process
 

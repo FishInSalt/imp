@@ -45,7 +45,7 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation, 2300);
 		expect(plain(fold.render(40))).toEqual(["● bash  echo ok ✓ 2.3s"]);
 		expect(fold.render(40)[0]).toBe(
-			`${dim}●${reset} ${bold}bash${reset}  echo ok ${green}✓${reset}${dim} 2.3s${reset}`,
+			`${dim}●${reset} ${bold}bash${reset}  echo ok ${green}✓${reset} ${dim}2.3s${reset}`,
 		);
 	});
 

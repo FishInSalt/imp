@@ -398,7 +398,7 @@ export class ToolBlockFold implements Component {
 			const elapsedText = block.elapsedMs === undefined ? "" : formatToolElapsed(block.elapsedMs);
 			const durPlain = elapsedText === "" ? "" : ` ✓ ${elapsedText}`;
 			const durW = visibleWidth(durPlain);
-			const dur = elapsedText === "" ? "" : ` ${GREEN}✓${RESET}${DIM} ${elapsedText}`;
+			const dur = elapsedText === "" ? "" : ` ${GREEN}✓${RESET} ${DIM}${elapsedText}`;
 			// Two width bases by design: content rows reserve against `prefix`
 			// (header + two spaces) with an 8-column floor (I3); header-only rows
 			// measure the bare `header` against the full width (I4).

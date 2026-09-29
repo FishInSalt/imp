@@ -2485,12 +2485,12 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
 		await settle();
 		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
-		expect(
-			env.terminal
-				.frameSince(0)
-				.split("\n")
-				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("✓");
+		const callLine = env.terminal
+			.frameSince(0)
+			.split("\n")
+			.find((l) => l.includes("● bash"));
+		expect(callLine).toBeTruthy();
+		expect(callLine ?? "").not.toContain("✓");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 
@@ -2516,12 +2516,12 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => env2.terminal.frameSince(0).includes("done"), 8000);
 		await settle();
 		expect(env2.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
-		expect(
-			env2.terminal
-				.frameSince(0)
-				.split("\n")
-				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("✓");
+		const callLine2 = env2.terminal
+			.frameSince(0)
+			.split("\n")
+			.find((l) => l.includes("● bash"));
+		expect(callLine2).toBeTruthy();
+		expect(callLine2 ?? "").not.toContain("✓");
 		env2.terminal.data("/exit\r");
 		await expect(env2.repl).resolves.toBe(0);
 	});
@@ -2557,12 +2557,20 @@ describe("runRepl with shell:tui", () => {
 		});
 		await waitUntil(() => env.transcript.toolFolds.length === 2);
 		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
-		expect(
-			env.terminal
-				.frameSince(0)
-				.split("\n")
-				.find((l) => l.includes("● bash")) ?? "",
-		).not.toContain("✓");
+		await waitUntil(
+			() =>
+				env.terminal
+					.frameSince(0)
+					.split("\n")
+					.some((l) => l.includes("● bash")),
+			4000,
+		);
+		const callLine = env.terminal
+			.frameSince(0)
+			.split("\n")
+			.find((l) => l.includes("● bash"));
+		expect(callLine).toBeTruthy();
+		expect(callLine ?? "").not.toContain("✓");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

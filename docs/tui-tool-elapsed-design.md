@@ -392,6 +392,12 @@ owner-facing and will be listed as pending until the owner confirms.
   bookkeeping (fixed on close). All folded in revision 2; round 2:
   **CONFIRMED** (clean scan, zero new findings).
 
+- Amendment 1 implementation check (same reviewer, on the committed
+  diff, 2026-09-29): **APPROVE WITH CORRECTIONS** — 2×P3 folded: the
+  space after ✓ moved outside the DIM span (byte order now identical to
+  the legacy `render.ts` completion line), and the three absence pins
+  assert the `● bash` line is present before checking it.
+
 ## Process
 
 - Independent adversarial design review (fresh context) is required before

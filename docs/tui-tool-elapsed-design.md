@@ -72,8 +72,9 @@ took, in the current block visual language, for calls ≥ 1s.
    output change.
 6. **No configuration knob** — no env var or setting; display-only, always
    on in TUI.
-7. **No per-row ✓/✗ markers reintroduced** (the series moved to `⎿`-row
-   status; failure stays `⎿ failed`).
+7. **No per-row ✗ marker** — failure status stays the `⎿ failed` row.
+   The completion **✓ is restored as the duration suffix** (Amendment 1,
+   owner decision); the ✗ prohibition stands.
 8. **No child-tool rows** — child tool calls never reach the transcript
    (activity only); the `task` tool row is a normal top-level tool and does
    get a duration.
@@ -106,6 +107,14 @@ owner decision 2026-09-29 — the legacy-literal form):
   separator idiom, but reads as metadata rather than a completion marker —
   overridden by the owner), bare ` 2.3s` (reads as command text),
   parenthesized `(2.3s)`.
+- Implementation plumbing (amendment review round 1): the suffix is a
+  **mixed-style string** — green `✓` + `" "` + dim duration — so the
+  render sites must **not** wrap it in an additional `DIM` (unlike the
+  original all-dim ` · ` form); `durW`/`reserve` continue to measure the
+  plain `" ✓ X.Ys"` text (7 columns; `visibleWidth` strips ANSI), and
+  `emit`'s `firstSuffix` parameter receives the pre-styled text.
+  `tool-block.ts` gains a local green escape (`src/format.ts`'s `green()`
+  is not currently imported there).
 - Format (new pure helper, proposed `src/format.ts` `formatToolElapsed(ms)`):
   - `ms < 60_000`: tenths **floored** — `Math.floor(ms/100)/10` with one
     decimal (`2.3s`, `1.0s`; 59.999s → `59.9s`, never `60.0s`).
@@ -221,7 +230,9 @@ inside `createToolSink` with an injectable clock:
 - `src/format.ts` — `formatToolElapsed` (pure; unit-tested).
 - `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs`; sink timing,
   gate, and end-time update call.
-- `src/repl/components/tool-block.ts` — suffix rendering per D2 invariants.
+- `src/repl/components/tool-block.ts` — suffix rendering per D2
+  invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
+  green escape).
 - `src/repl/transcript.ts` — optional clock option passthrough only.
 - `src/cli.ts` — no change expected (defaults).
 - Docs: this file; `CHANGELOG.md` Unreleased entry; `PROJECT_PLAN.md`
@@ -373,7 +384,13 @@ owner-facing and will be listed as pending until the owner confirms.
   separator-idiom choice in favor of the legacy-literal form. Width
   identity verified before drafting (`visibleWidth("✓") = visibleWidth("·")
   = 1`, suffix 7 columns both) — I1-I6 budgets/boundaries stand unchanged.
-  Single targeted design-review round: <outcome pending>.
+  Round 1: **NEEDS-FIXES** — Non-goal 7 still banned per-row ✓ markers
+  (fixed: ✗ prohibition kept, ✓ restored explicitly), mixed-style
+  (green-✓ + dim-time) plumbing unspecified against the single-DIM render
+  sites (fixed: D2 plumbing note + local green escape), stale `· 2.3s` in
+  CHANGELOG/ledger to update with the implementation, placeholder/ordering
+  bookkeeping (fixed on close). All folded in revision 2; round 2
+  <pending>.
 
 ## Process
 

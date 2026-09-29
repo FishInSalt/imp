@@ -1909,7 +1909,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("semantic tools: reverse execution completion retains call order live and on replay", async () => {
+	it("semantic tools: concurrent results render under their own call, live and on replay", async () => {
 		const first = gate();
 		const second = gate();
 		const started: string[] = [];
@@ -1947,15 +1947,20 @@ describe("runRepl with shell:tui", () => {
 		second.resolve();
 		await waitUntil(() => finished.length === 1);
 		expect(finished).toEqual(["b"]);
+		// #tool-settle: b's own settle renders its result immediately — the
+		// display no longer waits for the chunk to drain. a is still running.
+		await waitUntil(() => env.transcript.toolFolds.some((f) => f.block.kind === "output"));
 		expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
 			["a", "input"],
 			["b", "input"],
+			["b", "output"],
 		]);
 		first.resolve();
 		await frameContains(env, "parallel done");
-		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "a", "b"]);
-		// #tool-result-follows-call: the fold ARRAY stays arrival-ordered (ctrl+o
-		// walks it), but each result RENDERS under its own call.
+		// The fold ARRAY is now settle-ordered (b settled first). What is retained
+		// regardless of completion timing is the RENDERED order, asserted below.
+		expect(env.transcript.toolFolds.map((f) => f.block.id)).toEqual(["a", "b", "b", "a"]);
+		// #tool-result-follows-call: each result RENDERS under its own call.
 		const rendered = env.transcript.render(80).map(stripAnsi);
 		const atRow = (needle: string) => rendered.findIndex((row) => row.includes(needle));
 		expect(atRow('"id": "a"')).toBeLessThan(atRow("a result"));
@@ -2351,6 +2356,68 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+	it("#tool-settle: a settled call clears its row and renders its result before the chunk ends", async () => {
+		const env = await startTuiRepl([reply("done")]);
+		// Observe the activity snapshots the shell receives (the region's own
+		// rendering is differential and not a stable assertion surface).
+		const seen: Parameters<TuiShell["setActivity"]>[0][] = [];
+		const realSetActivity = TuiShell.prototype.setActivity;
+		const spy = vi.spyOn(TuiShell.prototype, "setActivity").mockImplementation(function (
+			this: TuiShell,
+			snapshot,
+		) {
+			seen.push(snapshot);
+			realSetActivity.call(this, snapshot);
+		});
+		const lastAgents = (): string[] => (seen.at(-1)?.agents ?? []).map((a) => a.taskToolId);
+		const original = env.runner.runTurn.bind(env.runner);
+		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			for (const id of ["t1", "t2"])
+				emit({ type: "tool_start", toolCallId: id, name: "task", args: { agent: "scout", prompt: id } });
+			expect(lastAgents()).toEqual(["t1", "t2"]);
+			const t2 = {
+				toolCallId: "t2",
+				toolName: "task",
+				content: "TWO-RESULT",
+				isError: false,
+				durationMs: 2100,
+			};
+			// t2 settles while t1 is still running.
+			emit({ type: "tool_settled", result: t2 });
+			expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
+				["t1", "input"],
+				["t2", "input"],
+				["t2", "output"],
+			]);
+			const rendered = stripAnsi(env.transcript.render(80).join("\n"));
+			expect(rendered).toContain("2.1s"); // t2's own runtime, not the chunk's
+			expect(rendered).toContain("TWO-RESULT");
+			await settle();
+			// Only t1's row survives; the chunk has not ended yet.
+			expect(lastAgents()).toEqual(["t1"]);
+			// The authoritative tool_end repeats nothing.
+			emit({ type: "tool_end", result: t2 });
+			expect(env.transcript.toolFolds.map((f) => [f.block.id, f.block.kind])).toEqual([
+				["t1", "input"],
+				["t2", "input"],
+				["t2", "output"],
+			]);
+			emit({
+				type: "tool_end",
+				result: { toolCallId: "t1", toolName: "task", content: "ONE-RESULT", isError: false },
+			});
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("done"));
+		await settle();
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+		spy.mockRestore();
+	});
+
 	it("each concurrent task's live rows sit under its own header in launch order", async () => {
 		const child: Tool = {
 			name: "child_tool",

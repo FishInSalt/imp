@@ -681,7 +681,8 @@ export function createToolSink(
 			// entries (design D4; Amendment 2 removed the ≥1000ms gate and
 			// Amendment 3 the isError gate — the renderer picks ✗ vs ✓ by
 			// `failed` and decides between bare marker and marker+time).
-			const elapsed = entry.startedAt === undefined ? undefined : clock() - entry.startedAt;
+			const elapsed =
+				result.durationMs ?? (entry.startedAt === undefined ? undefined : clock() - entry.startedAt);
 			if (elapsed !== undefined && !replay && entry.input !== undefined)
 				update?.(entry.input, {
 					...entry.input,

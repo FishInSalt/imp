@@ -367,3 +367,40 @@ provider converter. Findings folded in:
 The reviewer also listed the remaining undecided points it wanted resolved;
 those decisions are now §4.5 item 5 (refusal plans), §6.10 (`onEvent`
 throwing), §6.7 (flush invariant) and §7.1 (two clocks).
+
+**Round 2 — confirmation (same reviewer, resumed), verdict CONFIRMED** with
+five cosmetic residuals, all folded in: `tool-presentation-hooks.ts:320` (not
+`:318`), the `Base:` header updated after the rebase, the child-settle prose
+made consistent with the snippet (dropped entirely, not "a no-op repaint"),
+the explicit "insert before `repl.ts:671`" placement constraint, and §4.5
+item 5's rationale corrected (a refusal marker is already `✗`; the reason to
+leave it alone is that it never ran, not that the marker would flip).
+
+## 9. Implementation notes
+
+- `src/core/messages.ts`: `ToolResult.durationMs`.
+- `src/core/loop.ts`: the `tool_settled` event, `RunAgentLoopOptions.clock`
+  (default `Date.now`), the phase-2 measurement + emit, and the two-field
+  `persistableResult` strip. `runTool`, the serial path, and phase 3's emission
+  order are untouched.
+- `src/repl/repl.ts`: the tap's `tool_settled` branch (top-level only) and the
+  widened `tool_end` arm in `trackActivity`.
+- `src/repl/tool-presentation.ts`: `end` prefers `result.durationMs`.
+- Tests: `test/loop-concurrency.test.ts` (3: own-runtime measurement with an
+  injected clock, serial emits nothing, a schema-refused call settles nothing);
+  `test/repl-tui.test.ts` (1: row cleared + own result rendered while the chunk
+  is still running, asserted through the activity snapshots the shell receives,
+  plus one-marker/one-fold idempotence against the authoritative `tool_end`);
+  `test/render.test.ts` (1: byte-identical print output with and without the
+  settle event). The duration and real-time cases are red before the change
+  (verified by reverting the four source files).
+- **One existing test changed contract.** `test/repl-tui.test.ts`'s
+  "semantic tools: reverse execution completion retains call order live and on
+  replay" (the `#tool-result-follows-call` batch's pin) is renamed to
+  "concurrent results render under their own call, live and on replay". Its
+  mid-flight `toolFolds` assertion now shows `b`'s output already present, and
+  the live fold-array order becomes settle-ordered (`a, b, b, a`) — that array
+  was only ever a transport detail. The *rendered* order assertion (a, a, b, b),
+  added last batch, is unchanged and still pins what matters; replay still
+  builds `a, b, a, b` because it feeds stored order.
+- Gate: 127 files / 2477 tests, lint 0, typecheck (both configs) 0, build 0.

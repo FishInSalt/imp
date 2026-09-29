@@ -87,6 +87,12 @@ export interface ToolResult {
 	 *  events — the loop strips it before the result enters history, so it
 	 *  never reaches the model, the session file, or resume replay. */
 	display?: string;
+	/** #tool-settle: how long this call's tool actually executed, measured by the
+	 *  loop at the moment the call settled. Render-only, with the same lifecycle
+	 *  as `display`: carried on `tool_settled` and `tool_end` events, stripped
+	 *  before the result enters history. Absent for calls that never ran
+	 *  (schema refusals, gate blocks) and for results rebuilt outside the loop. */
+	durationMs?: number;
 	/** SA-03 task metadata: program-visible and PERSISTED with the message —
 	 *  the opposite lifecycle of `display`. NEVER model-visible: provider
 	 *  converters construct wire objects field-by-field and must never read

@@ -14,6 +14,7 @@ import { visibleWidth } from "../src/tui.js";
 const dim = "\x1b[2m";
 const reset = "\x1b[0m";
 const bold = "\x1b[1m";
+const green = "\x1b[32m";
 const plain = (rows: string[]) => rows.map(sanitizeDisplay);
 const input = (name: string, args: unknown, hook: unknown, elapsedMs?: number): ToolBlockFold => {
 	const block = preparedInputBlock(prepareCall("id", name, args, () => hook as never));
@@ -40,10 +41,12 @@ describe("formatToolElapsed (#tui-tool-elapsed)", () => {
 });
 
 describe("call-row duration suffix (#tui-tool-elapsed)", () => {
-	it("appends a dim suffix at the end of the first row", () => {
+	it("appends the green-check suffix at the end of the first row", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation, 2300);
-		expect(plain(fold.render(40))).toEqual(["● bash  echo ok · 2.3s"]);
-		expect(fold.render(40)[0]).toBe(`${dim}●${reset} ${bold}bash${reset}  echo ok${dim} · 2.3s${reset}`);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo ok ✓ 2.3s"]);
+		expect(fold.render(40)[0]).toBe(
+			`${dim}●${reset} ${bold}bash${reset}  echo ok ${green}✓${reset} ${dim}2.3s${reset}`,
+		);
 	});
 
 	it("renders no suffix without elapsedMs (regression)", () => {
@@ -54,26 +57,26 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 
 	it("renders the suffix on a pathFirst call row", () => {
 		expect(plain(input("read", { path: "src/a.ts" }, readPresentation, 2300).render(40))).toEqual([
-			"● read  src/a.ts · 2.3s",
+			"● read  src/a.ts ✓ 2.3s",
 		]);
 	});
 
 	it("closes the first row of a multi-row command and leaves continuations", () => {
 		expect(
 			plain(input("bash", { command: "echo first\necho last" }, bashPresentation, 2300).render(40)),
-		).toEqual(["● bash  echo first · 2.3s", "    echo last"]);
+		).toEqual(["● bash  echo first ✓ 2.3s", "    echo last"]);
 	});
 
 	it("uses the minute form for long calls", () => {
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 61200).render(40))).toEqual([
-			"● bash  echo ok · 1m01s",
+			"● bash  echo ok ✓ 1m01s",
 		]);
 	});
 
 	it("reserves width and omits the suffix below the 8-column floor", () => {
 		// prefix 8 + suffix 7: budget 23-8-7 = 8 -> shown; 22-8-7 = 7 -> omitted.
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 2300).render(23))).toEqual([
-			"● bash  echo ok · 2.3s",
+			"● bash  echo ok ✓ 2.3s",
 		]);
 		expect(plain(input("bash", { command: "echo ok" }, bashPresentation, 2300).render(22))).toEqual([
 			"● bash  echo ok",
@@ -95,7 +98,7 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 
 	it("shows no suffix on header-only rows when the header itself is the budget", () => {
 		const rows = plain(input("bash", { command: "echo ok" }, bashPresentation, 2300).render(8));
-		expect(rows.join("\n")).not.toContain("·");
+		expect(rows.join("\n")).not.toContain("✓");
 		expect(rows.join("\n")).toContain("● bash");
 	});
 
@@ -105,7 +108,7 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		const shown = input("read", { path: "src/a.ts" }, readPresentation, 2300);
 		shown.setExpanded(true);
 		shown.setRawArguments(true);
-		expect(plain(shown.render(13))[0]).toBe("● read · 2.3s");
+		expect(plain(shown.render(13))[0]).toBe("● read ✓ 2.3s");
 		const omitted = input("read", { path: "src/a.ts" }, readPresentation, 2300);
 		omitted.setExpanded(true);
 		omitted.setRawArguments(true);
@@ -115,26 +118,26 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 	it("keeps the suffix on the first row when expanded", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation, 2300);
 		fold.setExpanded(true);
-		expect(plain(fold.render(40))).toEqual(["● bash · 2.3s", "    Command: echo ok"]);
+		expect(plain(fold.render(40))).toEqual(["● bash ✓ 2.3s", "    Command: echo ok"]);
 	});
 
 	it("keeps the suffix under raw arguments", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation, 2300);
 		fold.setRawArguments(true);
-		expect(plain(fold.render(40))[0]).toContain(" · 2.3s");
+		expect(plain(fold.render(40))[0]).toContain(" ✓ 2.3s");
 	});
 
 	it("reflects an updateBlock re-render (cache invalidation)", () => {
 		const fold = input("bash", { command: "echo ok" }, bashPresentation);
-		expect(plain(fold.render(40))[0]).not.toContain("·");
+		expect(plain(fold.render(40))[0]).not.toContain("✓");
 		fold.updateBlock({ ...fold.block, elapsedMs: 2300 });
-		expect(plain(fold.render(40))[0]).toContain(" · 2.3s");
+		expect(plain(fold.render(40))[0]).toContain(" ✓ 2.3s");
 	});
 
 	it("ignores the field on output blocks (I5)", () => {
 		const out = outputBlock(result());
 		out.elapsedMs = 2300;
-		expect(plain(new ToolBlockFold(out).render(40)).join("\n")).not.toContain("·");
+		expect(plain(new ToolBlockFold(out).render(40)).join("\n")).not.toContain("✓");
 	});
 
 	it("keeps omission notices in parity with and without the suffix", () => {

@@ -11,7 +11,7 @@ All notable changes to imp are documented here. The format follows
 
 - **TUI tool-call duration (#tui-tool-elapsed).** Completed tool calls in the
   TUI transcript show their wall time as a dim suffix closing the call row
-  (`● bash  npm test · 2.3s`; `1m03s` minute form; ≥1s only). Errors,
+  (`● bash  npm test ✓ 2.3s`; `1m03s` minute form; ≥1s only). Errors,
   interruptions, and replayed history carry none; legacy and print rendering
   are unchanged. Design + adversarial review: `docs/tui-tool-elapsed-design.md`.
 

@@ -8,6 +8,12 @@
   2026-09-29); implementation review APPROVE WITH CORRECTIONS (P3 folds
   applied). Manual terminal acceptance pending. Implementation commits:
   dc4f068 (code + tests), 0e41b95 (CHANGELOG), 252a345 (review folds).
+- **Amendment 1 (owner decision, 2026-09-29): the suffix form becomes the
+  legacy-literal ` ✓ 2.3s` (green check + dim time) instead of the original
+  ` · 2.3s`.** Glyph width is identical (`✓` = 1 column, suffix = 7
+  columns), so every I1-I6 budget, floor, and boundary stands numerically
+  unchanged. Branch: `fix/tui-tool-elapsed-check-glyph`; targeted design
+  review round recorded in the review log.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -66,8 +72,9 @@ took, in the current block visual language, for calls ≥ 1s.
    output change.
 6. **No configuration knob** — no env var or setting; display-only, always
    on in TUI.
-7. **No per-row ✓/✗ markers reintroduced** (the series moved to `⎿`-row
-   status; failure stays `⎿ failed`).
+7. **No per-row ✗ marker** — failure status stays the `⎿ failed` row.
+   The completion **✓ is restored as the duration suffix** (Amendment 1,
+   owner decision); the ✗ prohibition stands.
 8. **No child-tool rows** — child tool calls never reach the transcript
    (activity only); the `task` tool row is a normal top-level tool and does
    get a duration.
@@ -86,17 +93,28 @@ a row of the call block's 3-row collapsed budget; noisier).
 
 ### D2 — Form
 
-Dim suffix appended at the end of the call block's **first row**:
-`● bash  echo first · 2.3s`.
+Suffix appended at the end of the call block's **first row** (Amendment 1,
+owner decision 2026-09-29 — the legacy-literal form):
+`● bash  echo first ✓ 2.3s`.
 
-- Suffix text: `· ` + formatted duration (single leading space, i.e.
-  `· 2.3s`). The `·` matches the established dim-metadata separator idiom
-  (`· interrupted (no result)`, host notices, agent activity rows) and can
-  not be confused with command/argument text the way a bare `2.3s` could
-  (`echo first 2.3s` is plausible command content; `· 2.3s` is not).
-  Considered alternatives: legacy-literal ` ✓ 2.3s` (reintroduces a marker
-  the block style dropped, asymmetric with `⎿ failed`), parenthesized
-  `(2.3s)` (fine, but `·` is the codebase idiom).
+- Suffix text: ` ✓ ` + formatted duration — one leading space, **green
+  `✓`**, one space, **dim duration** (`src/render.ts`'s pre-series
+  completion line rendered exactly `green("✓")` + ` ` + `dim(X.Ys)`; the
+  owner elected to restore that marker form). Glyph width is identical to
+  the original `·` choice (`✓` = 1 column, suffix = 7 columns), so every
+  I1-I6 budget, floor, and boundary is numerically unchanged. Original
+  choice and alternatives considered: `· ` + dim (matches the dim-metadata
+  separator idiom, but reads as metadata rather than a completion marker —
+  overridden by the owner), bare ` 2.3s` (reads as command text),
+  parenthesized `(2.3s)`.
+- Implementation plumbing (amendment review round 1): the suffix is a
+  **mixed-style string** — green `✓` + `" "` + dim duration — so the
+  render sites must **not** wrap it in an additional `DIM` (unlike the
+  original all-dim ` · ` form); `durW`/`reserve` continue to measure the
+  plain `" ✓ X.Ys"` text (7 columns; `visibleWidth` strips ANSI), and
+  `emit`'s `firstSuffix` parameter receives the pre-styled text.
+  `tool-block.ts` gains a local green escape (`src/format.ts`'s `green()`
+  is not currently imported there).
 - Format (new pure helper, proposed `src/format.ts` `formatToolElapsed(ms)`):
   - `ms < 60_000`: tenths **floored** — `Math.floor(ms/100)/10` with one
     decimal (`2.3s`, `1.0s`; 59.999s → `59.9s`, never `60.0s`).
@@ -212,7 +230,9 @@ inside `createToolSink` with an injectable clock:
 - `src/format.ts` — `formatToolElapsed` (pure; unit-tested).
 - `src/repl/tool-presentation.ts` — `ToolBlock.elapsedMs`; sink timing,
   gate, and end-time update call.
-- `src/repl/components/tool-block.ts` — suffix rendering per D2 invariants.
+- `src/repl/components/tool-block.ts` — suffix rendering per D2
+  invariants (Amendment 1: mixed-style green-✓ + dim-time string; local
+  green escape).
 - `src/repl/transcript.ts` — optional clock option passthrough only.
 - `src/cli.ts` — no change expected (defaults).
 - Docs: this file; `CHANGELOG.md` Unreleased entry; `PROJECT_PLAN.md`
@@ -230,10 +250,10 @@ Unit — `formatToolElapsed` table:
 `61_200→1m01s`, `3_600_000→60m00s`.
 
 Unit — `ToolBlockFold` render (`elapsedMs` set/unset):
-- typical single-row: `● bash  echo first · 2.3s`;
+- typical single-row: `● bash  echo first ✓ 2.3s`;
 - with semantic summary present: suffix last;
 - multi-line command: suffix on the first row, continuation rows unchanged;
-- header-only call (no path/body): `● name · 2.3s`;
+- header-only call (no path/body): `● name ✓ 2.3s`;
 - narrow terminal: suffix omitted (I3) with the boundary pins
   (`budget - s == 8` shows / `== 7` omits); the assertion is
   `rows.every((r) => visibleWidth(r) <= w)` — the pi-tui throw contract,
@@ -271,7 +291,7 @@ Integration — TUI harness: `startTuiRepl`
 `execute` advances that clock synchronously (e.g. `now += 2300`) before
 returning — no real waits:
 - clock-advanced tool → the frame contains the call row with the
-  `· 2.3s` suffix;
+  `✓ 2.3s` suffix;
 - fast tool → no suffix (existing frames unchanged);
 - error tool → no suffix;
 - resume/replay frames → no suffix.
@@ -291,8 +311,9 @@ owner-facing and will be listed as pending until the owner confirms.
 
 ## Open questions for the reviewer
 
-1. D2 suffix form and format: is `· 2.3s` / minute-hybrid right, or should
-   the batch stay closer to legacy parity (`✓ 2.3s`, `X.Ys` always)?
+1. ~~D2 suffix form~~ Resolved (owner, Amendment 1): the legacy-literal
+   ` ✓ 2.3s` glyph form (green check + dim time); the format stays the
+   minute-hybrid (`X.Ys` below 60s).
 2. D2 invariants: any render path (pathFirst expanded, wrapped first row,
    CJK widths, `… omitted` replacement rows) that can violate I1/I2/I3?
 3. D4 update-callback reuse: any consumer or reentrancy hazard in calling
@@ -357,6 +378,25 @@ owner-facing and will be listed as pending until the owner confirms.
   integration slow-pin red against baseline src (20 failed / 8 passed /
   145 skipped). Gates (unmasked): lint 0, typecheck 0, 127 files / 2440
   tests 0, build 0.
+
+- Amendment 1 (owner-directed glyph change, 2026-09-29): the suffix form
+  ` · 2.3s` → ` ✓ 2.3s` (green check + dim time), overriding D2's
+  separator-idiom choice in favor of the legacy-literal form. Width
+  identity verified before drafting (`visibleWidth("✓") = visibleWidth("·")
+  = 1`, suffix 7 columns both) — I1-I6 budgets/boundaries stand unchanged.
+  Round 1: **NEEDS-FIXES** — Non-goal 7 still banned per-row ✓ markers
+  (fixed: ✗ prohibition kept, ✓ restored explicitly), mixed-style
+  (green-✓ + dim-time) plumbing unspecified against the single-DIM render
+  sites (fixed: D2 plumbing note + local green escape), stale `· 2.3s` in
+  CHANGELOG/ledger to update with the implementation, placeholder/ordering
+  bookkeeping (fixed on close). All folded in revision 2; round 2:
+  **CONFIRMED** (clean scan, zero new findings).
+
+- Amendment 1 implementation check (same reviewer, on the committed
+  diff, 2026-09-29): **APPROVE WITH CORRECTIONS** — 2×P3 folded: the
+  space after ✓ moved outside the DIM span (byte order now identical to
+  the legacy `render.ts` completion line), and the three absence pins
+  assert the `● bash` line is present before checking it.
 
 ## Process
 

@@ -1,7 +1,8 @@
 # Confirm prompt surface (design)
 
-Status: DRAFT — awaiting round-3 independent adversarial review (round 1 returned
-NEEDS REVISION, round 2 CONFIRMED WITH NOTES and both folds are recorded in §13).
+Status: CONFIRMED WITH NOTES through round 3 — Phase 1 may be implemented; Phase 2
+starts after one short confirmation round on D7 (the round-2/3 folds are recorded
+in §13).
 
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
@@ -66,7 +67,7 @@ Four defects are visible in that single frame:
 |---|---|
 | Entry point: extensions call `api.confirm(message, detail, options)` | `src/extensions/types.ts:105`; guardian call sites `examples/extensions/guardian.mjs:228` (bash gate) and `:243` (write gate) |
 | Host: `TtyConfirm.handler` writes `renderer.note` lines, then opens the picker | `src/repl/repl.ts:265-283` (title note `:271`, detail note `:272`, `select` call `:275-280`) |
-| The notes go to the output stream, so they are the only detail carrier on non-TUI hosts | `src/render.ts` `note()`; `test/repl-confirm.test.ts:68` asserts the detail note for the picker host, `:113` the probe of the no-picker path |
+| The notes go to the output stream, so they are the only detail carrier on non-TUI hosts | `src/render.ts` `note()`; `test/repl-confirm.test.ts:67` asserts the detail note for the picker host, `:113` the probe of the no-picker path |
 | Options are a host constant, identical for every gate | `src/repl/repl.ts:234-238` (`Yes` / `Yes, don't ask again this session` / `No`) |
 | Picker primitive: `TuiShell.select` — title, dim detail, `warnSpans`, items, optional type-to-filter | `src/repl/shell.ts:810-930`; `SelectOptions` at `src/repl/line-input.ts:31-51` |
 | Warn spans: extension supplies plain offsets, host owns color | `src/repl/shell.ts:840`; `src/format.ts:162-192` (`WARN_START = \x1b[0m\x1b[1;31m`) |
@@ -324,19 +325,28 @@ interface ConfirmOptions {
   host still owns the memory (`sessionAllowed`, keyed by `sessionKey`); the
   extension supplies only the words. This is the split agreed in review: memory
   is host policy, granularity wording is extension knowledge.
-- `preview.kind === "command"` renders `● bash  <text>` using the same visual
-  idiom as a transcript call header: dim `●`, bold tool name, two spaces, then
-  the text.
+- **Division of labour between `preview` and `detail` (round-3 R2).** `preview`
+  is the request being decided; `detail` is the explanation. The extension must
+  **not** repeat the command inside `detail` (guardian drops its `command: …`
+  prefix and passes `why it matched: …` as the detail). The host guarantees the
+  command is shown **exactly once** on every surface:
+  - TUI: a styled row under the title, before the items;
+  - text hosts (readline, no-host, print): one plain note line, so the command
+    is not lost where the styled row does not exist (D8).
+- `preview.kind === "command"` renders `● <tool>  <text>` in the transcript's
+  call-header idiom: dim `●`, bold tool name, two spaces, then the text;
+  continuation rows are indented and do not repeat the header.
   **Corrected after round-1 P1:** this does **not** reuse `ToolBlockFold`.
   Verified: `ToolBlockFold` requires a full `ToolBlock` produced from a
   `PreparedToolCall` (`src/repl/components/tool-block.ts:87,96`;
   `src/repl/tool-presentation.ts:109,170,173`), and its header is built inside
   `render()` entangled with summary-visibility, path cropping and width budgets
-  (`src/repl/components/tool-block.ts:392` shows the path/summary budget) — there
-  is no standalone call-row renderer to call. Phase 2 therefore adds a **small
-  dedicated renderer** for this one shape, and its acceptance is a **literal
-  pin** on the rendered text, not an equality with the transcript's renderer.
-  It also carries **no completion suffix**: a transcript call row is
+  (`src/repl/components/tool-block.ts:392`). Phase 2 therefore adds a **small
+  exported helper next to it** — `renderCommandHeader({tool, text, warnSpans,
+  width})` in `src/repl/components/tool-block.ts`, which reuses the already
+  exported `wrappedRows` (`:73`) — and its acceptance is a **literal pin** on
+  the returned rows, not an equality with the transcript's renderer.
+  It carries **no completion suffix**: a transcript call row is
   `● bash <cmd> ✓ 1.2s`, which is meaningless for a call that has not run yet
   (#tui-tool-elapsed never applies here).
 - Malformed or unknown values (`preview.kind` not `"command"`, non-string
@@ -349,11 +359,13 @@ interface ConfirmOptions {
   (`node_modules/@earendil-works/pi-tui/dist/components/text.js:54-55`), so a
   command string containing ESC sequences would otherwise reach the terminal
   (round-2 N2).
-- **The preview row wraps to the box width** using the already-exported
-  `wrappedRows(text, width, spans)` (`src/repl/components/tool-block.ts:73`),
-  continuing rows without repeating the `● <tool>` header — a one-row literal
-  pin cannot hold a long command (round-2 N2). Width enforcement follows the
-  existing pattern (`test/repl-tui.test.ts:742`).
+- **Warn styling and wrapping (round-3 R3).** `preview.warnSpans` are plain
+  `[start, end)` offsets into `text` — the extension never emits ANSI. The
+  helper styles those ranges with the same alert pair the detail block uses
+  (`WARN_START`/`WARN_END`, `src/format.ts:162-163`) and wraps the styled text
+  through `wrappedRows(text, width, spans)` (`src/repl/components/tool-block.ts:73`,
+  whose `spans` parameter is the style-aware path). Width follows the existing
+  enforcement pattern (`test/repl-tui.test.ts:742`).
 - Degradation (D8) applies: hosts without a picker ignore both fields.
 
 ### D8 — degradation matrix (must not change)
@@ -361,8 +373,8 @@ interface ConfirmOptions {
 | Host | Behavior with the new fields | Evidence |
 |---|---|---|
 | TUI picker | renders them (Phase 2) | n/a |
-| Legacy readline ask | ignored; `proceed? [y/N]` byte-identical, and the detail note still written (D1) | `test/repl-confirm.test.ts:113`, new guard |
-| No interactive host (print, tests) | ignored; one `imp:` teaching line, resolves false | `src/extensions/registry.ts:93-94` |
+| Legacy readline ask | ignored; `proceed? [y/N]` byte-identical, the detail note still written (D1), and `preview` printed as one plain note line | `test/repl-confirm.test.ts:113`, new guard |
+| No interactive host (print, tests) | same as readline: the one `imp:` teaching line, resolves false; `preview`/`detail` reach the transcript as plain notes | `src/extensions/registry.ts:93-94` |
 | Subagent call in-process | same host, same queue as the parent | `test/repl-tui.test.ts:956` |
 
 ## 7. Phase 1 — host-only: scope, files, acceptance
@@ -375,8 +387,9 @@ Acceptance criteria (scriptable):
 1. **Picker host:** a confirm frame contains the title exactly once, and the
    detail only inside the picker (D1).
 2. **No-picker host:** the title *and* detail notes are both written
-   (byte-identical to today), and the readline probe at
-   `test/repl-confirm.test.ts:113` still passes unchanged (D1, non-goal §5).
+   (byte-identical to today), the readline probe at
+   `test/repl-confirm.test.ts:113` still passes unchanged (D1, non-goal §5),
+   and a `preview` appears as one plain note line (D7, D8).
 3. While a non-filterable picker is open: the affordance line is present, digits
    `1..n` select item `n-1`, Enter selects the highlighted row, ↑/↓ move, Esc
    cancels to a decline, and digits above the item count are ignored (D2-D4).
@@ -401,14 +414,20 @@ Acceptance criteria (scriptable):
    `Yes, don't ask again this session (<label>)`; without it, byte-identical.
 2. With `preview`, the confirm shows `● <tool>  <text>` with the preview's own
    `warnSpans` highlight and **no** completion suffix; the rendered text is
-   pinned literally in the test. Without the field, byte-identical.
-3. Guardian passes a `rememberLabel` at both gates and a `preview` at the bash
-   gate; its decline path (`{block, reason}`) is unchanged, and
-   `test/guardian.test.ts:107` (exact-equality options object at the write gate)
-   is updated to include the new field (round-1 P3).
-4. Both fields are ignored by the readline ask and by no-host hosts (D8).
-5. An unknown `preview.kind` renders nothing rather than throwing.
-6. Gates, unmasked exit codes: lint 0, typecheck 0, full suite 0, build 0.
+   pinned literally in the test.
+3. **Combined case (round-3 R2):** when `detail` and `preview` are both present
+   — which is what guardian passes — the frame contains the command **exactly
+   once** (in the preview) and the detail carries only the explanation; without
+   the field, byte-identical.
+4. Guardian passes a `rememberLabel` at both gates, a `preview` at the bash
+   gate, and drops the `command: …` prefix from that gate's `detail`; its
+   decline path (`{block, reason}`) is unchanged, and `test/guardian.test.ts:107`
+   (exact-equality options object at the write gate) is updated to include the
+   new field (round-1 P3).
+5. Both fields are ignored by the readline ask and by no-host hosts, except that
+   `preview` is written as a plain note line (D8).
+6. An unknown `preview.kind` renders nothing rather than throwing.
+7. Gates, unmasked exit codes: lint 0, typecheck 0, full suite 0, build 0.
 
 ## 9. Files touched (implementation forecast)
 
@@ -419,7 +438,8 @@ Acceptance criteria (scriptable):
 | 1 | `test/repl-tui.test.ts` | ten marker sites + new pins |
 | 1 | `test/repl-confirm.test.ts` | detail-note guard for the no-picker path |
 | 2 | `src/extensions/types.ts` | `rememberLabel`, `preview` |
-| 2 | `src/repl/shell.ts` | render both; ignore malformed; small command-header renderer |
+| 2 | `src/repl/components/tool-block.ts` | new exported `renderCommandHeader` helper (sanitize, warn style, wrap) |
+| 2 | `src/repl/shell.ts` | render both fields; ignore malformed; write the plain preview note on non-picker hosts |
 | 2 | `examples/extensions/guardian.mjs` | pass both fields |
 | 2 | `test/repl-tui.test.ts`, `test/guardian.test.ts` | consumer pins, `:107` update |
 
@@ -441,8 +461,8 @@ Phase 1:
 - RED: refiltering keeps the list last (child order, D5).
 - GUARD (green before and after): the no-picker path still writes both notes;
   legacy ask bytes (`test/repl-confirm.test.ts:113`); no-host teaching line
-  (`:123`); Esc/Ctrl+C cancel; queue-not-decline (`test/repl-tui.test.ts:956`);
-  width wraps (`:732`).
+  (`:123`, assertion at `:129-130`); Esc/Ctrl+C cancel; queue-not-decline
+  (`test/repl-tui.test.ts:956`); width wraps (`:742`).
 
 Phase 2:
 
@@ -452,6 +472,8 @@ Phase 2:
 - RED: unknown `preview.kind` renders nothing and does not throw.
 - RED: control bytes in `preview.text`/`preview.tool` are stripped, and a long
   command wraps inside the box width (round-2 N2).
+- RED: `detail` + `preview` together render the command exactly once, and a text
+  host prints the preview as one plain note line (round-3 R2).
 - RED: guardian's bash gate passes a preview and a remember label.
 - RED/updated: `test/guardian.test.ts:107` includes `rememberLabel` (currently an
   exact-equality assertion — an intentional trap to catch silent option drift).
@@ -526,6 +548,22 @@ Round-2 checks that found nothing to change: picker height and the 8-row window
 carve-out's consistency across D2/D3/D5/§7, §5 non-goal integrity, and the ten
 marker sites' continued validity after the merge.
 
+**Round 3** (closing review of `e7bea80`, base `06dbfcb`) — verdict
+**CONFIRMED WITH NOTES**. Every round-2 fold verified in substance (citations
+correct, helpers already imported by `shell.ts`, the transient wording steers
+implementers correctly). Remaining items, folded:
+
+| # | Sev | Finding | Disposition here |
+|---|---|---|---|
+| R1 | P3 | One stale `:68` survived in §2 | Folded: `:67` |
+| R2 | P2 | The combined `detail` + `preview` case was unspecified — and the only consumer passes both, so a literal reading would print the command twice, the very defect this design removes | Folded: D7 states the division of labour (preview = the request, detail = the explanation, command shown exactly once on every surface), §8 gains a combined-case and a text-host acceptance, §10 gains the matching RED pin |
+| R3 | P3 | `preview.warnSpans` → `wrappedRows` span mapping unspecified | Folded: the new exported `renderCommandHeader` owns sanitize + warn styling (`WARN_START`/`WARN_END`) + wrap |
+| R4 | P3 | Stale "round 2 pending" in §14; the no-host teaching-line pointer named the test declaration | Folded: §14 rewritten; §10 names the assertion lines |
+
+Round-3 statement on readiness: **Phase 1 may start** (no open finding against
+D1-D6). **Phase 2** is buildable as written after the R2 rule above; per §14 the
+changed section (D7) gets one short confirmation round before Phase 2 coding.
+
 ## 14. Process
 
 - Work happens in the `/Users/z/Z/Agent_demo/imp-confirm-design` worktree. The
@@ -533,9 +571,10 @@ marker sites' continued validity after the merge.
   that session's branch `feat/task-inline-live-rows` merged into `main` as
   `39d3f66` (+ ledger `06dbfcb`) while this document was in review. This design
   touches none of that work.
-- One design (this document) → independent adversarial review (round 1 done,
-  round 2 pending) → Phase 1 implementation on its own branch → gates →
-  implementation check → `--no-ff` merge → ledger entry.
+- One design (this document) → independent adversarial review (rounds 1-3 done;
+  round 1 NEEDS REVISION, rounds 2-3 CONFIRMED WITH NOTES, all folds recorded in
+  §13) → Phase 1 implementation on its own branch → gates → implementation
+  check → `--no-ff` merge → ledger entry.
 - Phase 2 reuses this document; if its sections change after round 2, the
   changed section gets a fresh review round before implementation.
 - Each phase merges separately and is independently revertible; neither phase

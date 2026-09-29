@@ -131,7 +131,9 @@ describe("guardian ask-first destructive bash (spec part 3 item 8)", () => {
 				"recursive force delete — list the files that would go and ask first, or delete the specific files one by one",
 		});
 		expect(confirm).toHaveBeenCalledTimes(1);
-		expect(confirm.mock.calls[0]?.[0]).toContain("[guardian]");
+		// #confirm-prompt (Phase 3 D9): the host names the caller, so the extension's
+		// own message carries no `[guardian] ` prefix anymore.
+		expect(confirm.mock.calls[0]?.[0]).toBe("allow this bash command?");
 		// Phase 2 (#confirm-prompt D7): the command moves to the preview (transcript
 		// idiom, offsets into the raw command); the detail keeps the reason only, so
 		// the command is shown exactly once across every surface.
@@ -195,7 +197,9 @@ describe("guardian hard floor — never asks, always denies (spec part 3 item 9)
 		]) {
 			const decision = await gate(writeEvent("/proj", target));
 			expect(decision).toMatchObject({ block: true });
-			expect(String((decision as { reason: string }).reason)).toContain("[guardian]");
+			// #confirm-prompt (Phase 3 D9): the floor reason is bare — the host adds
+			// the extension name when it renders the block string.
+			expect(String((decision as { reason: string }).reason)).not.toContain("[guardian]");
 			expect(String((decision as { reason: string }).reason)).toContain("never asks");
 		}
 		expect(confirm).not.toHaveBeenCalled();

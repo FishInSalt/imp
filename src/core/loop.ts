@@ -103,6 +103,19 @@ export interface ToolCallDecision {
 	block: boolean;
 	/** Fed back to the model as the (isError) tool result — make it teaching-style. */
 	reason?: string;
+	/** #confirm-prompt (Phase 3 D9): the extension that returned this decision, set
+	 *  by the registry (never by an extension or a raw onToolCall gate). Present ⇒
+	 *  the block string names it; absent ⇒ today's `an extension` wording. */
+	source?: string;
+}
+
+/** #confirm-prompt (Phase 3 D9): the block string's subject. The registry attaches
+ *  the extension name to every decision it returns, so a block is attributed by the
+ *  host; a raw `onToolCall` gate (no registry) keeps the anonymous fallback. */
+function blockSource(decision: ToolCallDecision): string {
+	return decision.source === undefined || decision.source === ""
+		? "an extension"
+		: `extension ${decision.source}`;
 }
 
 /**
@@ -459,7 +472,7 @@ async function executeChunk(
 				result: {
 					toolCallId: call.id,
 					toolName: call.name,
-					content: `Tool "${call.name}" blocked by an extension: ${decision.reason ?? "no reason given"}`,
+					content: `Tool "${call.name}" blocked by ${blockSource(decision)}: ${decision.reason ?? "no reason given"}`,
 					isError: true,
 				},
 			});
@@ -600,7 +613,7 @@ async function executeToolCall(
 		return {
 			toolCallId: id,
 			toolName: name,
-			content: `Tool "${name}" blocked by an extension: ${decision.reason ?? "no reason given"}`,
+			content: `Tool "${name}" blocked by ${blockSource(decision)}: ${decision.reason ?? "no reason given"}`,
 			isError: true,
 		};
 	}

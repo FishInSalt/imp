@@ -852,7 +852,16 @@ export class TuiShell implements LineInput {
 		}));
 		let list = new SelectList(items, Math.min(items.length, 8), this.theme.selectList);
 		const box = new Container();
-		if (options.title !== undefined && options.title !== "") box.addChild(new Text(options.title, 0, 0));
+		if (options.title !== undefined && options.title !== "") {
+			// #confirm-prompt (Phase 3 D9): the caller name rides after the title as a
+			// faint tag (host-derived, sanitizeDisplay because the value reaches the
+			// terminal raw). No attribution — the title's bytes are unchanged.
+			const tag =
+				options.attribution === undefined || options.attribution === ""
+					? ""
+					: dim(` · ${sanitizeDisplay(options.attribution)}`, true);
+			box.addChild(new Text(options.title + tag, 0, 0));
+		}
 		// The confirm detail rides in the picker (not just transcript notes):
 		// Text wraps + preserves newlines, so the gated command and its reason
 		// stay in view while the list waits for the answer. Warn spans overlay

@@ -1,6 +1,11 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_CONFIRM_LINE } from "../src/extensions/registry.js";
+import { loadExtensions } from "../src/extensions/loader.js";
+import { ExtensionRegistry, NO_CONFIRM_LINE } from "../src/extensions/registry.js";
+import type { ConfirmOptions } from "../src/extensions/types.js";
 import { ReplInput } from "../src/repl/input.js";
 import type { LineInput, SelectOptions } from "../src/repl/line-input.js";
 import { TtyConfirm } from "../src/repl/repl.js";
@@ -38,6 +43,72 @@ function makeConfirmHost(args?: { select?: boolean }) {
 }
 
 describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
+	it("#confirm-prompt (Phase 3 D9): the 4th argument names the caller; the record line carries it", async () => {
+		const host = makeConfirmHost();
+		await host.confirm.handler("allow this bash command?", "why it matched: risky", undefined, "guardian");
+		expect(host.output()).toContain("▪ confirm: guardian — allow this bash command?");
+		// the picker title carries the same host-derived attribution (D9)
+		expect(host.picks[0]?.attribution).toBe("guardian");
+		// without a source the bytes are exactly today's (no separator appears)
+		await host.confirm.handler("plain question");
+		expect(host.output()).toContain("▪ confirm: plain question");
+		expect(host.output()).not.toContain("▪ confirm:  —");
+		// session-allowlist note keeps the same prefix shape (the pick answer is
+		// "Yes, don't ask again this session" — index 1)
+		host.pickAnswer.value = 1;
+		await host.confirm.handler("remember me", undefined, { sessionKey: "d9:k" }, "guardian");
+		// same key, second ask: no picker, straight approval, prefixed audit note
+		await host.confirm.handler("remember me", undefined, { sessionKey: "d9:k" }, "guardian");
+		expect(host.output()).toContain("▪ confirm: guardian — remember me — allowed for this session");
+	});
+
+	it("#confirm-prompt (Phase 3 D9): the loader's api closure passes facts.name as the confirm source", async () => {
+		const seen: Array<{ message: string; source?: string }> = [];
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-d9-"));
+		await writeFile(
+			path.join(dir, "asker.mjs"),
+			`export default async function (api) {\n\tawait api.confirm("really?");\n}\n`,
+		);
+		const loaded = await loadExtensions({
+			cwd: dir,
+			cliPaths: [path.join(dir, "asker.mjs")],
+			noDiscovery: true,
+			confirm: (message, _detail, _options, source) => {
+				seen.push({ message, source });
+				return Promise.resolve(false);
+			},
+		});
+		expect(loaded.failures).toEqual([]);
+		// the loader closure calls registry.confirm with facts.name (module basename)
+		expect(seen).toEqual([{ message: "really?", source: "asker" }]);
+	});
+
+	it("#confirm-prompt (Phase 3 D9): a direct registry call passes the source through; ConfirmOptions gained no field", async () => {
+		const seen: Array<string | undefined> = [];
+		const confirm = (
+			_message: string,
+			_detail?: string,
+			_options?: ConfirmOptions,
+			source?: string,
+		): Promise<boolean> => {
+			seen.push(source);
+			return Promise.resolve(false);
+		};
+		const registry = new ExtensionRegistry({ confirm });
+		registry.beginExtension("probe_ext", "cli");
+		await registry.confirm("ask one");
+		expect(seen).toEqual([undefined]); // absent stays absent
+		await registry.confirm("ask two", undefined, undefined, "probe_ext");
+		expect(seen).toEqual([undefined, "probe_ext"]);
+		// the extension-facing facade is unchanged: the options bag is (message,
+		// detail, options) and ConfirmOptions has no source field — an extension
+		// cannot set or spoof the label.
+		const options: ConfirmOptions = { sessionKey: "k", rememberLabel: "this command pattern" };
+		expect(Object.keys(options)).toEqual(["sessionKey", "rememberLabel"]);
+		// and the public registry seam still takes exactly four declared parameters
+		expect(ExtensionRegistry.prototype.confirm.length).toBe(4);
+	});
+
 	it('a picker-bound host asks via the three options; "don\'t ask again" approves AND remembers the key', async () => {
 		const host = makeConfirmHost();
 		host.pickAnswer.value = 1; // "Yes, don't ask again this session"

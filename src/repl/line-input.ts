@@ -32,6 +32,13 @@ export interface TreeSelectRequest {
 export interface SelectOptions {
 	/** Line rendered above the items (e.g. "pick a model"). */
 	title?: string;
+	/** #confirm-prompt (Phase 3 D9): who is asking — the host-derived extension
+	 *  name, rendered as a faint ` · <name>` tag after the title. Host-internal:
+	 *  only the confirm path (`TtyConfirm.handler`) sets it, so an extension can
+	 *  neither set nor spoof it and every other `ctx.select` caller is unaffected.
+	 *  Named `attribution` to stay clear of `sourceId` below and the observer
+	 *  `source` in repl.ts, which mean something else. */
+	attribution?: string;
 	/** Context shown INSIDE the picker, between title and items (dim,
 	 * wrapped, multi-line — newlines preserved). The ask-side carrier for
 	 * api.confirm's detail: the gated command and why it matched stay

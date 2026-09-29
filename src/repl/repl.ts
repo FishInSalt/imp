@@ -268,14 +268,24 @@ export class TtyConfirm {
 		this.renderer = renderer;
 	}
 
-	/** The confirm handler — pass to loadExtensions when interactive. */
-	readonly handler = async (message: string, detail?: string, options?: ConfirmOptions): Promise<boolean> => {
+	/** The confirm handler — pass to loadExtensions when interactive. The 4th
+	 *  argument is the host-derived caller name (Phase 3 D9); the extension can
+	 *  neither set nor spoof it. */
+	readonly handler = async (
+		message: string,
+		detail?: string,
+		options?: ConfirmOptions,
+		source?: string,
+	): Promise<boolean> => {
+		// #confirm-prompt (Phase 3 D9): the caller name rides the record line only
+		// when the host supplied one; without it the bytes are exactly as before.
+		const label = source === undefined || source === "" ? "" : `${source} — `;
 		const sessionKey = options?.sessionKey;
 		if (sessionKey !== undefined && this.sessionAllowed.has(sessionKey)) {
-			this.renderer.note(`▪ confirm: ${message} — allowed for this session`);
+			this.renderer.note(`▪ confirm: ${label}${message} — allowed for this session`);
 			return true;
 		}
-		this.renderer.note(`▪ confirm: ${message}`);
+		this.renderer.note(`▪ confirm: ${label}${message}`);
 		const select = this.select;
 		// #confirm-prompt (Phase 1 D1): the picker carries the detail itself, so the
 		// dim detail note is written only where no picker exists — on readline,
@@ -292,6 +302,7 @@ export class TtyConfirm {
 		if (select !== null) {
 			const choice = await select({
 				title: message,
+				attribution: source,
 				detail,
 				warnSpans: options?.warnSpans,
 				preview: options?.preview,

@@ -91,7 +91,7 @@ export default function (api) {
 		return undefined;
 	};
 	const floorReason = (floor) =>
-		`[guardian] ${floor} is protected — this rule never asks; make the change yourself or hand it to the human`;
+		`${floor} is protected — this rule never asks; make the change yourself or hand it to the human`;
 
 	// Caller cwd (M6b): the loop about to execute the call. A worktree child
 	// resolves against its worktree, not the parent project — absolute
@@ -222,7 +222,7 @@ export default function (api) {
 				const detail = `why it matched: ${effective.reason}`;
 				// sessionKey "guardian:bash:<pattern>" — one remembered decision per
 				// matched pattern, so "don't ask again" covers this shape, not all bash
-				const approved = await api.confirm("[guardian] allow this bash command?", detail, {
+				const approved = await api.confirm("allow this bash command?", detail, {
 					sessionKey: `guardian:bash:${effective.test.source}`,
 					rememberLabel: "this command pattern",
 					preview: {
@@ -244,7 +244,7 @@ export default function (api) {
 				// sessionKey "guardian:write:<cwd>" — one remembered decision per
 				// caller directory (outside writes for the same tree share it)
 				const approved = await api.confirm(
-					`[guardian] allow writing outside ${cwd}?`,
+					`allow writing outside ${cwd}?`,
 					`path: ${event.args.path}\nwhy it matched: the target is outside the caller's working directory`,
 					{ sessionKey: `guardian:write:${cwd}`, rememberLabel: "this directory" },
 				);

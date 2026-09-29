@@ -764,6 +764,35 @@ describe("TuiShell selector", () => {
 		shell.close();
 	});
 
+	it("#confirm-prompt (Phase 3 D9): an attribution tag renders after the picker title, faint", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		// plain-title picker (no attribution): today's bytes exactly — no separator tag
+		void shell.select({
+			title: "plain picker",
+			items: [{ label: "alpha" }, { label: "beta" }],
+		});
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("plain picker · ");
+		shell.close();
+
+		const withTag = makeShell();
+		withTag.shell.start();
+		await settle(0);
+		void withTag.shell.select({
+			title: "allow this bash command?",
+			attribution: "guardian",
+			items: [{ label: "Yes" }, { label: "No" }],
+		});
+		await settle();
+		const frame = withTag.terminal.frameSince(0);
+		expect(frame).toContain("allow this bash command? · guardian");
+		// faint: the tag rides inside a dim run (`\x1b[2m · guardian`)
+		expect(withTag.terminal.writes.join("")).toContain("\x1b[2m \u00b7 guardian");
+		withTag.shell.close();
+	});
+
 	it("Down moves the selection; Enter confirms the moved-to index", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();

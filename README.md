@@ -174,6 +174,14 @@ shared conversation and session:
 imp            # interactive REPL (streaming, one-line tool status)
 ```
 
+- Tool calls render as one-line transcript rows: while a call runs its status
+  sits in the activity region (`running 3s`); once it finishes, the row carries
+  a green `✓` (red `✗` on failure) plus a dim wall time when the call took
+  ≥1s — `● bash  npm test ✓ 2.3s` — with a `⎿` preview of the result beneath
+  it. **Ctrl+O** expands every fold (press it again to collapse them all);
+  **Alt+O** swaps structured calls to their raw arguments. Interrupted calls
+  and replayed history carry no marker. Concurrent `task` calls each keep
+  their own entry and update as they settle (see Subagents).
 - Plain lines are sent to the model. Lines typed while imp is working are
   queued — each queued row shows its route: `steer:` lines (plain Enter)
   inject into the running turn before the next model call (default mode
@@ -398,8 +406,12 @@ a `children/` directory next to the parent's (opt out with
 `IMP_CHILD_SESSIONS=0`). Wall-clock: no clock in the REPL (Ctrl+C is the
 backstop), a 60-minute hang guard in print/headless runs; a call's `timeoutMs`
 or an agent file's `timeout:` (seconds) always wins. Several `task` calls in
-one turn run concurrently (waves of up to 5) with deterministic, call-ordered
-output.
+one turn run concurrently (waves of up to 5). Results keep a deterministic,
+call-ordered place in the conversation; on screen each call owns its own
+entry — its live overview sits under its own `● task` header while it runs,
+its result lands under that header the moment it settles, and it reports its
+own duration, so five parallel subagents complete and time themselves
+independently.
 
 Named agents live as markdown files with hand-parsed frontmatter — no YAML
 dependency, no builtins; the project directory wins on name collisions:

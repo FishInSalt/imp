@@ -9,6 +9,14 @@ All notable changes to imp are documented here. The format follows
 
 ### Changed
 
+- **Task live view in its own header (#task-inline-live-rows).** A running
+  `task` call's live overview (the `└─ pending #N …` line with the agent, the
+  elapsed time and the child's tool count) moved out of the bottom activity
+  region and into the transcript, directly under that call's own `● task`
+  header. Concurrent subagents therefore read top to bottom in launch order —
+  header, its own live line, its own result — instead of all headers stacked
+  above all overview rows.
+
 - **Confirm prompt surface, Phase 1 (#confirm-prompt).** The guardian-style
   approval ask is legible now: the transcript keeps one `▪ confirm:` record line
   (the dim detail note is written only where no picker exists — readline,
@@ -84,6 +92,25 @@ All notable changes to imp are documented here. The format follows
     immediately after a credential change;
   - the anthropic "No API key found" error now also teaches
     `/login anthropic`.
+
+### Fixed
+
+- **A tool's result stays under its own call (#tool-result-follows-call).** A
+  concurrency-safe chunk emits every `tool_start` before any `tool_end` (for
+  deterministic result ordering), so a result block used to be appended after
+  all headers — five parallel `task` calls rendered as five headers followed by
+  five detached `⎿` blocks. Each result fold is now placed directly after its
+  own call's header, while the loop's emission order is untouched. Print mode
+  and the legacy shell are byte-identical.
+
+- **Per-call settle: real durations, live completion (#tool-settle).** Every
+  call in a concurrent chunk used to report the batch's wall time (five tasks
+  all showing `✓ 8.9s`) and nothing updated until the slowest finished. Each
+  call is now measured at its own settle point, so its row shows its own
+  runtime, and its activity row, `✓`/`✗` marker and `⎿` result land as soon as
+  that call finishes — not when the chunk drains. The emitted
+  `tool_settled` event is display-only: history, the session file, extension
+  hooks, print output and replay are unchanged.
 
 ## [0.1.0] - 2026-09-27
 

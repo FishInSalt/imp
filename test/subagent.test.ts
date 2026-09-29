@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
@@ -172,6 +172,9 @@ describe("runSubagent", () => {
 	it("abort with an open tool: the disposed monitor fires nothing after settle (#loop-health)", async () => {
 		const saved = process.env.IMP_HEALTH_TOOL_OPEN_MS;
 		process.env.IMP_HEALTH_TOOL_OPEN_MS = "200";
+		// Fake timers (design §6 item 7): no real-time race — the settled run is
+		// advanced past the threshold deterministically.
+		vi.useFakeTimers();
 		try {
 			const g = gate();
 			const controller = new AbortController();
@@ -188,15 +191,16 @@ describe("runSubagent", () => {
 				signal: controller.signal,
 				onEvent: (event) => events.push(event),
 			});
-			await new Promise((r) => setTimeout(r, 20));
+			await vi.advanceTimersByTimeAsync(0); // flush the turn to the open tool
 			controller.abort();
 			const outcome = await pending;
 			expect(outcome.status).toBe("aborted");
 			expect(outcome.health).toEqual([]);
 			// Past the 200ms threshold: a leaked timer would have fired by now.
-			await new Promise((r) => setTimeout(r, 300));
+			await vi.advanceTimersByTimeAsync(1000);
 			expect(events.filter((event) => event.type === "health")).toHaveLength(0);
 		} finally {
+			vi.useRealTimers();
 			if (saved === undefined) delete process.env.IMP_HEALTH_TOOL_OPEN_MS;
 			else process.env.IMP_HEALTH_TOOL_OPEN_MS = saved;
 		}

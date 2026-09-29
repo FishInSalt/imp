@@ -1000,6 +1000,49 @@ describe("SA-07 resume", () => {
 		expect(second.taskRecord?.health).toBeUndefined();
 	}, 30_000);
 
+	it("T23c: a legacy max_iterations record in the parent session does not block resume", async () => {
+		const { base, cwd, parent } = await fixture();
+		const { tool } = countingEcho();
+		const { task: firstTask } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [tool],
+			scripts: [assistant([{ type: "text", text: "old attempt" }])],
+		});
+		const first = await firstTask.execute({ prompt: "first task" }, signal(), { toolCallId: "call-1" });
+		const childId = childIdOf(first);
+		const original = first.taskRecord;
+		if (original === undefined) throw new Error("no record");
+		// What an old imp wrote when the 60-turn wall fired: a max_iterations
+		// record for a child that actually settled normally. Resume never
+		// branches on the record's terminal status.
+		const legacy = buildTaskRecord({ ...original, status: "max_iterations" });
+		parent.appendMessage({
+			role: "toolResult",
+			results: [
+				{
+					toolCallId: "call-1",
+					toolName: "task",
+					content: first.output,
+					isError: false,
+					taskRecord: legacy,
+				},
+			],
+		});
+		const { task } = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			tools: [tool],
+			scripts: [assistant([{ type: "text", text: "resumed legacy" }])],
+		});
+		const second = await task.execute({ resume: childId, prompt: "continue" }, signal());
+		expect(second.isError ?? false).toBe(false);
+		expect(second.output).toContain("resumed legacy");
+		expect(second.output).toContain("(child lifetime: 2 attempts");
+	}, 30_000);
+
 	it("T4b: crashed and timed-out children are settled and resumable", async () => {
 		const { base, cwd, parent } = await fixture();
 		const crashed = await dispatchAndPersist({

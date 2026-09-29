@@ -4,15 +4,18 @@
 - Branch: `docs/loop-health-design` (design only); implementation branch TBD
   (`feat/loop-health` proposed)
 - Baseline: `faf4b55` (main)
-- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED + POST-MERGE REVIEW FOLDED.
-  Design review closed 2026-09-29 (round 1 NEEDS-FIXES / APPROVE WITH
-  CORRECTIONS, round 2 CONFIRMED WITH NOTES, round 3 CONFIRMED — both
-  tracks); owner decisions A/B signed (A = no numeric valve; B = no
+- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED + POST-MERGE REVIEWS FOLDED
+  (rounds 1-2). Design review closed 2026-09-29 (round 1 NEEDS-FIXES /
+  APPROVE WITH CORRECTIONS, round 2 CONFIRMED WITH NOTES, round 3 CONFIRMED —
+  both tracks); owner decisions A/B signed (A = no numeric valve; B = no
   injection). Implementation on `feat/loop-health`; implementation review
   round 1 (two tracks, fresh context) closed APPROVE WITH CORRECTIONS with
-  all corrections folded (§9). Post-merge owner review folded on
+  all corrections folded. Post-merge review round 1 folded on
   `fix/loop-health-review2` (lint fix, main-loop retry span, peak-evidence
-  coherence — §9); final gate re-verified with UNMASKED lint exit code.
+  coherence); round 2 folded on `fix/loop-health-review3` (print-footprint
+  claim tightened + boundary test, legacy-record resume fixture, parser
+  copy, fake-timer abort test — §9). Final gate re-verified with UNMASKED
+  lint exit code.
 - Supersedes: `docs/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
   backup wall) and the cap-related entries in its §5; amends the "existing
   behavior to preserve" bullet in `docs/subagent-delegation-task-list.md`
@@ -130,7 +133,11 @@ Goals:
    statuses, `isError` semantics unchanged. (Owner decision B.)
 5. Child facts reach the parent honestly: task-result lines, a TaskRecord
    field, and interactive live notes; the main loop gets interactive live
-   notes. Print stdout stays byte-identical.
+   notes. Print mode gains no health output of its own (no live notes); when
+   facts fire, the task-result text changes by design like any other
+   result-text change, visible there only in the tool line's `(+N lines)`
+   count (post-merge review round 2, F4 — the earlier "byte-identical"
+   wording was too broad).
 6. Tests and docs updated; the old pins are replaced by explicit new contracts.
 
 Non-goals (with reason):
@@ -142,7 +149,8 @@ Non-goals (with reason):
   pi's `checkpointBeforeDeadlineMs` is an injected instruction and is
   deliberately not adopted here.
 - No steer / wait / asynchronous delegation (previously deferred; unchanged).
-- No print-mode stdout/stderr additions (byte contract; see §4.3).
+- No print-mode additions of the monitor's own (no live notes, no stderr; see
+  §4.3) — the task-result text itself changes by design when facts fire.
 - No extension API or M4 event-set additions (normative set; no named
   consumer).
 - No changes to timeout precedence, abort propagation, overflow recovery,
@@ -402,10 +410,15 @@ strings (pinned by goldens at implementation; ≤4 lines; `isError` unchanged):
 - Once per `(sourceId ?? "main", code)` per run; later growth updates the
   record and result line, not the note.
 
-**Print mode**: no new stdout bytes (mechanism above + test) and no new stderr
-writes; child facts still reach the parent model through the task result, and
-the record still lands in the parent session JSONL. Main-loop print anomalies
-get no live surface in v1 (recorded as §7 Q3).
+**Print mode**: the monitor adds NO output of its own — no live notes, no
+stderr writes; `Renderer.event({type:"health", …})` writes zero bytes (unit
+pinned). When facts fire, the task-result TEXT changes by design (the parent
+must see it); in print that change surfaces exactly as any other result-text
+change — in the task tool line's `(+N lines)` count (pinned by the renderer
+test; post-merge review round 2, F4). Child facts reach the parent model
+through the task result, and the record still lands in the parent session
+JSONL. Main-loop print anomalies get no live surface in v1 (recorded as §7
+Q3).
 
 **Extensions**: unchanged (no new events; the health `AgentEvent` is not
 forwarded to the extension emit points). Exhaustiveness evidence (round-1
@@ -537,12 +550,11 @@ is ever written; no main-agent context is ever written.
 14. REPL — note rendering: one note per `(sourceId|main, code)` per run; child
     notes carry the agent label; dedup map resets per run; `renderer.event`
     and `showResultFold` are not invoked for health events.
-15. Print mode — silence: `Renderer.event({type:"health", …})` writes zero
-    bytes (unit); a scripted print run with a looping child produces identical
-    stdout to the baseline apart from the model's own final text; stderr
-    unchanged. (The e2e half is substituted by the zero-byte unit test plus
-    the structural argument that `renderer.event` is the only print sink for
-    events — recorded in §9.)
+15. Print mode: `Renderer.event({type:"health", …})` writes zero bytes (unit
+    pinned); the print tool line carries no health text and the fired-signal
+    delta is exactly the appended result line — `(+N lines)` grows by one
+    (`test/render.test.ts`, post-merge review round 2 F4, which replaces the
+    earlier "identical stdout" e2e intent).
 16. Grep tests: no `src/extensions/` reference to the health variant; no
     remaining `CHILD_MAX_TURNS` reference outside docs/history.
 17. Update the old pins. All six cap-relying live-child sites were audited
@@ -552,8 +564,10 @@ is ever written; no main-agent context is ever written.
     `test/task-tool.test.ts:1346-1388`, `:1390-1415`, `:1569-1599`,
     `:1996-2010` → rewritten (abort/timeout drivers or direct `taskResult`
     unit tests for the handoff shapes); `test/child-resume.test.ts:922-945`
-    → persisted-fixture rework (legacy `max_iterations` record; resume and
-    lifetime assertions preserved). Direct unit tests of the legacy
+    → rewritten with a live timeout driver, plus **T23c**: a persisted legacy
+    `max_iterations` record fixture proves resume never branches on the
+    record's terminal status (restores the fixture coverage promised here —
+    post-merge review round 2, O1). Direct unit tests of the legacy
     `max_iterations` rendering (`test/task-tool.test.ts:130-144`, `:187-223`,
     `test/tool-presentation.test.ts:53,88-89,135`,
     `test/builtin-tool-presentation-integration.test.ts:229`) do not spin and
@@ -706,8 +720,29 @@ is ever written; no main-agent context is ever written.
   - Accepted and recorded (no change): `parseTaskRecord` tolerates a foreign
     `health: []` (harmless — producers never write empty arrays); the REPL
     dedup-key/label divergence when `info` exists without `sourceId` is
-    unreachable (the task tool always sets it); the scripted print-run
-    stdout-equivalence e2e remains substituted by the zero-byte unit test
-    plus the structural fact that `renderer.event` is the only print sink;
-    a `canonicalJson`-throwing argument set degrades to "no signal" per the
-    never-crash contract.
+    unreachable (the task tool always sets it); a `canonicalJson`-throwing
+    argument set degrades to "no signal" per the never-crash contract.
+- Post-merge independent re-review round 2 (owner side, 2026-09-29, branch
+  tip `f27efef` re-audited against current main; findings re-reproduced with
+  probes):
+  - F4 (P3, fixed): the "print stdout byte-identical / no new stdout bytes"
+    claim was too broad. The monitor adds no output of its own, but a fired
+    signal changes the task-RESULT text, and print's two-line tool row
+    (`summarizeResult`) counts content lines — a normal completion with a
+    `repeat-loop` fact moved `  → did the thing (+2 lines)` to `(+3 lines)`.
+    Claims tightened (goals §2.5, non-goals, §4.3 print bullet, §6 item 15,
+    CHANGELOG); the renderer test now pins the real boundary (zero-byte
+    event; no health text in the tool line; delta exactly +1 line).
+  - O1 (fixed): restored the persisted-fixture coverage the §6 item 17
+    wording promised — `T23c`: a legacy `max_iterations` record in the
+    parent session does not block resume (resume never branches on a
+    record's terminal status).
+  - O3 (fixed): `parseTaskRecord` now drops a malformed `health` on a
+    shallow copy instead of mutating its input.
+  - O4 (fixed): the subagent abort-with-open-tool test now uses fake timers
+    (design §6 item 7 wording) — no real-time race.
+  - O2/O5 (recorded): the print e2e is superseded by the boundary test above
+    (which catches the F4 scenario); runner-layer direct tests for items
+    13/18 remain indirect (REPL e2e + grep + unit) and are accepted as
+    accounting notes.
+  - F1-F3 re-confirmed as fixed on current main (reconciliation only).

@@ -1,7 +1,7 @@
 import type { ThinkingSection, ThinkingSink } from "../thinking-sink.js";
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../tui.js";
 import { ToolBlockFold } from "./components/tool-block.js";
-import { createToolSink, type ToolBlock } from "./tool-presentation.js";
+import { createToolSink, type ToolBlock, type ToolPresentationSink } from "./tool-presentation.js";
 
 const USER_BLOCK_BG = "\x1b[48;5;237m";
 const RESET = "\x1b[0m";
@@ -57,23 +57,30 @@ export class TranscriptSink implements Component {
 	}
 	readonly toolFolds: ToolBlockFold[] = [];
 	private inputFolds = new WeakMap<ToolBlock, ToolBlockFold>();
-	readonly toolSink = createToolSink(
-		(block) => {
-			const fold = new ToolBlockFold(block);
-			fold.setRawArguments(this.rawToolArguments);
-			this.inputFolds.set(block, fold);
-			this.toolFolds.push(fold);
-			this.appendChild(fold);
-		},
-		(previous, next) => {
-			const fold = this.inputFolds.get(previous);
-			if (!fold) return;
-			fold.updateBlock(next);
-			this.inputFolds.delete(previous);
-			this.inputFolds.set(next, fold);
-			this.onUpdate?.();
-		},
-	);
+	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
+	 *  tests (production passes nothing — the sink defaults to Date.now). */
+	readonly toolSink: ToolPresentationSink;
+
+	constructor(options: { clock?: () => number } = {}) {
+		this.toolSink = createToolSink(
+			(block) => {
+				const fold = new ToolBlockFold(block);
+				fold.setRawArguments(this.rawToolArguments);
+				this.inputFolds.set(block, fold);
+				this.toolFolds.push(fold);
+				this.appendChild(fold);
+			},
+			(previous, next) => {
+				const fold = this.inputFolds.get(previous);
+				if (!fold) return;
+				fold.updateBlock(next);
+				this.inputFolds.delete(previous);
+				this.inputFolds.set(next, fold);
+				this.onUpdate?.();
+			},
+			options.clock,
+		);
+	}
 
 	clear(): void {
 		this.toolSink.clear();

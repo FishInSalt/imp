@@ -107,6 +107,11 @@ export interface SourceEvidence {
 	sources: { section: string; index: number }[];
 }
 export interface ToolBlock {
+	/** #tui-tool-elapsed: completed-call wall time, set by the sink at end on
+	 *  input blocks only (never on replayed or interrupted blocks, never on
+	 *  output blocks). Presentation-only: not persisted, never sent to the
+	 *  model. See docs/tui-tool-elapsed-design.md. */
+	elapsedMs?: number;
 	promotedEvidence?: SourceEvidence;
 	titleExitEvidence?: SourceEvidence & { title: string };
 	summaryOwnership?: {
@@ -618,12 +623,18 @@ export function outputBlock(result: ToolResult, replay = false): ToolBlock {
 	};
 }
 
-/** Updates are optional for append-only consumers; interruption styling requires them. */
+/** Updates are optional for append-only consumers; interruption styling and
+ *  the #tui-tool-elapsed end-time duration require them. `clock` exists for
+ *  deterministic tests (precedent: Renderer.clock). */
 export function createToolSink(
 	append: (block: ToolBlock) => void,
 	update?: (previous: ToolBlock, next: ToolBlock) => void,
+	clock: () => number = Date.now,
 ): ToolPresentationSink {
-	const entries = new Map<string, { record?: PreparedToolCall; input?: ToolBlock; terminal: boolean }>();
+	const entries = new Map<
+		string,
+		{ record?: PreparedToolCall; input?: ToolBlock; terminal: boolean; startedAt?: number }
+	>();
 	let resolver: ToolPresentationResolver | undefined;
 	let finalizing = false;
 	const prepare = (id: string, name: string, args: unknown): PreparedToolCall => {
@@ -645,6 +656,7 @@ export function createToolSink(
 			prepare(id, name, args);
 			const entry = entries.get(id)!;
 			if (entry.terminal || entry.input) return;
+			entry.startedAt = clock();
 			entry.input = preparedInputBlock(entry.record!);
 			append(entry.input);
 		},
@@ -656,6 +668,18 @@ export function createToolSink(
 				entries.set(result.toolCallId, entry);
 			}
 			entry.terminal = true;
+			// #tui-tool-elapsed: the call row carries its wall time once the call
+			// completes. Set the terminal flag first (above), update before the
+			// output append, and skip replay/error/orphan entries (design D4).
+			const elapsed = entry.startedAt === undefined ? undefined : clock() - entry.startedAt;
+			if (
+				elapsed !== undefined &&
+				elapsed >= 1000 &&
+				!replay &&
+				result.isError !== true &&
+				entry.input !== undefined
+			)
+				update?.(entry.input, { ...entry.input, elapsedMs: elapsed });
 			if (!entry.input) {
 				entry.input = entry.record
 					? preparedInputBlock(entry.record)
@@ -685,6 +709,8 @@ export function createToolSink(
 						...input,
 						title: `${input.title} · interrupted (no result)`,
 						error: true,
+						// I6: an interrupted row never carries a duration, structurally.
+						elapsedMs: undefined,
 					});
 				}
 			} finally {

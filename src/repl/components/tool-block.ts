@@ -1,3 +1,4 @@
+import { formatToolElapsed } from "../../format.js";
 import { type Component, truncateToWidth, visibleWidth } from "../../tui.js";
 import { type RawSection, sanitizeDisplay, type ToolBlock } from "../tool-presentation.js";
 
@@ -297,7 +298,13 @@ export class ToolBlockFold implements Component {
 		let summaryOffset = 0;
 		const summaryVisible: { start: number; end: number }[] = [];
 		let number: number | null = null;
-		const emit = (line: string, diff = false, prefix = indent, spans: StyleSpan[] = []): void => {
+		const emit = (
+			line: string,
+			diff = false,
+			prefix = indent,
+			spans: StyleSpan[] = [],
+			firstSuffix = "",
+		): void => {
 			let style = "";
 			if (diff) {
 				if (line.startsWith("@@")) {
@@ -313,20 +320,29 @@ export class ToolBlockFold implements Component {
 				}
 			}
 			if (visibleWidth(prefix) >= w) prefix = "";
+			// #tui-tool-elapsed (I3/N-B): the suffix's width is reserved from the
+			// FIRST row's wrap budget and from its consumed scan feeding
+			// summaryVisible, so occurrence accounting stays in sync; continuation
+			// rows keep the full budget.
+			const suffixW = firstSuffix === "" ? 0 : visibleWidth(firstSuffix);
 			let first = true;
 			let remaining = sanitizeDisplay(line);
 			do {
 				const current = first ? prefix : call ? indent : " ".repeat(visibleWidth(prefix));
-				const row = wrappedRows(remaining, w - visibleWidth(current)).next().value ?? "";
-				if (count < limit) rows.push(`${styledPrefix(current, style, first ? spans : [])}${row}${RESET}`);
+				const budget = w - visibleWidth(current) - (first ? suffixW : 0);
+				const row = wrappedRows(remaining, budget).next().value ?? "";
+				if (count < limit)
+					rows.push(
+						`${styledPrefix(current, style, first ? spans : [])}${row}${first && suffixW > 0 ? `${DIM}${firstSuffix}` : ""}${RESET}`,
+					);
 				count++;
 				// Oversize defensive clipping may not retain the original glyph spelling.
 				let consumed = 0;
 				let columns = 0;
 				for (const { segment } of segmenter.segment(remaining)) {
 					if (segment === "\n") break;
-					const size = Math.min(w - visibleWidth(current), visibleWidth(segment));
-					if (columns + size > w - visibleWidth(current)) break;
+					const size = Math.min(budget, visibleWidth(segment));
+					if (columns + size > budget) break;
 					columns += size;
 					consumed += segment.length;
 				}
@@ -371,35 +387,54 @@ export class ToolBlockFold implements Component {
 					spans.push({ start: decoration.length + name.length, end: header.length, style: RED });
 			}
 			const prefix = `${header}  `;
+			// #tui-tool-elapsed (design I1-I6): the completed call's duration is a
+			// dim suffix closing the first row. Content rows reserve its width from
+			// that row's budget; below an 8-column floor it is omitted entirely.
+			// Header-only rows carry it only when the header fits with it.
+			const dur = block.elapsedMs === undefined ? "" : ` · ${formatToolElapsed(block.elapsedMs)}`;
+			const durW = visibleWidth(dur);
+			// Two width bases by design: content rows reserve against `prefix`
+			// (header + two spaces) with an 8-column floor (I3); header-only rows
+			// measure the bare `header` against the full width (I4).
+			const reserve = durW > 0 && w - visibleWidth(prefix) - durW >= 8 ? durW : 0;
+			const addHeader = (): void => {
+				if (durW > 0 && visibleWidth(header) + durW <= w) {
+					rows.push(`${styledPrefix(header, "", spans)}${DIM}${dur}${RESET}`);
+					return;
+				}
+				add(header, "", "", spans);
+			};
 			if (pathFirst) {
 				const showPath = !this.expanded || !this.raw || !pathCovered;
-				if (!showPath) add(header, "", "", spans);
+				if (!showPath) addHeader();
 				else if (this.expanded || visibleWidth(prefix) >= w) {
 					if (visibleWidth(prefix) < w) {
-						const first = wrappedRows(pathText, w - visibleWidth(prefix)).next().value ?? "";
-						rows.push(`${styledPrefix(prefix, "", spans)}${first}${RESET}`);
+						const first = wrappedRows(pathText, w - visibleWidth(prefix) - reserve).next().value ?? "";
+						rows.push(
+							`${styledPrefix(prefix, "", spans)}${first}${reserve > 0 ? `${DIM}${dur}` : ""}${RESET}`,
+						);
 						if (first.length < pathText.length) add(pathText.slice(first.length), indent);
 					} else {
-						add(header, "", "", spans);
+						addHeader();
 						add(pathText, indent);
 					}
 				} else {
-					const preview = ellipsize(pathText, w - visibleWidth(prefix));
+					const preview = ellipsize(pathText, w - visibleWidth(prefix) - reserve);
 					pathCropped = preview !== pathText;
 					const suffix = semantic?.summary ? `  ${sanitizeDisplay(semantic.summary)}` : "";
-					if (!pathCropped && visibleWidth(prefix + preview + suffix) <= w)
+					if (!pathCropped && visibleWidth(prefix + preview + suffix + (reserve > 0 ? dur : "")) <= w)
 						emittedSummary = sanitizeDisplay(semantic?.summary ?? "");
 					rows.push(
-						`${styledPrefix(prefix, "", spans)}${preview}${emittedSummary ? `  ${emittedSummary}` : ""}${RESET}`,
+						`${styledPrefix(prefix, "", spans)}${preview}${emittedSummary ? `  ${emittedSummary}` : ""}${reserve > 0 ? `${DIM}${dur}` : ""}${RESET}`,
 					);
 				}
 			} else if (!this.expanded && !title.includes("\n") && visibleWidth(prefix) < w && body.length) {
 				// Header is chrome; only the summary's wrapped rows consume the budget.
 				const start = rows.length;
-				emit(body[0] ?? "", false, prefix, spans);
+				emit(body[0] ?? "", false, prefix, spans, reserve > 0 ? dur : "");
 				// Continuation indentation is established by emit, not another header.
 				inline = rows.length > start;
-			} else add(header, "", "", spans);
+			} else addHeader();
 		} else if (block.title)
 			add(
 				this.expanded &&

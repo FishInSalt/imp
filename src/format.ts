@@ -136,6 +136,16 @@ export function formatTokens(n: number): string {
 	return `${Math.round(n / 1_000_000)}M`;
 }
 
+/** #tui-tool-elapsed: a completed tool call's wall time. Tenths are floored
+ *  below a minute so the value never rounds up across the boundary
+ *  (59_999 → "59.9s", not "60.0s"); the minute idiom matches the legacy
+ *  spinner's formatElapsed. The sink gates the ≥1s display rule. */
+export function formatToolElapsed(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
+	return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 export function green(text: string, ansi = process.stdout.isTTY === true): string {
 	return ansi ? `\x1b[32m${text}\x1b[0m` : text;
 }

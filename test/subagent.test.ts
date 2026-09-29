@@ -139,7 +139,7 @@ describe("runSubagent", () => {
 		});
 		expect(outcome.status).toBe("completed");
 		expect(outcome.health).toHaveLength(1);
-		expect(outcome.health[0]).toMatchObject({ code: "repeat-loop", count: 6, turn: 5 });
+		expect(outcome.health[0]).toMatchObject({ code: "repeat-loop", count: 6, turn: 6 }); // peak evidence moves together
 		const relayed = events.filter(
 			(event): event is Extract<AgentEvent, { type: "health" }> => event.type === "health",
 		);
@@ -208,7 +208,9 @@ describe("runSubagent", () => {
 		try {
 			const steps: ScriptStep[] = [];
 			for (let i = 0; i < 5; i++) {
-				steps.push(assistant([{ type: "toolCall", id: `d${i}`, name: "echo", arguments: { message: "again" } }]));
+				steps.push(
+					assistant([{ type: "toolCall", id: `d${i}`, name: "echo", arguments: { message: "again" } }]),
+				);
 			}
 			steps.push(assistant([{ type: "text", text: "done" }]));
 			const events: AgentEvent[] = [];
@@ -398,7 +400,10 @@ describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagin
 		// count 5, turn 5 (cumulative across both launches).
 		const sink: LLMRequest[] = [];
 		const call = (i: number) =>
-			assistant([{ type: "toolCall", id: `c${i}`, name: "echo", arguments: { message: "again" } }], "tool_use");
+			assistant(
+				[{ type: "toolCall", id: `c${i}`, name: "echo", arguments: { message: "again" } }],
+				"tool_use",
+			);
 		const provider = scriptedProvider(
 			[
 				call(0),

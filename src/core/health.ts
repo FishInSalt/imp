@@ -21,7 +21,9 @@ export type HealthCode = "repeat-loop" | "mutation-failure-streak" | "tool-open"
 
 /** One detected condition. `count` is the peak observed run length for the
  *  condition (1 for tool-open); `turn` is the assistant `message_end` count
- *  since monitor creation at first fire. */
+ *  since monitor creation — at first fire for the live emit, and moved
+ *  together with count/detail when the peak grows (post-merge review finding
+ *  3: stored facts never mix evidence from two batches). */
 export interface HealthSignal {
 	code: HealthCode;
 	count: number;
@@ -163,9 +165,10 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 	let mutationStreak = 0;
 	let lastMutationFailureAt: number | undefined;
 
-	/** First fire per code wins: stores + emits once; later growth updates
-	 *  the peak count in place (no re-emit; the note stays first-fire). The
-	 *  emitted object is a clone — callers cannot mutate internal state. */
+	/** First fire per code wins: stores + emits once (the emit is a first-fire
+	 *  snapshot); later growth updates the PEAK evidence in place — count,
+	 *  turn and detail move together so persisted facts never mix two batches
+	 *  (post-merge review finding 3). No re-emit. */
 	function record(signal: HealthSignal): void {
 		const existing = firedIndex.get(signal.code);
 		if (existing === undefined) {
@@ -175,7 +178,12 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 			return;
 		}
 		const current = fired[existing];
-		if (current !== undefined && signal.count > current.count) current.count = signal.count;
+		if (current !== undefined && signal.count > current.count) {
+			current.count = signal.count;
+			current.turn = signal.turn;
+			if (signal.detail === undefined) delete current.detail;
+			else current.detail = signal.detail;
+		}
 	}
 
 	function observe(event: AgentEvent): void {

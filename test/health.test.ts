@@ -320,3 +320,38 @@ describe("thresholds and env", () => {
 		);
 	});
 });
+
+describe("removal sweep (design §6 item 16)", () => {
+	it("no src/extensions reference to the health variant (M4 event set untouched)", async () => {
+		const { readdirSync, readFileSync } = await import("node:fs");
+		const dir = new URL("../src/extensions/", import.meta.url);
+		const hits: string[] = [];
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+			const text = readFileSync(new URL(entry.name, dir), "utf8");
+			if (text.includes('"health"') || text.includes("HealthSignal")) hits.push(entry.name);
+		}
+		expect(hits).toEqual([]);
+	});
+
+	it("the removed turn-cap constant is referenced nowhere in src/ or test/", async () => {
+		const { readdirSync, readFileSync } = await import("node:fs");
+		// Built dynamically so this test file is not its own hit.
+		const needle = `CHILD_MAX${"_TURNS"}`;
+		const hits: string[] = [];
+		const walk = (dir: URL): void => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				if (entry.isDirectory()) {
+					walk(new URL(`${entry.name}/`, dir));
+					continue;
+				}
+				if (!entry.name.endsWith(".ts")) continue;
+				if (readFileSync(new URL(entry.name, dir), "utf8").includes(needle)) {
+					hits.push(`${dir.pathname}${entry.name}`);
+				}
+			}
+		};
+		for (const root of ["../src/", "../test/"]) walk(new URL(root, import.meta.url));
+		expect(hits).toEqual([]);
+	});
+});

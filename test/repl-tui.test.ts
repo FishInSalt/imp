@@ -1355,6 +1355,8 @@ describe("runRepl with shell:tui", () => {
 			seedSession?: (store: SessionStore) => void; // raw seeding (entries incl. compaction)
 			noSession?: boolean;
 			markdown?: boolean;
+			/** #tui-tool-elapsed: deterministic sink clock for duration pins. */
+			clock?: () => number;
 		},
 	) {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
@@ -1369,7 +1371,7 @@ describe("runRepl with shell:tui", () => {
 		const provider: LLMProvider | undefined =
 			options?.provider ?? (options?.realProvider === true ? undefined : scriptedProvider(scripts, requests));
 		const terminal = new FakeTerminal();
-		const transcript = new TranscriptSink();
+		const transcript = new TranscriptSink(options?.clock === undefined ? {} : { clock: options.clock });
 		const renderer = new Renderer({
 			write: transcript.feed,
 			thinkingSink: transcript.thinkingSink,
@@ -2427,6 +2429,140 @@ describe("runRepl with shell:tui", () => {
 		expect(iTool).toBeGreaterThanOrEqual(0);
 		expect(iFold).toBeGreaterThan(iTool); // fold UNDER its tool line…
 		expect(iText).toBeGreaterThan(iFold); // …and the following text UNDER the fold
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("#tui-tool-elapsed: a slow call shows its duration on the call row", async () => {
+		const clock = { now: 1_000 };
+		const slow: Tool = {
+			name: "bash",
+			description: "duration stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				clock.now += 2_300;
+				return { output: "ok" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "build" } }],
+					"tool_use",
+				),
+				reply("done"),
+			],
+			{ tools: [slow], clock: () => clock.now },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		await settle();
+		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBe(2300);
+		expect(env.terminal.frameSince(0)).toContain("· 2.3s");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("#tui-tool-elapsed: fast and failed calls render no duration", async () => {
+		const fast: Tool = {
+			name: "bash",
+			description: "fast stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return { output: "ok" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "fast" } }], "tool_use"),
+				reply("done"),
+			],
+			{ tools: [fast], clock: () => 5_000 },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"), 8000);
+		await settle();
+		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
+		expect(
+			env.terminal
+				.frameSince(0)
+				.split("\n")
+				.find((l) => l.includes("● bash")) ?? "",
+		).not.toContain("·");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+
+		const clock = { now: 0 };
+		const failing: Tool = {
+			name: "bash",
+			description: "failing stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				clock.now += 5_000;
+				return { output: "Error: boom", isError: true };
+			},
+		};
+		const env2 = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "fail" } }], "tool_use"),
+				reply("done"),
+			],
+			{ tools: [failing], clock: () => clock.now },
+		);
+		await settle();
+		env2.terminal.data("go\r");
+		await waitUntil(() => env2.terminal.frameSince(0).includes("done"), 8000);
+		await settle();
+		expect(env2.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
+		expect(
+			env2.terminal
+				.frameSince(0)
+				.split("\n")
+				.find((l) => l.includes("● bash")) ?? "",
+		).not.toContain("·");
+		env2.terminal.data("/exit\r");
+		await expect(env2.repl).resolves.toBe(0);
+	});
+
+	it("#tui-tool-elapsed: replayed history renders no durations", async () => {
+		const clock = { now: 10_000 };
+		const replayTool: Tool = {
+			name: "bash",
+			description: "replay stand-in",
+			parameters: Type.Object({ command: Type.String() }),
+			async execute() {
+				return { output: "ok" };
+			},
+		};
+		const env = await startTuiRepl([], {
+			tools: [replayTool],
+			// Every clock read advances: a missed replay gate would fabricate a
+			// duration from nothing but the read count.
+			clock: () => {
+				clock.now += 2_000;
+				return clock.now;
+			},
+			seed: [
+				assistant(
+					[{ type: "toolCall", id: "old", name: "bash", arguments: { command: "saved" } }],
+					"tool_use",
+				),
+				{
+					role: "toolResult",
+					results: [{ toolCallId: "old", toolName: "bash", content: "saved raw", isError: false }],
+				},
+			],
+		});
+		await waitUntil(() => env.transcript.toolFolds.length === 2);
+		expect(env.transcript.toolFolds.find((f) => f.block.kind === "input")?.block.elapsedMs).toBeUndefined();
+		expect(
+			env.terminal
+				.frameSince(0)
+				.split("\n")
+				.find((l) => l.includes("● bash")) ?? "",
+		).not.toContain("·");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

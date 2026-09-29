@@ -4,8 +4,8 @@
 - Branch: `feat/tui-tool-elapsed` (this document's review; implementation follows
   on the same branch)
 - Baseline: `f1fcc54` (main)
-- Status: DRAFT v4 — rounds 1-3 folded; NOTES from round 3 folded
-  (N-A/N-B); awaiting final confirmation.
+- Status: CONFIRMED (round 4, 2026-09-29) — design review closed;
+  implementation on `feat/tui-tool-elapsed`.
 - Backlog source: `PROJECT_PLAN.md` 【Backlog｜TUI 工具调用耗时显示】(recorded
   2026-09-29, owner request).
 
@@ -341,6 +341,9 @@ owner-facing and will be listed as pending until the owner confirms.
   inline-body case. Both folded in revision 4 (implementation may
   proceed; N-B folded before implementation so the parity pin is not
   self-defeating).
+
+- Round 4 (same reviewer, closure check, 2026-09-29): **CONFIRMED** —
+  N-A/N-B FIXED; zero new findings; design review closed.
 
 ## Process
 

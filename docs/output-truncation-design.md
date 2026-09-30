@@ -1,9 +1,9 @@
 # 主循环输出截断处理：目录预算 + 截断工具调用拒绝 + 可见性（#output-truncation）
 
-状态：草稿 —— 设计评审第 1 轮（2×P1 / 7×P2 / 3×P3）、第 2 轮（3×P2 / 4×P3）与
-第 3 轮（4×P3）均已折叠，等待第 4 轮复核。主人决策已签（2026-09-30）：D3 = 直接用
-模型目录上限；D2/D4 按建议；D1 无异议。D3b（子代理同规则）为评审新增，**待主人
-确认**。
+状态：草稿 —— 设计评审第 1 轮（2×P1 / 7×P2 / 3×P3）、第 2 轮（3×P2 / 4×P3）、
+第 3 轮（4×P3）与第 4 轮（2×P3 笔记）均已折叠，等待第 5 轮复核。主人决策已签
+（2026-09-30）：D3 = 直接用模型目录上限；D2/D4 按建议；D1 无异议。D3b（子代理同
+规则）为评审新增，**待主人确认**。
 分支：`fix/output-truncation`（独立 worktree `imp-output-truncation`）；基线 main `b7d8a9d`。
 
 参考（均已读/已核实）：
@@ -195,14 +195,17 @@
 8. truncated 注记精确字符串（含数字）；
 8b. 子代理预算：目录值非 undefined 时 `launchLoop` 收到 `maxTokens`；目录缺失 → 不传
    （loop 兜底 8192 回归钉子）；
-8c. `lastRunMaxTokens` 每次 run 更新（评审 C2）：同一 Runner 两次截断 run，其间
-   `runner.setModel()`（公开 API、`/model` 底层）切到目录上限不同的模型——maxTokens
-   无运行时 setter，上限变化只经由模型切换；第二条注记显示第二个 run 的上限。
+8c. `lastRunMaxTokens` 每次 run 更新（评审第 3 轮，8c 机制项）：同一 Runner 两次
+   截断 run，其间 `runner.setModel()`（公开 API、`/model` 底层）切到目录上限不同的
+   模型——maxTokens 无运行时 setter，上限变化只经由模型切换；**切换须在同一 family
+   内**以复用注入的 fake provider（跨 family 会构建真实 provider；`test-model` 落
+   anthropic family，夹具在同 family 注入两个不同 `maxTokens` 的 id）；第二条注记显示
+   第二个 run 的上限。
 
 新增（print/repl 与 CLI e2e 用例，就近落位现有 `runRepl` / `bin/imp.js` 基建）：
 9. 脚本化 REPL（`runRepl` 已导出 + mock provider）：截断的最终 run → EOF 退出码 1 +
    注记；正常 → 退出码 0（回归钉子）；
-9b. 帮助文案与同源双重钉子（评审 P2-N2 + C3）：① `bin/imp.js --help` e2e 输出含
+9b. 帮助文案与同源双重钉子（评审第 2/3 轮：落位修正 + 同源缺口）：① `bin/imp.js --help` e2e 输出含
    新的默认说明（模型目录上限，未知时 16384）；② 源码/AST 断言 `cli.ts` 的
    `--max-tokens` 帮助行引用 `DEFAULT_MAX_TOKENS`（复用 `test/cli-model-explicit.test.ts`
    的 AST 提取模式——`HELP` 未导出、入口模块底部 `await main()`，直接 import 会触发
@@ -261,4 +264,7 @@ print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不�
 - 第 3 轮复核（2026-09-30，同一评审子代理续跑；commit 8d8681e）：**APPROVE WITH
   CORRECTIONS** —— 第 2 轮 7 项确认折叠；新增 4×P3（9b 论证事实错误、9c 机制不可
   实现、9b 未钉"同源"、验收项 2 未标注手动面），已折叠（本修订）。
-- 第 4 轮复核：待进行。
+- 第 4 轮复核（2026-09-30，同一评审子代理续跑；commit 239d16c）：**CONFIRMED WITH
+  NOTES** —— 第 3 轮 4 项确认折叠；2 条 P3 笔记（8c 同 family 提示、C 标签悬空），已
+  折叠（本修订）。
+- 第 5 轮复核：待进行。

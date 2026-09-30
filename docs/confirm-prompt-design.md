@@ -1137,6 +1137,8 @@ Phase 3 rule: a pin that survives its own mutation is not a pin).
   blank; after D14 that row is the rule, so each must assert blank → rule →
   title.
 - `:823` (a titleless, unattributed picker) gains an unlabeled rule row.
+- The A2.1 re-anchor (§16.13) changes only the expected bytes of the exact-bytes
+  rows above; the pin set is unchanged.
 - `test/repl-confirm.test.ts:51,64` assert that `attribution` reaches `select()`
   — unchanged by D13/D14; the comment at `:50` (it describes the title tag) needs
   rewriting.
@@ -1228,7 +1230,14 @@ sit left ("a centred label is harder to spot"). D13/D14 are otherwise unchanged.
   `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
   `right = width - 4 - labelWidth`; the fallback threshold is unchanged at
   `width < 6`. `visibleWidth(row) === width` still holds by construction.
-- Pin delta: the exact-bytes rows in `test/repl-tui.test.ts` — the width-20
-  `tui` row and the width-6 clipped row — become the left-anchored shape; the
-  width-5 plain row and the `visibleWidth(row) === width` loop are unchanged.
+- Pin delta (round-3 note N1): the two exact-bytes rows in
+  `test/repl-tui.test.ts` — the width-20 `tui` row (`:4685-4687`) and the
+  width-6 clipped row (`:4711-4713`) — become the left-anchored shape, and the
+  clipped width-20 row (`:4689-4695`) changes too. Row shapes from the contract:
+  width 20 `tui` → `dim("──") + " tui " + dim(13 dashes)`; width 20 with a
+  clipped 16-wide label and width 6 with a clipped 2-wide label both have
+  `right === 0`, so those rows **end after the label's trailing space, with no
+  closing dashes**. The width-5 plain row and the `visibleWidth(row) === width`
+  loop are unchanged (round-3 note N2: the pin *set* is unchanged, so §16.6's
+  inventory still holds; only the expected bytes move).
 - Review: a short round 3 (below) covers this delta before implementation.

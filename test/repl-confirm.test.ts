@@ -212,6 +212,35 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		expect(host.output().split("rm -rf node_modules").length - 1).toBe(1);
 	});
 
+	it("#guardian-auto-mode (D13): a fresh confirm has no remember option — and No is index 1", async () => {
+		const host = makeConfirmHost();
+		// The auto/shadow fallback shape: no sessionKey => no memory to offer,
+		// so the picker must not promise one (the old three-option shape lied).
+		host.pickAnswer.value = 1;
+		await expect(
+			host.confirm.handler(
+				"allow this bash command?",
+				"why it matched: recursive force delete",
+				{
+					preview: { kind: "command", tool: "bash", text: "rm -rf -- /tmp/imp-verify", warnSpans: [[0, 6]] },
+				},
+				"guardian",
+			),
+		).resolves.toBe(false); // index 1 is No here — the 3-option mapping would have approved
+		expect(host.picks[0]?.items.map((item) => item.label)).toEqual(["Yes", "No"]);
+		// Yes stays index 0
+		host.pickAnswer.value = 0;
+		await expect(host.confirm.handler("q", undefined, undefined, "guardian")).resolves.toBe(true);
+		// a sessionKey keeps the M10 three-option contract byte for byte
+		host.pickAnswer.value = 2;
+		await expect(host.confirm.handler("q2", undefined, { sessionKey: "k" })).resolves.toBe(false);
+		expect(host.picks.at(-1)?.items.map((item) => item.label)).toEqual([
+			"Yes",
+			"Yes, don't ask again this session",
+			"No",
+		]);
+	});
+
 	it("a different sessionKey still prompts", async () => {
 		const host = makeConfirmHost();
 		host.pickAnswer.value = 1;

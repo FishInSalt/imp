@@ -351,7 +351,7 @@ current format (append-only, never fatal — unchanged contract).
 |---|---|
 | shadow verdict | `▪ guardian — classifier: allow — <reason> (<model>)` (then the fresh confirm follows) |
 | auto allowed | the same host line, then the call runs |
-| auto asked / unavailable | today's `▪ confirm: guardian — …` (fresh) + detail line `classifier: <reason>` / `classifier unavailable (<why>)` |
+| auto asked / unavailable | today's `▪ confirm: guardian — …` (fresh; the picker shows **two options — Yes / No**, the remember entry is omitted because a fresh confirm carries no `sessionKey` — host fix) + detail line `classifier: <reason>` / `classifier unavailable (<why>)` |
 | manual-only skip | `▪ guardian (auto) — target not statically resolvable; asking` |
 | no verified context | `▪ guardian (auto) — no verified user context; asking` |
 | mode change | `▪ guardian: mode → shadow` / `→ auto` / `→ manual` |

@@ -1340,3 +1340,23 @@ reset immediately after the clipped label's own reset, so its expected bytes end
 `…\x1b[0m\x1b[0m ` (doubled reset) before the trailing space. Red-first: 5 pins
 red, then green; mutations "drop the accent" (6 pins) and "33 → 35" (6 pins) both
 caught.
+
+## Amendment — the fresh confirm (#guardian-auto-mode D13/D16, 2026-09-30)
+
+The M10 contract above renders three options for every gate for callers that
+pass a `sessionKey`; that stays byte-for-byte. #guardian-auto-mode then required
+*fresh* fallbacks — auto/shadow confirmations deliberately pass **no**
+`sessionKey` so a remembered approval can never bypass the classifier — and the
+constant three-option picker kept offering "Yes, don't ask again this session",
+which remembered nothing. An option that promises memory it cannot keep is a
+lie the user pays for twice (they grant it, and are asked again). The host now
+omits the remember entry when no `sessionKey` is present:
+
+| Caller | Items |
+|---|---|
+| `sessionKey` present (every pre-existing gate, manual's guardian paths) | `Yes` / `Yes, don't ask again this session (…label)` / `No` — unchanged |
+| no `sessionKey` (auto/shadow fallbacks; any extension confirming without memory) | `Yes` / `No` — index 1 declines |
+
+Pinned in `test/repl-confirm.test.ts` ("a fresh confirm has no remember option
+— and No is index 1"). The "options are a host constant" fact in §2 above is
+history at `06dbfcb`, kept as-is.

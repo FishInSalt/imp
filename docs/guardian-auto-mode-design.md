@@ -611,4 +611,4 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   (`:1007`); and clearing must key on `positionMoves` (`:992-993`), not on a
   summary's success — a failed branch summary still moves the position. N3: the
   mutation list gained the test-29 entry. Folded.
-- R13: *(pending — micro-verification of the R12 fold)*
+- R13: **CONFIRMED** — all four checks pass; no stale anchors outside the historical log entries. Review closed on rev 3.2 (this reviewer). The owner's second-opinion reviewer may verify rev 3.2 independently before implementation starts.

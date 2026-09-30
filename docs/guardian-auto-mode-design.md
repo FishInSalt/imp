@@ -508,4 +508,4 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   R1-R3 broken. N1: test 23 reworded to the arg-negation observable (the double
   models no cache). N2: D8 scoped to auto-mode fallbacks (shadow/manual keep
   session memory). Both folded.
-- R6: *(pending — micro-verification of N1/N2)*
+- R6: **CONFIRMED** — micro-verification of N1/N2 and the R5 log entry: all accurate; review closed on rev 2. Implementation may start once the owner gives the go-ahead.

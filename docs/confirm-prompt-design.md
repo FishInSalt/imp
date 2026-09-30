@@ -1066,16 +1066,17 @@ with the leanings below.
 - Render contract (`render(width)`), and `implements Component` requires
   `invalidate(): void` as well (empty — the rule caches nothing, exactly like
   `DialogBorder`, `src/repl/login-dialog.ts:41`):
-  - absent/empty label, or `width < 6` → `dim("─".repeat(width))` (below that
-    threshold the clipped label is a bare ellipsis, which names nobody — the
-    A2.1 re-anchor changed this row's shape, not the threshold);
+  - `const LEAD_DASHES = 4` (A2.2; it was two dashes written inline) and
+    `avail = width - LEAD_DASHES - 2`;
+  - absent/empty label, or `avail < 2` → `dim("─".repeat(width))` (below that the
+    clipped label would be a bare ellipsis, which names nobody);
   - otherwise the label is `sanitizeDisplay`-ed, clipped with
-    `truncateToWidth(label, width - 4)`, and the row is
-    `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
-    `right = width - 4 - labelWidth` — **two dashes, then the label, then the
-    remainder**: the label sits left where the eye lands first (owner decision
-    after looking at the centred form: "a centred label is harder to spot",
-    §16.10 round 3), and `visibleWidth(row) === width` exactly;
+    `truncateToWidth(label, avail)`, and the row is
+    `dim("─"×LEAD_DASHES) + " " + label + " " + (right > 0 ? dim("─"×right) : "")`
+    with `right = avail - labelWidth` — the label sits left, `LEAD_DASHES + 2`
+    columns in, where the eye lands first (owner decisions: left-anchored, then
+    nudged right; §16.13/§16.14), and `visibleWidth(row) === width` exactly
+    (`right === 0` ends the row after the label's trailing space);
   - dashes faint, label at normal weight (D12: decision content normal, chrome
     faint).
 - Placement (base `f417fba`): the generic picker box gets the rule **between** its
@@ -1161,7 +1162,9 @@ login dialog shows no host-added rule.
 
 | # | Question |
 |---|---|
-| O7 | **Answered in round 1 — no overflow**: for widths 1-200 and label widths up to 500 (ASCII and wide characters) `visibleWidth(row) === width` held for the centred form. **Re-resolved by the owner (2026-09-30, round 3): the label is now left-anchored** — two dashes, then `label`, then the remainder — because a centred label is harder to spot. The identity still holds by construction: `2 + 1 + labelWidth + 1 + right = width` with `right = width - 4 - labelWidth >= 0` |
+| O7 | **Answered in round 1 — no overflow**: for widths 1-200 and label widths up to 500 (ASCII and wide characters) `visibleWidth(row) === width` held for the centred form. **Re-resolved by the owner (2026-09-30, round 3): the label is now left-anchored** — two dashes, then `label`, then the remainder — because a centred label is harder to spot. The identity holds by construction for any lead-in:
+`LEAD_DASHES + 2 + labelWidth + right = width` with
+`right = avail - labelWidth >= 0` (A2.2 sets `LEAD_DASHES = 4`, §16.14) |
 | O8 | **Resolved: leave `DialogBorder` private.** The login dialog's rows are its own frame (top and bottom), not a section boundary; folding them into `SectionRule` would change their bytes for no user-visible gain. Revisit only if a third rule site appears |
 | O9 | **Resolved: label at normal weight.** It names who asks (information); the dashes are chrome — the same split D12 already draws inside the picker |
 | O10 | **Resolved: keep both.** The owner approved the airier layout (blank row, then rule); the rule carries the name the blank row cannot |
@@ -1230,6 +1233,8 @@ sit left ("a centred label is harder to spot"). D13/D14 are otherwise unchanged.
   `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
   `right = width - 4 - labelWidth`; the fallback threshold is unchanged at
   `width < 6`. `visibleWidth(row) === width` still holds by construction.
+  (A2.2 supersedes the lead-in and the threshold: the `4` in `width - 4` here is
+  `LEAD_DASHES + 2`, now 6 — see §16.14.)
 - Pin delta (round-3 note N1): the two exact-bytes rows in
   `test/repl-tui.test.ts` — the width-20 `tui` row (`:4685-4687`) and the
   width-6 clipped row (`:4711-4713`) — become the left-anchored shape, and the
@@ -1263,8 +1268,14 @@ one number:
 - Plain-dash fallback when the label is absent/empty or `avail < 2` — the same
   semantics as before (below that, a clipped label is a bare ellipsis), which
   moves the threshold from `width < 6` to `width < 8` at `LEAD_DASHES = 4`.
-- Pin delta: the width-20 rows become `──── tui ` + 11 dashes and
-  `──── <clipped 14> ` (right 0); the threshold pins move to width 7 (plain) and
-  width 8 (labelled, clipped to 2); the width-80 frame row becomes
-  `──── guardian ` + 66 dashes.
-- Review: round 4 (below) covers this delta before implementation.
+- Pin delta: the width-20 rows (`test/repl-tui.test.ts:4682-4687`,
+  `:4689-4695`) become `──── tui ` + 11 dashes and `──── <clipped 14> ` (right
+  0); the **threshold test** (`:4708-4715`) must be retitled and re-bodied —
+  width 7 plain, width 8 labelled (clipped to 2); the width-80 frame row
+  (`:809-812`) becomes `──── guardian ` + 66 dashes; the `avail < 2 (width < 5)`
+  test (`:4703-4706`) keeps its assertions and loses its stale name.
+- Review: round 4 returned **NEEDS REVISION** — the normative D14 bullet, O7 and
+  §16.13 still carried the LEAD=2 literals, and this section's pin delta did not
+  name the threshold test that actually breaks. All four folded (D14 now states
+  the parameterised contract; O7 states the general identity; §16.13 forward-points
+  here; the pin delta names `:4703-4706` and `:4708-4715`).

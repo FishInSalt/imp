@@ -120,7 +120,8 @@ M18 §2 记录：*"触发条件：引入 HTTP/凭据型服务器时改为字段�
 
 ### D7 F1：项目级 mcp 配置并入 M8 trust 门（批 0，先行、独立提交）
 
-- **接口**：`discoverMcpConfig({ cwd, home?, paths?, projectAllowed })`——`projectAllowed` 为**必填**（不设默认，杜绝 fail-open：新调用者必须显式决定信任语义；现有 `test/mcp-config.test.ts` 的 7 处调用点**在批 0 内**机械补 `true`——否则批 0 的 typecheck/vitest 无法全绿；批 A 的 schema 改造再动其余部分）。`projectAllowed=false` → 跳过第 4/5 条项目路径（`<cwd>/.mcp.json`、`<cwd>/mcp.json`），notes 加一行教学：`mcp: project config skipped — directory not trusted (--trust to enable)`。返回的 `paths` 仍列全部五条（`/mcp` 的 "looked in" 提示不变，note 讲清跳过原因）。
+- **接口**：`discoverMcpConfig({ cwd, home?, paths?, projectAllowed })`——`projectAllowed` 为**必填**（不设默认，杜绝 fail-open：新调用者必须显式决定信任语义；现有 `test/mcp-config.test.ts` 的 7 处调用点**在批 0 内**机械补 `true`——否则批 0 的 typecheck/vitest 无法全绿；批 A 的 schema 改造再动其余部分）。`projectAllowed=false` → 跳过第 4/5 条项目路径（`<cwd>/.mcp.json`、`<cwd>/mcp.json`），notes 加一行教学：`mcp: project config skipped — directory not trusted (--trust to enable)`（仅当被跳过的文件确实存在；空目录零噪音）。返回的 `paths` 仍列全部五条（`/mcp` 的 "looked in" 提示不变，note 讲清跳过原因）。
+- **实施修订（批 0 落地时发现）**：定位 `resources.length === 0 → true` 的短路后确认——`trustRequiringResources` **必须**把两条项目级 mcp 文件计入（`isFile`），否则"目录里只有 `.mcp.json`"的克隆仓库会走"无资源→零摩擦"分支，信任位恒为 true，本门形同虚设。已随批 0 落地（`src/core/trust.ts`）并配单元（清单）与 e2e（pid 见证）钉子。
 - **接线**：`createMcpSetup` 传 `runner.projectSettingsAllowed`（信任位——extensions/skills/settings/AGENTS 项目层用同一个决策，语义正确）。时序：交互模式信任在 `cli.ts:583` 解析、`:632` 进 runner、`:649` 调用 createMcpSetup；print 模式 `:1004` 解析、`:1047` 调用——两处调用点信任均已在先。global 三条路径不受影响；`--trust`/ask（含 session 选项）通过后项目层恢复。
 - **测试**：未信任 + 项目 `.mcp.json`（stdio fake server）→ 不 spawn（pid 见证）+ note；未信任 + 项目 http url → fake http server 见证 0 请求；信任后两者恢复；global 层不受影响。
 
@@ -195,3 +196,7 @@ M18 §2 记录：*"触发条件：引入 HTTP/凭据型服务器时改为字段�
 ### 结论（2026-09-29）
 
 两轮审查关闭：**设计通过，可进入实施**（批 0 先行）。
+
+### 实施期修订
+
+- **批 0（已落地）**：`trustRequiringResources` 计入两条项目级 mcp 文件（见 D7 实施修订）——审查文本只覆盖了 `projectAllowed` 的接线，漏了信任清单本身；实现时以 `resolveProjectTrust` 的"无资源短路"为证据补上，并配清单单测 + pid 见证 e2e。

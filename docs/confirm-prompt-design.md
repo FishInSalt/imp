@@ -1247,3 +1247,24 @@ sit left ("a centred label is harder to spot"). D13/D14 are otherwise unchanged.
   and the threshold flipped to `< 5`/`< 7`); nothing survived the focused file. The
   one doc nit it raised (D14's fallback rationale still described `─ … ─`) is
   folded.
+
+### 16.14 Round 4 — the lead-in widens (A2.2, owner, 2026-09-30)
+
+After the A2.1 merge the owner asked for the label "a little more to the right".
+The lead-in becomes a named constant inside `SectionRule` so future nudges are
+one number:
+
+- `const LEAD_DASHES = 4` (was two dashes, written inline).
+- `avail = width - LEAD_DASHES - 2`; the row is
+  `dim("─"×LEAD_DASHES) + " " + label + " " + (right > 0 ? dim("─"×right) : "")`
+  with `right = width - LEAD_DASHES - 2 - labelWidth`, so the label starts at
+  column `LEAD_DASHES + 2` (6 with the new value) and the row still fills the
+  width exactly.
+- Plain-dash fallback when the label is absent/empty or `avail < 2` — the same
+  semantics as before (below that, a clipped label is a bare ellipsis), which
+  moves the threshold from `width < 6` to `width < 8` at `LEAD_DASHES = 4`.
+- Pin delta: the width-20 rows become `──── tui ` + 11 dashes and
+  `──── <clipped 14> ` (right 0); the threshold pins move to width 7 (plain) and
+  width 8 (labelled, clipped to 2); the width-80 frame row becomes
+  `──── guardian ` + 66 dashes.
+- Review: round 4 (below) covers this delta before implementation.

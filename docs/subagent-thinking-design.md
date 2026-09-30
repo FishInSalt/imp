@@ -18,13 +18,13 @@
 
 ### 1.1 结构性事实（代码位点）
 
-- 子代理链路没有档位：`SubagentOptions`（`src/core/subagent.ts:28-95`）无 `thinking` 字段；`launchLoop`（`:322-352`）的 `runAgentLoop` 调用（`:338`）不传 `thinking`；溢出重试的第二次 launch（`:433`）复用同一 options——修复点只有这一处 seam。
+- 子代理链路没有档位：`SubagentOptions`（`src/core/subagent.ts:41-95`）无 `thinking` 字段；`launchLoop`（`:337`）的 `runAgentLoop` 调用（`:338`）不传 `thinking`；溢出重试的第二次 launch（`:433`）复用同一 options——修复点只有这一处 seam。
 - 请求通路已就绪：`RunAgentLoopOptions.thinking`（`src/core/loop.ts:48-49`）被逐请求转发（`loop.ts:211`）；`LLMRequest.thinking`（`src/provider/types.ts:27`）。
-- agent frontmatter（`src/core/agents/registry.ts:120-215`）字段：`name` / `description` / `tools` / `model` / `timeout` / `worktree`——无 `thinking`。校验先例：`timeout`、`worktree` 非法值 → 解析错误、文件跳过、warning（`:155-176`）；空白 `model:` 是显式配置错误、留给调度期拒绝（SA-02 C6，`:136-138`）。
+- agent frontmatter（`src/core/agents/registry.ts:120-215`）字段：`name` / `description` / `tools` / `model` / `timeout` / `worktree`——无 `thinking`。校验先例：`timeout`、`worktree` 非法值 → 解析错误、文件跳过、warning（`:147-166`）；空白 `model:` 是显式配置错误、留给调度期拒绝（SA-02 C6，`:136-138`、`src/core/child-model.ts:75`）。
 - task spawn：父模型/provider 在同步步进里钉住（SA-08 round 3 F-4，`src/core/tools/task.ts:711-718`）；fresh dispatch 在 `:853-880` 组装 `runSubagent`；resume 在 `:613-640`，其中 `resumeAgent` 从**当前**注册表重取（`:482`），`extraSystem`、`timeoutMs` 用当前文件值（`:598`、`:619`）——`model`/`role`/`cwd`/`worktree` 冻结，文件内容与 timeout 以当前为准。
 - 主会话档位：`runner.thinkingLevel`（`src/runner.ts:1121`），启动时 clamp 到当前模型（`:501-509`）；主请求把 `off` 映射为 `undefined`（`:1472`，pi parity 形状）；task 工具接线在 `:548-551`（`getProvider`/`getModel`/`getModelReference` 同类 getter 先例）。
-- clamp 与线格：`THINKING_LEVELS`（`src/provider/thinking.ts:21`）；`supportedThinkingLevels`（`:548`）、`clampThinkingLevel`（`:567`，不可用档位先向上、再向下取最近）；线格映射在 `openai-completions.ts:326-356`（glm-openai / deepseek / openai-effort 三支）与 `anthropic.ts:178-209`（budget / adaptive / glm-anthropic + 显式 disabled 的 else-if）。
-- 子代理自己的压缩摘要器**不**带档位：`subagent.ts:256`（`compactSession`）、`:274`（`compactHistory`）都不传 `thinking`；而两函数与 `runSummarizer` 均支持（`src/core/compaction.ts:403`、`:527`、`:604`；off→undefined 在 `:424`）。主会话的摘要器搭 session 档位（`runner.ts:1020`：`thinking: this.level`）。
+- clamp 与线格：`THINKING_LEVELS`（`src/provider/thinking.ts:23`）；`supportedThinkingLevels`（`:548`）、`clampThinkingLevel`（`:567`，不可用档位先向上、再向下取最近）；线格映射共四支：`openai-completions.ts:326-356`（glm-openai / deepseek / openai-effort）、`anthropic.ts:178-209`（budget / adaptive / glm-anthropic + 显式 disabled 的 else-if）、`codex-responses.ts:195-204`（openai-codex：显式 `reasoning.effort`；off 允许时写 map 的 off 值，`off:null` 不写字段）。
+- 子代理自己的压缩摘要器**不**带档位：`subagent.ts:256`（`compactSession`）、`:274`（`compactHistory`）都不传 `thinking`；而两函数与 `runSummarizer` 均支持（`src/core/compaction.ts:403`、`:527`、`:604`；off→undefined 在 `:424`）。主会话的摘要器搭 session 档位（主压缩 `runner.ts:1604`、分支摘要 `:1020`：`thinking: this.level`）。
 
 ### 1.2 未传档位时的线上行为（子代理现状）
 
@@ -32,17 +32,19 @@
 
 | 模型类别 | undefined 的线格结果 | 子代理实际行为 |
 | --- | --- | --- |
-| off 允许的已知模型（deepseek-flash、zai GLM、Claude ≥4.6 等） | 显式 disabled（`openai-completions.ts:342-349`；anthropic else-if `:205-209`） | 关思考 |
-| `off:null` 强制推理模型（fable-5、kimi-k2.7-code、gpt-5-pro 系列等） | 不写字段（各支均以 `off !== null` 判断） | 模型默认（通常照常推理） |
+| off 允许的已知模型（deepseek-flash、Claude ≥4.6 等） | 显式 disabled（`openai-completions.ts:342-349`；anthropic else-if `:205-209`） | 关思考 |
+| `off:null` 且所属支以 `off !== null` 判断（anthropic else-if、deepseek、openai-effort、codex 支；例：claude-fable-5、kimi-k2.7-code、gpt-5-pro 系列、codex `gpt-6-astra`） | 不写字段（codex 支见 `codex-responses.ts:201-204`） | 模型默认（通常照常推理） |
+| `off:null`，**glm-openai 支（GLM 5.3）** | 该支**没有** `off !== null` 守卫（`openai-completions.ts:328-335`）→ 显式 disabled | 关思考（"显式 disabled 但模型实际关不掉"的既有形状；本批后的行为变化见 D2） |
 | 未知模型（meta `null`） | 不写字段 | 模型默认 |
+| `auto` 风格（`openai/deepseek-r`，`thinking.ts:241`） | 无支命中 → 不写字段 | 模型默认（本无旋钮） |
 
-**更正**：本仓库 SA-09 backlog 原文称"anthropic-messages 省略字段 = 新 Claude 默认开"——不准确；对 off 允许的 Claude 模型，`undefined` 走显式 disabled（上表第 1 行）。真正落到"模型默认"的只有 `off:null` 与未知模型两类。
+**更正**：本仓库 SA-09 backlog 原文称"anthropic-messages 省略字段 = 新 Claude 默认开"——不准确；对 off 允许的 Claude 模型，`undefined` 走显式 disabled（上表第 1 行）。真正落到"模型默认"的是上表第 2、4、5 行；第 3 行（GLM 5.3）是另一种形状：线格写 disabled，而该模型 off 实际不可用。
 
 实测佐证：deepseek-flash 子会话 21 回合零 thinking 块（2026-09-30，child JSONL）——与该家族"显式关"一致。
 
 ### 1.3 前置条件（已满足）
 
-`#output-truncation` D3b 已让子请求预算取目录值（deepseek-flash = 384000），思考不再立刻撞旧的 8192 上限；截断可见性与截断工具调用拒绝对子代理同规则生效（`df4becb` 已合入）。
+`#output-truncation` D3b 已让子请求预算取目录值（deepseek-flash = 384000；该值来自 pi.dev 目录缓存 `~/.imp/models-catalog.json`，离线无缓存首跑回退 loop 的 8192 兜底），思考不再立刻撞旧的 8192 上限；截断可见性与截断工具调用拒绝对子代理同规则生效（`df4becb` 已合入）。
 
 ## 2. 决策记录
 
@@ -65,31 +67,36 @@ agent frontmatter thinking: <level>   → 用它
 | 模型类别 | 子=`off` 时 | 与现状差异 |
 | --- | --- | --- |
 | off 允许的已知模型 | 显式 disabled | 无（与今天回落一致） |
-| `off:null` 强制推理模型 | clamp 到**最低可用档**并显式表达（如 claude-fable-5：off→minimal，adaptive 映射为 effort "low"；kimi-k2.7-code：off→minimal→thinking enabled；gpt-5-pro 系列：off→high） | **有**：今天不写字段=模型默认；现在是最低档显式 |
-| 未知模型（meta `null`） | clamp 后仍 `off`，无分支命中 → 不写字段 | 无 |
+| `off:null`，deepseek / openai-effort / codex / anthropic-else-if 支 | clamp 到**最低可用档**并显式表达（claude-fable-5：off→minimal，adaptive 映射为 effort "low"；kimi-k2.7-code：off→minimal→thinking enabled；gpt-5-pro 系列：off→high；codex `gpt-6-astra`：off→low→effort "low"） | **有**：今天不写字段=模型默认；现在是最低档显式 |
+| `off:null`，glm-openai 支（GLM 5.3） | clamp 上移 → low → enabled + effort "low" | **有**：今天是"显式 disabled 但模型实际关不掉"，现在是该模型真实的最低档 |
+| 未知模型（meta `null`）与 `auto` 风格（无旋钮） | clamp 后仍无表达式 → 不写字段 | 无 |
 
-- 非 off 档位（本批新能力）：所有家族显式启用（deepseek/GLM enabled(+effort)；Claude adaptive/budget 按档位）。
+- 非 off 档位（本批新能力）：**有旋钮的**家族显式启用（deepseek/GLM enabled(+effort)；Claude adaptive/budget；codex `reasoning.effort` 按档位）；`auto` 风格（无请求旋钮，`thinking.ts:241`）与无旋钮模型（meta `null`）无字段可写——档位在这些模型上天然惰性，如实记录，不假装"显式启用"。
 - **范围边界**：主请求的 `off→undefined`（`runner.ts:1472`）本批不动。差异仅在 `off:null` 模型上可见（子=最低档显式、主=模型默认）；不在本批扩大行为变更面（D6）。
 - 继承档位在子模型上不可用时的既有 clamp 语义（pi parity）——文档示例：父 `low` + 子 `gpt-5-pro`（只支持 high）→ 子 high；父 `max` + 子 GLM 5.2（binary/稀疏图）→ 按图向上取最近可表达档。这是 clamp 的既定行为，不是本批新语义。
 
 ### D3 读取时机：spawn 时钉住；resume 时重新解析
 
 - `TaskToolOptions` 新增可选 `getThinkingLevel?: () => ThinkingLevel`；runner 接线 `() => this.thinkingLevel`（与 `getModelReference` 同"真 runner 总是接上"模式；缺席 → `undefined` → 旧行为，测试与自定义 wiring 不受影响）。
-- fresh dispatch：父级读取放进 F-4 同步块（`task.ts:711-718` 旁），与 provider/model 一并钉住——本次尝试内不漂移。
-- resume：重新解析（当前文件的 frontmatter + 当前父级）。先例对齐：`timeoutMs`/`extraSystem` 用当前文件；`model`/`role`/`cwd`/`worktree` 作为"尝试身份"冻结。thinking 是"本次生成的档位语义"，归入前者。
+- fresh dispatch：父级读取放在 F-4 同步块内、`const provider = options.getProvider();`（`task.ts:718`）**之后**——不得插在既有两个读取之间（`task.ts:711-713` 的相邻性不变量），也不得放在 `:802-805`（那里在 `await resolveRepoState`/`await createChildWorktree` 之后，不构成钉住）。读取值 `agent?.thinking ?? getThinkingLevel?.()` 供 `:853` 组装使用；尝试内不漂移。
+- resume：用 `resumeAgent?.thinking ?? getThinkingLevel?.()`——resume 分支的 `agent` 实参被 `checkResumeArgs` 拒绝（`src/core/child-resume.ts:35-41`，role 不可变），所以取 `resumeAgent`（`task.ts:482`，当前注册表重取）；读取与其同步、在租约获取等异步副作用之前。
+- 先例对齐：`timeoutMs`/`extraSystem` 用当前文件；`model`/`role`/`cwd`/`worktree` 作为"尝试身份"冻结。thinking 是"本次生成的档位语义"，归入前者。
 - 溢出重试的第二次 launch 复用同一解析值（attempt 内一致）。
+- **已知缺口**：resume 重新解析出的档位变化在任何面上不可见（SA-03 记录、launch record、结果行都不含 thinking；`child-launch.ts` 的漂移校验只覆盖 `agent.system` 哈希，`:179`、`:752`）——归入 D6 显示面推迟项。
 
 ### D4 frontmatter 字段与校验
 
 - 新增可选字段 `thinking: <level>`；合法集 = `THINKING_LEVELS`（`off, minimal, low, medium, high, xhigh, max`），trim 后按小写归一。
-- 非法值或**空白** `thinking:` → 解析错误、文件跳过、warning 一行（`timeout`/`worktree` 先例）；空白与 `model` 的 C6 处理一致（保留空值、判为显式配置错误、教学文案列全部档位）——理由：用户写了这一行即显式配置意图，静默当作"未出现"会吞掉配置；档位字段没有合法空值。
+- 非法值或**空白** `thinking:` → 解析错误、文件跳过、warning 一行（解析期校验，同 `timeout`/`worktree` 先例）。空白要在解析期可见，必须**修订 `registry.ts:138`** 的填空题规则（`... || key === "model" || key === "thinking"`）——否则空白值被 fields 表静默丢弃、退化成"未出现"（评审轮 1 发现，见 §7）。
+- 与 `model` 的 C6 关系**明示为不同**：`model` 空白是调度期字段级拒绝（`child-model.ts:75`，跨 provider 判定在调度层）；`thinking` 无解析器 seam、合法集是封闭枚举，故在解析期以**文件级跳过**校验。两者的共同点只是"显式配置错误必须响亮"。
 - `AgentDefinition.thinking?: ThinkingLevel`；`registry.ts` 头注释与 README 的 agent 格式段同步更新。
 
 ### D5 子代理自己的压缩摘要器也随身档位
 
 - `compactChildHistory` 的两处调用（`subagent.ts:256`、`:274`）直传 `thinking: options.thinking`。
-- 论证：子会话的**所有** LLM 调用遵守同一档位（主会话先例：摘要器搭 session 档位，`runner.ts:1020`）；off→undefined 的形状由 summarizer 请求层既有处理（`compaction.ts:424`）。
-- 备选（评审可推翻）：保守不动、记触发条件。取舍点：一致/可预期 vs 摘要器成本（子代理短命、压缩频率低；主会话同一语义已被接受）。
+- 论证：与主会话逐字同构——主压缩传 `this.level` 原值（`runner.ts:1604`）；非 off 档位如实搭乘，off 由 summarizer 请求层的既有约定映射为 undefined（`compaction.ts:424`）。
+- **如实记录两处局限**（评审轮 1 发现，见 §7）：(a) 子=`off` 且 `off:null` 子模型时，正文请求（D2：lift 到最低档显式）与摘要器请求（off→undefined→无字段/模型默认）线格不一致——主会话同形状，属 compaction 层既有约定，本批不改；(b) 同组合下摘要器 token 超限无法降档重试（`summarizeWithRetry` 把 `off` 当 rank 0，`compaction.ts:496-500` 直接拒绝），失败被 `compactChildHistory` 的 catch 记入 3 连败禁用——与今天 off 形状下的行为一致，非本批引入。
+- 测试须同时钉住 off 与非 off 两输入（见 §4）。备选（评审可再推翻）：保守不动、记触发条件。
 
 ### D6 明确不做（各记触发条件）
 
@@ -105,7 +112,7 @@ agent frontmatter thinking: <level>   → 用它
 ## 3. 实现（文件与改动点）
 
 1. `src/core/agents/registry.ts`：`AgentDefinition.thinking?: ThinkingLevel`；`parseAgentFile` 校验（D4）；头注释更新。
-2. `src/core/tools/task.ts`：`TaskToolOptions.getThinkingLevel?`；F-4 块内钉住父级；fresh（`:802-805` 旁）与 resume（`:598` 旁）解析 `agent?.thinking ?? getThinkingLevel?.()` 并传 `runSubagent`。
+2. `src/core/tools/task.ts`：`TaskToolOptions.getThinkingLevel?`；fresh 在 `:718` 之后即时读取（F-4 块内），供 `:853` 使用；resume 在 `:482` 的 `resumeAgent` 旁读取 `resumeAgent?.thinking ?? getThinkingLevel?.()`，供 `:613` 使用。
 3. `src/core/subagent.ts`：`SubagentOptions.thinking?: ThinkingLevel`；`launchLoop` 传入 `runAgentLoop`（存在才传，模式同 `maxTokens`）；压缩两处直传（D5）。
 4. `src/runner.ts`：`createTaskTool({ ..., getThinkingLevel: () => this.thinkingLevel })`（`:+548-551` 区）。
 5. `README.md`（agent 格式段）与 `docs/subagent-delegation-task-list.md`（SA-09 条目：改为已定契约 + anthropic 事实更正）。
@@ -113,18 +120,22 @@ agent frontmatter thinking: <level>   → 用它
 
 ## 4. 测试计划
 
-- `test/agents-registry.test.ts`：合法档位解析；非法/空白 → 警告且文件跳过；大小写归一；合法文件不影响既有字段。
-- `test/subagent.test.ts`：`SubagentOptions.thinking` → 每轮请求带 `thinking`（sink 捕 `LLMRequest`）；溢出重试第二轮同样带；未提供 → `undefined`（回归）。
-- `test/task-tool.test.ts`：frontmatter 优先于继承；继承取 getter 值；getter 缺席 → 旧行为；spawn 后改 getter 不漂移（尝试内钉住）。
-- `test/child-resume.test.ts`：resume 用当前文件 + 当前父级（两变量各改一次各测）。
-- `test/child-compaction.test.ts`：子压缩摘要器请求带子档位（sink）。
-- 线格：`test/deepseek.test.ts:187-205` 已有 "raw off 防御"与 "off:null + undefined 不掉字段"先例——新增/引用覆盖 `off` 在 off:null 上 **clamp 上移** 的子代理语义；`test/thinking.test.ts` 如缺 clamp(off) 于 off:null 的断言则补。
-- 回归：全量套件；基线以开工时 main 为准（不复用旧测试数）。
+| 验收项 | 文件 | 断言 |
+| --- | --- | --- |
+| frontmatter 胜出 / 继承父级 / getter 缺席→undefined | `test/task-tool.test.ts` | 三种输入下子运行收到的 `thinking`（fake provider sink） |
+| spawn 钉住（await 交错不漂移） | `test/task-tool.test.ts` | 自定义 `getThinkingLevel` 在 worktree 创建 await 期间变更返回值，尝试仍用 spawn 时值 |
+| 每轮请求带档位；溢出重试第二轮同值；未提供→回归 | `test/subagent.test.ts` | sink 捕 `LLMRequest.thinking` + catalog `maxTokens` 组合断言（D3b 回归） |
+| resume 用当前文件 + 当前父级（两变量各测） | `test/child-resume.test.ts` | 同 sink 断言 |
+| 摘要器档位（`off` 与非 off，`off:null` 模型） | `test/child-compaction.test.ts` | 摘要器请求的 `thinking` |
+| raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled）、`test/openai-completions.test.ts`（gpt-5-pro→effort "high"）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"） | 线格 body |
+| GLM 5.3：off→low enabled；undefined→disabled（定格既有形状） | `test/zai.test.ts`（`:105-106` 已有 off→low，补 undefined 定格） | 线格 body |
+| 非法/空白 frontmatter → 解析期跳过 + 警告；大小写归一 | `test/agents-registry.test.ts` | `parseAgentFile` 返回值 / `loadAgentDefinitions.warnings` |
+| 回归：全量套件 | — | 基线以开工时 main 为准（不复用旧测试数） |
 
 ## 5. 风险与回滚
 
 - **成本/延迟**：继承=max 语义使未写 frontmatter 的 agent 全部按 max 思考（owner 已知情）。缓解：README 写明降档方法（frontmatter）。
-- **off:null 行为变化**：子=`off` 从"模型默认"变为"最低档显式"——有意为之，文档化。
+- **off:null 行为变化**：子=`off` 从"模型默认"（deepseek/openai-effort/codex/anthropic-else-if 支）或"显式 disabled 但实际关不掉"（GLM 5.3）变为"最低档显式"——有意为之，文档化。
 - **clamp 上移意外**：继承档位在子模型稀疏图上可能上移（low→high）。文档表现表说明，非本批语义。
 - **兼容**：新字段可选，旧 agent 文件不受影响；无持久化格式变化（launch record 不含 thinking），回滚 = 整体 revert，无迁移。
 
@@ -132,8 +143,8 @@ agent frontmatter thinking: <level>   → 用它
 
 改动：`src/core/agents/registry.ts`、`src/core/tools/task.ts`、`src/core/subagent.ts`、`src/runner.ts`、`README.md`、`docs/subagent-delegation-task-list.md`。
 新增：`docs/subagent-thinking-design.md`（本文件）。
-测试：`test/agents-registry.test.ts`、`test/subagent.test.ts`、`test/task-tool.test.ts`、`test/child-resume.test.ts`、`test/child-compaction.test.ts`（± `test/thinking.test.ts`、`test/deepseek.test.ts` 增补）。
+测试：`test/agents-registry.test.ts`、`test/subagent.test.ts`、`test/task-tool.test.ts`、`test/child-resume.test.ts`、`test/child-compaction.test.ts`，线格增补 `test/anthropic-thinking.test.ts`、`test/moonshotai.test.ts`、`test/openai-completions.test.ts`、`test/codex-responses.test.ts`、`test/zai.test.ts`（± `test/thinking.test.ts`、`test/deepseek.test.ts`）。
 
 ## 7. 评审记录
 
-- 评审轮 1：待启动。
+- 评审轮 1（2026-09-30，独立全新上下文）：11 项发现，全部折入本稿。7 项 P2——GLM 5.3（`off:null` 而 glm-openai 支无守卫）归类错误且行为变化未记；openai-codex 家族未进表；D4 空白值在 `registry.ts:138` 下不可实现且与 C6 表述自相矛盾；D3 fresh 位置自相矛盾（`task.ts:802-805` 在 await 之后，不构成钉住）；resume 公式误用 `agent?.thinking`（resume 分支该实参必被拒绝）；D5 在 `off:null` 上的论证不实、不可降档形状未记；测试计划未逐条钉住 5 项验收。4 项 P3——`auto`/无旋钮表述过度；6 处行号引用修正；resume 档位变化无披露面；384000 目录来源未注明。评审对 GLM 5.3 与 codex 的事实主张经本人复核属实（codex 条目在目录缓存 `openai-codex/gpt-6-astra` 等）。待评审轮 2。

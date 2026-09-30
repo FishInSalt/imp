@@ -1,8 +1,9 @@
 # 主循环输出截断处理：目录预算 + 截断工具调用拒绝 + 可见性（#output-truncation）
 
-状态：草稿 —— 设计评审第 1 轮（2×P1 / 7×P2 / 3×P3）与第 2 轮（3×P2 / 4×P3）均已
-折叠，等待第 3 轮复核。主人决策已签（2026-09-30）：D3 = 直接用模型目录上限；D2/D4
-按建议；D1 无异议。D3b（子代理同规则）为评审新增，**待主人确认**。
+状态：草稿 —— 设计评审第 1 轮（2×P1 / 7×P2 / 3×P3）、第 2 轮（3×P2 / 4×P3）与
+第 3 轮（4×P3）均已折叠，等待第 4 轮复核。主人决策已签（2026-09-30）：D3 = 直接用
+模型目录上限；D2/D4 按建议；D1 无异议。D3b（子代理同规则）为评审新增，**待主人
+确认**。
 分支：`fix/output-truncation`（独立 worktree `imp-output-truncation`）；基线 main `b7d8a9d`。
 
 参考（均已读/已核实）：
@@ -37,7 +38,8 @@
 验收：
 1. `stopReason === "max_tokens"` 的 assistant 消息带工具调用时：工具零执行、模型收到
    逐条错误、UI 可见失败行；
-2. 运行以截断（无工具调用）结束时：TUI 与 print 均出现截断注记；`-p` 模式退出码 1；
+2. 运行以截断（无工具调用）结束时：TUI 与 print 均出现截断注记；`-p` 模式退出码 1
+   （该退出码为手动验收 11，无自动化 e2e——自动化由脚本化 REPL 出口面覆盖）；
 3. deepseek-flash 默认请求 max_tokens=384000（显式 `--max-tokens` 仍优先）；
 4. 全量门禁绿（typecheck / lint / vitest）。
 
@@ -192,18 +194,20 @@
 7. 目录值缺失 → 回退（16384）；
 8. truncated 注记精确字符串（含数字）；
 8b. 子代理预算：目录值非 undefined 时 `launchLoop` 收到 `maxTokens`；目录缺失 → 不传
-   （loop 兜底 8192 回归钉子）。
+   （loop 兜底 8192 回归钉子）；
+8c. `lastRunMaxTokens` 每次 run 更新（评审 C2）：同一 Runner 两次截断 run，其间
+   `runner.setModel()`（公开 API、`/model` 底层）切到目录上限不同的模型——maxTokens
+   无运行时 setter，上限变化只经由模型切换；第二条注记显示第二个 run 的上限。
 
 新增（print/repl 与 CLI e2e 用例，就近落位现有 `runRepl` / `bin/imp.js` 基建）：
 9. 脚本化 REPL（`runRepl` 已导出 + mock provider）：截断的最终 run → EOF 退出码 1 +
    注记；正常 → 退出码 0（回归钉子）；
-9b. 帮助文案 e2e（`bin/imp.js --help`）：输出含新的默认说明（模型目录上限，未知时
-   16384）——`HELP` 未导出、入口模块底部 `await main()`，e2e 是既有 HELP 断言的唯一
-   路径（评审 P2-N2）；
-9c. 注记数字取"本 run"：脚本化 REPL 连续两个截断 run、第二个换模型/上限后，第二条
-   注记显示第二个 run 的值（`flushQueue` 为 ReplMachine 私有，故落 REPL 层；评审
-   P2-N3）；
-9d. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 1
+9b. 帮助文案与同源双重钉子（评审 P2-N2 + C3）：① `bin/imp.js --help` e2e 输出含
+   新的默认说明（模型目录上限，未知时 16384）；② 源码/AST 断言 `cli.ts` 的
+   `--max-tokens` 帮助行引用 `DEFAULT_MAX_TOKENS`（复用 `test/cli-model-explicit.test.ts`
+   的 AST 提取模式——`HELP` 未导出、入口模块底部 `await main()`，直接 import 会触发
+   启动）；
+9c. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 1
    （评审 P3-N6 的语义钉子）。
 print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不导出（入口模块），无
 稳定自动化承载；如需自动化，触发条件见 §5。
@@ -240,8 +244,8 @@ print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不�
 | `src/core/subagent.ts` | D3b 传参（~3 行） |
 | `src/core/constants.ts` | +1 常量 |
 | `test/loop.test.ts` | +4 用例（含 gate 0 调用与"续跑不累积"断言） |
-| `test/runner.test.ts` | +5 用例（含 8b） |
-| print/REPL 与 CLI e2e 测试 | +4 用例（9 / 9b / 9c / 9d） |
+| `test/runner.test.ts` | +6 用例（含 8b/8c） |
+| print/REPL 与 CLI e2e 测试 | +3 用例（9 / 9b / 9c） |
 | `docs/output-truncation-design.md` | 本文 |
 
 ## 7. 评审记录
@@ -254,4 +258,7 @@ print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不�
 - 第 2 轮复核（2026-09-30，同一评审子代理续跑；commit 38c67d4）：**NEEDS-FIXES** ——
   12 项确认全部折叠；新增 3×P2（D3b 状态一致性、5b/8c 落位不可实现、print 退出码
   自动化缺口）与 4×P3（§6 计数、shell/失败路径状态语义、D1 行号），已折叠（本修订）。
-- 第 3 轮复核：待进行。
+- 第 3 轮复核（2026-09-30，同一评审子代理续跑；commit 8d8681e）：**APPROVE WITH
+  CORRECTIONS** —— 第 2 轮 7 项确认折叠；新增 4×P3（9b 论证事实错误、9c 机制不可
+  实现、9b 未钉"同源"、验收项 2 未标注手动面），已折叠（本修订）。
+- 第 4 轮复核：待进行。

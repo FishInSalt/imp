@@ -322,6 +322,33 @@ describe("runSubagent between-turn compaction (session store wired)", () => {
 		expect(reopened.buildContext().compacted).toBe(true);
 		expect(reopened.buildContext().messages.map((m) => m.role)).toEqual(context.messages.map((m) => m.role));
 	});
+
+	it("SA-09 D5: the session-backed branch passes the resolved level to compactSession", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-sa09-compact-"));
+		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1500),
+				assistant([{ type: "text", text: "session done" }]),
+			],
+			"SA-09-SUMMARY",
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+			thinking: "high",
+			session,
+			onMessage: (message) => session.appendMessage(message),
+		});
+		expect(outcome.status).toBe("completed");
+		expect(routed.summaryRequests).toHaveLength(1);
+		expect(routed.summaryRequests[0]?.thinking).toBe("high");
+	});
 });
 
 describe("task tool end-to-end (default settings, real session seam)", () => {
@@ -677,5 +704,45 @@ describe("SA-04 accounting: exactly-once attempt usage (red evidence on baseline
 		});
 		expect(outcome.usageDetail.summarizerCalls).toBe(attempts);
 		expect(outcome.usageDetail.incomplete).toBe(false);
+	});
+});
+
+describe("SA-09 D5: the child summarizer rides the resolved level", () => {
+	const steps = (): ScriptStep[] => [
+		toolTurn("c1", "one", 500),
+		toolTurn("c2", "two", 1000),
+		toolTurn("c3", "three", 1500),
+		assistant([{ type: "text", text: "done" }]),
+	];
+
+	it("a non-off level rides the summarizer request; off maps to no level", async () => {
+		const routed = routingProvider(steps(), "SA-09-SUMMARY");
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "go",
+			settings: TINY_SETTINGS,
+			thinking: "high",
+		});
+		expect(outcome.status).toBe("completed");
+		expect(routed.summaryRequests).toHaveLength(1);
+		expect(routed.summaryRequests[0]?.thinking).toBe("high");
+
+		const offRouted = routingProvider(steps(), "SA-09-SUMMARY");
+		await runSubagent({
+			provider: offRouted.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "go",
+			settings: TINY_SETTINGS,
+			thinking: "off",
+		});
+		expect(offRouted.summaryRequests).toHaveLength(1);
+		// compaction.ts maps off → undefined at the request seam: "no level"
+		// is the summarizer's shape for off (design D5 limitation (a)).
+		expect(offRouted.summaryRequests[0]?.thinking).toBeUndefined();
 	});
 });

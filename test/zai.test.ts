@@ -106,6 +106,12 @@ describe("zai provider (pi's GLM connection path)", () => {
 			await collect(provider.stream(REQ("glm-5.3", "off")));
 			expect(captured.at(-1)?.thinking).toEqual({ type: "enabled", clear_thinking: false });
 			expect(captured.at(-1)?.reasoning_effort).toBe("low");
+			// SA-09: NO level at all (legacy callers / undefined) — the glm branch
+			// has no off:null guard, so it writes the disabled form even though the
+			// model cannot actually turn thinking off (design §1.2 row 3 shape).
+			await collect(provider.stream(REQ("glm-5.3")));
+			expect(captured.at(-1)?.thinking).toEqual({ type: "disabled" });
+			expect(captured.at(-1)?.reasoning_effort).toBeUndefined();
 		} finally {
 			delete process.env.ZAI_BASE_URL;
 			delete process.env.ZAI_API_KEY;

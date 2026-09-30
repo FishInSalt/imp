@@ -426,6 +426,8 @@ model: glm-5.3              # optional: override on the current provider
                             # (bare id or a same-provider `provider/id` prefix;
                             #  a cross-provider reference is rejected up front)
 timeout: 300                # optional wall clock, seconds
+thinking: high              # optional: off|minimal|low|medium|high|xhigh|max;
+                            # omit to inherit the session's level at spawn
 ---
 
 You are a code scout. Go broad before deep.
@@ -438,6 +440,12 @@ different provider is rejected before the child starts, with an error that
 names the workaround; cross-provider children are not supported. Omit the
 field to inherit the session's model; a blank `model:` is a configuration
 error and is rejected the same way (before the child starts).
+
+`thinking:` sets the thinking level that agent's children run at — one of
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Omit the field to
+inherit the session's current level at the moment the child starts; a blank
+`thinking:` is a configuration error (the file is skipped with a startup
+warning). The level is clamped to what the child's model supports.
 
 Registered agents are advertised to the model in the system prompt's
 `<advertised_agents>` block (auto-routing hint); `task(agent: "scout", prompt:

@@ -888,4 +888,66 @@ describe("#output-truncation D3b (child request budget)", () => {
 		expect(outcome.status).toBe("completed");
 		expect(sink[0]?.maxTokens).toBe(8192);
 	});
+
+	it("SA-09: the resolved thinking level rides every request as-is — including `off`", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [],
+			prompt: "go",
+			thinking: "off",
+		});
+		expect(outcome.status).toBe("completed");
+		expect(sink[0]?.thinking).toBe("off"); // design D2: raw, providers clamp/express
+	});
+
+	it("SA-09: absent thinking stays undefined (legacy callers keep the family fallback)", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
+		await runSubagent({ provider, model: "m", system: "", tools: [], prompt: "go" });
+		expect(sink[0]?.thinking).toBeUndefined();
+	});
+
+	it("SA-09: the overflow retry rides the same level and the summarizer rides it too (D5)", async () => {
+		const sink: LLMRequest[] = [];
+		// Local copies of the runSubagent describe's fixtures (these tests live in
+		// the D3b describe; identical values keep the trigger behavior in sync).
+		const overflow = () => {
+			throw new Error("prompt is too long: 300000 tokens > 262144 tokens maximum");
+		};
+		const tiny = { reserveTokens: 16, keepRecentTokens: 1, contextWindow: 131072 };
+		const provider = scriptedProvider(
+			[
+				assistant(
+					[
+						{ type: "text", text: "working" },
+						{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "hi" } },
+					],
+					"tool_use",
+				),
+				overflow,
+				assistant([{ type: "text", text: "summary of the child work" }]),
+				assistant([{ type: "text", text: "recovered" }]),
+			],
+			sink,
+		);
+		const outcome = await runSubagent({
+			provider,
+			model: "m",
+			system: "",
+			tools: [echo],
+			prompt: "go",
+			settings: tiny,
+			thinking: "high",
+		});
+		expect(outcome.status).toBe("completed");
+		expect(outcome.text).toBe("recovered");
+		// turn → overflow → summarizer → retry: whichever launch or seam
+		// produced the request, it carries the resolved level.
+		expect(sink).toHaveLength(4);
+		expect(sink.map((r) => r.thinking)).toEqual(["high", "high", "high", "high"]);
+	});
 });

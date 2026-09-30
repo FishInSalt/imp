@@ -180,3 +180,38 @@ describe("M8 trust gate: projectAllowed=false (the skipped tier)", () => {
 		expect(registry.agents[0]?.description).toContain("GLOBAL VERSION");
 	});
 });
+
+describe("SA-09: frontmatter `thinking:`", () => {
+	it("parses a valid level and normalizes case/whitespace; absent stays undefined", () => {
+		const leveled = parseAgentFile("---\nname: a\ndescription: d\nthinking: HIGH\n---\nbody", "/x/a.md");
+		if (typeof leveled === "string") throw new Error(leveled);
+		expect(leveled.thinking).toBe("high");
+
+		const absent = parseAgentFile("---\nname: a\ndescription: d\n---\nbody", "/x/a.md");
+		if (typeof absent === "string") throw new Error(absent);
+		expect(absent.thinking).toBeUndefined();
+	});
+
+	it("invalid and blank values are rejected at parse, naming the file, field and full level list", () => {
+		expect(parseAgentFile("---\nname: a\ndescription: d\nthinking: turbo\n---\n", "/x/a.md")).toBe(
+			'/x/a.md: invalid "thinking" "turbo" — use one of: off, minimal, low, medium, high, xhigh, max',
+		);
+		// A blank line is EXPLICIT configuration (the `model:` C6 family): the
+		// fields map preserves it so validation rejects it instead of inheriting.
+		expect(parseAgentFile("---\nname: a\ndescription: d\nthinking:\n---\n", "/x/a.md")).toBe(
+			'/x/a.md: invalid "thinking" "" — use one of: off, minimal, low, medium, high, xhigh, max',
+		);
+	});
+
+	it("loader: an invalid thinking file warns and is skipped; a valid one carries the level", () => {
+		const t = tempProject();
+		agentFile(t.projectDir, "bad", "---\nname: bad\ndescription: d\nthinking: turbo\n---\n");
+		agentFile(t.projectDir, "good", "---\nname: good\ndescription: d\nthinking: low\n---\nok");
+		const { agents, warnings } = loadAgentDefinitions(t.cwd, t.home);
+		expect(agents.map((a) => a.name)).toEqual(["good"]);
+		expect(agents[0]?.thinking).toBe("low");
+		expect(warnings).toEqual([
+			`agent file skipped: ${path.join(t.projectDir, "bad.md")}: invalid "thinking" "turbo" — use one of: off, minimal, low, medium, high, xhigh, max`,
+		]);
+	});
+});

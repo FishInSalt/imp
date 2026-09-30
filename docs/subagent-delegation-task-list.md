@@ -48,7 +48,7 @@ Do not treat the following as authorization to launch paid model calls, change g
 | SA-06 | Persist and validate resumable child launch state | New feature foundation | SA-01, SA-02, SA-03 |
 | SA-07 | Synchronous continuation of settled children | New feature | SA-03, SA-04, SA-06; regression-check SA-01 and SA-02 |
 | SA-08 | Independent integration review and acceptance | Review / release gate | All work included in the delivery |
-| SA-09 | Child thinking policy (frontmatter + settings + explicit-off semantics) | Contract gap + new feature / after SA-02 | SA-02 (child model config); #output-truncation D3b (child request budget) as budget precondition |
+| SA-09 | Child thinking policy (frontmatter + inherit, explicit normalization) | Contract gap + new feature / after SA-02 | SA-02 (child model config); #output-truncation D3b (child request budget) as budget precondition |
 
 SA-05 is not a prerequisite for building the resume engine, but its accounting integration must be verified with SA-07 before declaring the complete effort finished.
 
@@ -376,36 +376,37 @@ Deliver:
 
 ## SA-09 — Make the child thinking policy explicit and configurable
 
-Recorded 2026-09-30 (owner request: "子代理思考策略" as a follow-up batch). This entry is a backlog record, not an approved design; it must pass its own design review before implementation. It does not satisfy the design-review gate.
+Recorded 2026-09-30 (owner request); the contract below was confirmed by the owner 2026-09-30. The design draft lives in `docs/subagent-thinking-design.md` — like every batch with a design document, it must pass its own independent adversarial review before implementation starts; this entry does not satisfy the design-review gate.
 
 ### Problem and evidence
 
-- Children never pass `thinking` to `runAgentLoop`: `SubagentOptions` has no such field and `src/core/subagent.ts` (`launchLoop`) never sets it. Agent frontmatter supports `name`, `description`, `tools`, `model`, `timeout` only (`src/core/agents/registry.ts`).
-- With the level undefined, the wire result drifts by provider family:
-  - `deepseek` / zai-GLM (openai-completions): explicit `thinking: {type:"disabled"}` (`src/provider/openai-completions.ts:326-349`) — children run with thinking off.
-  - `anthropic-messages`: the field is omitted entirely; newer Claude models default to thinking on (`src/provider/anthropic.ts:180-199`) — children can run with model-default thinking.
-- Observed: a child session on `deepseek/deepseek-flash` produced 21 assistant turns with zero thinking blocks (child JSONL under `~/.imp/sessions/.../children/`, 2026-09-30) — de-facto "off" on this family only.
-- Ecosystem parity: `pi-subagents` implements a full policy — agent frontmatter `thinking`, `subagents.defaultThinking`, `agentOverrides.<name>.thinking`, `subagents.maxThinking`, `subagents.disableThinking`, per-run thinking suffixes; its builtin roles split levels (scout low, worker/reviewer medium, oracle high).
-- Interplay: `#output-truncation` D3b raises the child request budget to the model-catalog value (`docs/output-truncation-design.md`). That budget is a precondition for enabling child thinking: without it, thinking at today's 8,192-token child request cap recreates the "thinking eats the output budget" failure (see `docs/compaction-thinking-retry-design.md`).
+- Children never pass `thinking` to `runAgentLoop`: `SubagentOptions` has no such field and `src/core/subagent.ts` (`launchLoop`) never sets it. Agent frontmatter supports `name`, `description`, `tools`, `model`, `timeout`, `worktree` only (`src/core/agents/registry.ts`).
+- With the level undefined, the wire result drifts by provider family (each branch read and verified 2026-09-30):
+  - Off-allowed known models — `deepseek`, zai-GLM, Claude ≥4.6 and most others: explicit disabled (`src/provider/openai-completions.ts:326-356`; `src/provider/anthropic.ts:205-209`) — children run with thinking off.
+  - `off:null` forced-reasoning models (`claude-fable-5`, `kimi-k2.7-code`, the `gpt-5-pro` family, ...): no field is written — children run at the model default.
+  - Unknown models (meta `null`): no field is written — model default.
+- Correction (2026-09-30): an earlier revision of this entry claimed that for anthropic-messages "the field is omitted entirely; newer Claude models default to thinking on". That is wrong for off-allowed Claude models (they get explicit disabled like every other off-allowed family); only the `off:null` and unknown-model rows above reach model-default behavior.
+- Observed: a child session on `deepseek/deepseek-flash` produced 21 assistant turns with zero thinking blocks (child JSONL under `~/.imp/sessions/.../children/`, 2026-09-30) — consistent with the explicit-disabled fallback.
+- Ecosystem parity: `pi-subagents` implements a full policy — agent frontmatter `thinking`, `subagents.defaultThinking`, `agentOverrides.<name>.thinking`, `subagents.maxThinking`, `subagents.disableThinking`, per-run thinking suffixes; its builtin roles split levels (scout low, worker/reviewer medium, oracle high). Its settings layer exists because pi ships builtin agents users cannot edit; imp's registry is user-owned from day one ("No builtin agents"), so per-agent files cover the need — owner decision: two sources only.
+- Interplay: `#output-truncation` D3b raises the child request budget to the model-catalog value (`docs/output-truncation-design.md`, merged `df4becb`). That budget is a precondition for enabling child thinking: without it, thinking at the old 8,192-token child request cap recreates the "thinking eats the output budget" failure (see `docs/compaction-thinking-retry-design.md`).
 
-### Proposed minimal contract to confirm in design review
+### Owner-confirmed contract (2026-09-30)
 
-- Agent frontmatter gains an optional `thinking: <level>`; absent → settings default.
-- Settings: `subagents.defaultThinking` fallback; optional ceiling (`subagents.maxThinking`) and escape hatch (`subagents.disableThinking`). Extend only after the default path passes review.
-- Resolution seam: `SubagentOptions` → `runAgentLoop({ thinking })`, clamped per family by the existing `clampThinkingLevel`.
-- "Off" must be expressed as the family's explicit disabled form where omission would not disable (anthropic protocol), not by leaving the field out.
-- Child thinking must not change model, provider, request budget, cwd, or gate behavior.
+- Two sources only: the agent's frontmatter `thinking: <level>` wins; absent → inherit the parent session's current level, read at spawn. No settings layer (deferred with triggers — see the design's D6).
+- Explicit normalization: the resolved level (including `off`) is written into every child request as-is; the existing per-provider clamp and wire mapping express it. Consequences: off-allowed families keep byte-identical behavior (explicit disabled); `off:null` models lift `off` to the lowest available level, expressed explicitly (a deliberate behavior change vs today's silent model default); unknown models stay field-less. The main request's `off→undefined` shape is out of scope.
+- Child thinking must not change model, provider, request budget, cwd, gate behavior, result format, or accounting.
 
 ### Scope / entry points
 
-- `src/core/agents/registry.ts` (frontmatter parse/validation), `src/core/subagent.ts` (`SubagentOptions`, `launchLoop`), `src/core/settings.ts` (settings schema), `src/core/tools/task.ts` (only if a per-run override is approved later).
-- Tests: fake-provider child request carries the resolved level; frontmatter and settings resolution/precedence; the anthropic omission case.
+- `src/core/agents/registry.ts` (frontmatter parse/validation), `src/core/tools/task.ts` (spawn-time `getThinkingLevel` resolution; fresh dispatch and resume), `src/core/subagent.ts` (`SubagentOptions`, `launchLoop`, child-compaction pass-through), `src/runner.ts` (getter wiring). No `src/core/settings.ts` change; no provider change (the existing branches handle raw `off` and every level).
+- Tests: see the design's test plan (`docs/subagent-thinking-design.md` §4).
 
 ### Acceptance tests
 
-- Fake-provider child run asserts the request's resolved thinking level (frontmatter / settings default / escape hatch).
-- `thinking: false` / `disableThinking` yields the family's explicit disabled form where omission would not disable.
-- Invalid or unknown levels are rejected with an error naming the source file/field.
+- Fake-provider child run asserts the request's resolved thinking level: frontmatter wins; absent → the inherited parent level; getter absent → `undefined` (legacy behavior).
+- Resume re-resolves from the current agent file plus the current parent level; the value pinned at spawn does not drift within an attempt.
+- Raw `off` on an `off:null` model lifts to the lowest available level, expressed explicitly (`claude-fable-5` → adaptive effort "low"; `kimi-k2.7-code` → thinking enabled; `gpt-5-pro` → reasoning_effort "high"; `gpt-5.2/5.4/5.5-pro` → "medium").
+- Invalid or blank `thinking:` values are rejected at parse time with an error naming the source file/field (file skipped, warning surfaced).
 - Regression: a child with thinking enabled + catalog-budgeted maxTokens completes without the output-limit truncation seen in the `#output-truncation` evidence.
 
 ## Suggested assignment message

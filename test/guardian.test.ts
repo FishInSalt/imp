@@ -31,6 +31,9 @@ function fakeApi(cwd: string): {
 		registerTool: () => {},
 		registerCommand: () => {},
 		registerContext: () => {},
+		// #guardian-auto-mode: the extension reports the footer mode at load
+		// and on every mode change; manual stays a no-op.
+		setStatus: () => {},
 		on: (event: string, handler: (event: ToolCallEvent) => unknown) => {
 			handlers[event] = handler;
 		},

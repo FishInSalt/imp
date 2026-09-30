@@ -90,11 +90,10 @@ export interface ConfirmOptions {
  *  the trusted-context block (host-extracted, D11), the output contract, the
  *  timeout, the audit record, and whether the seam exists on this surface at
  *  all (D8). */
-/** One classifier question. Requests whose combined `system` + `prompt`
- *  exceed the host's input cap (design §14.4) are treated as unavailable
- *  (fail-to-ask) — the extension may pre-flight against the documented cap. */
 export interface ClassifyRequest {
-	/** The extension's policy framing (the system message). */
+	/** The extension's policy framing (the system message) — the request's
+	 *  `system` + `prompt` are capped by the host (§14.4); over-cap fails to
+	 *  unavailable. */
 	system: string;
 	/** What to judge (one user message): the candidate action and its context. */
 	prompt: string;

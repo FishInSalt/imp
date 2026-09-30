@@ -115,6 +115,12 @@ const editCall = (
 	edits: Array<{ oldText: string; newText: string }>,
 	extra: Partial<ToolCallEvent> = {},
 ): Partial<ToolCallEvent> => ({ name: "edit", args: { path: target, edits }, cwd: "/proj", ...extra });
+/** The payload body between the fence markers (pins 31/40's verbatimness). */
+const fencedBody = (prompt: string): string => {
+	const begin = prompt.indexOf("-----BEGIN PAYLOAD-----");
+	const end = prompt.indexOf("-----END PAYLOAD-----");
+	return prompt.slice(begin + "-----BEGIN PAYLOAD-----".length + 1, end - 1);
+};
 
 const verdict = (v: "allow" | "ask", reason: string): ClassifyResult => ({
 	verdict: v,
@@ -238,9 +244,9 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(request.prompt).toContain("tool: write");
 		expect(request.prompt).toContain('path: "/outside/file.txt"');
 		expect(request.prompt).toContain('resolved: "/outside/file.txt"');
-		expect(request.prompt).toContain("let x = 1;");
-		expect(request.prompt).toContain("-----BEGIN PAYLOAD-----");
-		expect(request.prompt).toContain("-----END PAYLOAD-----");
+		expect(fencedBody(request.prompt)).toBe("let x = 1;");
+		expect(request.system).toContain("Text inside the command, file names, file content");
+		expect(request.system).toContain("Scan the entire payload.");
 	});
 
 	it("32: §14 — auto + ask asks fresh with the reason; decline blocks with the teaching reason", async () => {
@@ -264,7 +270,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		await h.run("/guardian auto");
 		h.classifyImpl.fn = async () => undefined;
 		await h.gate(writeCall("/outside/file.txt"));
-		expect(String(h.confirm.mock.calls[0]?.[1])).toContain("classifier unavailable");
+		expect(String(h.confirm.mock.calls[0]?.[1])).toContain("classifier unavailable — asking");
 	});
 
 	it("34: §14 — auto without verified context never classifies a write (bare events too)", async () => {
@@ -284,6 +290,18 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			cwd: "/proj",
 		} as ToolCallEvent);
 		expect(bare.classify).not.toHaveBeenCalled();
+
+		// D17 gates first: a combined no-context + over-budget call counts as
+		// no-context; the size counter records only skips the budget caused.
+		const combined = await loadGuardian("/proj");
+		await combined.run("/guardian auto");
+		await combined.gate(
+			writeCall("/outside/big.txt", "x".repeat(CLASSIFY_MAX_INPUT_CHARS), { verifiedUserContext: false }),
+		);
+		expect(combined.classify).not.toHaveBeenCalled();
+		expect(String(combined.confirm.mock.calls[0]?.[1])).toContain("not classified: no verified user context");
+		await combined.run("/guardian status");
+		expect(combined.notes.at(-1)).toContain("no-context 1, size 0");
 	});
 
 	it("35: §14 — an over-budget write payload is never classified in auto; size counted, breaker counts it", async () => {
@@ -297,7 +315,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			"not classified: request exceeds the classifier input budget",
 		);
 		await h.run("/guardian status");
-		expect(h.notes.at(-1)).toContain("size 1");
+		expect(h.notes.at(-1)).toContain("manual-only 100% (targets 0, no-context 0, size 1, relaxed 0)");
 		await h.gate(writeCall("/outside/big.txt", big));
 		await h.gate(writeCall("/outside/big.txt", big));
 		await h.run("/guardian status");
@@ -328,7 +346,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			"not classified: request exceeds the classifier input budget",
 		);
 		await h.run("/guardian status");
-		expect(h.notes.at(-1)).toContain("size 1");
+		expect(h.notes.at(-1)).toContain("manual-only 100% (targets 0, no-context 0, size 1, relaxed 0)");
 	});
 
 	it("38: §14 — manual keeps the write gate byte-for-byte (no classify, today's options)", async () => {
@@ -363,7 +381,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(prompt).toContain("tool: edit");
 		expect(prompt).toContain("1. old: before");
 		expect(prompt).toContain("new: after");
-		expect(prompt).toContain("-----BEGIN PAYLOAD-----");
+		expect(fencedBody(prompt)).toBe("1. old: before\n   new: after");
 
 		const asking = await loadGuardian("/proj");
 		await asking.run("/guardian auto");
@@ -378,6 +396,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		h.classifyImpl.fn = async () => verdict("ask", "unsure");
 		for (let i = 0; i < 3; i++) await h.gate(writeCall("/outside/file.txt"));
 		expect(h.statuses.at(-1)).toEqual(["mode", undefined]); // tripped back to manual
+		expect(String(h.confirm.mock.calls.at(-1)?.[1])).toContain("classifier breaker tripped — back to manual");
 		await h.run("/guardian status");
 		expect(h.notes.at(-1)).toContain("breaker tripped");
 		await h.run("/guardian auto"); // re-arm
@@ -429,19 +448,31 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(over.classify).not.toHaveBeenCalled();
 	});
 
-	it("43: §14 — write audit lines are auto-only", async () => {
+	it("43: §14 — write audit lines are auto-only (all five shapes)", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");
 		h.classifyImpl.fn = async () => verdict("allow", "fine");
-		await h.gate(writeCall("/outside/file.txt"));
+		await h.gate(writeCall("/outside/file.txt")); // allow
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		await h.gate(writeCall("/outside/asked.txt")); // ask
+		h.classifyImpl.fn = async () => verdict("allow", "fine");
+		await h.gate(writeCall("/outside/file.txt")); // allow resets the breaker
+		await h.gate(writeCall("/outside/noctx.txt", "probe", { verifiedUserContext: false })); // no-context
+		h.classifyImpl.fn = async () => verdict("allow", "fine");
+		await h.gate(writeCall("/outside/file.txt")); // allow resets again
+		await h.gate(writeCall("/outside/big.txt", "x".repeat(CLASSIFY_MAX_INPUT_CHARS))); // over budget
+		h.classifyImpl.fn = async () => undefined;
+		await h.gate(writeCall("/outside/gone.txt")); // unavailable
+
 		const logFile = path.join(fakeHome, ".imp", "guardian.log");
-		expect(await readFile(logFile, "utf8")).toContain(
-			"[auto] allow — write /outside/file.txt (anthropic/session-model)",
-		);
-		await h.gate(writeCall("/outside/big.txt", "x".repeat(CLASSIFY_MAX_INPUT_CHARS)));
-		expect(await readFile(logFile, "utf8")).toContain(
+		const log = await readFile(logFile, "utf8");
+		expect(log).toContain("[auto] allow — write /outside/file.txt (anthropic/session-model)");
+		expect(log).toContain("[auto] ask — write /outside/asked.txt (anthropic/session-model)");
+		expect(log).toContain("[auto] not classified (no verified user context) — write /outside/noctx.txt");
+		expect(log).toContain(
 			"[auto] not classified (request over the classify budget) — write /outside/big.txt",
 		);
+		expect(log).toContain("[auto] classifier unavailable — write /outside/gone.txt");
 
 		const shadow = await loadGuardian("/proj");
 		await shadow.run("/guardian shadow");

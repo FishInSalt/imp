@@ -659,71 +659,97 @@ was "in target/argument positions"; the implementation scans the whole
 command. R8's warning (an over-triggering detector silently defeats auto) is
 now measured reality, not a hypothetical.
 
-### 13.2 The refinement
+### 13.2 The refinement (rev 2 — R1 findings folded)
 
-Two tiers replace the single whole-command regex:
+Two tiers replace the single whole-command regex. The **expansion tier** is
+unchanged and stays whole-command: `[$`]|\$\(|<(?=\()|>\(` anywhere keeps the
+command manual-only — these constructs make effects invisible to the
+classifier wherever they sit, so position buys nothing.
 
-1. **Expansion tier — unchanged, whole command.** `[$`]|\$\(|<(?=\()|>\(`
-   keeps the command manual-only wherever it appears: these constructs make
-   effects *invisible to the classifier* (it cannot read what they evaluate
-   to), so position buys nothing.
-2. **Pattern tier — narrowed to the matched invocation's region.**
-   `[*?[\]{}]` is tested on `command.slice(0, spanEnd)` only, where
+The **pattern tier** (`[*?[\]{}]`) is tested on `command.slice(0, spanEnd)`
+only. `spanEnd = command.length` — today's whole-command behavior — **unless
+all** of the following are established (the default is the conservative one;
+every fallback is strictly more manual-only, never less):
 
-       spanEnd = max over every match m of every ask-tier rule in command
-                 of scanEnd(command, m.index + m[0].length)
+1. **No `<<` anywhere** in the command (heredoc / here-string body structure
+   is not modeled — R1 P0: a heredoc body is consumed by its command and
+   escapes any naive `\n` terminator).
+2. **No rule match starts inside a quoted region** (R1: `x='rm -rf /tmp/y';
+   eval $x` — a match inside quotes says nothing about where the invocation
+   executes).
+3. **Every contributing span walks to a definite end**:
 
-   `scanEnd(from)` walks to the first **unquoted** control operator (`;`, `&`,
-   `|`, newline) or end-of-string, tracking single quotes, double quotes and
-   backslash escapes. Every rule contributes all of its matches (iterate a
-   `/g` clone of the regex); the `rmForceRecursive` span end participates the
-   same way.
+       spanEnd = max over every match m of every ask-tier rule in the command
+                 of segmentEnd(command, m.index + m[0].length)
 
-   Conservative fallbacks — always *more* manual-only, never less:
-   - the walk ends inside an open quote → `spanEnd = command.length` (today's
-     whole-command behavior);
-   - any ambiguity in the walk (trailing backslash, unrecognized quoting
-     construct) → the same fallback.
+   Every rule contributes **all** of its matches (iterate a `/g` clone of the
+   regex — the gate's current single-`exec` first-match view is not enough;
+   this is an explicit implementation surface, R1). If no regex matched and
+   the gate fell back to `rmForceRecursive` (split-flag rm), then
+   `spanEnd = command.length`: its span comes from a naive `[;&|]` split that
+   is **not** quote-aware (R1 P1 — `rm -rf "/tmp/a;b" /tmp/*.log` produces a
+   span ending inside the quotes), and fixing that split is a non-goal.
 
-Load-bearing shell fact: word expansion happens per command, left to right —
-a later segment cannot change an earlier command's words. Pattern characters
-after `spanEnd` therefore cannot alter the matched invocation's targets, and
-they remain fully visible to the classifier (it judges the whole command text
-and can still ask). Nothing is hidden from the model; the host only stops
-*refusing to ask*.
+   `segmentEnd(command, from)`: walk `i` from **0** (R1: the quote state must
+   be tracked from the start, not assumed clean at `from`), tracking single
+   quotes, double quotes and backslash escapes; return the first index `j >=
+   from` observed **outside quotes** with `command[j]` in `; & | \n`; return
+   `command.length` on end-of-string **or when the walk ends inside an open
+   quote** (unterminated quoting → conservative).
 
-| Command (abridged) | Today | Refined | Why |
+Load-bearing shell fact, scoped honestly: word expansion runs per command,
+left to right, so a later segment cannot change an earlier command's words —
+**for matches outside quotes**. Pattern characters after a definite `spanEnd`
+therefore cannot alter the matched invocation's targets. They remain in the
+text the classifier reads and judges (including later commands that will
+execute, whose own constructs it can weigh from their literal text — the
+classifier is the decider there, not the host's detector). Nothing is hidden
+from the model; the host only stops *refusing to ask*.
+
+| Command (abridged) | Today | Rev 2 | Why |
 |---|---|---|---|
-| `rm -rf -- /tmp/x && { [ -e /tmp/x ] && echo 'OK' \|\| echo 'no'; }` | manual-only | **classified** | patterns live in the suffix, past `spanEnd` |
+| `rm -rf -- /tmp/x && { [ -e /tmp/x ] && echo 'OK' \|\| echo 'no'; }` | manual-only | **classified** | patterns sit in the suffix, past a definite `spanEnd` |
+| `rm -rf /tmp/x && ls *.log` | manual-only | **classified** | the glob belongs to `ls`, not to the delete |
+| `rm -rf /tmp/x && cat <<EOF` + body | manual-only | manual-only | `<<` fallback (R1 P0) |
+| `echo "rm -rf x" && ls /tmp/[ab]*` | manual-only | manual-only | match inside quotes → fallback (R1) |
 | `rm -rf /tmp/*.log` | manual-only | manual-only | glob inside the region |
-| `rm -rf /tmp/x && echo "$(date)"` | manual-only | manual-only | expansion tier (whole command) |
-| `rm -rf '/tmp/a;b' /tmp/*.log` | manual-only | manual-only | quote-aware walk; a naive `[;&\|]` split ends the region inside the quotes and *wrongly* classifies this |
+| `rm -rf '/tmp/a;b' /tmp/*.log` and `/tmp/*.log '/tmp/a;b'` | manual-only | manual-only | quote-aware walk; a naive `[;&\|]` split ends the region inside the quotes and *wrongly* classifies — both argument orders are pinned |
 | `rm -rf "/tmp/x && ls *` (unterminated) | manual-only | manual-only | fallback: open quote → whole command |
 | `rm -rf /tmp/x; rm -rf /tmp/[ab]*` | manual-only | manual-only | `spanEnd` takes the **last** match |
 | `[ -e /tmp/x ] && rm -rf /tmp/x` | manual-only | manual-only | everything before the match stays in the region |
-| `rm -rf /tmp/x && ls *.log` | manual-only | **classified** | the glob belongs to `ls`, not to the delete |
+| `rm -rf /tmp/x && echo "$(date)"` | manual-only | manual-only | expansion tier (whole command) |
+| `rm -r -f /tmp/*.log` (split flags) | manual-only | manual-only | `rmForceRecursive` path → whole command (R1 P1) |
 
 ### 13.3 Surfaces that change
 
 - auto: the refined value drives the pre-classify skip exactly as today;
 - shadow: the same value drives the prompt marker; its text becomes
   `note: the command contains shell expansion or glob syntax — prefer ask`;
-- counters: `manualOnlyTargets` keeps counting the skips; a new
-  `relaxedPatterns` counter counts commands whose pattern characters sit past
-  `spanEnd` ("how often the old detector would have skipped"), shown in
-  `/guardian status`;
+- the **gate re-scans the rules table** (all matches, `/g` clones) — a new
+  implementation surface, not just a predicate swap;
+- counters: `manualOnlyTargets` keeps counting the skips; the new
+  `relaxedPatterns` counter increments **iff the old whole-command pattern
+  test would have triggered and the refined one does not**
+  (`PATTERNS.test(command) && !PATTERNS.test(region)`), evaluated for every
+  matched command at the detection point — the refinement's own "how often
+  would the old detector have skipped" metric, shown in `/guardian status`;
 - detail wording: `not classified: the command contains shell expansion or
-  glob syntax`;
-- manual mode, the floor, the rules table, the write tier, breaker semantics:
-  untouched.
+  glob syntax` — which **updates existing pins** that carry the old string
+  (`test/guardian-auto.test.ts:227`; the `manualOnlyTargets` shapes around
+  `:260` — implementation must edit those expectations, not add alongside);
+- manual mode, the floor, the rules table's *matches*, the write tier,
+  breaker semantics: untouched.
 
 ### 13.4 Non-goals and residual limits (explicit)
 
 - `cd` in an earlier segment, stdin-driven arguments (`xargs rm`), aliases and
   constructs with no textual trace remain undetected — **pre-existing**,
   unchanged (§9.3's boundary-not-promise stands);
-- still not a shell parser: heredocs, ANSI-C quotes (`$'…'` — the expansion
-  tier catches the `$`), nested substitutions (also caught) stay out of scope;
+- still not a shell parser: heredocs and here-strings (fallback), ANSI-C
+  quotes (`$'…'` — the expansion tier catches the `$`), nested substitutions
+  (also caught), and the quote-unaware `rmForceRecursive` split stay out of
+  scope — their paths now degrade to whole-command conservatism instead of
+  pretending to narrow;
 - segments after `spanEnd` still *execute*; the classifier sees them and
   judges them. The host's guarantee narrows to: the matched invocation's own
   region carries no unresolved syntax.
@@ -736,21 +762,28 @@ Red today (the refinement's reason to exist):
    runs unprompted (today: never classified, confirm shown);
 2. the same command in shadow → the prompt carries **no** `prefer ask` marker;
 3. `rm -rf /tmp/x && ls *.log` → classified (auto + allow runs);
-4. `relaxedPatterns` increments for 1/3.
+4. `relaxedPatterns` increments for 1/3 (and not for any green-keep).
 
 Green-keeps (regression guards, green today already): `rm -rf /tmp/*.log`;
-`rm -rf '/tmp/a;b' /tmp/*.log` (kills a naive-split implementation);
-`rm -rf "/tmp/x && ls *` (fallback); `rm -rf /tmp/x; rm -rf /tmp/[ab]*`
-(last match); `[ -e /tmp/x ] && rm -rf /tmp/x`; the §13.1 command with a glob
-target (`rm -rf /tmp/dir* && …`); `rm -rf /tmp/x && echo "$(date)"`
-(expansion tier).
+the quoted-`;` case in **both** argument orders; `rm -rf "/tmp/x && ls *`
+(fallback); `rm -rf /tmp/x; rm -rf /tmp/[ab]*` (last match);
+`[ -e /tmp/x ] && rm -rf /tmp/x`; the §13.1 command with a glob target; a
+heredoc body carrying patterns (`<<` fallback); a match inside quotes; split
+flags with a glob target; `rm -rf /tmp/x && echo "$(date)"`.
 
-Mutations (each must be caught): drop quote tracking → the quoted-`;` pin
-red; first match instead of last → the multi-match pin red; whole-command
-scan (today's behavior) → pin 1 red; ignore the expansion tier → the `$(date)`
-pin red; count `relaxedPatterns` even for in-region patterns → the two glob
-pins red.
+Mutations (each must be caught): drop quote tracking → the quoted-`;` pins
+red; first match instead of last → the multi-match pin red; whole-command scan
+(today's behavior) → pin 1 red; ignore the expansion tier → the `$(date)` pin
+red; treat `rmForceRecursive` spans as definite → the split-flag pin red;
+drop the `<<` fallback → the heredoc pin red; walk from the match end instead
+of 0 → the in-quote-match pin red.
 
 ### 13.6 Review log (this amendment)
 
-- (awaiting round 1)
+- **R1 (adversarial, fresh context): NEEDS REVISION** — P0: heredoc body
+  escapes the `\n` terminator class; P1: `rmForceRecursive`'s naive split
+  yields spans inside quotes and its span must not narrow anything; P2:
+  rescan-the-rule-table must be an explicit surface, the walk must start at 0
+  (quote state), quoted-region matches must be conservative, the old-wording
+  pins need edits, `relaxedPatterns` must be defined exactly. All folded in
+  rev 2; awaiting R2 verification.

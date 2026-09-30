@@ -19,6 +19,7 @@ import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.j
 import { imageSuffix, type Renderer } from "../render.js";
 import { type AgentEventInfo, noModelText, type Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
+import type { HostClassify } from "./classify.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import {
 	COMMANDS,
@@ -71,6 +72,11 @@ export interface ReplOptions {
 	/** Cross-session input history file for the TUI shell (M11 #4); cli.ts
 	 *  resolves the real ~/.imp path, hermetic runs omit it. */
 	inputHistoryPath?: string;
+	/** Interactive classify host for extension gates (api.classify,
+	 *  #guardian-auto-mode): created by cli.ts for any interactive session,
+	 *  bound below to the live model reference. Absent (print mode, tests):
+	 *  api.classify resolves undefined without touching the network. */
+	classify?: HostClassify;
 	/** Interactive confirm host for extension gates (api.confirm): created by
 	 *  cli.ts before extension loading (which precedes this call) and bound
 	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
@@ -360,6 +366,16 @@ interface ReplMachineOptions {
  * exits when EOF/an exit request is pending. Double Ctrl+C force-exits
  * through `exit()` — never awaiting a possibly-hung tool.
  */
+/** #guardian-auto-mode (D11): does this submitted line count as human input?
+ *  Blanks never do; `!` bangs run in the shell and never reach the model.
+ *  Everything else — typed text, slash commands (recorded as the invocation,
+ *  not its expansion) — is recorded at the submission boundary, before any
+ *  dispatch. Module scope: the repl machine calls it, tests pin it. */
+export function capturesAsUserInput(line: string): boolean {
+	if (line.trim() === "") return false;
+	return line[0] !== "!";
+}
+
 class ReplMachine {
 	private state: ReplState = "idle";
 	/** #startup-model-resolution (D5): per-SESSION one-shot guard for the
@@ -451,6 +467,10 @@ class ReplMachine {
 			this.input.refresh();
 			return;
 		}
+		// #guardian-auto-mode D11: the provenance-verified log is appended
+		// HERE — the human submission boundary, before command dispatch and
+		// before any prompt expansion (submitPrompt never passes through).
+		if (capturesAsUserInput(line)) this.runner.recordUserInput(line);
 		// "! cmd" passthrough (M10): the shell runs it directly — never model
 		// input, never a session entry. Checked before parseCommand so "/" and
 		// "!" stay unambiguous; while a phase is active the existing queue
@@ -1652,6 +1672,10 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	// picker-capable shell the host also gets select — the three-option
 	// confirm (M10) reuses the same binding path as ctx.select.
 	options.confirm?.bind((question: string) => input.ask(question));
+	// #guardian-auto-mode: api.classify reads the live model reference per
+	// call (/model may change between calls); the user-context block arrives
+	// through the call-scoped snapshot, not through this binding.
+	options.classify?.bind({ renderer, modelReference: () => runner.modelReference() });
 	const confirmSelect = input.select?.bind(input);
 	if (confirmSelect !== undefined) options.confirm?.bindSelect(confirmSelect);
 

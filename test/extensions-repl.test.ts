@@ -875,7 +875,7 @@ describe("guardian case study (design §13.1)", () => {
 		// ever resolve under the runner's cwd, never above it
 		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
 		await mkdir(sacrifice, { recursive: true });
-		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
+		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
 		env.send("clean up\n");
 		await waitUntil(() => env.output().includes("adapted after the bash block"));
 		env.send("write outside\n");
@@ -959,7 +959,7 @@ describe("guardian case study (design §13.1)", () => {
 			'Tool "bash" blocked by extension guardian: matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run',
 		);
 		// the invalid regex was skipped — the extension loaded and gated anyway
-		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
+		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});
@@ -1065,7 +1065,7 @@ export default function (api) {
 				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
 			},
 		});
-		expect(env.output()).toContain("▪ extension guardian [project] — 2 hooks");
+		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
 		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
 		// approved: the question renders on the tty, y executes the delete
 		await mkdir(sacrifice, { recursive: true });

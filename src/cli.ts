@@ -20,7 +20,7 @@ import {
 import { loadDotEnv } from "./env.js";
 import { type LoadedExtensions, loadExtensions, printExtensionDiagnostics } from "./extensions/loader.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
-import type { ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
+import type { ClassifyHandler, ConfirmOptions, RegisteredExtensionCommand } from "./extensions/types.js";
 import { bold, dim, red, VERSION } from "./format.js";
 import { discoverMcpConfig } from "./mcp/config.js";
 import { McpManager } from "./mcp/manager.js";
@@ -32,6 +32,7 @@ import { parseModelRef } from "./provider/resolve.js";
 import { decideStartupModel, type ModelSource, type StartupModelDecision } from "./provider/startup-model.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
+import { classifyHostFor } from "./repl/classify.js";
 import { COMMANDS } from "./repl/commands.js";
 import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
@@ -496,8 +497,10 @@ async function main(): Promise<void> {
  * after the renderer exists and before createRunner, streaming failure
  * lines through renderer.error and then the dim `▪` banner — so extension
  * output always precedes the runner's own banners (incl. `▪ context:`).
- * `confirm` is the interactive handler (REPL only); print mode passes none,
- * so api.confirm there declines with a teaching line instead of hanging.
+ * `confirm` and `classify` are the interactive handlers (REPL only); print
+ * mode passes none, so api.confirm there declines with a teaching line and
+ * api.classify resolves undefined without touching the network (#guardian-
+ * auto-mode D8 — the free degradation of auto mode on non-interactive hosts).
  */
 async function loadExtensionSetup(
 	opts: CliOptions,
@@ -505,6 +508,7 @@ async function loadExtensionSetup(
 	confirm:
 		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
 		| undefined,
+	classify: ClassifyHandler | undefined,
 	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {
 	const loaded = await loadExtensions({
@@ -514,6 +518,7 @@ async function loadExtensionSetup(
 		projectDirAllowed: projectTrusted,
 		onDiagnostic: (line) => renderer.error(line),
 		confirm,
+		classify,
 	});
 	printExtensionDiagnostics(loaded.summaries, (line) => renderer.note(line));
 	return loaded;
@@ -552,6 +557,10 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	// Extension confirm (interactive only): the host exists before extensions
 	// load; runRepl binds it to the live tty prompt once the REPL starts.
 	const confirm = interactive ? new TtyConfirm(renderer) : undefined;
+	// Extension classify (interactive only, #guardian-auto-mode): same
+	// capability-gating as confirm — a host without a human to escalate to
+	// never serves the seam (D8).
+	const classify = classifyHostFor(interactive);
 	let releaseStartupNotes: (() => void) | undefined;
 	// Startup-note deferral (interactive only): every `▪` note emitted before
 	// the REPL owns the screen — extension lines, the context banner, trust
@@ -604,7 +613,13 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 				? (cwd, resources) => askTrustViaTui({ transcript: transcript, cwd, resources })
 				: undefined,
 		);
-		const extensions = await loadExtensionSetup(opts, renderer, confirm?.handler, projectTrusted);
+		const extensions = await loadExtensionSetup(
+			opts,
+			renderer,
+			confirm?.handler,
+			classify?.handler,
+			projectTrusted,
+		);
 		extensionRegistry = extensions.runtime;
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		// M15 (review P1-2): hideThinking reads the MERGED view once the
@@ -667,6 +682,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 			runner,
 			commands,
 			confirm,
+			classify,
 			releaseStartupNotes,
 			mcp,
 			extensions: extensionRegistry, // extension status line sink (task-timer design §4.2)
@@ -1017,7 +1033,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	let runner: Runner;
 	try {
 		const projectTrusted = await resolveProjectTrust(opts, renderer, false);
-		const extensions = await loadExtensionSetup(opts, renderer, undefined, projectTrusted);
+		const extensions = await loadExtensionSetup(opts, renderer, undefined, undefined, projectTrusted);
 		const skills = loadSkillSetup(opts, renderer, projectTrusted);
 		runner = await createRunner({
 			projectSettingsAllowed: projectTrusted,

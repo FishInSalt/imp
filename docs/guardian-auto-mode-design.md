@@ -139,7 +139,7 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, each elided at 2000 chars — **§14 draft**): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim (each elided at 2000 chars), a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, each elided at 2000 chars — **§14 draft**): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB — **§14 draft: 128×1024 chars**); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
@@ -825,16 +825,16 @@ of 0 → the in-quote-match pin red.
 
 ## 14. Write-gate classification (draft for independent review — 2026-09-30)
 
-> Status: **rev 2.1 — R1 (adversarial) NEEDS REVISION and R2 (verification)
-> NEEDS REVISION; both rounds' findings are folded below (log: §14.9). A
-> verification round is pending.** No implementation before the review of
-> this section closes (AGENTS.md). It implements the Phase B item
-> “write-gate classification” (§9.2) for the existing outside-cwd write/edit
-> ask gate. The trigger condition, the hard floors, manual-mode behavior and
-> the bash gate's gating logic are unchanged; the deliberate deltas — the
-> shared-seam changes (budget/timeout, context elision, framing) and one
-> bash-side fix (the stale breaker flag, §14.5) — are enumerated in §14.5
-> and §14.8; §14.8 lists the earlier statements superseded.
+> Status: **rev 2.1 — review CLOSED.** R1 (adversarial) and R2
+> (verification) each returned NEEDS REVISION and are folded (rev 2 / rev
+> 2.1); R3 (verification) returned CONFIRMED (log: §14.9). Implementation
+> may start (AGENTS.md). It implements the Phase B item “write-gate
+> classification” (§9.2) for the existing outside-cwd write/edit ask gate.
+> The trigger condition, the hard floors, manual-mode behavior and the bash
+> gate's gating logic are unchanged; the deliberate deltas — the shared-seam
+> changes (budget/timeout, context elision, framing) and one bash-side fix
+> (the stale breaker flag, §14.5) — are enumerated in §14.5 and §14.8; §14.8
+> lists the earlier statements superseded.
 
 ### 14.1 Observed problem (owner dogfooding, 2026-09-30)
 
@@ -1176,4 +1176,7 @@ Mutations (each must be caught):
   40 must name the payload fence; the D23 additions' placement in the
   shared `classifySystem`; the elision rationale must name constraint
   sentences). Folded in rev 2.1.
-- *(verification round pending)*
+- **R3 (same reviewer, verification): CONFIRMED** — all five N-folds
+  verified correct; spot-checks across §14.4/§14.5/§14.8 and the pin list
+  found no regressions; the only blemish was a cosmetic duplicate clause in
+  §4.2's cell (smoothed without another round). **Review closed (rev 2.1).**

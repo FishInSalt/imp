@@ -139,16 +139,16 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, each elided at 2000 chars — **§14 draft**): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
-| Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
+| Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB — **§14 draft: 128×1024 chars**); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
 | Timeout | host `AbortController` + wall-clock constant (draft: 10 s). Abort plumbing exists (`LLMRequest.signal`, `src/provider/types.ts:32`; honored in `anthropic.ts:220,248`). Test fakes must resolve/reject on `signal.abort`, mirroring `abortSafe` (`src/provider/shared.ts:31-35`) | |
 | Output contract | host appends: reply with exactly one JSON object `{"verdict":"allow"|"ask","reason":"<one sentence>"}` | new |
 | Defensive parse | first JSON object; `verdict` strictly `allow`/`ask` (anything else, incl. `block`, is invalid); `reason` capped (draft: 200 chars) and run through `sanitizeDisplay` | `src/repl/tool-presentation.ts:14` |
 | Any deviation | garbage, refusal, empty, truncated, provider error (incl. a configured reference with no usable credentials), timeout, aborted ⇒ `undefined` | |
 | Accounting | **Phase A: no ledger attribution — documented limitation.** The totals tracker derives from session entries (`src/core/usage-totals.ts:219`); per-attempt buckets are fixed (`src/core/usage-ledger.ts:17-30,59`). Follow-up in §11.5. The record line names the model actually used | |
-| Audit record | on success: one record line (draft wording in §7); on failure: one line per session (first failure only), then silent | `▪` note channel |
+| Audit record | on success: one record line (draft wording in §7); on failure: **none** (**§14 draft** — the “first failure” draft was never implemented) | `▪` note channel |
 
 The host does **not** expose: provider choice beyond the reference string,
 streaming, tool use, thinking, retries beyond the provider layer's own, or the
@@ -320,8 +320,9 @@ the manual-only class are not the classifier's business; and that the user's
 stated intent (the context block) is the authorization evidence, not the
 command's apparent usefulness.
 
-**Withheld**: the conversation transcript (beyond the host's D11 block), file
-contents, the audit log, other tool calls, and **every model-authored message
+**Withheld**: the conversation transcript (beyond the host's D11 block), the
+target file's **existing** contents (never read — **§14 draft**, D21), the audit
+log, other tool calls, and **every model-authored message
 regardless of its stored role** (summaries, delegation prompts, tool results).
 
 ### 5.7 Circuit breaker (D10)
@@ -333,9 +334,12 @@ not decide); its counters are observational only.
 
 ### 5.8 Audit log
 
-`~/.imp/guardian.log` gains one line per auto/shadow decision: timestamp, tool,
-verdict, model, first line of the reason. Blocked/error lines keep their
-current format (append-only, never fatal — unchanged contract).
+`~/.imp/guardian.log` gains one line per **auto** decision: timestamp, tool,
+verdict, model, first line of the reason. (**§14 draft**: shadow decisions are
+not audited — the rev-3 “auto/shadow” wording was never implemented; shadow's
+evidence is the host verdict record and the D16 counters.) Blocked/error
+lines keep their current format (append-only, never fatal — unchanged
+contract).
 
 ## 6. Invariants
 
@@ -425,7 +429,7 @@ active.
 20. config: missing ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
     passthrough; reload picks up edits;
 21. write/edit tier in auto still goes straight to `confirm` (scope pin —
-    **superseded by §14**; replaced by pins 31–42 once §14's review closes);
+    **superseded by §14**; replaced by pins 31–44 once §14's review closes);
 22. **unresolvable target** — `target="$HOME/.ssh"; rm -rf "$target"` and
     glob/`$()` variants: auto never classifies (fresh confirm), shadow
     classifies with the marker (I8);
@@ -539,6 +543,7 @@ classifier cost attribution (§11.5), a consulted-and-ignored “mismatch line�
 1. Member name: `classify` vs `adjudicate`/`judge`?
 2. Record wording (§7 drafts) — owner eyeballs at acceptance.
 3. Failure-record dedupe: “first per session” (draft) vs every failure vs none?
+   **(§14 draft: none — the draft was never implemented.)**
 4. `auto.model` reference syntax — the exact `provider/model` grammar, and the
    “unavailable” diagnostics.
 5. Cost accounting deferred (Phase A reports nothing; `usage-totals.ts:219`);
@@ -820,12 +825,14 @@ of 0 → the in-quote-match pin red.
 
 ## 14. Write-gate classification (draft for independent review — 2026-09-30)
 
-> Status: **draft**. No implementation before the adversarial review of this
-> section closes (AGENTS.md). It implements the Phase B item “write-gate
-> classification” (§9.2) for the existing outside-cwd write/edit ask gate.
-> The trigger condition, the hard floors, the bash gate and manual-mode
-> behavior are unchanged; §14.8 lists the earlier statements it supersedes
-> once the review closes.
+> Status: **rev 2 — R1 (independent adversarial, fresh context) returned
+> NEEDS REVISION; all twelve findings are folded below (log: §14.9). A
+> verification round is pending.** No implementation before the review of
+> this section closes (AGENTS.md). It implements the Phase B item
+> “write-gate classification” (§9.2) for the existing outside-cwd write/edit
+> ask gate. The trigger condition, the hard floors, manual-mode behavior and
+> the bash gate are unchanged — one deliberate micro-fix excepted (the stale
+> breaker flag, §14.5); §14.8 lists the earlier statements it supersedes.
 
 ### 14.1 Observed problem (owner dogfooding, 2026-09-30)
 
@@ -848,7 +855,7 @@ this gate (this section).
 | D21 | **Input** (the classifier's question): tool (`write`/`edit`), caller `cwd`, `path` as given + `resolved` absolute, the payload **verbatim** (write: `content`, the empty string marked; edit: the `oldText`/`newText` pairs), `subagent`, and the matched-rule reason. The host's D11 context block is unchanged. **Withheld**: the target file's existing content (no filesystem probing), file stats, the transcript beyond the D11 block, other tool calls. |
 | D22 | **Budget (accuracy first)**: the seam budget rises `8×1024 → 128×1024` chars and the wall-clock timeout `10 s → 20 s`; `maxTokens` stays 400. **No truncation, ever** — a request that cannot fit is never classified (fresh confirm with a named detail, `manualOnlySize` counter): the full payload or the human. The provider's own context limit is the practical ceiling. |
 | D23 | **Framing**: the path and the file content are data — never authorization, never instructions; the classifier must scan the entire payload and answer `ask` unless every part is clearly safe and clearly within the user's request. |
-| D24 | **Privacy (documented)**: `content`/`edits` may carry secrets and travel to the classifier model (`auto.model`, else the session model); the §5.2 config-docs privacy note is extended to say so. |
+| D24 | **Privacy (documented)**: `content`/`edits` may carry secrets and travel to the classifier model (`auto.model`, else the session model). The payload is model-authored — already in the session model's context — so the genuinely new recipient is a configured `auto.model` provider; shadow sends payloads too; the target's existing content is never read (D21). The §5.2 config-docs privacy note is extended to say all of this. |
 | D25 | **Limitations recorded, not fixed here**: the gate's inside/outside test stays **lexical** — a path that lexically sits inside cwd but traverses a symlink outward bypasses the gate entirely (pre-existing, §14.7); shadow's cancel-≠-deny caveat inherits D16. |
 
 ### 14.3 The classifier's input
@@ -867,6 +874,12 @@ content:              — write: the full content, verbatim; "" renders as
                         "(empty — this empties the file)"
 edits:                — edit: every pair, verbatim, "N. old: … / new: …"
 ```
+
+`path` and `resolved` are serialized JSON-quoted (a filename may legally
+contain newlines; quoting keeps it on one line), and payload bodies are
+wrapped in explicit `-----BEGIN PAYLOAD-----` / `-----END PAYLOAD-----`
+delimiters (draft wording) so text inside a payload cannot impersonate the
+question's metadata lines (`cwd:`, `path:`, `matched rule:`).
 
 Shadow-only, when the log is empty: the D14 marker line
 `note: no verified user context is attached — prefer ask` (auto never gets
@@ -898,13 +911,27 @@ Framing additions (D23 — draft wording, owner eyeballs at acceptance):
   resolve; the seam's request contract (the `ClassifyRequest` docstring) gains
   one sentence: requests over the cap are treated as unavailable.
 - **The host's check is on the request's own `system.length +
-  prompt.length`** (extension-supplied strings only; the host's own additions
-  are bounded separately by §4.2). Guardian's **pre-flight** mirrors that
-  exact expression and constant: own size over the cap ⇒ classify is **not
-  called** — fresh confirm with
+  prompt.length`** (extension-supplied strings only; the host's context
+  additions are bounded by D11's count and — folded in this batch, R1
+  finding 2 — the per-entry char cap, next bullet). **The write branch's
+  pre-flight** mirrors that exact expression and constant: own size over the
+  cap ⇒ classify is **not** called — fresh confirm with
   `not classified: request exceeds the classifier input budget (<N> chars)`
   and `manualOnlySize` counts it. Shadow skips too: classification is
-  impossible, not policy-declined (counted for honesty).
+  impossible, not policy-declined (counted for honesty). A bash request over
+  the cap (possible only with an enormous command) keeps today's path — the
+  host drops it ⇒ the generic `classifier unavailable` fallback; the bash
+  gate gains no pre-flight, no new detail and no counter move.
+- **Folded host fix (R1 finding 2)**: the user-input log capped only its
+  count — a huge submission rode the context block unbounded while §4.2
+  claimed “~2000 chars”. The batch implements the promised bound:
+  `UserInputLog.record()` elides each submission at 2000 chars with an
+  explicit marker (draft constant + marker wording), the count stays ≤3, so
+  the block is ≤ ~6 K chars. Context elision is data hygiene, not D22's
+  no-truncation rule (that rule protects the judged payload, not host
+  context data); an authorization sentence beyond the cap is lost to the
+  classifier — fail-to-ask remains the guard, and the alternative was an
+  unbounded block.
 - Drift: if the host cap is lowered and the mirror is not, guardian ships
   requests the host drops ⇒ today's generic `classifier unavailable` path
   (safe); if the host cap is raised, guardian stays stricter ⇒ pre-flight
@@ -936,37 +963,48 @@ outside-cwd + auto:
 
 - **Counters**: one session-wide set; `matched` counts both gates' matches;
   new `manualOnlySize`; `/guardian status`'s manual-only breakdown becomes
-  `(targets N, no-context N, size N, relaxed N)` — updates test 24's pinned
-  substring (an existing-pin edit, filed like §13's wording edits).
-  `relaxedPatterns` stays bash-only.
+  `(targets N, no-context N, size N, relaxed N)` and the rate's numerator is
+  `targets + no-context + size` (D16/§5.3 wording amended — §14.8); updates
+  test 24's pinned substring (an existing-pin edit, filed like §13's wording
+  edits). `relaxedPatterns` stays bash-only.
 - **Breaker**: shared (D10 is session-scoped); any write non-allow bumps,
-  any write allow resets, shadow never flips.
+  any write allow resets, shadow never flips. **Folded micro-fix (R1
+  finding 9)**: `resetBreaker` also clears `breakerTripped` — after a trip,
+  re-arming (`/guardian <mode>`, reload) clears the stale status label and
+  future notes; the tripping call itself still carries its note. This is
+  the batch's only intentional bash-side behavior change (a fix, pinned by
+  41).
 - **Audit lines** (auto only, mirroring the bash shapes; `edit` mirrors
-  `write`): `[auto] allow — write <path> (<model>)`,
+  `write`, and `<path>` is capped with the existing `firstLine` (160)
+  helper for log-shape parity): `[auto] allow — write <path> (<model>)`,
   `[auto] ask — write <path> (<model>)`,
   `[auto] not classified (no verified user context) — write <path>`,
   `[auto] not classified (request over the classify budget) — write <path>`,
   `[auto] classifier unavailable — write <path>`. Shadow writes no audit
-  (parity).
+  (parity — §5.8 amended, §14.8).
 - **Confirm surfaces**: the base message/detail stay
   (`allow writing outside <cwd>?` / `path: …\nwhy it matched: …`); fresh
   paths append the same classifier/not-classified lines the bash gate uses
   (`classifier: ask — …`, `classifier unavailable — asking`,
   `not classified: …`), plus the breaker note when tripped. Manual keeps the
   remember options; fresh carries none (D13).
-- **Host**: the two constants + comments + one docstring sentence. No new API
-  member (D6 intact), no new event field, no failure-record change (the
-  host's failure paths stay silent, as today). Verdict records are unchanged
-  and now cover write calls too (D9/I5).
+- **Host**: the two constants + comments + one docstring sentence + the
+  user-input-log elision cap (§14.4). No new API member (D6 intact), no new
+  event field; the host's failure paths stay silent — resolving §4.2's
+  “first failure” draft row and §11.3 item 3 to *none* (§14.8). Verdict
+  records are unchanged and now cover write calls too (D9/I5).
 
 ### 14.6 Pins (red-first) and mutations
 
 Guardian pins continue the existing numbering in
-`test/guardian-auto.test.ts` (14–30 taken; §13's additions were 28–30):
+`test/guardian-auto.test.ts` (14–30 taken; §13's additions were 28–30).
+
+**Red today (the batch's reason to exist):**
 
 31. auto + write outside + classifier `allow` ⇒ no confirm, the call runs;
-    the classify request's prompt carries `tool: write`, `path`, `resolved`
-    and the content verbatim;
+    the classify request's prompt carries `tool: write`, the JSON-quoted
+    `path`/`resolved` and the content verbatim between the payload fence
+    markers;
 32. auto + `ask` ⇒ **fresh** confirm (no `sessionKey`/`rememberLabel`),
     detail carries `classifier: ask — <reason>`; declined ⇒ the existing
     teaching reason;
@@ -982,39 +1020,65 @@ Guardian pins continue the existing numbering in
     verdict record is out of the fake's scope (real-host behavior);
 37. shadow + over-budget ⇒ never classified (impossible), fresh confirm,
     `size` counter — the observation blind spot made explicit;
-38. manual + write ⇒ no classify call and byte-for-byte today's confirm
-    options (M10 in `guardian.test.ts` pins the object; this pin guards it
-    from inside the mode logic);
-39. floors unchanged: auto + write under `<HOME>/.ssh` ⇒ block, classify
-    not called, confirm not called;
 40. edit tier: outside + `allow` ⇒ runs; the prompt carries the edit pairs
     verbatim; `ask` ⇒ fresh confirm (the write pins repeat for edit at
     least once);
 41. breaker: three write non-allows in auto flip to manual (footer
-    cleared); an intervening write allow resets; shadow never flips
-    (the async mirror of test 18);
-42. budget boundary: own size just under the mirror cap ⇒ classify is
-    called; clearly over ⇒ pre-flight skip (constructed strings; the
-    boundary math is the test's own).
+    cleared); an intervening write allow resets; shadow never flips (the
+    async mirror of test 18); re-arming (`/guardian auto`) clears the trip
+    state — no stale “breaker tripped” label or note (the R1 finding-9
+    fold);
+42. budget boundary: sizes are computed from the **imported**
+    `CLASSIFY_MAX_INPUT_CHARS` (`test/classify-seam.test.ts` already
+    imports it), so the extension's mirror literal is the value under
+    test — measure the prompt's fixed overhead first (one small classify
+    call: `system.length + prompt.length − content.length`), then: own
+    size at the cap ⇒ classify **is** called; one char over ⇒ pre-flight
+    skip with the size detail;
+43. write audit lines (fake `HOME`; read `~/.imp/guardian.log`): auto
+    allow ⇒ `[auto] allow — write <path> (<model>)`; auto over-budget ⇒
+    `[auto] not classified (request over the classify budget) — write
+    <path>`; shadow ⇒ no line;
+44. shadow + write + no verified context ⇒ the prompt carries the D14
+    marker (`note: no verified user context is attached — prefer ask`)
+    and the classify call still happens (the bash mirror is tests 22/29).
 
-Host pins (`test/classify-seam.test.ts`, descriptive names):
+**Green-keeps (regression guards, green today already):**
 
-- numeric contract pins: `CLASSIFY_MAX_INPUT_CHARS === 128 * 1024`,
-  `CLASSIFY_TIMEOUT_MS === 20_000`;
-- boundary: a request at the cap minus ε reaches the provider; at the cap
-  plus ε it returns `undefined` without a provider call (the existing
-  over-cap test keeps its shape and self-adapts to the constant).
+38. manual + write ⇒ no classify call and byte-for-byte today's confirm
+    options (M10 in `guardian.test.ts` pins the object; this pin guards
+    the mode logic from inside);
+39. floors unchanged: auto + write under `<HOME>/.ssh` ⇒ block, classify
+    not called, confirm not called.
+
+**Host pins** (`test/classify-seam.test.ts`, descriptive names):
+
+- numeric contract pins (red today): `CLASSIFY_MAX_INPUT_CHARS ===
+  128 * 1024`, `CLASSIFY_TIMEOUT_MS === 20_000`;
+- boundary (green-keep; the existing over-cap test keeps its shape and
+  self-adapts): at the cap exactly ⇒ reaches the provider (the check is a
+  strict `>`), at the cap plus ε ⇒ `undefined` without a provider call;
+- user-input-log cap (red today): a >2000-char submission is recorded
+  elided with its marker, `verified` stays true, and the assembled context
+  block stays ≤ ~6 K chars.
 
 Mutations (each must be caught):
 
 - the write branch ignoring the mode (today) ⇒ 31 red;
 - passing `sessionKey` on a write fresh confirm ⇒ 32/36 red;
-- classifying without verified context ⇒ 34 red;
+- classifying without verified context ⇒ 34 red; dropping the shadow
+  no-context marker ⇒ 44 red;
 - removing the pre-flight (shipping over-cap requests) ⇒ 35 red;
-- dropping the payload from the prompt ⇒ 31/40 red;
+- dropping the payload from the prompt, or dropping the payload fence ⇒
+  31/40 red;
 - letting the floor reach classify ⇒ 39 red;
-- the breaker not counting write non-allows ⇒ 41 red;
-- the host truncating instead of dropping over-cap ⇒ host boundary pin red;
+- the breaker not counting write non-allows, or not clearing the trip
+  state on re-arm ⇒ 41 red;
+- `manualOnlySize` not counted in shadow (or in auto) ⇒ 35/37 red;
+- skipping the write audit lines ⇒ 43 red;
+- the host truncating instead of dropping over-cap ⇒ host boundary pin
+  red;
+- the log cap not applied ⇒ log pin red;
 - the constants not raised ⇒ numeric pins red.
 
 ### 14.7 Non-goals and residual limits (explicit)
@@ -1025,6 +1089,11 @@ Mutations (each must be caught):
   pre-existing and unchanged — recorded here so it is not later mistaken
   for something this batch introduced; a future detector refinement can
   take it (§13's precedent).
+- **Injection residual (stated, not solved)**: payload text (and `path`)
+  can impersonate the question's own metadata lines or claim
+  authorization; the system/user-message split, the payload fence (§14.3)
+  and the D23 framing reduce this, but it is a model-level residual the
+  design cannot eliminate.
 - No preview of file content in the confirm picker (unchanged from today; a
   possible future surface).
 - Shadow sample caveats inherit D16/I11; failure paths without a name stay
@@ -1034,15 +1103,54 @@ Mutations (each must be caught):
 
 ### 14.8 Amendments to earlier sections (draft — fold when the review closes)
 
-- §5.4: “The write/edit tier … keeps its unconditional confirm in Phase A”
-  is superseded by §14 for the outside-cwd case (manual keeps today's
-  confirm exactly).
-- §8 test 21 / §9.1: same sentence — test 21 is replaced by pins 31–42.
-- §4.2 “input caps (draft: 8 KB)” and §11.6 item 6: resolved to
-  128×1024 chars / 20 s (both gates; the other constants stay drafts).
-- §5.2: the privacy note gains file content/edits (D24).
+- §5.4 / §8 test 21 / §9.1: the Phase A sentence “the write/edit tier
+  keeps its unconditional confirm” is superseded for the outside-cwd case
+  (manual keeps today's confirm exactly); test 21 is replaced by pins
+  31–44.
+- §5.6: prompt item 4 is the candidate action (bash: the command; write:
+  path + content; edit: path + pairs); the withheld “file contents” means
+  the target file's **existing** content — never read (D21); the submitted
+  payload travels verbatim.
+- §4.2: “input caps (draft: 8 KB)” resolves to 128×1024 chars / 20 s
+  (§11.6 item 6 annotated); the context row's “~2000 chars” is realized as
+  a per-entry elision cap (≤3 × ≤2000, explicit marker) — folded as a host
+  fix; the audit-record row's “first failure” resolves to **none** (never
+  implemented).
+- §5.2: the privacy note gains both real cases — shadow sends payloads at
+  all, and a configured `auto.model` adds a new recipient; with the
+  session-model default there is no new recipient (the payload is
+  model-authored, and the target's existing content is never read).
+- §5.8: audit lines are **auto-only**; shadow decisions surface via the
+  host verdict record and the D16 counters (the rev-3 “auto/shadow”
+  wording was never implemented).
 - §9.2: “write-gate classification” → this section.
+- §11.3: open question 3 (failure-record dedupe) resolves to **none**.
+- D16 / §5.3 (status): counters are session-wide across gates; the
+  manual-only breakdown gains `size`; the rate's numerator becomes
+  targets + no-context + size; `relaxedPatterns` stays bash-only.
+- Breaker flag lifecycle (pre-existing defect, fixed here): the tripping
+  call keeps its note, but an explicit re-arm (`/guardian <mode>`, reload,
+  or a subsequent `allow`) clears `breakerTripped` — no stale status label
+  or note afterwards. Folded into the write batch because the shared
+  breaker would otherwise leak the stale note into write confirms; the
+  one intentional bash-side behavior change of this batch (pin 41).
 
 ### 14.9 Review log (this amendment)
 
-- *(open — the independent adversarial review is to be recorded here)*
+- **R1 (adversarial, fresh context): NEEDS REVISION** — twelve findings,
+  no P0. P1: §5.6's “withheld: file contents” contradicted D21/§14.3
+  (§14.8 amended); §14.4's “bounded separately by §4.2” was false — the
+  user-input log capped its count only, so a huge submission rode the
+  context block unbounded (folded as a host fix: per-entry elision,
+  §14.4/§14.8). P2: §5.8's “auto/shadow” audit promise vs the shipped
+  auto-only behavior (§5.8 amended); §4.2's “first failure” row and
+  §11.3 unresolved (§14.8); pin 42 must size against the imported host
+  constant to catch mirror drift; the pre-flight's scope was ambiguous
+  against the “bash unchanged” header (scoped to the write branch, with
+  the bash over-cap path stated). P3: pins re-split red vs green-keeps;
+  D16/§5.3 manual-only metric wording (numerator now explicit); the stale
+  `breakerTripped` flag (folded fix + pin-41 coverage); coverage added —
+  write audit lines (43), shadow no-context marker (44), strict-`>`
+  boundary; the injection residual recorded (§14.7); the §5.2 privacy
+  fold sharpened (D24). All folded in rev 2.
+- *(verification round pending)*

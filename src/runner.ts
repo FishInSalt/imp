@@ -131,6 +131,9 @@ export interface RunnerOptions {
 	/** Only an explicit startup -m/--model overrides a saved session model. */
 	modelExplicit?: boolean;
 	maxTokens: number;
+	/** #output-truncation D3: true only when --max-tokens was passed
+	 *  explicitly — an explicit value beats the model catalog limit. */
+	maxTokensExplicit?: boolean;
 	/** Startup thinking level (#thinking-levels, pi parity): --thinking /
 	 *  IMP_THINKING. Clamped per model family on warmup; default "off". */
 	thinking?: ThinkingLevel;
@@ -445,6 +448,9 @@ class RunnerImpl implements Runner {
 	private readonly agents: AgentRegistry;
 	private initialized = false;
 	private lastRunModel: string;
+	/** #output-truncation D2: the output limit resolved for the current run
+	 *  (rendered in the truncation stop note). */
+	private lastRunMaxTokens = 0;
 
 	constructor(
 		options: RunnerOptions,
@@ -1387,6 +1393,14 @@ class RunnerImpl implements Runner {
 		// strictly inside the turn, so one slot is enough; cleared in finally).
 		this.turnEventTap = options.onEvent ?? null;
 		try {
+			// #output-truncation D3: an explicitly passed --max-tokens wins; the
+			// default (false) lets the model catalog set the per-turn output
+			// limit, falling back to the construction-time value when the catalog
+			// has no entry (offline first-run).
+			const effectiveMaxTokens = this.options.maxTokensExplicit
+				? this.options.maxTokens
+				: (modelMaxTokensFor(modelReference) ?? this.options.maxTokens);
+			this.lastRunMaxTokens = effectiveMaxTokens;
 			const result = await runAgentLoop({
 				provider,
 				model,
@@ -1398,7 +1412,7 @@ class RunnerImpl implements Runner {
 				history: this.history,
 				userMessage: options.userMessage,
 				userImages: options.userImages,
-				maxTokens: this.options.maxTokens,
+				maxTokens: effectiveMaxTokens,
 				thinking: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 				maxIterations: this.options.maxTurns,
 				// Assistant messages entering history also reach "message_end"
@@ -1558,6 +1572,13 @@ class RunnerImpl implements Runner {
 				this.options.renderer.error(`(stopped: reached max turns (${this.options.maxTurns}))`);
 				break;
 			case "completed":
+				// #output-truncation D2: the run ended on a truncated final response
+				// (thinking can consume the whole output budget).
+				if (result.truncated === true) {
+					this.options.renderer.note(
+						`(stopped: response truncated at the output limit (${this.lastRunMaxTokens} tokens) — send another message to continue)`,
+					);
+				}
 				break;
 		}
 		// The per-run `— model · turns · tokens` line is print-mode output

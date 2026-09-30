@@ -18,7 +18,22 @@ const declarations = file.statements.filter((statement) => {
 	}
 	return false;
 });
-const { outputText } = ts.transpileModule(declarations.map((node) => node.getText(file)).join("\n"), {
+// #output-truncation D3: cli.ts's default now references the shared constant —
+// extract it from constants.ts too (same AST-only rule: never copy values).
+const constantsSource = readFileSync(new URL("../src/core/constants.ts", import.meta.url), "utf8");
+const constantsFile = ts.createSourceFile("constants.ts", constantsSource, ts.ScriptTarget.Latest, true);
+const defaultMaxTokens = constantsFile.statements.find(
+	(statement): statement is ts.VariableStatement =>
+		ts.isVariableStatement(statement) &&
+		statement.declarationList.declarations.some(
+			(declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "DEFAULT_MAX_TOKENS",
+		),
+);
+const program = [
+	defaultMaxTokens?.declarationList.getText(constantsFile) ?? "",
+	...declarations.map((node) => node.getText(file)),
+].join("\n");
+const { outputText } = ts.transpileModule(program, {
 	compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 });
 

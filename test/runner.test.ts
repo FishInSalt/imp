@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { createSession, SessionNotFoundError } from "../src/core/session/manager
 import { SessionStore } from "../src/core/session/store.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
+import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
 import { createRunner, type Runner, resolveRunMode } from "../src/runner.js";
@@ -36,6 +37,8 @@ interface MakeArgs {
 	resume?: string;
 	continueRecent?: boolean;
 	noSession?: boolean;
+	maxTokens?: number;
+	maxTokensExplicit?: boolean;
 }
 
 async function makeRunner(args: MakeArgs): Promise<Runner> {
@@ -44,7 +47,8 @@ async function makeRunner(args: MakeArgs): Promise<Runner> {
 		cwd: args.cwd,
 		argv: [],
 		model: args.model ?? "test-model",
-		maxTokens: 1024,
+		maxTokens: args.maxTokens ?? 1024,
+		maxTokensExplicit: args.maxTokensExplicit,
 		maxTurns: 10,
 		noContextFiles: true,
 		noSession: args.noSession ?? false,
@@ -879,5 +883,89 @@ describe("child model vision binding (SA-02)", () => {
 		expect(childCanSee.text).toContain("Read image file [image/png]");
 		expect(childCanSee.hasImage).toBe(true);
 		expect(childCanSee.text).not.toContain("does not support images");
+	});
+});
+
+describe("#output-truncation D3 (per-run maxTokens resolution + stop note)", () => {
+	let savedCatalogPath: string | undefined;
+
+	function writeCatalog(models: Record<string, number>): void {
+		const dir = mkdtempSync(path.join(tmpdir(), "imp-trunc-catalog-"));
+		savedCatalogPath = process.env.IMP_CATALOG_PATH;
+		process.env.IMP_CATALOG_PATH = path.join(dir, "catalog.json");
+		const entries: Record<string, unknown> = {};
+		for (const [id, maxTokens] of Object.entries(models)) entries[id] = { id, maxTokens };
+		writeFileSync(
+			process.env.IMP_CATALOG_PATH,
+			JSON.stringify({ version: 1, providers: { anthropic: { checkedAt: Date.now(), models: entries } } }),
+			"utf-8",
+		);
+		loadCatalogCache();
+	}
+
+	afterEach(() => {
+		if (savedCatalogPath === undefined) delete process.env.IMP_CATALOG_PATH;
+		else process.env.IMP_CATALOG_PATH = savedCatalogPath;
+		savedCatalogPath = undefined;
+		resetCatalogForTest();
+	});
+
+	it("an explicit maxTokens beats the catalog limit", async () => {
+		writeCatalog({ "test-model": 50000 });
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests);
+		const { baseDir, cwd } = await setup();
+		const runner = await makeRunner({ provider, cwd, baseDir, maxTokens: 2048, maxTokensExplicit: true });
+		await runner.runTurn({ userMessage: "hi" });
+		expect(requests[0]?.maxTokens).toBe(2048);
+	});
+
+	it("without an explicit value the model catalog limit applies", async () => {
+		writeCatalog({ "test-model": 50000 });
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests);
+		const { baseDir, cwd } = await setup();
+		const runner = await makeRunner({ provider, cwd, baseDir });
+		await runner.runTurn({ userMessage: "hi" });
+		expect(requests[0]?.maxTokens).toBe(50000);
+	});
+
+	it("a catalog miss falls back to the construction value", async () => {
+		const requests: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "ok" }])], requests);
+		const { baseDir, cwd } = await setup();
+		const runner = await makeRunner({ provider, cwd, baseDir });
+		await runner.runTurn({ userMessage: "hi" });
+		expect(requests[0]?.maxTokens).toBe(1024);
+	});
+
+	it("the truncation stop note carries the resolved limit", async () => {
+		const provider = scriptedProvider([
+			assistant([{ type: "thinking", thinking: "long internal debate…" }], "max_tokens"),
+		]);
+		const { baseDir, cwd } = await setup();
+		const runner = (await makeRunner({ provider, cwd, baseDir })) as RunnerWithOutput;
+		const result = await runner.runTurn({ userMessage: "hi" });
+		runner.printRunStats(result);
+		expect(runner.capturedOutput()).toContain(
+			"(stopped: response truncated at the output limit (1024 tokens) — send another message to continue)",
+		);
+	});
+
+	it("the note follows the current run's limit across a same-family model switch", async () => {
+		writeCatalog({ "test-model": 1000, "test-model2": 2000 });
+		const provider = scriptedProvider([
+			assistant([{ type: "thinking", thinking: "long internal debate…" }], "max_tokens"),
+		]);
+		const { baseDir, cwd } = await setup();
+		const runner = (await makeRunner({ provider, cwd, baseDir })) as RunnerWithOutput;
+		const first = await runner.runTurn({ userMessage: "one" });
+		runner.printRunStats(first);
+		runner.setModel("test-model2");
+		const second = await runner.runTurn({ userMessage: "two" });
+		runner.printRunStats(second);
+		const out = runner.capturedOutput();
+		expect(out).toContain("(stopped: response truncated at the output limit (1000 tokens)");
+		expect(out).toContain("(stopped: response truncated at the output limit (2000 tokens)");
 	});
 });

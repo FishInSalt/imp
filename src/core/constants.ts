@@ -5,6 +5,12 @@
 /** Tail cap for oversized tool results (bash output, task results). */
 export const MAX_BYTES = 50 * 1024; // 50KB
 
+/** #output-truncation D3: per-turn output budget used when the model catalog
+ *  has no value for the model (offline first-run, unknown models). The CLI
+ *  fills its --max-tokens default with this; the runner falls back to the
+ *  option value when catalog resolution comes up empty. */
+export const DEFAULT_MAX_TOKENS = 16384;
+
 /** Default child wall clock (#subagent-softlanding rev 4). REPL (TTY): no
  *  clock — the user's Ctrl+C is the backstop. Print/headless runs: a
  *  generous 60-minute hang guard (the turn wall does not tick while a

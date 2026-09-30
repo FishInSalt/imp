@@ -90,6 +90,10 @@ export interface RunAgentLoopResult {
 	turns: number;
 	/** Aggregated token usage across all LLM calls in this run. */
 	usage: Usage;
+	/** #output-truncation D2: the final assistant message was cut off at the
+	 *  output token limit ("max_tokens"). Set only on the "completed" return
+	 *  (the otherwise-silent stop); never on aborted / max_iterations. */
+	truncated?: boolean;
 }
 
 /**
@@ -244,7 +248,14 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 			}
 			const followUps = (await getFollowUpMessages?.()) ?? [];
 			if (followUps.length === 0) {
-				return { stopReason: "completed", turns, usage };
+				return {
+					stopReason: "completed",
+					turns,
+					usage,
+					// #output-truncation D2: the silent-stop case — a truncated final
+					// response. aborted / max_iterations never set this.
+					...(assistant.stopReason === "max_tokens" ? { truncated: true } : {}),
+				};
 			}
 			for (const message of followUps) {
 				history.push(message);
@@ -268,7 +279,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
 		}
 
 		const results: ToolResult[] = [];
-		await executeToolBatch(toolCalls, toolMap, signal, onToolCall, onEvent, results, clock);
+		if (assistant.stopReason === "max_tokens") {
+			// #output-truncation D1 (pi parity): a "max_tokens" stop means the
+			// stream was cut mid-generation — streamed tool-call arguments may be
+			// silently incomplete (they can even parse as valid JSON). Refuse the
+			// whole batch; the model re-issues with complete arguments.
+			failToolCallsFromTruncatedMessage(toolCalls, results, onEvent);
+		} else {
+			await executeToolBatch(toolCalls, toolMap, signal, onToolCall, onEvent, results, clock);
+		}
 
 		// Abort can stop mid-batch: synthesize results for tools that never ran,
 		// so history (and the persisted session) always has complete tool_use →
@@ -298,6 +317,32 @@ function fillMissingToolResults(
 	for (const call of toolCalls) {
 		if (answered.has(call.id)) continue;
 		results.push({ toolCallId: call.id, toolName: call.name, content: reason, isError: true });
+	}
+}
+
+/** #output-truncation D1 (pi parity): refuse every tool call from an assistant
+ *  message truncated at the output token limit — never execute a batch whose
+ *  streamed arguments may be silently incomplete (a truncated argument string
+ *  can still parse as valid JSON). Emits the same tool_start/tool_end event
+ *  shape as execution so UI rows and extension taps stay consistent; the
+ *  onToolCall gate is deliberately NOT consulted (this is not an execution
+ *  attempt). Callers push the results as one toolResult message, so the
+ *  tool_use → tool_result closure (resumability) is unchanged. */
+function failToolCallsFromTruncatedMessage(
+	toolCalls: ReadonlyArray<{ id: string; name: string; arguments: unknown }>,
+	results: ToolResult[],
+	onEvent?: (event: AgentEvent) => void,
+): void {
+	for (const call of toolCalls) {
+		onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
+		const result: ToolResult = {
+			toolCallId: call.id,
+			toolName: call.name,
+			content: `Tool call "${call.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
+			isError: true,
+		};
+		results.push(persistableResult(result));
+		onEvent?.({ type: "tool_end", result });
 	}
 }
 

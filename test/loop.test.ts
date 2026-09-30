@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
-import type { AgentMessage, AssistantMessage } from "../src/core/messages.js";
+import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { contentText } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { createAttemptUsage } from "../src/core/usage-ledger.js";
@@ -522,5 +522,126 @@ describe("SA-04 attempt ledger", () => {
 			cacheWriteTokens: 0,
 		});
 		expect(ledger.incomplete).toBe(false);
+	});
+});
+
+describe("#output-truncation D1/D2", () => {
+	it("refuses every tool call from a truncated message: no execution, no gate, pi wording; a re-issued turn completes untruncated", async () => {
+		const seen: unknown[] = [];
+		const gateCalls: string[] = [];
+		const provider = scriptedProvider([
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "hi" } }],
+				"max_tokens",
+			),
+			assistant([{ type: "text", text: "all done" }]),
+		]);
+		const history: AgentMessage[] = [];
+		const events: AgentEvent[] = [];
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [echoTool(seen)],
+			history,
+			userMessage: "go",
+			onEvent: (event) => events.push(event),
+			onToolCall: (call) => {
+				gateCalls.push(call.toolCallId);
+			},
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(result.truncated).toBeUndefined(); // the FINAL assistant was not truncated
+		expect(seen).toHaveLength(0); // never executed
+		expect(gateCalls).toHaveLength(0); // refusals do not consult the gate
+		const results = history
+			.filter((m): m is ToolResultMessage => m.role === "toolResult")
+			.flatMap((m) => m.results);
+		expect(results).toHaveLength(1);
+		expect(results[0]?.isError).toBe(true);
+		expect(contentText(results[0]?.content ?? "")).toContain(
+			"was not executed: the response hit the output token limit",
+		);
+		expect(contentText(results[0]?.content ?? "")).toContain(
+			"Re-issue the tool call with complete arguments.",
+		);
+		expect(events.filter((e) => e.type === "tool_start")).toHaveLength(1);
+		expect(events.filter((e) => e.type === "tool_end")).toHaveLength(1);
+	});
+
+	it("normal tool turns still pass through the gate (contrast)", async () => {
+		const gateCalls: string[] = [];
+		const provider = scriptedProvider([
+			assistant([{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "x" } }], "tool_use"),
+			assistant([{ type: "text", text: "done" }]),
+		]);
+		await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [echoTool()],
+			history: [],
+			userMessage: "go",
+			onToolCall: (call) => {
+				gateCalls.push(call.toolCallId);
+			},
+		});
+		expect(gateCalls).toEqual(["t1"]);
+	});
+
+	it("a truncated final response with no tool calls sets result.truncated", async () => {
+		const provider = scriptedProvider([
+			assistant([{ type: "thinking", thinking: "long internal debate…" }], "max_tokens"),
+		]);
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(result.truncated).toBe(true);
+	});
+
+	it("a normal completion leaves truncated unset", async () => {
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])]);
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [],
+			history: [],
+			userMessage: "go",
+		});
+		expect(result.truncated).toBeUndefined();
+	});
+
+	it("the max-turns check stays in front of the truncation refusal (order pin)", async () => {
+		const seen: unknown[] = [];
+		const provider = scriptedProvider([
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "echo_tool", arguments: { message: "x" } }],
+				"max_tokens",
+			),
+		]);
+		const history: AgentMessage[] = [];
+		const result = await runAgentLoop({
+			provider,
+			model: "mock",
+			system: "",
+			tools: [echoTool(seen)],
+			history,
+			userMessage: "go",
+			maxIterations: 1,
+		});
+		expect(result.stopReason).toBe("max_iterations");
+		expect(result.truncated).toBeUndefined();
+		expect(seen).toHaveLength(0);
+		const results = history
+			.filter((m): m is ToolResultMessage => m.role === "toolResult")
+			.flatMap((m) => m.results);
+		expect(contentText(results[0]?.content ?? "")).toContain("(not executed: reached max turns)");
 	});
 });

@@ -1,23 +1,19 @@
 /**
- * Minimal MCP stdio client (M18, docs/m18-mcp-design.md §3).
+ * MCP protocol core (M19 D1, docs/m19-mcp-http-design.md).
  *
- * Hand-rolled JSON-RPC 2.0 over newline-delimited JSON on the server's
- * stdout (D3: no runtime deps — the v1 protocol surface is initialize /
- * tools/list / tools/call plus two notifications). One line = one message;
- * stray non-JSON lines are skipped; a >10MB line kills the connection
- * (defensive, design R3).
+ * Owns the pending table, request/notify, timeouts, abort, the initialize
+ * handshake, tools/list cursor pagination (10-page cap) and tools/call
+ * mapping. The wire lives behind McpTransport: stdio-transport.ts carries
+ * the M18 NDJSON/process logic verbatim; http-transport.ts is M19's
+ * Streamable HTTP addition. The closed flag HERE is the authority:
+ * close()/forceKill() set it first, so a transport-level death racing the
+ * close is ignored (D1 invariant), and transport.send no-ops after close.
  *
  * Version negotiation is deliberately lenient (design R2): a server that
- * answers initialize with a different protocolVersion is accepted — the
- * strict "disconnect on mismatch" reading buys nothing for a tools-only
- * client. The wire shapes are stable across MCP revisions.
+ * answers initialize with a different protocolVersion is accepted.
  */
-import { type ChildProcess, spawn } from "node:child_process";
+import type { McpTransport } from "./transport.js";
 
-/** Cap for one NDJSON line (design R3). */
-const MAX_LINE_BYTES = 10 * 1024 * 1024;
-/** Ring-buffer tail kept for /mcp failure diagnosis. */
-const STDERR_TAIL_CHARS = 2048;
 /** Protocol version imp requests (latest spec revision at design time). */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 /** Page cap for tools/list cursor pagination (z.ai has_more lesson). */
@@ -55,66 +51,63 @@ interface PendingEntry {
 
 export interface McpClientOptions {
 	name: string;
-	command: string;
-	args: string[];
-	env?: Record<string, string>;
-	cwd?: string;
 	/** clientInfo.version in the initialize handshake. */
 	clientVersion: string;
 	connectTimeoutMs?: number;
 	callTimeoutMs?: number;
 }
 
-/** Connection-level failure with the stderr tail attached for diagnosis. */
+/** Connection-level failure with the transport's diagnostics attached. */
 export class McpConnectionError extends Error {
 	constructor(
 		message: string,
-		public readonly stderrTail: string,
+		public readonly detail: string,
 	) {
 		super(message);
 		this.name = "McpConnectionError";
 	}
 }
 
+/** A 404 on a session-bearing HTTP request (M19 D4): the session is gone.
+ *  Distinct type so the manager can bypass the reconnect cooldown — a
+ *  session that expires right after connect must not hit "on cooldown". */
+export class McpSessionExpiredError extends McpConnectionError {
+	constructor(message: string, detail: string) {
+		super(message, detail);
+		this.name = "McpSessionExpiredError";
+	}
+}
+
 export class McpClient {
-	private proc: ChildProcess | null = null;
 	private nextId = 1;
 	private pending = new Map<number, PendingEntry>();
-	/** Raw byte buffer — lines split on 0x0A and decoded only when complete,
-	 * so a multi-byte UTF-8 char straddling a chunk boundary cannot corrupt
-	 * a line (review P2-4). Length is bytes (the 10MB guard means bytes). */
-	private stdoutBuf: Buffer = Buffer.alloc(0);
-	private stderrTail = "";
 	private closed = false;
+	private started = false;
 	private connected = false;
 
-	constructor(private readonly options: McpClientOptions) {}
+	constructor(
+		private readonly transport: McpTransport,
+		private readonly options: McpClientOptions,
+	) {}
 
-	/** Set by the manager: fired when the server process dies unexpectedly. */
+	/** Set by the manager: fired when the connection dies unexpectedly. */
 	onDead?: (reason: string) => void;
 
 	get isConnected(): boolean {
 		return this.connected && !this.closed;
 	}
 
-	/** Spawn + initialize handshake + initialized notification. */
+	/** Transport start + initialize handshake + initialized notification. */
 	async connect(): Promise<void> {
-		if (this.proc !== null) throw new Error("McpClient.connect called twice");
-		const proc = spawn(this.options.command, this.options.args, {
-			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, ...this.options.env },
-			cwd: this.options.cwd,
+		if (this.started) throw new Error("McpClient.connect called twice");
+		this.started = true;
+		await this.transport.start({
+			onMessage: (msg) => this.handleMessage(msg),
+			onRequestError: (id, error) => {
+				this.deletePending(id)?.reject(error);
+			},
+			onDeath: (reason) => this.die(reason),
 		});
-		this.proc = proc;
-		proc.on("error", (err) => this.die(`spawn failed: ${err.message}`));
-		proc.on("exit", (code, signal) => {
-			if (!this.closed) this.die(`server exited (code ${code ?? "?"}${signal ? ` ${signal}` : ""})`);
-		});
-		proc.stdout?.on("data", (chunk: Buffer) => this.feedStdout(chunk));
-		proc.stderr?.on("data", (chunk: Buffer) => {
-			this.stderrTail = (this.stderrTail + chunk.toString("utf-8")).slice(-STDERR_TAIL_CHARS);
-		});
-
 		try {
 			const result = (await this.request(
 				"initialize",
@@ -125,17 +118,23 @@ export class McpClient {
 				},
 				this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
 			)) as { protocolVersion?: string; serverInfo?: { name?: string } };
-			// Lenient negotiation (design R2): accept any version back.
-			void result?.protocolVersion;
+			// Lenient negotiation (design R2): accept any version back. Record it
+			// so every subsequent request echoes the negotiated value (M19 D4).
+			const negotiated =
+				typeof result?.protocolVersion === "string" && result.protocolVersion !== ""
+					? result.protocolVersion
+					: MCP_PROTOCOL_VERSION;
+			this.transport.setProtocolVersion(negotiated);
 			this.notify("notifications/initialized", {});
 			this.connected = true;
 		} catch (err) {
-			// Full graceful sequence (stdin.end → SIGTERM → SIGKILL): a
-			// handshake that timed out may also ignore SIGTERM (review P3-13).
-			this.shutdown("graceful");
+			// A handshake that timed out may also ignore SIGTERM: run the full
+			// graceful transport sequence, then surface the original failure.
+			this.markClosed(new McpConnectionError("connection closed", this.transport.getDiagnostics()));
+			await this.transport.close();
 			if (err instanceof McpConnectionError) throw err;
 			const message = err instanceof Error ? err.message : String(err);
-			throw new McpConnectionError(message, this.stderrTail.trim());
+			throw new McpConnectionError(message, this.transport.getDiagnostics());
 		}
 	}
 
@@ -166,7 +165,7 @@ export class McpClient {
 	 *  notifications/cancelled best-effort (never awaited). */
 	async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
 		if (!this.isConnected) {
-			throw new McpConnectionError("connection is not open", this.stderrTail.trim());
+			throw new McpConnectionError("connection is not open", this.transport.getDiagnostics());
 		}
 		const result = (await this.request(
 			"tools/call",
@@ -180,53 +179,57 @@ export class McpClient {
 		};
 	}
 
-	/** Graceful close: stdin.end → 3s → SIGTERM → 2s → SIGKILL. */
-	close(): void {
-		this.shutdown("graceful");
+	/** Graceful close: reject pending, then the transport's sequence (stdio
+	 *  resolves immediately; http awaits its bounded DELETE, M19 D4). */
+	close(): Promise<void> {
+		if (this.closed) return Promise.resolve();
+		this.markClosed(new McpConnectionError("connection closed", this.transport.getDiagnostics()));
+		return this.transport.close();
 	}
 
-	/** Synchronous best-effort kill for the double-Ctrl+C force path. */
+	/** Synchronous best-effort teardown for the double-Ctrl+C force path.
+	 *  Must reach the transport even when close() already ran: that is how a
+	 *  forceExit preempts an in-flight http DELETE (M19 D4 abandon rule). */
 	forceKill(): void {
-		this.shutdown("SIGTERM");
+		if (!this.closed) {
+			this.markClosed(new McpConnectionError("connection closed", this.transport.getDiagnostics()));
+		}
+		this.transport.forceKill();
 	}
 
-	getStderrTail(): string {
-		return this.stderrTail.trim();
+	getDiagnostics(): string {
+		return this.transport.getDiagnostics();
 	}
 
 	// --- internals ---------------------------------------------------------
 
-	private feedStdout(chunk: Buffer): void {
-		this.stdoutBuf = this.stdoutBuf.length === 0 ? chunk : Buffer.concat([this.stdoutBuf, chunk]);
-		if (this.stdoutBuf.length > MAX_LINE_BYTES) {
-			this.die("server wrote a line over 10MB — connection dropped (design R3)");
-			return;
-		}
-		let nl = this.stdoutBuf.indexOf(0x0a);
-		while (nl >= 0) {
-			const line = this.stdoutBuf.subarray(0, nl).toString("utf-8");
-			this.stdoutBuf = this.stdoutBuf.subarray(nl + 1);
-			if (line.trim() !== "") this.handleLine(line);
-			if (this.closed) return;
-			nl = this.stdoutBuf.indexOf(0x0a);
+	/** Set closed + reject everything pending with one error. */
+	private markClosed(err: McpConnectionError): void {
+		this.closed = true;
+		this.connected = false;
+		for (const id of [...this.pending.keys()]) {
+			this.deletePending(id)?.reject(err);
 		}
 	}
 
-	private handleLine(line: string): void {
-		let msg: Record<string, unknown>;
+	/** Unexpected death: mark closed, reject everything, notify the manager. */
+	private die(reason: string): void {
+		if (this.closed) return;
+		this.markClosed(new McpConnectionError(reason, this.transport.getDiagnostics()));
 		try {
-			const parsed: unknown = JSON.parse(line);
-			if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
-			msg = parsed as Record<string, unknown>;
+			this.onDead?.(reason);
 		} catch {
-			return; // stray non-JSON line (design §3): skip
+			// manager hooks must never take the client down
 		}
+	}
+
+	private handleMessage(msg: Record<string, unknown>): void {
 		// Server REQUEST (id + method): answer ping, reject the rest.
 		if (msg.id !== undefined && typeof msg.method === "string") {
 			if (msg.method === "ping") {
-				this.write({ jsonrpc: "2.0", id: msg.id, result: {} });
+				this.transport.send({ jsonrpc: "2.0", id: msg.id, result: {} });
 			} else {
-				this.write({
+				this.transport.send({
 					jsonrpc: "2.0",
 					id: msg.id,
 					error: { code: -32601, message: `imp does not support "${msg.method}" (v1)` },
@@ -268,7 +271,7 @@ export class McpClient {
 	): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			if (this.closed) {
-				reject(new McpConnectionError("connection is closed", this.stderrTail.trim()));
+				reject(new McpConnectionError("connection is closed", this.transport.getDiagnostics()));
 				return;
 			}
 			const id = this.nextId++;
@@ -297,55 +300,11 @@ export class McpClient {
 				// late response after abort: no pending entry → ignored above
 			}
 			this.pending.set(id, entry);
-			this.write({ jsonrpc: "2.0", id, method, params });
+			this.transport.send({ jsonrpc: "2.0", id, method, params }, signal);
 		});
 	}
 
 	private notify(method: string, params: unknown): void {
-		this.write({ jsonrpc: "2.0", method, params });
-	}
-
-	private write(message: Record<string, unknown>): void {
-		if (this.proc?.stdin?.writable !== true) return;
-		this.proc.stdin.write(`${JSON.stringify(message)}\n`);
-	}
-
-	/** Unexpected death: reject everything pending, notify the manager. */
-	private die(reason: string): void {
-		if (this.closed) return;
-		this.connected = false;
-		this.closed = true;
-		const err = new McpConnectionError(reason, this.stderrTail.trim());
-		for (const id of [...this.pending.keys()]) {
-			this.deletePending(id)?.reject(err);
-		}
-		this.proc?.kill("SIGTERM");
-		try {
-			this.onDead?.(reason);
-		} catch {
-			// manager hooks must never take the client down
-		}
-	}
-
-	private shutdown(mode: "graceful" | "SIGTERM"): void {
-		if (this.closed) return;
-		this.closed = true;
-		this.connected = false;
-		const err = new McpConnectionError("connection closed", this.stderrTail.trim());
-		for (const id of [...this.pending.keys()]) {
-			this.deletePending(id)?.reject(err);
-		}
-		const proc = this.proc;
-		if (proc === null) return;
-		if (mode === "graceful") {
-			proc.stdin?.end();
-			const term = setTimeout(() => proc.kill("SIGTERM"), 3000);
-			const kill = setTimeout(() => proc.kill("SIGKILL"), 5000);
-			term.unref?.();
-			kill.unref?.();
-		} else {
-			proc.stdin?.end();
-			proc.kill("SIGTERM");
-		}
+		this.transport.send({ jsonrpc: "2.0", method, params });
 	}
 }

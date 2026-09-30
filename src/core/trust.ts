@@ -231,6 +231,16 @@ export function trustRequiringResources(cwd: string, home: string): string[] {
 		const target = join(cwd, ".imp", name);
 		if (existsSync(target) && statSync(target).isFile()) found.push(`.imp/${name}`);
 	}
+	// #mcp-trust (m19 F1): project-tier mcp config is an EXECUTABLE resource —
+	// a cloned repo's .mcp.json spawns servers before any consent. Counting it
+	// here is what makes the gate real: without it, a repo whose only project
+	// resource is .mcp.json would short-circuit resolveProjectTrust's
+	// "no resources → zero friction" branch. isFile, so a directory shadowing
+	// the name cannot trigger the ask (SYSTEM.md precedent).
+	for (const name of [".mcp.json", "mcp.json"]) {
+		const target = join(cwd, name);
+		if (existsSync(target) && statSync(target).isFile()) found.push(name);
+	}
 	// `.agents/skills` ancestor walk (M12): cwd first, up to the git root,
 	// excluding the user-global ~/.agents/skills. Entries are relative to
 	// cwd ("../.agents/skills" for ancestors) so describeTrustResources can

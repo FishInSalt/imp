@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpClient } from "../src/mcp/client.js";
+import { StdioTransport } from "../src/mcp/stdio-transport.js";
 
 const SERVER = join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 const FAST = { connectTimeoutMs: 2000, callTimeoutMs: 2000 };
@@ -16,18 +17,22 @@ afterAll(() => {
 	if (tmp !== "") rmSync(tmp, { recursive: true, force: true });
 });
 
-function makeClient(mode: string, extra: Partial<ConstructorParameters<typeof McpClient>[0]> = {}) {
-	return new McpClient({
-		name: "fake",
-		command: process.execPath,
-		args: [SERVER, mode],
-		clientVersion: "test",
-		...FAST,
-		...extra,
-	});
+/** Test knobs: env goes to the transport, timeouts to the client. */
+type ClientKnobs = { env?: Record<string, string>; connectTimeoutMs?: number; callTimeoutMs?: number };
+
+function makeClient(mode: string, extra: ClientKnobs = {}) {
+	return new McpClient(
+		new StdioTransport({ command: process.execPath, args: [SERVER, mode], env: extra.env }),
+		{
+			name: "fake",
+			clientVersion: "test",
+			connectTimeoutMs: extra.connectTimeoutMs ?? FAST.connectTimeoutMs,
+			callTimeoutMs: extra.callTimeoutMs ?? FAST.callTimeoutMs,
+		},
+	);
 }
 
-async function connect(mode: string, extra: Partial<ConstructorParameters<typeof McpClient>[0]> = {}) {
+async function connect(mode: string, extra: ClientKnobs = {}) {
 	const client = makeClient(mode, extra);
 	await client.connect();
 	return client;
@@ -160,10 +165,8 @@ describe("McpClient", () => {
 	});
 
 	it("marks the client dead and notifies onDead on unexpected exit", async () => {
-		const client = new McpClient({
+		const client = new McpClient(new StdioTransport({ command: process.execPath, args: [SERVER, "die"] }), {
 			name: "fake",
-			command: process.execPath,
-			args: [SERVER, "die"],
 			clientVersion: "test",
 			connectTimeoutMs: 2000,
 			callTimeoutMs: 2000,

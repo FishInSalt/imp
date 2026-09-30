@@ -224,8 +224,12 @@ no legacy stored args to upgrade — pi needed it for pre-1.0 sessions, docs/ext
 
 ## 6. The ExtensionApi — complete surface
 
-Seven members total: three read-only facts, three registration methods, one subscriber.
-This is the **entire** API; anything an extension cannot do with this, it cannot do in M4.
+Seven members total at M4: three read-only facts, three registration methods,
+one subscriber. This is the **entire** API; anything an extension cannot do
+with this, it cannot do in M4. *(Later milestones grew it deliberately:
+`setStatus` (task-timer), and `classify` — #guardian-auto-mode Phase A, whose
+design §0 D6 records the "one purpose-built member" decision — bring the live
+surface to nine; `src/extensions/types.ts` is the normative list.)*
 
 ```ts
 // src/extensions/types.ts

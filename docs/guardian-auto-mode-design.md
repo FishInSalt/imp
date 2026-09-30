@@ -348,13 +348,19 @@ current format (append-only, never fatal — unchanged contract).
 
 | Event | Draft record line |
 |---|---|
-| shadow verdict | `▪ guardian (shadow) — classifier would allow: <reason>` (then the fresh confirm follows) |
-| auto allowed | `▪ guardian (auto) — classifier allowed: <reason>` |
+| shadow verdict | `▪ guardian — classifier: allow — <reason> (<model>)` (then the fresh confirm follows) |
+| auto allowed | the same host line, then the call runs |
 | auto asked / unavailable | today's `▪ confirm: guardian — …` (fresh) + detail line `classifier: <reason>` / `classifier unavailable (<why>)` |
 | manual-only skip | `▪ guardian (auto) — target not statically resolvable; asking` |
 | no verified context | `▪ guardian (auto) — no verified user context; asking` |
 | mode change | `▪ guardian: mode → shadow` / `→ auto` / `→ manual` |
 | breaker tripped | `▪ guardian: 3 non-allows in a row — back to manual` |
+
+The **host** verdict line (row 1-2) carries no mode tag: the host cannot know
+the extension's mode, and a mode the extension could write onto a verdict line
+would be spoofable. The footer (`guardian: auto`) and the mode-change records
+carry the mode instead; a fallback model, when one happened, is appended as
+`note: model "<requested>" unavailable, used <model>` (implemented shape).
 
 The command itself is not repeated in these records: it renders exactly once in
 the tool block that follows. The footer shows `guardian: shadow|auto` while

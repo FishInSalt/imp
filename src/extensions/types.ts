@@ -82,10 +82,40 @@ export interface ConfirmOptions {
 	preview?: CommandPreview;
 }
 
+/** `api.classify` (#guardian-auto-mode D6): the extension supplies the
+ *  question, the host supplies everything else — model resolution and auth,
+ *  the trusted-context block (host-extracted, D11), the output contract, the
+ *  timeout, the audit record, and whether the seam exists on this surface at
+ *  all (D8). */
+export interface ClassifyRequest {
+	/** The extension's policy framing (the system message). */
+	system: string;
+	/** What to judge (one user message): the candidate action and its context. */
+	prompt: string;
+	/** Optional provider/model reference; absent → the session model. */
+	model?: string;
+}
+
+export interface ClassifyResult {
+	/** Phase A verdicts only (D7): the model cannot write the block path. */
+	verdict: "allow" | "ask";
+	/** One line, sanitized and capped by the host. */
+	reason: string;
+	/** The reference actually used (may differ from the request's). */
+	model: string;
+}
+
+/** Host-side implementation injected by the surface — the same pattern as the
+ *  confirm handler. A surface without it serves no classify calls. */
+export type ClassifyHandler = (
+	request: ClassifyRequest,
+	source: string | undefined,
+) => Promise<ClassifyResult | undefined>;
+
 /**
  * The extension api: three read-only facts, three registration methods, one
- * subscriber, one ask-the-human method — eight members. Anything an extension
- * cannot do with this, it cannot do.
+ * subscriber, one ask-the-human method, one ask-the-model method — nine
+ * members. Anything an extension cannot do with this, it cannot do.
  */
 export interface ExtensionApi {
 	/** Absolute working directory imp was started in. */
@@ -126,6 +156,20 @@ export interface ExtensionApi {
 	 *  options lets the host remember a "don't ask again this session" choice
 	 *  for that key (M10); hosts without that affordance just ignore it. */
 	confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean>;
+
+	/** Ask a model a yes/no question about a call (#guardian-auto-mode),
+	 *  through a host-resolved one-shot request (no tools, no streaming).
+	 *
+	 *  The host supplies the model (or resolves `request.model`), the
+	 *  provenance-verified user context, the output contract and the audit
+	 *  record; the extension supplies only the question. Resolves `undefined`
+	 *  whenever the seam is unavailable — no interactive host, no verified
+	 *  call association, an unresolvable model that cannot fall back, an
+	 *  over-cap request, a timeout, a provider error, or an answer that does
+	 *  not match the contract. **It never throws and never hangs; a gate must
+	 *  treat `undefined` as “unavailable” and ask the human.** Two verdicts
+	 *  exist in Phase A: `allow` and `ask` — the model cannot block.*/
+	classify(request: ClassifyRequest): Promise<ClassifyResult | undefined>;
 }
 
 /**

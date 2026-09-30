@@ -110,7 +110,7 @@
 ### 5.2 若"URL token"真机被拒/要求 Bearer
 
 - 触发条件：真机携 token 握手仍 401/403，或响应要求 `Authorization: Bearer`（端点已广播 OAuth 元数据，§1）。
-- 最小回退：批 A 已支持的静态 `headers` 可直接填 Bearer，覆盖"Bearer 直填"场景；完整 OAuth（PKCE/发现/刷新/令牌存储）仍是 D5 延后项、需单独立项——若 Tushare 强制交互式 OAuth，本目标的"最小连接"不成立，回炉重估。
+- 最小回退：批 A 已支持的静态 `headers` 可直接填 Bearer，覆盖"Bearer 直填"场景；完整 OAuth（PKCE/发现/刷新/令牌存储）仍是 D5 延后项、需单独立项——若 Tushare 强制交互式 OAuth，本目标的"最小连接"不成立，回炉重估。（OAuth 立项评估见 `docs/mcp-oauth-evaluation.md`：结论=暂不立项，触发条件见其 §5。）
 
 ## 6. 验收标准（真机，汇总）
 

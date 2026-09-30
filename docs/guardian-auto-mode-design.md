@@ -16,7 +16,7 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D3 | Switch: the **`/guardian` command** (no args toggles; with an arg sets). Custom keybindings are **deliberately deferred** — every imp binding is host-owned and context-gated; a keybinding seam is its own batch. |
 | D4 | Two modes, **manual is the default**. Manual = today's behavior, byte for byte. |
 | D5 | User-defined filter rules (Claude Code's allowlist analog) are **Phase B**, layered *below* the classifier; Phase A ships mode + classifier + minimal config. |
-| D6 | Exactly **one new host seam member** (`api.classify`). Policy stays with the extension; model resolution, auth, accounting, timeouts and the audit record stay with the host. |
+| D6 | Exactly **one new host seam member** (`api.classify`). Policy stays with the extension; model resolution, auth, accounting (deferred in Phase A — §11.5), timeouts and the audit record stay with the host. |
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
 | D8 | Failure posture is **fail-to-ask**: every classifier failure falls back to the human prompt; a host without an interactive prompt never serves the seam at all, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action: the transcript shows the consultation and the verdict even if the extension then does something else. |
@@ -51,9 +51,10 @@ total”) — a reader will trip on the older count otherwise.
 
 The existing three-way split still governs:
 
-- **Invariants → host**: credentials, provider auth, accounting, timeouts,
-  output-contract enforcement, sanitization, the audit record, and — critically —
-  whether the seam exists at all on a given surface (D8).
+- **Invariants → host**: credentials, provider auth, accounting *when it lands*
+  (Phase A defers it — §11.5), timeouts, output-contract enforcement,
+  sanitization, the audit record, and — critically — whether the seam exists at
+  all on a given surface (D8).
 - **Policy → extension**: which calls get classified, what the classifier is
   asked, what each verdict means, the mode state, the breaker.
 - **Rendering → host**: record lines go through the existing `▪` note channel
@@ -239,8 +240,8 @@ else (bash ask tier only):
   allow     → return undefined (run)                            [breaker resets]
 ```
 
-The hard-floor branch (`guardian.mjs:188-210`) is untouched and never reaches
-this code.
+The hard-floor branch (`guardian.mjs:192-193` for bash; `:241-242` for
+write/edit) is untouched and never reaches this code.
 
 ### 5.5 What the classifier sees
 
@@ -278,7 +279,7 @@ current format (append-only, never fatal — unchanged contract).
 
 | # | Invariant | Why |
 |---|---|---|
-| I1 | The floor branch **precedes** the classifier branch and returns before any classify call can happen (`guardian.mjs:188-210,241-242`). The seam cannot enforce this — it is a property of guardian's code shape, pinned by test 10. | A model must not be able to talk the gate out of `/etc`, `~/.ssh`, home-root rm. |
+| I1 | The floor branch **precedes** the classifier branch and returns before any classify call can happen (`guardian.mjs:192-193` bash; `:241-242` write/edit). The seam cannot enforce this — it is a property of guardian's code shape, pinned by test 10. | A model must not be able to talk the gate out of `/etc`, `~/.ssh`, home-root rm. |
 | I2 | Any classifier failure ⇒ ask the human. No fail-open path exists in any branch. | The feature's purpose is to reduce interruptions, not to remove the human. |
 | I3 | A surface without an interactive prompt (print mode, test harnesses) does not serve the seam. The legacy readline shell **is** interactive (its `[y/N]` prompt) and therefore does serve it. | Headless runs keep today's block behavior; “auto” can never mean “unattended allow”. |
 | I4 | Phase A verdicts are `{allow, ask}`; the model cannot block. | A hallucinating classifier must not silently kill legitimate work; blocking stays deterministic. |
@@ -413,6 +414,13 @@ write-gate classification, possibly a `block` verdict for the classifier.
    all drafts.
 7. Does the footer show `guardian: manual` permanently (noise) or only `auto`
    (draft)?
+8. **Consulted-and-ignored (R2 review note)**: an extension may receive `ask`
+   and run the tool anyway; §4.4 leaves this as inherent extension power (the
+   record still shows the verdict). A later phase could record a *mismatch*
+   line — the host keeping the last verdict per tool call and comparing it with
+   what the handler returned. It catches only the consulted-and-ignored case
+   (an extension that never calls classify is unobservable), at the cost of
+   per-call host state. Phase B candidate, not Phase A.
 
 ## 12. Review log
 
@@ -431,4 +439,11 @@ write-gate classification, possibly a `block` verdict for the classifier.
   placing the handler in the repl layer (no module move). P3: anchors corrected
   (`resolve.ts:126`; `cli.ts:491-493,502,540,593,1005`); both stale member
   counts amended (`types.ts:88-89`, `m4:227`); concurrency/mid-flight, symlink
-  and no-auth cases specified (§4.2, §4.5). All folded.
+  and no-auth cases specified (§4.2, §4.5).
+- R2: **CONFIRMED WITH NOTES** (2 P3 precision findings + one design opinion).
+  N1: floor anchors cited the whole handler, not the floor branches — now
+  `:192-193` (bash) and `:241-242` (write/edit) in §5.4/§6. N2: D6 and §2 still
+  claimed accounting as a host invariant without the Phase A deferral — both
+  now point at §11.5. The opinion (recorded as open question 8): a
+  consulted-then-ignored verdict is invisible to enforcement; a “mismatch line”
+  is a Phase B candidate. Everything else re-verified against the code.

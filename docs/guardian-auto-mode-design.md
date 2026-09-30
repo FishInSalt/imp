@@ -565,4 +565,9 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   fixed; test 13 names the artificial interleave. R8's attack-next note folded:
   shadow also counts the **manual-only rate**, and the rollout gate includes it.
   Folds: D15/D16/D17, §5.4, tests 12/13/24/25, §9.1. Folded in rev 3.1.
-- R9: *(pending — verification of the rev 3.1 fold)*
+- R9: **CONFIRMED WITH NOTES** — D17's extension-policy/host-fact split verified
+  coherent everywhere and the `undefined`-means-unavailable collision genuinely
+  avoided; ALS leak pin, interleave wording, manual-only rate and the R8 log all
+  verified. N1 (botched fold): D14 was left outside the §0 table as an orphan
+  row after `## 1. Context` — restored into numeric order between D13 and D15.
+- R10: *(pending — micro-verification of the D14 restoration)*

@@ -123,12 +123,12 @@ agent frontmatter thinking: <level>   → 用它
 | 验收项 | 文件 | 断言 |
 | --- | --- | --- |
 | frontmatter 胜出 / 继承父级 / getter 缺席→undefined | `test/task-tool.test.ts` | 三种输入下子运行收到的 `thinking`（fake provider sink） |
-| spawn 钉住（await 交错不漂移） | `test/task-tool.test.ts` | 自定义 `getThinkingLevel` 在 worktree 创建 await 期间变更返回值，尝试仍用 spawn 时值 |
-| 每轮请求带档位；溢出重试第二轮同值；未提供→回归 | `test/subagent.test.ts` | sink 捕 `LLMRequest.thinking` + catalog `maxTokens` 组合断言（D3b 回归） |
+| spawn 钉住（await 交错不漂移） | `test/child-resume.test.ts`（F4-a 同址：worktree+swap 装置在此；原计划 task-tool 落点调整） | 自定义 `getThinkingLevel` 在 worktree 创建 await 期间变更返回值，尝试仍用 spawn 时值 |
+| 每轮请求带档位；溢出重试第二轮同值；未提供→回归 | `test/subagent.test.ts` | sink 捕 `LLMRequest.thinking`（三态 + 溢出重试；catalog `maxTokens` 组合由既有 D3b 用例覆盖） |
 | resume 用当前文件 + 当前父级（两变量各测） | `test/child-resume.test.ts` | 同 sink 断言 |
-| 摘要器档位（`off` 与非 off，`off:null` 模型） | `test/child-compaction.test.ts` | 摘要器请求的 `thinking` |
+| 摘要器档位（`off` 与非 off；session 与无 session 两分支） | `test/child-compaction.test.ts` | 摘要器请求的 `thinking`（off 映射为 undefined，D5 局限 (a)） |
 | raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled，`:283-285` 已有）、`test/openai-completions.test.ts`（新增：`gpt-5-pro`→effort "high"；`gpt-5.2-pro`→effort "medium"——两 id 各钉）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"，`:354-357` 已有） | 线格 body |
-| GLM 5.3：off→low enabled；undefined→disabled（定格既有形状） | `test/zai.test.ts`（`:105-106` 已有 off→low，补 undefined 定格） | 线格 body |
+| GLM 5.3：off→low enabled；undefined→disabled（定格既有形状） | `test/zai.test.ts`（`:105-106` 已有 off→low；已补 undefined→disabled 定格） | 线格 body |
 | 非法/空白 frontmatter → 解析期跳过 + 警告；大小写归一 | `test/agents-registry.test.ts` | `parseAgentFile` 返回值 / `loadAgentDefinitions.warnings` |
 | 回归：全量套件 | — | 基线以开工时 main 为准（不复用旧测试数） |
 
@@ -150,3 +150,4 @@ agent frontmatter thinking: <level>   → 用它
 - 评审轮 1（2026-09-30，独立全新上下文）：11 项发现，全部折入本稿。7 项 P2——GLM 5.3（`off:null` 而 glm-openai 支无守卫）归类错误且行为变化未记；openai-codex 家族未进表；D4 空白值在 `registry.ts:138` 下不可实现且与 C6 表述自相矛盾；D3 fresh 位置自相矛盾（`task.ts:802-805` 在 await 之后，不构成钉住）；resume 公式误用 `agent?.thinking`（resume 分支该实参必被拒绝）；D5 在 `off:null` 上的论证不实、不可降档形状未记；测试计划未逐条钉住 5 项验收。4 项 P3——`auto`/无旋钮表述过度；6 处行号引用修正；resume 档位变化无披露面；384000 目录来源未注明。评审对 GLM 5.3 与 codex 的事实主张经本人复核属实（codex 条目在目录缓存 `openai-codex/gpt-6-astra` 等）。待评审轮 2。
 - 评审轮 2（2026-09-30，独立全新上下文）：复核轮 1 的 11 项折叠**全部通过**；新发现 1 项 P2（`gpt-5.2/5.4/5.5-pro` 的 off 落点是 medium 非 high——代码复核属实，已改 D2 表与 §4 两处）、3 项 P3（openai-effort 的 off 守卫是 `typeof off === "string"`；§1.2 行 1 的 "Claude ≥4.6" 需排除 fable-5；kimi 的 lift 用例 `moonshotai.test.ts:283-285` 已存在——已标注）与 2 项备注（继承值=父级钳后值，已补 D1；`gpt-6` 示例已补 D2）。轮 2 结论：**CONFIRMED（含 finding 1 待折）**；上列全部已折入，待轮 3 快验关闭。
 - 评审轮 3（2026-09-30，轮 2 评审员快验）：三处 `gpt-5.x-pro` 更正与 `thinking.ts:263-291` 一致；P3 清扫（守卫措辞/fable-5 排除/已有用例标注）与 D1/D2 补充均准确 → **CLOSED — CONFIRMED**。残留 P3 两条不改：§1.2 行 1 未内联标注 fable-5 排除（行 2 已含）；§1.2 行 2 例表保留 "gpt-5-pro 系列" 简写（无害）。
+- 实现评审轮 1（2026-09-30，独立全新上下文）：**NEEDS FIXES**——1 P2（§4 所列 GLM 5.3 的 undefined 线格 pin 未实现）+ 3 P3（D5 的 session 分支无覆盖；spawn 钉住测试落在 `child-resume.test.ts` 而计划写 task-tool；§4 subagent 行措辞过强）。全部折入（`zai.test.ts` undefined pin、`child-compaction.test.ts` session 分支用例、§4 两处措辞修正）。待实现评审轮 2。

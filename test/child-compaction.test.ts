@@ -322,6 +322,33 @@ describe("runSubagent between-turn compaction (session store wired)", () => {
 		expect(reopened.buildContext().compacted).toBe(true);
 		expect(reopened.buildContext().messages.map((m) => m.role)).toEqual(context.messages.map((m) => m.role));
 	});
+
+	it("SA-09 D5: the session-backed branch passes the resolved level to compactSession", async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), "imp-sa09-compact-"));
+		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
+		const routed = routingProvider(
+			[
+				toolTurn("c1", "one", 500),
+				toolTurn("c2", "two", 1500),
+				assistant([{ type: "text", text: "session done" }]),
+			],
+			"SA-09-SUMMARY",
+		);
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "do the big job",
+			settings: TINY_SETTINGS,
+			thinking: "high",
+			session,
+			onMessage: (message) => session.appendMessage(message),
+		});
+		expect(outcome.status).toBe("completed");
+		expect(routed.summaryRequests).toHaveLength(1);
+		expect(routed.summaryRequests[0]?.thinking).toBe("high");
+	});
 });
 
 describe("task tool end-to-end (default settings, real session seam)", () => {

@@ -1279,3 +1279,33 @@ one number:
   name the threshold test that actually breaks. All four folded (D14 now states
   the parameterised contract; O7 states the general identity; §16.13 forward-points
   here; the pin delta names `:4703-4706` and `:4708-4715`).
+
+### 16.15 Round 5 — the name gets the host accent (A2.3, owner, 2026-09-30)
+
+The owner asked whether the extension's name could carry a color and chose
+yellow to try first. Color is host-owned (D6 forbids extension-authored ANSI),
+so the host colors the name it already holds; no extension API changes.
+
+- **D6 amendment**: "dim only, no accent" becomes "dim for chrome; the
+  **provenance name** carries the host's single accent". One accent for every
+  extension — per-extension colors would clash and would put color in the
+  extension's hands; a future extension uses the same yellow.
+- **Accent**: `\x1b[33m`, via a new `yellow(text, ansi = process.stdout.isTTY
+  === true)` helper in `src/format.ts`, matching `dim`/`red`/`green`/`bold`.
+- **Scope A (owner's choice)**: only the `SectionRule` label — `────` stays dim,
+  the label is yellow, everything else (record line, picker title, preview)
+  keeps today's treatment. Extending the accent to the record line's
+  `guardian — ` tag is a follow-up if the owner asks (it needs the renderer's
+  `ansi` gate, not the TUI's unconditional styling).
+- **Widths**: escape sequences are zero-width, so `visibleWidth(row) === width`
+  and the clip/lead arithmetic are unchanged; `truncateToWidth` runs on the
+  sanitized **plain** label before the color is applied.
+- **Empty label**: still plain dim dashes — no name, no accent.
+- **Degradation**: `SectionRule` is constructed only by the TUI shell, so
+  print/legacy/no-host output gains nothing (and stays ANSI-free).
+- **Pin delta**: the exact-byte rows gain `\x1b[33m` … `\x1b[0m` around the
+  label (`:4682-4687`, `:4689-4695`, the threshold rows, the width-80 frame row
+  `:809-812`, whose "faint dashes around a normal-weight label" assertion
+  becomes "dim dashes around a yellow label"); the hostile-label pin asserts the
+  accent wraps the sanitized text; the width-identity loop is unchanged.
+- Review: round 5 (below) covers this delta before implementation.

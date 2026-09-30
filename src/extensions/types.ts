@@ -72,7 +72,10 @@ export interface ConfirmOptions {
 	warnSpans?: Array<[number, number]>;
 	/** What "don't ask again this session" will remember, in the extension's own
 	 *  words (e.g. "this command pattern", "this directory"). The host renders
-	 *  it inside the remember option's label; absent → the stock wording. */
+	 *  it inside the remember option's label; absent → the stock wording.
+	 *  The remember option itself appears only when `sessionKey` is present —
+	 *  without a key there is no memory to offer (#guardian-auto-mode D13's
+	 *  fresh fallbacks render plain Yes/No). */
 	rememberLabel?: string;
 	/** The request being decided, rendered in the transcript's call-header idiom
 	 *  instead of prose. The host sanitizes both fields, styles `warnSpans` with

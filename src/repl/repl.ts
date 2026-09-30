@@ -237,11 +237,15 @@ function entryLabel(entry: QueueEntry): string {
 	return isBangLine(entry.text) ? "bash" : entry.mode === "followUp" ? "follow-up" : "steer";
 }
 
-/** The three-option confirm picker (M10): approve, approve for the session,
- *  decline. `rememberLabel` (#confirm-prompt Phase 2 D7) names what the session
- *  memory covers, in the extension's own words — the host still owns the memory
- *  itself, keyed by `sessionKey`. */
-function confirmItems(rememberLabel?: string): SelectItemOption[] {
+/** The confirm picker's items: approve, approve-for-the-session, decline.
+ *  The remember entry exists only when a `sessionKey` gives the memory
+ *  something to key on — the fresh fallbacks of #guardian-auto-mode (D13/D16)
+ *  deliberately pass none, and offering "don't ask again" with no memory to
+ *  back it would be a lie. `rememberLabel` (#confirm-prompt Phase 2 D7) names
+ *  what the session memory covers, in the extension's own words — the host
+ *  still owns the memory itself. */
+function confirmItems(rememberLabel: string | undefined, sessionKey: string | undefined): SelectItemOption[] {
+	if (sessionKey === undefined) return [{ label: "Yes" }, { label: "No" }];
 	const stock = "Yes, don't ask again this session";
 	return [
 		{ label: "Yes" },
@@ -306,17 +310,24 @@ export class TtyConfirm {
 			if (previewText !== "") this.renderer.note(`  ${previewText}`);
 		}
 		if (select !== null) {
+			const items = confirmItems(options?.rememberLabel, sessionKey);
 			const choice = await select({
 				title: message,
 				attribution: source,
 				detail,
 				warnSpans: options?.warnSpans,
 				preview: options?.preview,
-				items: confirmItems(options?.rememberLabel),
+				items,
 			});
 			if (choice === null) return false; // cancelled picker declines, like Ctrl+C at the ask
-			if (choice === 1 && sessionKey !== undefined) this.sessionAllowed.add(sessionKey);
-			return choice !== 2;
+			if (sessionKey !== undefined) {
+				if (choice === 1) {
+					this.sessionAllowed.add(sessionKey);
+					return true;
+				}
+				return choice !== 2; // [Yes, remember, No]
+			}
+			return choice === 0; // [Yes, No] — no key, nothing to remember
 		}
 		const ask = this.ask;
 		if (ask === null) {

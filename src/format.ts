@@ -151,6 +151,12 @@ export function green(text: string, ansi = process.stdout.isTTY === true): strin
 	return ansi ? `\x1b[32m${text}\x1b[0m` : text;
 }
 
+/** #confirm-prompt (A2.3): the host's single accent for the provenance name —
+ *  who is asking (the section rule's label). Same shape as the other wrappers. */
+export function yellow(text: string, ansi = process.stdout.isTTY === true): string {
+	return ansi ? `\x1b[33m${text}\x1b[0m` : text;
+}
+
 export function bold(text: string, ansi = process.stdout.isTTY === true): string {
 	return ansi ? `\x1b[1m${text}\x1b[0m` : text;
 }

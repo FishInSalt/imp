@@ -808,8 +808,8 @@ describe("TuiShell selector", () => {
 		expect(titleAt).toBeGreaterThan(0);
 		// exact bytes at width 80 (A2.2 lead-in): `──── guardian ` + 66 dashes
 		expect(lines[titleAt - 1]).toBe(`──── guardian ${"─".repeat(66)}`);
-		// faint dashes around a normal-weight label (D12 split)
-		expect(withTag.terminal.writes.join("")).toContain("\x1b[2m────\x1b[0m guardian ");
+		// faint dashes around a yellow label (D12 split + A2.3 accent)
+		expect(withTag.terminal.writes.join("")).toContain("\x1b[33mguardian\x1b[0m");
 		withTag.shell.close();
 	});
 
@@ -833,6 +833,8 @@ describe("TuiShell selector", () => {
 		expect(ruleAt).toBeGreaterThan(-1);
 		expect(lines[ruleAt]).toContain(" badname ");
 		expect(lines[ruleAt]).not.toContain("\u00b7");
+		// A2.3: the accent wraps the sanitized plain text
+		expect(raw).toContain("\x1b[33mbadname\x1b[0m");
 		expect(raw).not.toContain("\x1b[31m"); // the injected color never reaches the terminal
 		expect(raw).not.toContain("\x1b[1m"); // nor the injected bold
 		shell.close();
@@ -4680,19 +4682,21 @@ describe("D14 — SectionRule render contract", () => {
 		expect(new SectionRule("").render(10)).toEqual([`\x1b[2m${"─".repeat(10)}\x1b[0m`]);
 	});
 
-	it("a labeled rule is four dim dashes, a plain label, then dim dashes", () => {
-		// A2.1 left-anchored, A2.2 nudged right. width 20, label "tui":
-		// LEAD_DASHES(4) + 1 + 3 + 1 + right(11) = 20
+	it("a labeled rule is four dim dashes, a yellow label, then dim dashes", () => {
+		// A2.1 left-anchored, A2.2 nudged right, A2.3 accent. width 20, label
+		// "tui": LEAD_DASHES(4) + 1 + 3 + 1 + right(11) = 20
 		const row = new SectionRule("tui").render(20)[0] ?? "";
-		expect(row).toBe(`\x1b[2m────\x1b[0m tui \x1b[2m${"─".repeat(11)}\x1b[0m`);
+		expect(row).toBe(`\x1b[2m────\x1b[0m \x1b[33mtui\x1b[0m \x1b[2m${"─".repeat(11)}\x1b[0m`);
 	});
 
 	it("a label wider than avail is clipped, and a full row ends after the label", () => {
 		// avail = 20 - 6 = 14: truncateToWidth clips the label to 14 (11 'a' + "...";
-		// its own reset codes ride inside), so right = 0: the row ends after the
-		// label's trailing space, with no closing dashes (A2.1, §16.13 N1).
+		// its own resets ride inside), so right = 0: the row ends after the label's
+		// trailing space, with no closing dashes (A2.1, §16.13 N1). The accent adds
+		// its own closing reset after the clipped label's, hence the doubled
+		// `\x1b[0m` before the trailing space.
 		const row = new SectionRule("a".repeat(60)).render(20)[0] ?? "";
-		expect(row).toBe(`\x1b[2m────\x1b[0m ${"a".repeat(11)}\x1b[0m...\x1b[0m `);
+		expect(row).toBe(`\x1b[2m────\x1b[0m \x1b[33m${"a".repeat(11)}\x1b[0m...\x1b[0m\x1b[0m `);
 		expect(visibleWidth(row)).toBe(20);
 	});
 
@@ -4700,7 +4704,8 @@ describe("D14 — SectionRule render contract", () => {
 		const row = new SectionRule("\x1b[31mred\x1b[1m").render(20)[0] ?? "";
 		expect(row).not.toContain("\x1b[31m");
 		expect(row).not.toContain("\x1b[1m");
-		expect(row).toContain(" red ");
+		// A2.3: the accent wraps the sanitized plain text
+		expect(row).toContain("\x1b[33mred\x1b[0m");
 	});
 
 	it("avail < 2 falls back to plain dashes (width 7 and below)", () => {
@@ -4715,7 +4720,7 @@ describe("D14 — SectionRule render contract", () => {
 		// leaves right = 0, so the row ends after the space.
 		expect(new SectionRule("tui").render(7)).toEqual([`\x1b[2m${"─".repeat(7)}\x1b[0m`]);
 		const clipped = truncateToWidth("tui", 2);
-		expect(new SectionRule("tui").render(8)[0]).toBe(`\x1b[2m────\x1b[0m ${clipped} `);
+		expect(new SectionRule("tui").render(8)[0]).toBe(`\x1b[2m────\x1b[0m \x1b[33m${clipped}\x1b[0m `);
 		expect(visibleWidth(clipped)).toBe(2);
 	});
 

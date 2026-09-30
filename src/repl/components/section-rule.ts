@@ -1,4 +1,4 @@
-import { dim } from "../../format.js";
+import { dim, yellow } from "../../format.js";
 import { type Component, truncateToWidth, visibleWidth } from "../../tui.js";
 import { sanitizeDisplay } from "../tool-presentation.js";
 
@@ -7,9 +7,10 @@ import { sanitizeDisplay } from "../tool-presentation.js";
 const LEAD_DASHES = 4;
 
 /**
- * #confirm-prompt (Phase 4 D14): a full-width horizontal rule that can carry
- * a host-held label — the section boundary between the transcript and a
- * picker box.
+ * #confirm-prompt (Phase 4 D14, A2.1/A2.2/A2.3): a full-width horizontal rule
+ * that can carry a host-held label — the section boundary between the
+ * transcript and a picker box. The label renders in the host's accent
+ * (`yellow`), the dashes stay dim.
  *
  * Same rendering shape as the login dialog's private `DialogBorder`
  * (`login-dialog.ts` "pi's DynamicBorder"), but kept separate: that one is the
@@ -44,9 +45,12 @@ export class SectionRule implements Component {
 		const label = truncateToWidth(sanitized, avail);
 		const right = avail - visibleWidth(label);
 		// A2.1/A2.2: left-anchored, LEAD_DASHES in. `right === 0` is legal: the row
-		// ends after the label's trailing space.
+		// ends after the label's trailing space. A2.3: the name carries the host's
+		// one accent (yellow) — dim dashes, accented label, dim remainder.
 		return [
-			`${dim("─".repeat(LEAD_DASHES), true)} ${label} ${right > 0 ? dim("─".repeat(right), true) : ""}`,
+			`${dim("─".repeat(LEAD_DASHES), true)} ${yellow(label, true)} ${
+				right > 0 ? dim("─".repeat(right), true) : ""
+			}`,
 		];
 	}
 }

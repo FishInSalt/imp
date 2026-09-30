@@ -1,8 +1,8 @@
 # 主循环输出截断处理：目录预算 + 截断工具调用拒绝 + 可见性（#output-truncation）
 
-状态：草稿 —— 第 1 轮独立评审（NEEDS-FIXES：2×P1 / 7×P2 / 3×P3）已全部折叠，
-等待第 2 轮复核。主人决策已签（2026-09-30）：D3 = 直接用模型目录上限；D2/D4 按
-建议；D1 无异议。
+状态：草稿 —— 设计评审第 1 轮（2×P1 / 7×P2 / 3×P3）与第 2 轮（3×P2 / 4×P3）均已
+折叠，等待第 3 轮复核。主人决策已签（2026-09-30）：D3 = 直接用模型目录上限；D2/D4
+按建议；D1 无异议。D3b（子代理同规则）为评审新增，**待主人确认**。
 分支：`fix/output-truncation`（独立 worktree `imp-output-truncation`）；基线 main `b7d8a9d`。
 
 参考（均已读/已核实）：
@@ -31,7 +31,7 @@
 - 截断消息中的工具调用**一律不执行**（参数可能被截断、且可能在合法 JSON 边界上被误判为
   完整）——对齐 pi。
 - 主循环每轮输出上限改为模型目录值（主人决策）：deepseek-flash 由固定 16384 提升到
-  384000，本次事件场景直接消失；同一解析规则覆盖子代理请求路径（D3b）。
+  384000，本次事件场景直接消失；同一解析规则覆盖子代理请求路径（D3b，待主人确认）。
 - 正常路径（未截断的运行）行为零变化；截断路径不引入额外调用（不重试、不注入）。
 
 验收：
@@ -84,8 +84,8 @@
 - **事件形状**与执行路径一致（`tool_start` + `tool_end`，复用 `persistableResult`），保证
   UI 行、扩展 tap（`emitToolEnd`）与正常失败一致；**故意不过 onToolCall gate**（gate 是
   "执行前最后一道"，此路径无执行）。
-- **顺序**：既有 `maxIterations` 检查保持在其前（到达上限时仍返回 `max_iterations`，
-  行为不变）；拒绝分支替换 `executeToolBatch` 的调用位置。
+- **顺序**：既有 `maxIterations` 检查保持在其前（:257；到达上限时仍返回 `max_iterations`，
+  行为不变）；拒绝分支替换 `executeToolBatch` 的调用位置（:270-271）。
 - `_parseError` 兜底保留（防御纵深，两条路径不冲突）。
 - 结果照常 `history.push` + `onMessage` 持久化：tool_use / tool_result 闭合不变，
   会话可恢复性不受影响。
@@ -106,6 +106,9 @@
   ② 脚本化 REPL（管道输入、无 -p）与交互 TUI 走 `runRepl` 的 EOF 路径
   （`handleEof` 的 idle 分支与 `returnToIdle` 的 eofPending 分支），以"最后一次 run
   是否 truncated"决定 `gracefulExit(1 / 0)`；普通运行保持 0。
+  状态语义（评审 P3-N6）：清零只发生在模型 run 入口（`submitTurn`），写只发生在
+  `settleSuccess`；模型 run 之外的 shell（`! cmd`，`runBangCommand`）与失败 settle
+  （`settleFailure`）不改写该状态。
 - `run_end` 事件与扩展载荷**不变**（避免扩展 schema 波纹）；树视图既有 max_tokens
   标记（`tree-selector.ts:81`）保留。
 - 不做逐消息转录横幅（pi 的 `assistant-message.ts:182-186` 形态）——拒绝行 + 停止注记已
@@ -184,21 +187,26 @@
 
 新增（`test/runner.test.ts`，printRunStats 精确字符串用例群旁）：
 5. 显式 `--max-tokens` 优先于目录值；
-5b. 帮助文案与 `DEFAULT_MAX_TOKENS` 同源钉子（`cli.ts:152` 引用常量；帮助字符串含
-   "catalog" 说明）；
 6. 目录值生效（catalog 注入：`setCatalogFetcherForTest` / `IMP_CATALOG_PATH` 夹具；
    `test/model-catalog.test.ts` 已有基建）；
 7. 目录值缺失 → 回退（16384）；
 8. truncated 注记精确字符串（含数字）；
 8b. 子代理预算：目录值非 undefined 时 `launchLoop` 收到 `maxTokens`；目录缺失 → 不传
-   （loop 兜底 8192 回归钉子）；
-8c. 注记数字取"本 run"：flushQueue 连续两 run、第二个 run 换上限后注记显示第二个的
-   值（lastRunMaxTokens 契约）；
+   （loop 兜底 8192 回归钉子）。
 
-新增（print/repl 用例，就近落位现有 `runRepl` 基建）：
-9. print 模式（`bin/imp.js` 级 e2e，参照 `test/cli-max-turns.test.ts` 模式）：`-p` + 强制
-   截断（`--max-tokens 512` 或脚本 provider）→ 退出码 1 + 注记；正常 → 退出码 0
-   （回归钉子）；脚本化 REPL（管道输入）的 EOF 退出同理钉 1/0。
+新增（print/repl 与 CLI e2e 用例，就近落位现有 `runRepl` / `bin/imp.js` 基建）：
+9. 脚本化 REPL（`runRepl` 已导出 + mock provider）：截断的最终 run → EOF 退出码 1 +
+   注记；正常 → 退出码 0（回归钉子）；
+9b. 帮助文案 e2e（`bin/imp.js --help`）：输出含新的默认说明（模型目录上限，未知时
+   16384）——`HELP` 未导出、入口模块底部 `await main()`，e2e 是既有 HELP 断言的唯一
+   路径（评审 P2-N2）；
+9c. 注记数字取"本 run"：脚本化 REPL 连续两个截断 run、第二个换模型/上限后，第二条
+   注记显示第二个 run 的值（`flushQueue` 为 ReplMachine 私有，故落 REPL 层；评审
+   P2-N3）；
+9d. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 1
+   （评审 P3-N6 的语义钉子）。
+print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不导出（入口模块），无
+稳定自动化承载；如需自动化，触发条件见 §5。
 
 手动验收（owner 放行后）：
 10. 实发探针：deepseek-flash 请求 max_tokens=384000 被端点接受；
@@ -214,7 +222,9 @@
   （repeat-loop）部分覆盖——观察触发条件：日志出现连续 ≥3 轮"截断拒绝"（阈值可评审
   调整；子代理随 D3b 预算提升概率进一步下降）。
 - **退出码 1**：既有把 `-p` 非零视为失败的脚本从现在起能正确捕获截断（本意），发布说明
-  需提及。
+  需提及。print 模式的退出码暂无自动化 e2e（`runPrint` 在入口模块内、不可导入测试；
+  由手动验收 11 覆盖）——触发条件：出现回归时，把 `runPrint`/退出码判定抽成可导入
+  helper。
 - **离线首启且无缓存**：目录值缺失 → 回退 16384，截断仍可能发生，但 D1/D2 保证安全与
   可见。
 - **服务端拒绝 384000 的可能性**：探针先行；被拒则按修订流程 cap。
@@ -230,8 +240,8 @@
 | `src/core/subagent.ts` | D3b 传参（~3 行） |
 | `src/core/constants.ts` | +1 常量 |
 | `test/loop.test.ts` | +4 用例（含 gate 0 调用与"续跑不累积"断言） |
-| `test/runner.test.ts` | +6 用例（含 8b/8c） |
-| print/REPL 测试 | +2 用例（含脚本化 REPL EOF 退出码） |
+| `test/runner.test.ts` | +5 用例（含 8b） |
+| print/REPL 与 CLI e2e 测试 | +4 用例（9 / 9b / 9c / 9d） |
 | `docs/output-truncation-design.md` | 本文 |
 
 ## 7. 评审记录
@@ -241,4 +251,7 @@
   错误）、7×P2（catalog 路径、lastRunMaxTokens 契约、repl 触及点与 flushQueue 续跑、
   truncated 最终态语义、续跑钉子、gate 钉子、常量单一出处）、3×P3（行号微偏 ×2、
   isRecoverableLength 语义差异）。全部折叠入本文（D2/D3/D3b/D4 与 §3-§6）。
-- 第 2 轮复核：待进行。
+- 第 2 轮复核（2026-09-30，同一评审子代理续跑；commit 38c67d4）：**NEEDS-FIXES** ——
+  12 项确认全部折叠；新增 3×P2（D3b 状态一致性、5b/8c 落位不可实现、print 退出码
+  自动化缺口）与 4×P3（§6 计数、shell/失败路径状态语义、D1 行号），已折叠（本修订）。
+- 第 3 轮复核：待进行。

@@ -356,6 +356,16 @@ current format (append-only, never fatal — unchanged contract).
 | mode change | `▪ guardian: mode → shadow` / `→ auto` / `→ manual` |
 | breaker tripped | `▪ guardian: 3 non-allows in a row — back to manual` |
 
+**Implementation note (Wave 3, channel correction):** the extension API has no
+transcript-note member (eight-plus-one members, D6), so guardian's own lines
+(rows 3-7) travel through channels that already exist: the **confirm detail**
+(the skip explanations and the `classifier: …` notes — the human sees them in
+the picker and the record), the **command's** `ctx.renderer` notes (`/guardian`
+mode changes, status, reload), and the **footer status + audit log** for the
+breaker (the next confirm's detail carries a one-time “breaker tripped” note).
+No tenth member; D6 intact. The §7 lines above are the drafts those channels
+render, not literal free-standing notes.
+
 The **host** verdict line (row 1-2) carries no mode tag: the host cannot know
 the extension's mode, and a mode the extension could write onto a verdict line
 would be spoofable. The footer (`guardian: auto`) and the mode-change records
@@ -506,8 +516,10 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
 - **Rejected**: extension-chosen models (D2), raw input / big API surface.
 - Config conventions, from the local `permission-gate` v3 extension
   (`/Users/z/Z/pi/permission-gate`, reference only): global file + project file
-  that can only tighten; `PI_PERMISSION_GATE_HOME`-style test isolation (ours:
-  `IMP_GUARDIAN_HOME`).
+  that can only tighten. Test isolation: the implementation keeps guardian's
+  established `HOME`-stubbing pattern instead of adding an `IMP_GUARDIAN_HOME`
+  knob (one fewer environment variable; `test/guardian*.test.ts` already pin
+  it). The project file itself remains Phase B (§9.2).
 
 ## 11. Open questions (for R5/owner acceptance)
 

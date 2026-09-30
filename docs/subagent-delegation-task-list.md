@@ -405,7 +405,7 @@ Recorded 2026-09-30 (owner request); the contract below was confirmed by the own
 
 - Fake-provider child run asserts the request's resolved thinking level: frontmatter wins; absent → the inherited parent level; getter absent → `undefined` (legacy behavior).
 - Resume re-resolves from the current agent file plus the current parent level; the value pinned at spawn does not drift within an attempt.
-- Raw `off` on an `off:null` model lifts to the lowest available level, expressed explicitly (`claude-fable-5` → adaptive effort "low"; `kimi-k2.7-code` → thinking enabled; `gpt-5-pro` family → reasoning_effort "high").
+- Raw `off` on an `off:null` model lifts to the lowest available level, expressed explicitly (`claude-fable-5` → adaptive effort "low"; `kimi-k2.7-code` → thinking enabled; `gpt-5-pro` → reasoning_effort "high"; `gpt-5.2/5.4/5.5-pro` → "medium").
 - Invalid or blank `thinking:` values are rejected at parse time with an error naming the source file/field (file skipped, warning surfaced).
 - Regression: a child with thinking enabled + catalog-budgeted maxTokens completes without the output-limit truncation seen in the `#output-truncation` evidence.
 

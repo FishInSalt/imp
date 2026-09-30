@@ -32,8 +32,8 @@
 
 | 模型类别 | undefined 的线格结果 | 子代理实际行为 |
 | --- | --- | --- |
-| off 允许的已知模型（deepseek-flash、Claude ≥4.6 等） | 显式 disabled（`openai-completions.ts:342-349`；anthropic else-if `:205-209`） | 关思考 |
-| `off:null` 且所属支以 `off !== null` 判断（anthropic else-if、deepseek、openai-effort、codex 支；例：claude-fable-5、kimi-k2.7-code、gpt-5-pro 系列、codex `gpt-6-astra`） | 不写字段（codex 支见 `codex-responses.ts:201-204`） | 模型默认（通常照常推理） |
+| off 允许的已知模型（deepseek-flash、off 允许的 Claude ≥4.6 等） | 显式 disabled（`openai-completions.ts:342-349`；anthropic else-if `:205-209`） | 关思考 |
+| `off:null` 且所属支对 off 有守卫（anthropic else-if、deepseek、codex 支：`off !== null`；openai-effort 支：`typeof off === "string"`；例：claude-fable-5、kimi-k2.7-code、gpt-5-pro 系列、codex `gpt-6-astra`） | 不写字段（codex 支见 `codex-responses.ts:201-204`） | 模型默认（通常照常推理） |
 | `off:null`，**glm-openai 支（GLM 5.3）** | 该支**没有** `off !== null` 守卫（`openai-completions.ts:328-335`）→ 显式 disabled | 关思考（"显式 disabled 但模型实际关不掉"的既有形状；本批后的行为变化见 D2） |
 | 未知模型（meta `null`） | 不写字段 | 模型默认 |
 | `auto` 风格（`openai/deepseek-r`，`thinking.ts:241`） | 无支命中 → 不写字段 | 模型默认（本无旋钮） |
@@ -57,7 +57,7 @@ agent frontmatter thinking: <level>   → 用它
 
 - 只有这两个来源；**无 settings 层**。论证：pi-subagents 的 `defaultThinking`/`agentOverrides`/`maxThinking` 服务于"随包发布、用户不可编辑的内建 agent"；imp 的 registry 从第一天起全归用户所有（registry 头注释 "No builtin agents"），每个 agent 文件都可直接改，全局默认层与天花板解决的"改不了文件"问题不存在，少一层也少一个"没写时用哪个"的歧义。
 - 语义自洽：子代理是会话的延伸（父级 off → 子级 off；父级 max → 子级 max——**owner 已知情并接受**"没写 frontmatter 的 agent 全部继承 max"的成本后果）。
-- 档位经 provider 的 clamp 落到子模型可表达的最近档位（见 D2 表；解析层不做 clamp，与主会话一致）。
+- 档位经 provider 的 clamp 落到子模型可表达的最近档位（见 D2 表；解析层不做 clamp，与主会话一致）。注意继承值是**父模型 clamp 之后**的档位：父级在某模型上被钳过的值会原样播给子代理，再在子模型上钳一次（如父级 `gpt-5-pro` 把 low 钳成 high，子代理继承到的是 high）。
 
 ### D2 显式化：解析结果如实进请求
 
@@ -67,7 +67,7 @@ agent frontmatter thinking: <level>   → 用它
 | 模型类别 | 子=`off` 时 | 与现状差异 |
 | --- | --- | --- |
 | off 允许的已知模型 | 显式 disabled | 无（与今天回落一致） |
-| `off:null`，deepseek / openai-effort / codex / anthropic-else-if 支 | clamp 到**最低可用档**并显式表达（claude-fable-5：off→minimal，adaptive 映射为 effort "low"；kimi-k2.7-code：off→minimal→thinking enabled；gpt-5-pro 系列：off→high；codex `gpt-6-astra`：off→low→effort "low"） | **有**：今天不写字段=模型默认；现在是最低档显式 |
+| `off:null`，deepseek / openai-effort / codex / anthropic-else-if 支 | clamp 到**最低可用档**并显式表达（claude-fable-5：off→minimal，adaptive effort "low"；kimi-k2.7-code：off→minimal→thinking enabled；`gpt-5-pro`：off→high；`gpt-5.2/5.4/5.5-pro`：off→medium；codex `gpt-6-astra`：off→low→effort "low"；openai `gpt-6`：off→minimal→effort "low"） | **有**：今天不写字段=模型默认；现在是最低档显式 |
 | `off:null`，glm-openai 支（GLM 5.3） | clamp 上移 → low → enabled + effort "low" | **有**：今天是"显式 disabled 但模型实际关不掉"，现在是该模型真实的最低档 |
 | 未知模型（meta `null`）与 `auto` 风格（无旋钮） | clamp 后仍无表达式 → 不写字段 | 无 |
 
@@ -127,7 +127,7 @@ agent frontmatter thinking: <level>   → 用它
 | 每轮请求带档位；溢出重试第二轮同值；未提供→回归 | `test/subagent.test.ts` | sink 捕 `LLMRequest.thinking` + catalog `maxTokens` 组合断言（D3b 回归） |
 | resume 用当前文件 + 当前父级（两变量各测） | `test/child-resume.test.ts` | 同 sink 断言 |
 | 摘要器档位（`off` 与非 off，`off:null` 模型） | `test/child-compaction.test.ts` | 摘要器请求的 `thinking` |
-| raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled）、`test/openai-completions.test.ts`（gpt-5-pro→effort "high"）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"） | 线格 body |
+| raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled，`:283-285` 已有）、`test/openai-completions.test.ts`（`gpt-5-pro`→effort "high"；`gpt-5.2-pro`→effort "medium"——两 id 各钉）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"） | 线格 body |
 | GLM 5.3：off→low enabled；undefined→disabled（定格既有形状） | `test/zai.test.ts`（`:105-106` 已有 off→low，补 undefined 定格） | 线格 body |
 | 非法/空白 frontmatter → 解析期跳过 + 警告；大小写归一 | `test/agents-registry.test.ts` | `parseAgentFile` 返回值 / `loadAgentDefinitions.warnings` |
 | 回归：全量套件 | — | 基线以开工时 main 为准（不复用旧测试数） |
@@ -148,3 +148,4 @@ agent frontmatter thinking: <level>   → 用它
 ## 7. 评审记录
 
 - 评审轮 1（2026-09-30，独立全新上下文）：11 项发现，全部折入本稿。7 项 P2——GLM 5.3（`off:null` 而 glm-openai 支无守卫）归类错误且行为变化未记；openai-codex 家族未进表；D4 空白值在 `registry.ts:138` 下不可实现且与 C6 表述自相矛盾；D3 fresh 位置自相矛盾（`task.ts:802-805` 在 await 之后，不构成钉住）；resume 公式误用 `agent?.thinking`（resume 分支该实参必被拒绝）；D5 在 `off:null` 上的论证不实、不可降档形状未记；测试计划未逐条钉住 5 项验收。4 项 P3——`auto`/无旋钮表述过度；6 处行号引用修正；resume 档位变化无披露面；384000 目录来源未注明。评审对 GLM 5.3 与 codex 的事实主张经本人复核属实（codex 条目在目录缓存 `openai-codex/gpt-6-astra` 等）。待评审轮 2。
+- 评审轮 2（2026-09-30，独立全新上下文）：复核轮 1 的 11 项折叠**全部通过**；新发现 1 项 P2（`gpt-5.2/5.4/5.5-pro` 的 off 落点是 medium 非 high——代码复核属实，已改 D2 表与 §4 两处）、3 项 P3（openai-effort 的 off 守卫是 `typeof off === "string"`；§1.2 行 1 的 "Claude ≥4.6" 需排除 fable-5；kimi 的 lift 用例 `moonshotai.test.ts:283-285` 已存在——已标注）与 2 项备注（继承值=父级钳后值，已补 D1；`gpt-6` 示例已补 D2）。轮 2 结论：**CONFIRMED（含 finding 1 待折）**；上列全部已折入，待轮 3 快验关闭。

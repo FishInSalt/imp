@@ -805,3 +805,7 @@ of 0 → the in-quote-match pin red.
   documented as an accepted over-trigger for quoted literals
   (`echo "a<<b"`); §13.4 notes the non-`<<` heredoc-likes (`| sh`, `source`)
   it does not model. **Review closed (rev 2.1).**
+- **Implemented** (2026-09-30): pins 28–30 (the decorated command
+  classifies; the marker appears only on honest flags; eleven conservative
+  cases stay manual-only), mutations caught (naive split, first-match-only,
+  no-heredoc-fallback, expansion-tier-ignored), full gates 2635 green.

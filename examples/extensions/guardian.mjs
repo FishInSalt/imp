@@ -224,6 +224,7 @@ export default function (api) {
 		matched: 0, // matched ask-tier commands seen this session
 		manualOnlyTargets: 0, // §5.5 detector: unresolvable target
 		manualOnlyContext: 0, // D17: no verified user context
+		relaxedPatterns: 0, // §13: the old whole-command detector would have skipped; the refined one did not
 		classify: 0,
 		allow: 0,
 		ask: 0,
@@ -232,11 +233,82 @@ export default function (api) {
 		allowHumanDenied: 0,
 	};
 
-	/** §5.5: a matched command whose affected target cannot be statically
-	 *  resolved is manual-only in auto — the gate cannot know what it would
-	 *  affect (the reviewer's `target="$HOME/.ssh"; rm -rf "$target"` case).
-	 *  Conservative over the whole command; over-triggering only asks more. */
-	const UNRESOLVABLE = /[$`]|\$\(|<(?=\()|>\(|[*?[\]{}]/;
+	/** §5.5 as amended by §13 (design rev 2.1): a matched command whose
+	 *  affected target cannot be statically resolved is manual-only in auto.
+	 *  Two tiers: the EXPANSION tier keeps the whole command manual-only —
+	 *  `$`, backticks, `$(`, `<(`, `>(` make the effect invisible wherever
+	 *  they sit; the PATTERN tier (`* ? [ ] { }`) narrows to the matched
+	 *  invocation's own region, because patterns past its segment cannot
+	 *  change its targets (and the classifier still reads them). Every
+	 *  fallback widens back to the whole command — over-triggering only
+	 *  asks more. */
+	const EXPANSION = /[$`]|\$\(|<(?=\()|>\(/;
+	const PATTERNS = /[*?[\]{}]/;
+
+	/** Per-index "inside a quoted region" map, walked from 0 (R1: a rule match
+	 *  can sit inside quotes, so the state must never be assumed at a match
+	 *  offset). Backslash-escaped characters are marked inside: they are never
+	 *  control operators. */
+	const quotedRegions = (command) => {
+		const inQuote = new Array(command.length + 1).fill(false);
+		let quote = null;
+		for (let i = 0; i < command.length; i++) {
+			const c = command[i];
+			inQuote[i] = quote !== null;
+			if (c === "\\" && quote !== "'") {
+				if (i + 1 < inQuote.length) inQuote[i + 1] = true;
+				i += 1;
+				continue;
+			}
+			if (quote === "'") {
+				if (c === "'") quote = null;
+			} else if (quote === '"') {
+				if (c === '"') quote = null;
+			} else if (c === "'" || c === '"') {
+				quote = c;
+			}
+		}
+		inQuote[command.length] = quote !== null;
+		return { inQuote, unterminated: quote !== null };
+	};
+
+	/** §13.2 segmentEnd: the first index at/after `from` that is outside
+	 *  quotes and carries a control operator — or the end of the command. */
+	const segmentEnd = (command, from, inQuote) => {
+		for (let j = Math.max(0, from); j < command.length; j++) {
+			if (inQuote[j]) continue;
+			const c = command[j];
+			if (c === ";" || c === "&" || c === "|" || c === "\n") return j;
+		}
+		return command.length;
+	};
+
+	/** §13.2: the region the PATTERN tier scans. The WHOLE command on every
+	 *  conservative fallback (`region == command` then reads exactly like the
+	 *  pre-§13 detector): `<<` heredocs/here-strings, a rule match starting
+	 *  inside quotes, an unterminated quote, the split-flag path. */
+	const unresolvableRegion = (command, splitFlagPath) => {
+		if (splitFlagPath || command.includes("<<")) return command;
+		const { inQuote, unterminated } = quotedRegions(command);
+		if (unterminated) return command;
+		let maxEnd = -1;
+		let matchInQuote = false;
+		for (const rule of rules) {
+			const flags = rule.test.flags.includes("g") ? rule.test.flags : `${rule.test.flags}g`;
+			const re = new RegExp(rule.test.source, flags);
+			for (let m = re.exec(command); m !== null; m = re.exec(command)) {
+				if (m[0] === "") {
+					re.lastIndex += 1; // zero-width safety
+					continue;
+				}
+				if (inQuote[m.index]) matchInQuote = true;
+				const end = segmentEnd(command, m.index + m[0].length, inQuote);
+				if (end > maxEnd) maxEnd = end;
+			}
+		}
+		if (matchInQuote || maxEnd < 0) return command;
+		return command.slice(0, maxEnd);
+	};
 
 	const setModeStatus = () => {
 		// Draft §7: the footer carries the mode only when it is not manual.
@@ -275,7 +347,7 @@ export default function (api) {
 			`command:\n${command}`,
 			// Shadow still classifies manual-only cases (D14/D16, data only):
 			// the markers tell the model what the gate could not establish.
-			flags.unresolvable ? "note: the target cannot be statically resolved (shell expansion or glob) — prefer ask" : "",
+			flags.unresolvable ? "note: the command contains shell expansion or glob syntax — prefer ask" : "",
 			flags.noContext ? "note: no verified user context is attached — prefer ask" : "",
 		]
 			.filter((line) => line !== "")
@@ -318,7 +390,7 @@ export default function (api) {
 				note(
 					`▪ guardian: mode ${mode}${breakerTripped ? " (breaker tripped — back to manual)" : ""} — ` +
 						`model ${config.model ?? "session default"} — config ${configFile} — matched ${counters.matched}, ` +
-						`manual-only ${pct(manualOnly, counters.matched)} (targets ${counters.manualOnlyTargets}, no-context ${counters.manualOnlyContext}), ` +
+						`manual-only ${pct(manualOnly, counters.matched)} (targets ${counters.manualOnlyTargets}, no-context ${counters.manualOnlyContext}, relaxed ${counters.relaxedPatterns}), ` +
 						`classify ${counters.classify} (allow ${counters.allow}, ask ${counters.ask}, unavailable ${counters.unavailable}), ` +
 						`ask-rate ${pct(counters.ask, counters.classify)}, ` +
 						`allow→human approved ${counters.allowHumanApproved}, denied ${counters.allowHumanDenied}`,
@@ -408,7 +480,12 @@ export default function (api) {
 				// (or whose call carries no verified user context, D17) is NEVER
 				// classified; shadow classifies anyway for observation (D14/D16).
 				const noContext = event.verifiedUserContext !== true;
-				const unresolvable = UNRESOLVABLE.test(command);
+				// §13 (rev 2.1): expansion anywhere; patterns only up to the
+				// matched invocation's region (fallbacks hand back the whole
+				// command, reading exactly like the pre-§13 detector).
+				const region = unresolvableRegion(command, matched.match === undefined);
+				const unresolvable = EXPANSION.test(command) || PATTERNS.test(region);
+				if (PATTERNS.test(command) && !PATTERNS.test(region)) counters.relaxedPatterns += 1;
 				let verdict;
 				if (mode === "shadow" || (!noContext && !unresolvable)) {
 					verdict = await api.classify({
@@ -460,8 +537,8 @@ export default function (api) {
 				}
 				if (unresolvable && verdict === undefined) {
 					counters.manualOnlyTargets += 1;
-					audit(`[auto] not classified (target not statically resolvable) — ${firstLine(command)}`);
-					const approved = await askFresh(`not classified: target not statically resolvable${breakerNote}`);
+					audit(`[auto] not classified (shell expansion or glob syntax) — ${firstLine(command)}`);
+					const approved = await askFresh(`not classified: the command contains shell expansion or glob syntax${breakerNote}`);
 					if (approved) return undefined;
 					return { block: true, reason: effective.reason };
 				}

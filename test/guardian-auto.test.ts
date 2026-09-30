@@ -224,7 +224,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(decision).toMatchObject({ block: true }); // confirm false
 		expect(h.classify).not.toHaveBeenCalled();
 		expect(String(h.confirm.mock.calls[0]?.[1])).toContain(
-			"not classified: target not statically resolvable",
+			"not classified: the command contains shell expansion or glob syntax",
 		);
 
 		const shadow = await loadGuardian("/proj");
@@ -232,7 +232,9 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		shadow.classifyImpl.fn = async () => verdict("allow", "x");
 		await shadow.gate({ args: { command: 'target="$HOME/.ssh"; rm -rf "$target"' } });
 		expect(shadow.classify).toHaveBeenCalledTimes(1);
-		expect(String(shadow.classify.mock.calls[0]?.[0].prompt)).toContain("cannot be statically resolved");
+		expect(String(shadow.classify.mock.calls[0]?.[0].prompt)).toContain(
+			"the command contains shell expansion or glob syntax — prefer ask",
+		);
 	});
 
 	it("23: shadow's evaluation confirm is fresh too (no sessionKey/rememberLabel)", async () => {
@@ -257,7 +259,61 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(line).toContain("allow→human approved 1, denied 1");
 		expect(line).toContain("classify 2 (allow 2, ask 0, unavailable 0)");
 		expect(line).toContain("config "); // the config path is reported
-		expect(line).toContain("manual-only 0% (targets 0, no-context 0)");
+		expect(line).toContain("manual-only 0% (targets 0, no-context 0, relaxed 0)");
+	});
+
+	// §13 (rev 2.1): the detector refinement — patterns past the matched
+	// invocation no longer defeat auto; every conservative case stays so.
+	it("28: §13 — a decorated command is classified when only its suffix carries metacharacters", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "scratch dir matches");
+		const decorated =
+			"rm -rf -- /tmp/imp-verify && { [ -e /tmp/imp-verify ] && echo 'STILL EXISTS' || echo 'removed: /tmp/imp-verify'; }";
+		expect(await h.gate({ args: { command: decorated } })).toBeUndefined(); // ran unprompted
+		expect(h.classify).toHaveBeenCalledTimes(1);
+		expect(h.confirm).not.toHaveBeenCalled();
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("relaxed 1");
+	});
+
+	it("29: §13 — the prefer-ask marker appears only when the detector really flags", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian shadow");
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		// the glob belongs to `ls`, not to the delete — classified without marker
+		await h.gate({ args: { command: "rm -rf /tmp/x && ls /tmp/*.log" } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+		expect(String(h.classify.mock.calls[0]?.[0].prompt)).not.toContain("prefer ask");
+		// an honest case still carries it
+		await h.gate({ args: { command: "rm -rf /tmp/*.log" } });
+		expect(String(h.classify.mock.calls[1]?.[0].prompt)).toContain("prefer ask");
+	});
+
+	it("30: §13 — the conservative cases stay manual-only (quote-aware walk, fallbacks)", async () => {
+		const cases = [
+			"rm -rf /tmp/*.log", // glob inside the region
+			"rm -rf '/tmp/a;b' /tmp/*.log", // a naive [;&|] split ends inside the quotes
+			"rm -rf /tmp/*.log '/tmp/a;b'", // both argument orders
+			'rm -rf "/tmp/x && ls *', // unterminated quote → fallback
+			"rm -rf /tmp/x; rm -rf /tmp/[ab]*", // the LAST match drives the span
+			"[ -e /tmp/x ] && rm -rf /tmp/x", // patterns before the match stay in-region
+			"rm -rf /tmp/dir* && { [ -e /tmp/dir ]; }", // decorated, but the target is a glob
+			"rm -rf /tmp/x && cat <<EOF\nls /tmp/[ab]*\nEOF", // heredoc body, patterns only — the << fallback
+			"rm -rf /tmp/x && cat <<EOF\nrm -rf /tmp/*.log\nEOF", // the body match also lands in-region
+			'echo "rm -rf x" && ls /tmp/[ab]*', // a match inside quotes → fallback
+			"rm -r -f /tmp/[ab]*", // split-flag path → whole command
+			'rm -rf /tmp/x && echo "$(date)"', // expansion tier, whole command
+		];
+		for (const command of cases) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			const decision = await h.gate({ args: { command } });
+			expect(h.classify, command).not.toHaveBeenCalled();
+			expect(decision, command).toMatchObject({ block: true }); // confirm false
+			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
 	});
 
 	it("25: auto without verified context never classifies and asks fresh", async () => {

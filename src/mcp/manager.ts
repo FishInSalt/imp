@@ -21,6 +21,7 @@ import type { Renderer } from "../render.js";
 import { bridgeTool, mapCallResult } from "./bridge.js";
 import { McpClient, McpConnectionError, TOOLS_LIST_PAGE_CAP } from "./client.js";
 import type { McpServerConfig } from "./config.js";
+import { StdioTransport } from "./stdio-transport.js";
 
 /** Run-boundary retry budget for startup-failed servers. */
 const STARTUP_RETRY_CAP = 3;
@@ -184,16 +185,20 @@ export class McpManager {
 		state.status = "connecting";
 		state.error = null;
 		state.lastAttemptAt = Date.now();
-		const client = new McpClient({
-			name: state.config.name,
-			command: state.config.command,
-			args: state.config.args,
-			env: state.config.env,
-			cwd: state.config.cwd ?? this.options.cwd,
-			clientVersion: this.options.version,
-			connectTimeoutMs: this.options.connectTimeoutMs,
-			callTimeoutMs: this.options.callTimeoutMs,
-		});
+		const client = new McpClient(
+			new StdioTransport({
+				command: state.config.command,
+				args: state.config.args,
+				env: state.config.env,
+				cwd: state.config.cwd ?? this.options.cwd,
+			}),
+			{
+				name: state.config.name,
+				clientVersion: this.options.version,
+				connectTimeoutMs: this.options.connectTimeoutMs,
+				callTimeoutMs: this.options.callTimeoutMs,
+			},
+		);
 		client.onDead = (reason) => this.markDead(state, reason);
 		state.client = client;
 		try {

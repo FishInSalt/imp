@@ -1,6 +1,6 @@
 # 子代理思考策略：frontmatter 档位 + 继承父会话 + 显式化（SA-09 设计，draft）
 
-状态：**draft，待独立对抗评审**（本文件通过评审前不得进入实现）。
+状态：**已过独立对抗评审（3 轮，2026-09-30 CLOSED — CONFIRMED）**——实现已解锁。
 日期：2026-09-30。分支：`feat/subagent-thinking`。前置：SA-02（子模型绑定，已合入）、#output-truncation D3b（子请求预算=目录值，已合入 `df4becb`）。
 
 ## 0. 目标与非目标
@@ -149,3 +149,4 @@ agent frontmatter thinking: <level>   → 用它
 
 - 评审轮 1（2026-09-30，独立全新上下文）：11 项发现，全部折入本稿。7 项 P2——GLM 5.3（`off:null` 而 glm-openai 支无守卫）归类错误且行为变化未记；openai-codex 家族未进表；D4 空白值在 `registry.ts:138` 下不可实现且与 C6 表述自相矛盾；D3 fresh 位置自相矛盾（`task.ts:802-805` 在 await 之后，不构成钉住）；resume 公式误用 `agent?.thinking`（resume 分支该实参必被拒绝）；D5 在 `off:null` 上的论证不实、不可降档形状未记；测试计划未逐条钉住 5 项验收。4 项 P3——`auto`/无旋钮表述过度；6 处行号引用修正；resume 档位变化无披露面；384000 目录来源未注明。评审对 GLM 5.3 与 codex 的事实主张经本人复核属实（codex 条目在目录缓存 `openai-codex/gpt-6-astra` 等）。待评审轮 2。
 - 评审轮 2（2026-09-30，独立全新上下文）：复核轮 1 的 11 项折叠**全部通过**；新发现 1 项 P2（`gpt-5.2/5.4/5.5-pro` 的 off 落点是 medium 非 high——代码复核属实，已改 D2 表与 §4 两处）、3 项 P3（openai-effort 的 off 守卫是 `typeof off === "string"`；§1.2 行 1 的 "Claude ≥4.6" 需排除 fable-5；kimi 的 lift 用例 `moonshotai.test.ts:283-285` 已存在——已标注）与 2 项备注（继承值=父级钳后值，已补 D1；`gpt-6` 示例已补 D2）。轮 2 结论：**CONFIRMED（含 finding 1 待折）**；上列全部已折入，待轮 3 快验关闭。
+- 评审轮 3（2026-09-30，轮 2 评审员快验）：三处 `gpt-5.x-pro` 更正与 `thinking.ts:263-291` 一致；P3 清扫（守卫措辞/fable-5 排除/已有用例标注）与 D1/D2 补充均准确 → **CLOSED — CONFIRMED**。残留 P3 两条不改：§1.2 行 1 未内联标注 fable-5 排除（行 2 已含）；§1.2 行 2 例表保留 "gpt-5-pro 系列" 简写（无害）。

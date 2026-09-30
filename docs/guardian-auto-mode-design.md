@@ -1,8 +1,9 @@
 # guardian auto mode — classifier-assisted approval (design)
 
-Status: **rev 2 — REVISED, awaiting verification review (R5).** Folds the
-owner's second-opinion review (R4: three substantive findings + a validation
-gap, §12). Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
+Status: **rev 3 — REVISED, awaiting verification review (R8).** Folds the
+owner's second-opinion review round 2 (R7: provenance is not a message role;
+the snapshot must bind to the call; shadow cache hits are not human judgments —
+§12). Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
 
 The owner experienced Claude Code's auto-approval and asked for the same shape
 in imp: *let a model judge first, hand only the suspicious calls to the human*
@@ -19,12 +20,14 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D5 | User-defined filter rules (Claude Code's allowlist analog) are **Phase B**, layered *below* the classifier; Phase A ships modes + classifier + minimal config. |
 | D6 | Exactly **one new host seam member** (`api.classify`). Policy stays with the extension; model resolution, auth, accounting (deferred in Phase A — §11.5), timeouts and the audit record stay with the host. |
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
-| D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13). Shadow and manual are not fallbacks — they keep today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
+| D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
 | D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
-| D11 | **Positioning (R4 #1)**: task-aware with **host-supplied trusted context** — the emitting run's most recent **user-role** messages (≤3, capped, host-delimited). Never assistant text: a claim of authorization by the executing model is not evidence. The classifier may allow only when safety *and* fit with the stated intent are clear from the given evidence; otherwise ask. |
+| D11 | **Positioning (R4 #1, amended by R7 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**, appended only at the human input boundary (the runner's `runTurn` entry and the steering/follow-up queues), never derived from message roles. A model summary, a parent agent's task prompt, or any other model-authored text stored as `role: "user"` is **not** authorization evidence (imp stores summaries and delegation prompts that way: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify at all (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** |
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
-| D13 | **Fresh fallback (R4 #3)**: in auto mode, `ask` and unavailable fallbacks must perform a *fresh* confirmation — the fallback `confirm` carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. The manual path keeps today's session memory. |
+| D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
+| D15 | **Per-call association (R7 #2)**: the host freezes the evidence snapshot **at the tool-gate entry** and carries it to the seam through a **call-scoped** mechanism (AsyncLocalStorage around the registry dispatch — no shared mutable “current run” state). The chain is `run → tool call → handler → classify`, one snapshot per call; two children with the same agent+cwd cannot cross-contaminate. No association (e.g. a handler calls `classify` outside its dispatch) ⇒ `undefined` ⇒ fresh confirm. |
+| D16 | **Shadow measurement integrity (R7 #3)**: shadow's counters distinguish `allow + human approved`, `allow + human denied`, and the ask-rate; cache hits cannot pollute samples (fresh confirm by construction). Honest limitation: the current `confirm` contract returns a bare boolean, so a cancel is indistinguishable from a denial and counts as `humanDenied` (conservative). |
 | D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. |
 
 ## 1. Context
@@ -39,9 +42,10 @@ The goal is to insert a model judgment *between* the rule match and the human:
 ```
 floor hit ────────────────────────────────► block (never classified)
 matched + manual ─────────────────────────► confirm (today, unchanged)
-matched + shadow  ─► classify ────────────► record the verdict, then confirm
-                                             (today's path, session memory kept)
+matched + shadow  ─► classify ────────────► record the verdict, then **fresh** confirm
+                                             (D16: samples are real human judgments)
 matched + auto:
+  no verified user context (D11) ─────────► fresh confirm (never classified)
   target unresolvable (§5.5) ─────────────► fresh confirm (never classified)
   else ─► classify ─ allow ───────────────► run (recorded)
                       ask ────────────────► fresh confirm, reason attached
@@ -62,9 +66,9 @@ The existing three-way split still governs:
 
 - **Invariants → host**: credentials, provider auth, accounting *when it lands*
   (Phase A defers it — §11.5), timeouts, output-contract enforcement,
-  sanitization, the audit record, the **trusted-context block** (host-extracted,
-  §4.2 — the extension can neither see nor alter it), and whether the seam
-  exists at all on a given surface (D8).
+  sanitization, the audit record, the **provenance-verified user-input log and
+  the per-call snapshot** (host-extracted; the extension can neither see nor
+  alter them), and whether the seam exists at all on a given surface (D8).
 - **Policy → extension**: which calls get classified, the policy framing, what
   each verdict means, the mode state, the manual-only class, the breaker.
 - **Rendering → host**: record lines go through the existing `▪` note channel
@@ -129,7 +133,8 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11) | the emitting run's **most recent user-role messages** (≤3, ~2000 chars total), wrapped in host delimiters and labeled as *data, not instructions*; **assistant/tool/result text is never included** (a model's own claim of authorization is not evidence); none available (e.g. a child run with no transcript access) ⇒ an explicit `no user context available` marker | host-side extraction; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): text appended only at the **human input boundary** — the runner's `runTurn` entry (`runner.ts:295,1255`; called by `repl.ts:685` and print's `cli.ts:1050`) and the steering/follow-up queues (`RunTurnOptions.getSteeringMessages`). Never derived from message roles: branch/compaction summaries and child task prompts are stored as `role: "user"` (`store.ts:973-988`, `task.ts:621`) and are **not** evidence. Child calls inherit the same session log. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ no verified context | host-owned log; the extension cannot forge or alter it |
+| Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
 | Timeout | host `AbortController` + wall-clock constant (draft: 10 s). Abort plumbing exists (`LLMRequest.signal`, `src/provider/types.ts:32`; honored in `anthropic.ts:220,248`). Test fakes must resolve/reject on `signal.abort`, mirroring `abortSafe` (`src/provider/shared.ts:31-35`) | |
@@ -155,11 +160,11 @@ shells**:
   real `[y/N]` prompt (`repl.ts:319`), so by I3 it must serve the seam. The
   classify handler is created beside the confirm host in the repl layer
   (which is also where `sanitizeDisplay` lives, `tool-presentation.ts:14` — no
-  module move). Like `TtyConfirm`, it is **bound after startup** to a context
-  provider (the live session's message store) because the trusted-context block
-  (D11) needs the emitting run's user messages. The classifier itself prompts
-  nobody: only the *fallback* differs between TUI (picker) and legacy ([y/N]);
-  records go through `renderer.note` on both.
+  module move). It needs no session-shaped binding: the evidence arrives
+  through the **call-scoped snapshot** the runner attaches to each dispatch
+  (D15), and the user-input log lives with the runner. The classifier itself
+  prompts nobody: only the *fallback* differs between TUI (picker) and legacy
+  ([y/N]); records go through `renderer.note` on both.
 - **Non-interactive — print mode (`cli.ts:1005`) and test harnesses.** Nothing
   is passed; `api.classify` returns `undefined` without touching the network —
   auto/shadow degrade to today's behavior exactly (classify unavailable →
@@ -212,7 +217,7 @@ Phase A reads one file, **global only**: `~/.imp/guardian.json`.
 - `auto.model` — provider/model reference for classify calls; absent ⇒ session
   model. Invalid values ⇒ session model + one diagnostic line at load.
   **Privacy note in the config docs**: pointing this at another provider sends
-  that provider the command and the trusted-context block (D11).
+  that provider the command and the provenance-verified user context (D11).
 - Read at extension load and by `/guardian reload`.
 - Tolerance follows guardian's standing philosophy: unreadable/invalid JSON ⇒
   defaults + one diagnostic, never fatal, the gate stands.
@@ -227,7 +232,7 @@ Phase A reads one file, **global only**: `~/.imp/guardian.json`.
 |---|---|
 | `/guardian` | cycle manual → shadow → auto → manual (three states now) |
 | `/guardian manual` / `shadow` / `auto` | set the mode |
-| `/guardian status` | mode, model (resolved), breaker state, config path, **session counters**: classify calls, allow/ask/unavailable, times the classifier's would-be verdict matched the human's answer (shadow) |
+| `/guardian status` | mode, model (resolved), breaker state, config path, **session counters (D16)**: classify calls, allow/ask/unavailable, `allow + human approved`, `allow + human denied`, ask-rate |
 | `/guardian reload` | re-read the config file, report what changed |
 
 Registered via `api.registerCommand` (`src/repl/commands.ts:129-137`). Allowed
@@ -242,9 +247,10 @@ Inside the existing **bash** ask tier (`guardian.mjs:225`). The write/edit tier
 ```
 if (mode === "manual")            → confirm with today's options (sessionKey kept)
 if (mode === "shadow"):
-  verdict = await api.classify(...)        // record only; counters updated
-  → confirm with today's options (sessionKey kept) — the human decides
+  verdict = await api.classify(...)        // record only; counters updated (D16)
+  → **fresh confirm** — the human decides, and the sample is a real judgment
 if (mode === "auto"):
+  if (no verified user context)  → fresh confirm (D11; never classified)
   if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; breaker counts)
   verdict = await api.classify({ system, prompt, model: config.model })
   undefined → fresh confirm(detail + "\nclassifier unavailable")   [breaker counts]
@@ -254,15 +260,17 @@ if (mode === "auto"):
 
 **Fresh confirm** means: `api.confirm(message, detail)` **without
 `sessionKey`/`rememberLabel`** — the host has nothing cached for that call, so
-it always asks (D13). The manual and shadow paths keep today's options exactly.
+it always asks (D13). Only the manual path keeps today's options.
 
 The hard-floor branch (`guardian.mjs:192-193` bash; `:241-242` write/edit) is
 untouched and never reaches this code.
 
 ### 5.5 Manual-only operations — never classified (D12)
 
-A matched command whose affected target cannot be **statically resolved** goes
-straight to a fresh human confirmation, in shadow and auto alike. Conservative
+A matched command whose affected target cannot be **statically resolved** never
+feeds an auto-allow decision: in auto it goes straight to a fresh human
+confirmation (never classified); in shadow it is still classified and recorded
+for observation (data only, with a marker in the prompt). Conservative
 syntactic detector over the matched command text: shell expansion (`$`,
 backticks, `$(`, `<(`/`>(`) or glob metacharacters (`* ? [ ] { }`) in
 target/argument positions. Motivation (R4): the floor's own analysis cannot
@@ -286,8 +294,9 @@ In `prompt` (extension-authored):
 3. the matched rule's teaching reason (guardian already holds it);
 4. the candidate command, verbatim.
 
-In `system`: the extension's policy framing, **plus** the host's trusted-context
-block (D11) and the output contract — none of which the extension writes.
+In `system`: the extension's policy framing, **plus** the host's
+provenance-verified context block (D11) and the output contract — none of which
+the extension writes.
 
 Policy framing says: what guardian is; that a human is always available as the
 fallback; that `ask` is the safe answer under uncertainty; that the floor and
@@ -296,7 +305,8 @@ stated intent (the context block) is the authorization evidence, not the
 command's apparent usefulness.
 
 **Withheld**: the conversation transcript (beyond the host's D11 block), file
-contents, the audit log, and other tool calls.
+contents, the audit log, other tool calls, and **every model-authored message
+regardless of its stored role** (summaries, delegation prompts, tool results).
 
 ### 5.7 Circuit breaker (D10)
 
@@ -315,24 +325,27 @@ current format (append-only, never fatal — unchanged contract).
 
 | # | Invariant | Why |
 |---|---|---|
-| I1 | The floor branch **precedes** the classifier branch and returns before any classify call can happen (`guardian.mjs:192-193` bash; `:241-242` write/edit) — pinned by test 13. | Code shape is the only guard against re-ordering. |
-| I2 | Any classifier failure **or an `ask` verdict** ⇒ a **fresh** human confirmation: the auto-mode fallback carries no `sessionKey`, so remembered approvals cannot bypass it (D13, pinned by test 23). | “Hand it to the human” must mean *this time*, not “whatever the cache says”. |
+| I1 | The floor branch **precedes** the classifier branch and returns before any classify call can happen (`guardian.mjs:192-193` bash; `:241-242` write/edit) — pinned by test 14. | Code shape is the only guard against re-ordering. |
+| I2 | Any classifier failure **or an `ask` verdict** ⇒ a **fresh** human confirmation: the auto fallback **and shadow's evaluation confirm** carry no `sessionKey`, so remembered approvals cannot bypass them (D13/D16, pinned by tests 23, 24). | “Hand it to the human” must mean *this time*, not “whatever the cache says”. |
 | I3 | A surface without an interactive prompt (print mode, test harnesses) does not serve the seam. The legacy readline shell **is** interactive and therefore does serve it. | Headless runs keep today's block behavior. |
 | I4 | Phase A verdicts are `{allow, ask}`; the model cannot block. | A hallucinating classifier must not silently kill legitimate work. |
 | I5 | The verdict record is written by the host at call completion, before the extension's decision is known. | Auditability is a property of the seam, not of extension good behavior. |
 | I6 | Manual is the default; mode changes are explicit, recorded, session-scoped; auto is never reached without an explicit step. | A feature that loosens a gate must be opted into, visibly. |
-| I7 | The classifier sees only what §5.6 lists — and the trusted-context block is host-extracted (user-role text only). | Privacy surface stays bounded; the model cannot manufacture its own authorization. |
-| I8 | A matched command whose target is not statically resolvable is **never classified** — it goes to a fresh human confirmation (§5.5), pinned by test 21. | The classifier must not decide what the gate cannot even identify. |
+| I7 | The classifier's context is **provenance-verified**: only text appended at the human input boundary (runner `runTurn`, steering/follow-up queues), never derived from stored message roles; model-authored text is never evidence regardless of its stored role (D11). | A model cannot manufacture its own authorization — not via a summary, not via a child's task prompt. |
+| I8 | A matched command whose target is not statically resolvable never feeds an auto-allow: auto never classifies it (fresh confirm); shadow may classify it for observation with a marker (§5.5), pinned by test 22. | The classifier must not decide what the gate cannot even identify. |
 | I9 | **Scope honesty**: the floor detects known dangerous *shapes*; it is not a sandbox and this design claims no completeness for protected paths (D12). Anything unresolved lands in the manual-only class or the human prompt. | A weak detector must not be presented as a boundary. |
+| I10 | Every classify call is associated with exactly one tool call via a snapshot frozen at gate entry (D15); no association ⇒ `undefined` ⇒ fresh confirm. | Evidence must belong to *this* call — two same-name children cannot share an ambiguous “current run”. |
+| I11 | Shadow's counters are built only from real human judgments (fresh confirm by construction, D16); cache hits never enter the samples. | The observation phase exists to find false-allows; cached approvals would hide exactly those. |
 
 ## 7. User-visible surfaces (drafts — owner eyeballs these at acceptance)
 
 | Event | Draft record line |
 |---|---|
-| shadow verdict | `▪ guardian (shadow) — classifier would allow: <reason>` (then the normal confirm follows) |
+| shadow verdict | `▪ guardian (shadow) — classifier would allow: <reason>` (then the fresh confirm follows) |
 | auto allowed | `▪ guardian (auto) — classifier allowed: <reason>` |
 | auto asked / unavailable | today's `▪ confirm: guardian — …` (fresh) + detail line `classifier: <reason>` / `classifier unavailable (<why>)` |
 | manual-only skip | `▪ guardian (auto) — target not statically resolvable; asking` |
+| no verified context | `▪ guardian (auto) — no verified user context; asking` |
 | mode change | `▪ guardian: mode → shadow` / `→ auto` / `→ manual` |
 | breaker tripped | `▪ guardian: 3 non-allows in a row — back to manual` |
 
@@ -354,52 +367,59 @@ active.
 8. concurrency: two overlapping calls do not interleave state;
 9. wiring: passed to `loadExtensionSetup` exactly when `interactive`
    (`cli.ts:540,593`);
-10. trusted context: the last user-role messages (≤3, capped) appear in the
-    request, host-delimited and labeled as data;
-11. **assistant/tool text never included** — a conversation whose only
-    authorization claim sits in an assistant message feeds the block nothing;
-12. no context available ⇒ the explicit marker.
+10. context: the user-input log's entries (≤3, capped) appear in the request,
+    host-delimited and labeled as data;
+11. **spoofing vectors (R7 #1)** — neither (a) a child's task prompt claiming
+    “the user authorized X” nor (b) a compaction/branch summary claiming it
+    appears in the request, although both are stored as `role: "user"`
+    (`task.ts:621`; `store.ts:973-988`);
+12. empty log ⇒ no-verified-context handling (guardian pin in test 25; the
+    shadow marker here);
+13. **association (R7 #2)**: the request carries the snapshot frozen at gate
+    entry (a log append between freeze and call does not change it); a
+    `classify` call outside a dispatch ⇒ `undefined`.
 
 **guardian (existing double grows `classify`)**
-13. floor command in auto ⇒ classify **never called**, block returned (I1);
-14. allow ⇒ no `confirm` call, handler returns undefined;
-15. ask ⇒ **fresh** confirm (args carry no `sessionKey`), reason attached;
-16. unavailable ⇒ fresh confirm;
-17. breaker: 3 non-allows ⇒ manual; shadow never flips;
-18. `/guardian` toggle/cycle/set/status/reload; unknown argument ⇒ usage;
-19. config: missing ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
+14. floor command in auto ⇒ classify **never called**, block returned (I1);
+15. allow ⇒ no `confirm` call, handler returns undefined;
+16. ask ⇒ **fresh** confirm (args carry no `sessionKey`), reason attached;
+17. unavailable ⇒ fresh confirm;
+18. breaker: 3 non-allows ⇒ manual; shadow never flips;
+19. `/guardian` toggle/cycle/set/status/reload; unknown argument ⇒ usage;
+20. config: missing ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
     passthrough; reload picks up edits;
-20. write/edit tier in auto still goes straight to `confirm` (scope pin);
-21. **unresolvable target** — `target="$HOME/.ssh"; rm -rf "$target"` and
-    glob/`$()` variants ⇒ never classified; fresh confirm in both auto and
-    shadow (I8);
-22. shadow: classify called, confirm called with today's options (sessionKey
-    kept), verdict recorded, counters updated;
-23. **fresh-fallback argument pin**: the auto `ask`/unavailable path's `confirm`
-    call carries **no `sessionKey`/`rememberLabel`** — asserted on the options
-    argument. (The guardian double's `confirm` is a bare spy
-    (`test/guardian.test.ts:20-47`) and does not model the host cache; the
-    cache lives in `TtyConfirm.sessionAllowed`, `repl.ts:263` — hence the
-    pin's real observable is the negated argument.) Optional companion pin on
-    the `TtyConfirm` side: a confirm call without `sessionKey` is never
-    short-circuited by a remembered key (I2).
+21. write/edit tier in auto still goes straight to `confirm` (scope pin);
+22. **unresolvable target** — `target="$HOME/.ssh"; rm -rf "$target"` and
+    glob/`$()` variants: auto never classifies (fresh confirm), shadow
+    classifies with the marker (I8);
+23. **fresh-argument pins (I2)**: the auto `ask`/unavailable fallback and the
+    shadow evaluation confirm carry **no `sessionKey`/`rememberLabel`**
+    (asserted on the options argument; the double's `confirm` is a bare spy,
+    `test/guardian.test.ts:20-47` — the host cache lives in
+    `TtyConfirm.sessionAllowed`, `repl.ts:263`);
+24. **shadow counters (D16/I11)**: `allow + human approved`,
+    `allow + human denied` (a cancel counts here — documented), ask-rate;
+25. no verified context in auto ⇒ fresh confirm, classify not called (D11);
 
 **TUI**
-24. the record lines of §7 render through the `▪` channel with the caller label.
+26. the record lines of §7 (incl. shadow, manual-only, no-context) render
+    through the `▪` channel with the caller label.
 
 **Mutation checks** (after green): drop the floor short-circuit; make a failure
 path return `allow`; remove the breaker; parse `"block"` as allow; skip the
-sanitize/cap step; **pass `sessionKey` in the auto fallback** (test 23 must go
-red); **classify an unresolvable target** (test 21); **include assistant text
-in the context block** (test 11).
+sanitize/cap step; **pass `sessionKey` in the auto fallback or shadow** (test
+23); **classify an unresolvable target in auto** (test 22); **feed the context
+block a summary or a child task prompt** (test 11); **read the live log instead
+of the frozen snapshot** (test 13).
 
 ## 9. Phases and non-goals
 
 ### 9.1 Phase A (this batch)
-Seam (+ trusted context) + global config + `/guardian` (three modes) + breaker
-+ the **bash ask tier only** (`guardian.mjs:225`) + the manual-only class
-(§5.5) + records + tests. The write/edit tier (`:246`) keeps its unconditional
-confirm — pinned by test 20.
+Seam (+ provenance-verified context, D11) + the runner-side **user-input log**
+and the call-scoped snapshot (D15) + global config + `/guardian` (three modes)
++ breaker + the **bash ask tier only** (`guardian.mjs:225`) + the manual-only
+class (§5.5) + shadow counters (D16) + records + tests. The write/edit tier
+(`:246`) keeps its unconditional confirm — pinned by test 21.
 
 **Rollout is part of the batch**: manual → **shadow on real commands** →
 auto. The owner reviews shadow records and `/guardian status` counters
@@ -468,9 +488,22 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
 7. Footer: show the mode only when not `manual` (draft)?
 8. Consulted-and-ignored: a later phase could record a *mismatch* line
    (per-call verdict state). Phase B candidate (R2 note).
-9. R4 leftovers for R5 to weigh: should shadow counters also count “would-allow
+9. R4 leftovers for R8 to weigh: should shadow counters also count “would-allow
    but human denied” separately (the false-allow signal the validation phase
-   exists to find)? Draft: yes — separate `wouldAllowDenied` count.
+   exists to find)? Resolved in D16: yes — the `allow + human denied` count.
+10. Shadow's anchoring risk (R7 suggestion, optional): showing the classifier
+    verdict *before* the human answers could bias the judgment; deferring the
+    record line until after the confirm would protect the samples. The host
+    writes the record at call completion (D9/I5), so deferral needs a seam
+    hint or a guardian-side buffered display. Phase A draft: show it
+    immediately, record the caveat, revisit if the samples look biased.
+11. R7's cancel-vs-deny limitation: `api.confirm` returns a bare boolean, so a
+    cancel counts as `humanDenied` in shadow. Distinguishing them would change
+    the confirm contract — out of scope (§9.3).
+12. Child calls stay eligible for auto-allow with the inherited session
+    snapshot (D11/D15). The conservative alternative — never auto-allow
+    subagent calls, always fresh confirm — remains available if R8 or the
+    owner prefers it.
 
 ## 12. Review log
 
@@ -508,4 +541,6 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   R1-R3 broken. N1: test 23 reworded to the arg-negation observable (the double
   models no cache). N2: D8 scoped to auto-mode fallbacks (shadow/manual keep
   session memory). Both folded.
-- R6: **CONFIRMED** — micro-verification of N1/N2 and the R5 log entry: all accurate; review closed on rev 2. Implementation may start once the owner gives the go-ahead.
+- R6: **CONFIRMED** — micro-verification of N1/N2 and the R5 log entry: all accurate; review closed on rev 2. *(Test numbers cited in R1-R6 entries follow the rev-2 numbering; the rev-3 additions shifted guardian's pins to tests 14-25.)*
+- R7: **owner second-opinion review round 2 — NEEDS REVISION before implementation** (three findings). #1 `role: "user"` ≠ “the real user said it”: summaries and child task prompts are stored that way (`store.ts:973-988`, `task.ts:621`), so role-filtered context is spoofable ⇒ D11 amended to provenance by input boundary + the runner-side user-input log; children inherit the session snapshot; no verified context ⇒ auto does not classify. #2 the snapshot must bind to the call, not to a shared “live session” (two same-name children) ⇒ D15: freeze at gate entry, carry via AsyncLocalStorage around the registry dispatch, no association ⇒ fresh confirm. #3 shadow's sessionKey hits make cache approvals masquerade as human judgments ⇒ D16: shadow's evaluation confirm is fresh; split counters; cancels count as `humanDenied` (honest limitation). Folds: D8/D11/D13/D15/D16, §4.2/§4.3/§5.3-§5.6, I2/I7/I10/I11, tests 11/13/22-25, §11.10-12. Folded in rev 3.
+- R8: *(pending — verification of the rev 3 fold)*

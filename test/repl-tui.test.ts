@@ -806,10 +806,10 @@ describe("TuiShell selector", () => {
 		const lines = frame.split("\n");
 		const titleAt = lines.findIndex((l) => l.trim() === "allow this bash command?");
 		expect(titleAt).toBeGreaterThan(0);
-		// exact bytes at width 80: left = right = 35 dashes, label in the middle
-		expect(lines[titleAt - 1]).toBe(`${"─".repeat(35)} guardian ${"─".repeat(35)}`);
+		// exact bytes at width 80 (A2.1 left anchor): `── guardian ` + 68 dashes
+		expect(lines[titleAt - 1]).toBe(`── guardian ${"─".repeat(68)}`);
 		// faint dashes around a normal-weight label (D12 split)
-		expect(withTag.terminal.writes.join("")).toContain(`\x1b[2m${"─".repeat(35)}\x1b[0m guardian `);
+		expect(withTag.terminal.writes.join("")).toContain("\x1b[2m──\x1b[0m guardian ");
 		withTag.shell.close();
 	});
 
@@ -4680,17 +4680,18 @@ describe("D14 — SectionRule render contract", () => {
 		expect(new SectionRule("").render(10)).toEqual([`\x1b[2m${"─".repeat(10)}\x1b[0m`]);
 	});
 
-	it("a labeled rule is dim dashes, a plain label, dim dashes", () => {
-		// width 20, label "tui" (3): left = floor((20-5)/2) = 7, right = 20-5-7 = 8
+	it("a labeled rule is two dim dashes, a plain label, then dim dashes", () => {
+		// A2.1: left-anchored. width 20, label "tui": 2 + 1 + 3 + 1 + right(13) = 20
 		const row = new SectionRule("tui").render(20)[0] ?? "";
-		expect(row).toBe(`\x1b[2m${"─".repeat(7)}\x1b[0m tui \x1b[2m${"─".repeat(8)}\x1b[0m`);
+		expect(row).toBe(`\x1b[2m──\x1b[0m tui \x1b[2m${"─".repeat(13)}\x1b[0m`);
 	});
 
-	it("a label wider than avail is clipped to width - 4", () => {
+	it("a label wider than width - 4 is clipped, and a full row ends after the label", () => {
+		// avail = 16: truncateToWidth clips the label to 16 (13 'a' + "..."; its own
+		// reset codes ride inside), so right = 20 - 4 - 16 = 0: the row ends after
+		// the label's trailing space, with no closing dashes (A2.1, §16.13 N1).
 		const row = new SectionRule("a".repeat(60)).render(20)[0] ?? "";
-		// avail = 16: truncateToWidth clips the label to 16 (13 'a' + "...";
-		// its own reset codes ride inside), left = floor((20-18)/2) = 1, right = 1
-		expect(row).toBe(`\x1b[2m─\x1b[0m ${"a".repeat(13)}\x1b[0m...\x1b[0m \x1b[2m─\x1b[0m`);
+		expect(row).toBe(`\x1b[2m──\x1b[0m ${"a".repeat(13)}\x1b[0m...\x1b[0m `);
 		expect(visibleWidth(row)).toBe(20);
 	});
 
@@ -4706,12 +4707,13 @@ describe("D14 — SectionRule render contract", () => {
 		expect(new SectionRule("tui").render(1)).toEqual([`\x1b[2m─\x1b[0m`]);
 	});
 
-	it("the label threshold is exact in both directions (avail 1 plain, avail 2 labelled)", () => {
-		// avail = width - 4. The implementation check found both off-by-ones green:
-		// `avail < 3` and `avail < 1`. These two rows pin the boundary.
+	it("the label threshold is exact in both directions (width 5 plain, width 6 labelled)", () => {
+		// width - 4 < 2 → plain. The implementation check found both off-by-ones
+		// green: `< 3` and `< 1`. These two rows pin the boundary. At width 6 the
+		// clipped 2-wide label leaves right = 0, so the row ends after the space.
 		expect(new SectionRule("tui").render(5)).toEqual([`\x1b[2m${"─".repeat(5)}\x1b[0m`]);
 		const clipped = truncateToWidth("tui", 2);
-		expect(new SectionRule("tui").render(6)[0]).toBe(`\x1b[2m─\x1b[0m ${clipped} \x1b[2m─\x1b[0m`);
+		expect(new SectionRule("tui").render(6)[0]).toBe(`\x1b[2m──\x1b[0m ${clipped} `);
 		expect(visibleWidth(clipped)).toBe(2);
 	});
 

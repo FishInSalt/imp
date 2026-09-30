@@ -1066,15 +1066,16 @@ with the leanings below.
 - Render contract (`render(width)`), and `implements Component` requires
   `invalidate(): void` as well (empty — the rule caches nothing, exactly like
   `DialogBorder`, `src/repl/login-dialog.ts:41`):
-  - absent/empty label, or `avail = width - 4 < 2` → `dim("─".repeat(width))`
-    (below that threshold a clipped label would render as `─ … ─`, which reads
-    as damage rather than a name);
+  - absent/empty label, or `width < 6` → `dim("─".repeat(width))` (below that
+    threshold the clipped label is a bare ellipsis, which names nobody — the
+    A2.1 re-anchor changed this row's shape, not the threshold);
   - otherwise the label is `sanitizeDisplay`-ed, clipped with
-    `truncateToWidth(label, avail)`, and the row is
-    `dim("─"×left) + " " + label + " " + dim("─"×right)` with
-    `left = max(1, floor((width - (labelWidth + 2)) / 2))` and
-    `right = max(1, width - (labelWidth + 2) - left)` — at least one dash on each
-    side, the label centred, and `visibleWidth(row) === width` exactly;
+    `truncateToWidth(label, width - 4)`, and the row is
+    `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
+    `right = width - 4 - labelWidth` — **two dashes, then the label, then the
+    remainder**: the label sits left where the eye lands first (owner decision
+    after looking at the centred form: "a centred label is harder to spot",
+    §16.10 round 3), and `visibleWidth(row) === width` exactly;
   - dashes faint, label at normal weight (D12: decision content normal, chrome
     faint).
 - Placement (base `f417fba`): the generic picker box gets the rule **between** its
@@ -1136,6 +1137,8 @@ Phase 3 rule: a pin that survives its own mutation is not a pin).
   blank; after D14 that row is the rule, so each must assert blank → rule →
   title.
 - `:823` (a titleless, unattributed picker) gains an unlabeled rule row.
+- The A2.1 re-anchor (§16.13) changes only the expected bytes of the exact-bytes
+  rows above; the pin set is unchanged.
 - `test/repl-confirm.test.ts:51,64` assert that `attribution` reaches `select()`
   — unchanged by D13/D14; the comment at `:50` (it describes the title tag) needs
   rewriting.
@@ -1158,7 +1161,7 @@ login dialog shows no host-added rule.
 
 | # | Question |
 |---|---|
-| O7 | **Answered in round 1 — no overflow is possible**: for widths 1-200 and label widths up to 500 (ASCII and wide characters) `visibleWidth(row) === width` whenever a label is drawn, with at least one dash on each side, so centring stays. Below `avail = width - 4 < 2` the rule falls back to plain dashes instead of an ellipsis-only row |
+| O7 | **Answered in round 1 — no overflow**: for widths 1-200 and label widths up to 500 (ASCII and wide characters) `visibleWidth(row) === width` held for the centred form. **Re-resolved by the owner (2026-09-30, round 3): the label is now left-anchored** — two dashes, then `label`, then the remainder — because a centred label is harder to spot. The identity still holds by construction: `2 + 1 + labelWidth + 1 + right = width` with `right = width - 4 - labelWidth >= 0` |
 | O8 | **Resolved: leave `DialogBorder` private.** The login dialog's rows are its own frame (top and bottom), not a section boundary; folding them into `SectionRule` would change their bytes for no user-visible gain. Revisit only if a third rule site appears |
 | O9 | **Resolved: label at normal weight.** It names who asks (information); the dashes are chrome — the same split D12 already draws inside the picker |
 | O10 | **Resolved: keep both.** The owner approved the airier layout (blank row, then rule); the rule carries the name the blank row cannot |
@@ -1201,6 +1204,7 @@ Branch `feat/confirm-prompt-phase4` from `f417fba`; this amendment passes an
 independent adversarial review before implementation; implementation is
 red-first with mutation-verified pins; an independent implementation check
 follows; then `--no-ff` merge plus a ledger entry. Phase 3 stays revertible.
+Each amendment round (A2.1) gets the same treatment at its own scale.
 
 ### 16.12 Implementation check (A2)
 
@@ -1216,3 +1220,30 @@ and the byte pins verified, six mutations probed, one survived.
 The check also ran three adversarial mutations of its own beyond the plan
 (restoring the Phase 3 title tag; placing the rule before the spacer; adding
 a rule to the login dialog) — all three were caught by existing pins.
+
+### 16.13 Round 3 — the label moves left (A2.1, owner, 2026-09-30)
+
+After the merge the owner looked at the centred form and asked for the label to
+sit left ("a centred label is harder to spot"). D13/D14 are otherwise unchanged.
+
+- Contract delta (D14, second bullet): the row is
+  `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
+  `right = width - 4 - labelWidth`; the fallback threshold is unchanged at
+  `width < 6`. `visibleWidth(row) === width` still holds by construction.
+- Pin delta (round-3 note N1): the two exact-bytes rows in
+  `test/repl-tui.test.ts` — the width-20 `tui` row (`:4685-4687`) and the
+  width-6 clipped row (`:4711-4713`) — become the left-anchored shape, and the
+  clipped width-20 row (`:4689-4695`) changes too. Row shapes from the contract:
+  width 20 `tui` → `dim("──") + " tui " + dim(13 dashes)`; width 20 with a
+  clipped 16-wide label and width 6 with a clipped 2-wide label both have
+  `right === 0`, so those rows **end after the label's trailing space, with no
+  closing dashes**. The width-5 plain row and the `visibleWidth(row) === width`
+  loop are unchanged (round-3 note N2: the pin *set* is unchanged, so §16.6's
+  inventory still holds; only the expected bytes move).
+- Review: round 3 (below) covered the delta before implementation; the bounded
+  implementation check returned **APPROVE** — the contract expression matched the
+  implementation byte-for-byte, and seven mutations were all caught (`──`→`─` and
+  `──`→`───`, `right` off by one in both directions, the `right > 0` guard removed,
+  and the threshold flipped to `< 5`/`< 7`); nothing survived the focused file. The
+  one doc nit it raised (D14's fallback rationale still described `─ … ─`) is
+  folded.

@@ -13,12 +13,13 @@ import { sanitizeDisplay } from "../tool-presentation.js";
  * label is the host-derived attribution, never extension-authored, so an
  * extension cannot write a different name into the divider.
  *
- * Render contract (design D14):
+ * Render contract (design D14, re-anchored by A2.1):
  *  - absent/empty label, or `avail = width - 4 < 2` → plain dim dashes
  *    (below the threshold a clipped label would read as damage);
  *  - otherwise the label is sanitized, clipped to `avail`, and the row is
- *    dim dashes + " " + label + " " + dim dashes with at least one dash on
- *    each side, the label centred, and `visibleWidth(row) === width`.
+ *    `dim("──") + " " + label + " " + dim(remaining dashes)` — the label sits
+ *    left where the eye lands first, and `visibleWidth(row) === width` always
+ *    (`right === 0` ends the row after the label's trailing space).
  */
 export class SectionRule implements Component {
 	private readonly label: string;
@@ -37,9 +38,9 @@ export class SectionRule implements Component {
 			return [dim("─".repeat(Math.max(0, width)), true)];
 		}
 		const label = truncateToWidth(sanitized, avail);
-		const labelWidth = visibleWidth(label);
-		const left = Math.max(1, Math.floor((width - (labelWidth + 2)) / 2));
-		const right = Math.max(1, width - (labelWidth + 2) - left);
-		return [`${dim("─".repeat(left), true)} ${label} ${dim("─".repeat(right), true)}`];
+		const right = width - 4 - visibleWidth(label);
+		// A2.1: left-anchored — two dashes, then the label, then the remainder.
+		// `right === 0` is legal: the row ends after the label's trailing space.
+		return [`${dim("──", true)} ${label} ${right > 0 ? dim("─".repeat(right), true) : ""}`];
 	}
 }

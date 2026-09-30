@@ -56,7 +56,7 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 | 4 | Resources/Prompts | pi：资源默认暴露为 `read_*` 工具，prompts 变 `/mcp__server__prompt` 命令，`mcp:` 引用语法；CC：List/Read 工具+`@server:uri` 提及+启动预取，prompts 变命令 | 均无 | 维持；触发：接入文档型/工作流型服务器 |
 | 5 | 逐调用审批门 | pi：`approveTools` 常量/数组，会话批准持久化，headless fail-closed；CC：passthrough 权限+规则建议 | 无 | 维持；触发：接入持凭据/带副作用服务器。注意与 F1 的边界不同（F1 是启动即执行，与工具调用无关） |
 | 6 | 跨厂商配置导入 | pi：imports 支持 cursor/claude-code/claude-desktop/opencode/vscode/windsurf/codex + hostConfigDiscovery；CC：add-from-claude-desktop | 无 | 维持；触发：在别处配了大量服务器 |
-| 7 | `mcp` 元工具代理 | pi：默认代理工具（search/describe/instructions/install 等动作）+ directTools/命名空间模式；CC：`mcp__` 前缀+搜索折叠 | 平铺直连（有意偏离） | **触发已命中（2026-09-29）：Tushare 官方服务器 254 个工具/267KB 定义每请求（真机 loop 实测）——includeTools/excludeTools（速解，对齐 pi）或代理模式（正式解）待推进** |
+| 7 | `mcp` 元工具代理 | pi：默认代理工具（search/describe/instructions/install 等动作）+ directTools/命名空间模式；CC：`mcp__` 前缀+搜索折叠 | 平铺直连（有意偏离） | **触发已命中（2026-09-29）：Tushare 官方服务器 254 个工具/267KB 定义每请求（真机 loop 实测）。用户决策（同日）：延后至实际使用出现痛点再做——速解 includeTools/excludeTools（半天）为第一修复，代理模式为全量可发现方案** |
 
 ## 4. 新发现（D5 未覆盖）
 
@@ -84,7 +84,8 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 - 影响：服务器使用指南（"工具都是只读"、"先 search 再 fetch"、"写操作需 X"）对模型不可见——部分服务器把关键约束放在 instructions 而非工具描述里。
 - 建议：小改。最低成本：握手完成后一条 note（用户可见）；完整版：并入系统提示 MCP 段——prompt-audit D10 的目录已有 100B/条+2KB 预算与降级机制（system-prompt.ts:78-95），instructions 可按服务器截断参与预算。
 - 触发：任一服务器返回非空 instructions（可先只做 note，零提示成本）。
-- **触发命中（2026-09-29）**：Tushare 官方服务器返回非空 instructions（"Tushare 金融数据 MCP Server，提供A股股票、基金等金融数据查询能力。"）——按本项设计，最小形态 = 连接时一条 note；待做。
+- **触发命中（2026-09-29）**：Tushare 官方服务器返回非空 instructions（"Tushare 金融数据 MCP Server，提供A股股票、基金等金融数据查询能力。"）。
+- **用户决策（2026-09-29）：延后**。理由：本条触发虽已命中，但 Tushare 的 instructions 内容泛泛、note 价值近零；真实价值场景 = instructions 含关键用法/操作顺序的服务器。届时最小形态仍是"连接时一条 note"；完整形态（并入模型可见目录）可随工具面治理一起做。
 
 ### F4 非文本内容块（图片等）被丢弃
 

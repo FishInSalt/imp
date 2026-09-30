@@ -454,16 +454,25 @@ describe("login dialog (#login-dialog)", () => {
 	});
 
 	it("17b. deviceCode state shows no input row (the root-level copy would survive content.clear)", async () => {
+		// Offline fixture (same as tests 3 and 4): this test used to skip the
+		// fake server, so every full-suite run made a real round trip to the
+		// live endpoint — the recorded flake (real request vs OAUTH_BUDGET
+		// under parallel load).
+		const fake = await fakeCodexAuth();
+		process.env.IMP_CODEX_AUTH_BASE = fake.baseUrl;
 		const env = await fresh();
 		env.terminal.data("/login openai-codex\r");
 		await frameEventually(env, "Enter code:", OAUTH_BUDGET);
 		const frame = env.terminal.frameSince(0);
+		// the injected fake is the base actually used — never the live host
+		expect(frame).toContain("127.0.0.1");
 		// content.clear() emptied the prompt state; a ROOT-level input (the
 		// pre-fix bug) would still render a bare "> " row below the code
 		expect((frame.match(/^>\s*$/gm) ?? []).length).toBe(0);
 		expect(frame).toContain("Waiting");
 		env.terminal.data("\x03"); // Ctrl+C cancels the poll
 		await settle();
+		await fake.close();
 	});
 
 	it("16. a second openLoginDialog queued behind a live selector re-runs after teardown", async () => {

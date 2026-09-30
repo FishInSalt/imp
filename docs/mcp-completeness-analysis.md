@@ -56,7 +56,7 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 | 4 | Resources/Prompts | pi：资源默认暴露为 `read_*` 工具，prompts 变 `/mcp__server__prompt` 命令，`mcp:` 引用语法；CC：List/Read 工具+`@server:uri` 提及+启动预取，prompts 变命令 | 均无 | 维持；触发：接入文档型/工作流型服务器 |
 | 5 | 逐调用审批门 | pi：`approveTools` 常量/数组，会话批准持久化，headless fail-closed；CC：passthrough 权限+规则建议 | 无 | 维持；触发：接入持凭据/带副作用服务器。注意与 F1 的边界不同（F1 是启动即执行，与工具调用无关） |
 | 6 | 跨厂商配置导入 | pi：imports 支持 cursor/claude-code/claude-desktop/opencode/vscode/windsurf/codex + hostConfigDiscovery；CC：add-from-claude-desktop | 无 | 维持；触发：在别处配了大量服务器 |
-| 7 | `mcp` 元工具代理 | pi：默认代理工具（search/describe/instructions/install 等动作）+ directTools/命名空间模式；CC：`mcp__` 前缀+搜索折叠 | 平铺直连（有意偏离） | 维持；触发：接入工具数 ≥10 的服务器 |
+| 7 | `mcp` 元工具代理 | pi：默认代理工具（search/describe/instructions/install 等动作）+ directTools/命名空间模式；CC：`mcp__` 前缀+搜索折叠 | 平铺直连（有意偏离） | **触发已命中（2026-09-29）：Tushare 官方服务器 254 个工具/267KB 定义每请求（真机 loop 实测）——includeTools/excludeTools（速解，对齐 pi）或代理模式（正式解）待推进** |
 
 ## 4. 新发现（D5 未覆盖）
 
@@ -68,6 +68,7 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 - 建议：把两条项目路径并入 M8 trust 判定（未信任→跳过+note；`--trust`/会话信任后正常读）。改动小：`createMcpSetup` 已有 `runner`，把 `projectSettingsAllowed` 同源的 trust 位传给 `discoverMcpConfig` 过滤项目路径即可；测试加"未信任项目含 .mcp.json 不 spawn（pid 见证）"。
 - 触发：立即（属修复类，不设触发条件）。补偿路径：global 层（`~/.config/mcp/mcp.json`、`~/.agents/...`）不受影响，用户显式信任目录后项目层恢复。
 - 与 M18 §1 注的张力（审查提出）：M18 记录过"imp 模型本就握着 bash/write（全能力面），MCP 工具不构成能力增量"。那条论证针对运行期工具调用；F1 针对的是启动时、在用户与任何确认流程介入之前的进程执行，且 M8 的既有姿态正是"项目级可执行资源未经信任不跑"——两者不冲突。
+- **已修（2026-09-29，M19 批 0 `4b8e1b7`）**：`trustRequiringResources` 计入两条项目级 mcp 文件（否则"只有 .mcp.json"的目录会走"无资源→零摩擦"短路，门形同虚设——实施期发现的补充）；`discoverMcpConfig.projectAllowed` 必填接线；单元 + e2e（pid 见证：--no-trust 不 spawn / --trust 对照）钉子。
 
 ### F2 `notifications/tools/list_changed` 被忽略
 
@@ -83,6 +84,7 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 - 影响：服务器使用指南（"工具都是只读"、"先 search 再 fetch"、"写操作需 X"）对模型不可见——部分服务器把关键约束放在 instructions 而非工具描述里。
 - 建议：小改。最低成本：握手完成后一条 note（用户可见）；完整版：并入系统提示 MCP 段——prompt-audit D10 的目录已有 100B/条+2KB 预算与降级机制（system-prompt.ts:78-95），instructions 可按服务器截断参与预算。
 - 触发：任一服务器返回非空 instructions（可先只做 note，零提示成本）。
+- **触发命中（2026-09-29）**：Tushare 官方服务器返回非空 instructions（"Tushare 金融数据 MCP Server，提供A股股票、基金等金融数据查询能力。"）——按本项设计，最小形态 = 连接时一条 note；待做。
 
 ### F4 非文本内容块（图片等）被丢弃
 

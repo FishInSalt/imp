@@ -23,14 +23,14 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
 | D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
-| D11 | **Positioning (R4 #1; amended by R7 #1 and R11 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**. **Capture point (R11)**: the human submission boundary *before* any dispatch — the editor's submit (`shell.ts:310` → `submit`, `:512`; the legacy shell's equivalent) and the steering/follow-up queues. The log records the raw submission (typed text verbatim; a slash-command/skill invocation as `/<name> <args>`), **never expansion products**: command- and skill-file bodies reach `runTurn` as `userMessage` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and are *not* user attestation. Never derived from message roles either (summaries and child task prompts are stored as `role: "user"`: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** Invalidation rules: D18. |
+| D11 | **Positioning (R4 #1; amended by R7 #1 and R11 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**. **Capture point (R11 #1)**: the human submission boundary *before* any dispatch — `handleLine` (`repl.ts:442`, the funnel both shells wire their input to: TUI `:1606`, legacy `:1622`) and the steering/follow-up queues. The log records the raw submission (typed text verbatim; a slash-command/skill invocation as `/<name> <args>`), **never expansion products**: command- and skill-file bodies reach the model via `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and never through `handleLine` — they are *not* user attestation. Never derived from message roles either (summaries and child task prompts are stored as `role: "user"`: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** Invalidation rules: D18. |
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
 | D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
 | D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. Shadow's numbers are **observational data, not an independent safety proof** (R11 note). |
 | D15 | **Per-call association (R7 #2)**: the host freezes the evidence snapshot **at the tool-gate entry** and carries it to the seam through a **call-scoped** mechanism (AsyncLocalStorage around the registry dispatch — no shared mutable “current run” state). The chain is `run → tool call → handler → classify`, one snapshot per call; two children with the same agent+cwd cannot cross-contaminate. No association (e.g. a handler calls `classify` outside its dispatch) ⇒ `undefined` ⇒ fresh confirm. |
 | D16 | **Shadow measurement integrity (R7 #3, extended by R8)**: shadow's counters distinguish `allow + human approved`, `allow + human denied`, the ask-rate, and the **manual-only rate** (how often the target detector blocks auto-classification — the metric that tells the owner whether auto is worth trusting). Cache hits cannot pollute samples (fresh confirm by construction). Honest limitation: the current `confirm` contract returns a bare boolean, so a cancel is indistinguishable from a denial and counts as `humanDenied` (conservative). |
 | D17 | **The context-presence fact travels on the event (R8 P1)**: the runner sets `verifiedUserContext: boolean` on every emitted `tool_call` event (a host fact, like `cwd`/`subagent`). Auto mode checks it **before** calling classify — `false` ⇒ fresh confirm, never classified; shadow calls regardless (the host's context block then carries an explicit “no verified context available” marker). The gate is **extension policy**; the host's guarantees are the fact, the marker and the record. This keeps D6's “one new member” (no second API member). |
-| D18 | **Log invalidation (R11 #2)**: the verified log is cleared when the conversation's identity or history position changes — `/new` (`runner.ts:830`), a successful `/resume` (`:1018`), and a successful `/tree`/`/fork` that actually moves the position (`:876,910`; history rebuild at `:1538`). Startup that restores an old session begins with an **empty** log (no inference from roles). Failed, cancelled, or no-op operations do **not** clear. Only new, clearly-sourced submissions append afterwards — so a rewound-away authorization can never enter a new call's snapshot. |
+| D18 | **Log invalidation (R11 #2, anchors corrected in R12)**: the verified log is cleared when the conversation's identity or history position changes — `/new` (`runner.ts:830`), a successful `/resume` (`:1018`), and a `/tree`/`/fork` whose target **actually moves the position** (`positionMoves`, `:992-993`; history rebuild `:1007`). Clearing keys on **positionMoves / identity change, not on a summary's outcome**: a branch summary that fails still moves the position (`:993`), and the log must clear anyway. Startup that restores an old session begins with an **empty** log (no inference from roles). Operations that fail, are cancelled, or move nothing clear nothing. Only new, clearly-sourced submissions append afterwards — a rewound-away authorization can never enter a new call's snapshot. |
 
 ## 1. Context
 
@@ -138,7 +138,7 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): raw submissions captured at the human submission boundary **before dispatch** — the editor submit (`shell.ts:310,512`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies ride `runTurn.userMessage` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and are not attestation. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 on `/new`, successful `/resume`, and position-moving `/tree`/`/fork`. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
@@ -422,9 +422,10 @@ active.
     (`/inspect …`) to the request — the body never appears
     (`commands-md.ts:151-158`, `skills.ts:525-527`);
 28. **invalidation (D18)**: `/new` and a successful `/resume` start the log
-    empty; a position-moving `/tree`/`/fork` clears it; a rewound-away
-    authorization does not enter the next call's snapshot
-    (`runner.ts:830,1018,876,910,1538`);
+    empty; a `/tree`/`/fork` whose target moves the position clears it
+    (`runner.ts:830,1018,992-993,1007`), including when the branch summary
+    subsequently fails; a rewound-away authorization does not enter the next
+    call's snapshot;
 29. **no-op preservation**: a failed/cancelled/no-op session operation clears
     nothing; subsequent submissions append normally.
 
@@ -435,7 +436,8 @@ sanitize/cap step; **pass `sessionKey` in the auto fallback or shadow** (test
 block a summary or a child task prompt** (test 11); **read the live log instead
 of the frozen snapshot** (test 13); **log an expanded command body instead of
 the invocation** (test 27); **skip the invalidation on a position-moving
-`/tree`** (test 28).
+`/tree`** (test 28); **keep the log across a rewind because the summary
+failed** (test 28); **skip clearing when nothing moved** (test 29).
 
 ## 9. Phases and non-goals
 
@@ -600,4 +602,13 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   `/tree`//`/fork` clear the log (`runner.ts:830,1018,876,910,1538`); restored
   sessions start empty; failed/no-op operations clear nothing. Folds: D11/D14/D18,
   §4.2, I7, tests 27-29 + mutation list, §9.1. Folded in rev 3.2.
-- R12: *(pending — limited-scope verification of the rev 3.2 fold)*
+- R12: **NEEDS REVISION** (limited scope; 2 P2 + 1 P3, all accuracy — fold
+  direction sound). N1: the capture point named only the TUI hop — both shells
+  converge on `handleLine` (`repl.ts:442`; wired `:1606`/`:1622`), which is now
+  the named funnel; the expansion-exclusion proof (via
+  `submitPrompt`→`enqueuePrompt`→`submitTurn`, never through `handleLine`) was
+  verified. N2: `:1538` is the compaction splice, not the tree/fork rebuild
+  (`:1007`); and clearing must key on `positionMoves` (`:992-993`), not on a
+  summary's success — a failed branch summary still moves the position. N3: the
+  mutation list gained the test-29 entry. Folded.
+- R13: *(pending — micro-verification of the R12 fold)*

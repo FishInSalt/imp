@@ -1,9 +1,9 @@
 # guardian auto mode — classifier-assisted approval (design)
 
-Status: **rev 3 — REVISED, awaiting verification review (R8).** Folds the
-owner's second-opinion review round 2 (R7: provenance is not a message role;
-the snapshot must bind to the call; shadow cache hits are not human judgments —
-§12). Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
+Status: **rev 3.1 — REVISED, awaiting verification review (R9).** Folds both
+second-opinion rounds (R7: provenance, call association, shadow sample
+integrity; R8: the context-presence channel — §12). Branch:
+`design/guardian-auto-mode`. Base: `1d097a0` (main).
 
 The owner experienced Claude Code's auto-approval and asked for the same shape
 in imp: *let a model judge first, hand only the suspicious calls to the human*
@@ -27,10 +27,11 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
 | D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
 | D15 | **Per-call association (R7 #2)**: the host freezes the evidence snapshot **at the tool-gate entry** and carries it to the seam through a **call-scoped** mechanism (AsyncLocalStorage around the registry dispatch — no shared mutable “current run” state). The chain is `run → tool call → handler → classify`, one snapshot per call; two children with the same agent+cwd cannot cross-contaminate. No association (e.g. a handler calls `classify` outside its dispatch) ⇒ `undefined` ⇒ fresh confirm. |
-| D16 | **Shadow measurement integrity (R7 #3)**: shadow's counters distinguish `allow + human approved`, `allow + human denied`, and the ask-rate; cache hits cannot pollute samples (fresh confirm by construction). Honest limitation: the current `confirm` contract returns a bare boolean, so a cancel is indistinguishable from a denial and counts as `humanDenied` (conservative). |
-| D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. |
+| D16 | **Shadow measurement integrity (R7 #3, extended by R8)**: shadow's counters distinguish `allow + human approved`, `allow + human denied`, the ask-rate, and the **manual-only rate** (how often the target detector blocks auto-classification — the metric that tells the owner whether auto is worth trusting). Cache hits cannot pollute samples (fresh confirm by construction). Honest limitation: the current `confirm` contract returns a bare boolean, so a cancel is indistinguishable from a denial and counts as `humanDenied` (conservative). |
+| D17 | **The context-presence fact travels on the event (R8 P1)**: the runner sets `verifiedUserContext: boolean` on every emitted `tool_call` event (a host fact, like `cwd`/`subagent`). Auto mode checks it **before** calling classify — `false` ⇒ fresh confirm, never classified; shadow calls regardless (the host's context block then carries an explicit “no verified context available” marker). The gate is **extension policy**; the host's guarantees are the fact, the marker and the record. This keeps D6's “one new member” (no second API member). |
 
 ## 1. Context
+| D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. |
 
 Today (see `docs/m4-extensions-design.md` §13.1) guardian has two tiers in one
 `tool_call` handler: a hard floor that blocks without asking, and an ask tier
@@ -58,7 +59,9 @@ methods, one subscriber, one ask-the-human method — **eight members**.
 Anything an extension cannot do with this, it cannot do.”). This batch grows it
 to **nine**, with one purpose-built member, and amends that docstring **and**
 the stale prologue in `docs/m4-extensions-design.md:227` (“Seven members
-total”).
+total”). `ToolCallEvent` additionally gains one field,
+`verifiedUserContext: boolean` (D17) — a field on an existing event, not a new
+event name (the normative event set, `types.ts:200`, is unchanged).
 
 ## 2. Ownership
 
@@ -68,7 +71,8 @@ The existing three-way split still governs:
   (Phase A defers it — §11.5), timeouts, output-contract enforcement,
   sanitization, the audit record, the **provenance-verified user-input log and
   the per-call snapshot** (host-extracted; the extension can neither see nor
-  alter them), and whether the seam exists at all on a given surface (D8).
+  alter them — only the presence fact, `verifiedUserContext`, D17), and whether
+  the seam exists at all on a given surface (D8).
 - **Policy → extension**: which calls get classified, the policy framing, what
   each verdict means, the mode state, the manual-only class, the breaker.
 - **Rendering → host**: record lines go through the existing `▪` note channel
@@ -133,7 +137,7 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): text appended only at the **human input boundary** — the runner's `runTurn` entry (`runner.ts:295,1255`; called by `repl.ts:685` and print's `cli.ts:1050`) and the steering/follow-up queues (`RunTurnOptions.getSteeringMessages`). Never derived from message roles: branch/compaction summaries and child task prompts are stored as `role: "user"` (`store.ts:973-988`, `task.ts:621`) and are **not** evidence. Child calls inherit the same session log. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ no verified context | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): text appended only at the **human input boundary** — the runner's `runTurn` entry (`runner.ts:295,1255`; called by `repl.ts:685` and print's `cli.ts:1050`) and the steering/follow-up queues (`RunTurnOptions.getSteeringMessages`). Never derived from message roles: branch/compaction summaries and child task prompts are stored as `role: "user"` (`store.ts:973-988`, `task.ts:621`) and are **not** evidence. Child calls inherit the same session log. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
@@ -232,7 +236,7 @@ Phase A reads one file, **global only**: `~/.imp/guardian.json`.
 |---|---|
 | `/guardian` | cycle manual → shadow → auto → manual (three states now) |
 | `/guardian manual` / `shadow` / `auto` | set the mode |
-| `/guardian status` | mode, model (resolved), breaker state, config path, **session counters (D16)**: classify calls, allow/ask/unavailable, `allow + human approved`, `allow + human denied`, ask-rate |
+| `/guardian status` | mode, model (resolved), breaker state, config path, **session counters (D16)**: classify calls, allow/ask/unavailable, `allow + human approved`, `allow + human denied`, ask-rate, manual-only rate |
 | `/guardian reload` | re-read the config file, report what changed |
 
 Registered via `api.registerCommand` (`src/repl/commands.ts:129-137`). Allowed
@@ -250,7 +254,7 @@ if (mode === "shadow"):
   verdict = await api.classify(...)        // record only; counters updated (D16)
   → **fresh confirm** — the human decides, and the sample is a real judgment
 if (mode === "auto"):
-  if (no verified user context)  → fresh confirm (D11; never classified)
+  if (event.verifiedUserContext === false) → fresh confirm (D17; never classified)
   if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; breaker counts)
   verdict = await api.classify({ system, prompt, model: config.model })
   undefined → fresh confirm(detail + "\nclassifier unavailable")   [breaker counts]
@@ -296,7 +300,9 @@ In `prompt` (extension-authored):
 
 In `system`: the extension's policy framing, **plus** the host's
 provenance-verified context block (D11) and the output contract — none of which
-the extension writes.
+the extension writes. When the log is empty (shadow only; auto never gets
+here, D17), the block says so explicitly instead of pretending to carry
+evidence.
 
 Policy framing says: what guardian is; that a human is always available as the
 fallback; that `ask` is the safe answer under uncertainty; that the floor and
@@ -373,11 +379,13 @@ active.
     “the user authorized X” nor (b) a compaction/branch summary claiming it
     appears in the request, although both are stored as `role: "user"`
     (`task.ts:621`; `store.ts:973-988`);
-12. empty log ⇒ no-verified-context handling (guardian pin in test 25; the
-    shadow marker here);
-13. **association (R7 #2)**: the request carries the snapshot frozen at gate
-    entry (a log append between freeze and call does not change it); a
-    `classify` call outside a dispatch ⇒ `undefined`.
+12. empty log ⇒ the host sets `verifiedUserContext: false` on the event and
+    the context block carries the explicit “no verified context available”
+    marker; guardian's auto-side check is pinned in test 25;
+13. **association (R7 #2, R8 P2)**: the request carries the snapshot frozen at
+    gate entry — the pin forces the interleave by appending to the host log
+    **from inside the handler** before calling classify; a `classify` call
+    outside a dispatch (detached / after the handler returned) ⇒ `undefined`.
 
 **guardian (existing double grows `classify`)**
 14. floor command in auto ⇒ classify **never called**, block returned (I1);
@@ -398,8 +406,10 @@ active.
     `test/guardian.test.ts:20-47` — the host cache lives in
     `TtyConfirm.sessionAllowed`, `repl.ts:263`);
 24. **shadow counters (D16/I11)**: `allow + human approved`,
-    `allow + human denied` (a cancel counts here — documented), ask-rate;
-25. no verified context in auto ⇒ fresh confirm, classify not called (D11);
+    `allow + human denied` (a cancel counts here — documented), ask-rate, and
+    the **manual-only rate**;
+25. no verified context in auto (`event.verifiedUserContext === false`) ⇒ fresh
+    confirm, classify not called (D17);
 
 **TUI**
 26. the record lines of §7 (incl. shadow, manual-only, no-context) render
@@ -423,7 +433,8 @@ class (§5.5) + shadow counters (D16) + records + tests. The write/edit tier
 
 **Rollout is part of the batch**: manual → **shadow on real commands** →
 auto. The owner reviews shadow records and `/guardian status` counters
-(false-allows that would have run, ask-rate, model differences) before
+(false-allows that would have run, ask-rate, the **manual-only rate** — R8's
+warning: an over-triggering target detector would silently defeat auto) before
 flipping auto; the config ships `manual` as the default.
 
 ### 9.2 Phase B (specified then, not now)
@@ -543,4 +554,15 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   session memory). Both folded.
 - R6: **CONFIRMED** — micro-verification of N1/N2 and the R5 log entry: all accurate; review closed on rev 2. *(Test numbers cited in R1-R6 entries follow the rev-2 numbering; the rev-3 additions shifted guardian's pins to tests 14-25.)*
 - R7: **owner second-opinion review round 2 — NEEDS REVISION before implementation** (three findings). #1 `role: "user"` ≠ “the real user said it”: summaries and child task prompts are stored that way (`store.ts:973-988`, `task.ts:621`), so role-filtered context is spoofable ⇒ D11 amended to provenance by input boundary + the runner-side user-input log; children inherit the session snapshot; no verified context ⇒ auto does not classify. #2 the snapshot must bind to the call, not to a shared “live session” (two same-name children) ⇒ D15: freeze at gate entry, carry via AsyncLocalStorage around the registry dispatch, no association ⇒ fresh confirm. #3 shadow's sessionKey hits make cache approvals masquerade as human judgments ⇒ D16: shadow's evaluation confirm is fresh; split counters; cancels count as `humanDenied` (honest limitation). Folds: D8/D11/D13/D15/D16, §4.2/§4.3/§5.3-§5.6, I2/I7/I10/I11, tests 11/13/22-25, §11.10-12. Folded in rev 3.
-- R8: *(pending — verification of the rev 3 fold)*
+- R8: **NEEDS REVISION** (fresh reviewer; 1 P1 + 3 minor). P1: the empty-log
+  rule had **no channel** — the extension cannot see the host log, and
+  `undefined` is contractually “unavailable”, so auto's “don't classify without
+  verified context” and shadow's marker were both unevaluable ⇒ **D17**: the
+  host puts `verifiedUserContext: boolean` on the emitted `tool_call` event
+  (a fact, like `cwd`), the extension applies policy against it; the block
+  carries the none-marker. Keeps one new API member. P2: the ALS leak path
+  (post-return classify ⇒ `undefined`) now pinned in test 13. P3: D-list order
+  fixed; test 13 names the artificial interleave. R8's attack-next note folded:
+  shadow also counts the **manual-only rate**, and the rollout gate includes it.
+  Folds: D15/D16/D17, §5.4, tests 12/13/24/25, §9.1. Folded in rev 3.1.
+- R9: *(pending — verification of the rev 3.1 fold)*

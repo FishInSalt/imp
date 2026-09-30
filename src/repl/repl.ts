@@ -360,6 +360,16 @@ interface ReplMachineOptions {
  * exits when EOF/an exit request is pending. Double Ctrl+C force-exits
  * through `exit()` — never awaiting a possibly-hung tool.
  */
+/** #guardian-auto-mode (D11): does this submitted line count as human input?
+ *  Blanks never do; `!` bangs run in the shell and never reach the model.
+ *  Everything else — typed text, slash commands (recorded as the invocation,
+ *  not its expansion) — is recorded at the submission boundary, before any
+ *  dispatch. Module scope: the repl machine calls it, tests pin it. */
+export function capturesAsUserInput(line: string): boolean {
+	if (line.trim() === "") return false;
+	return line[0] !== "!";
+}
+
 class ReplMachine {
 	private state: ReplState = "idle";
 	/** #startup-model-resolution (D5): per-SESSION one-shot guard for the
@@ -447,6 +457,10 @@ class ReplMachine {
 			this.input.refresh();
 			return;
 		}
+		// #guardian-auto-mode D11: the provenance-verified log is appended
+		// HERE — the human submission boundary, before command dispatch and
+		// before any prompt expansion (submitPrompt never passes through).
+		if (capturesAsUserInput(line)) this.runner.recordUserInput(line);
 		// "! cmd" passthrough (M10): the shell runs it directly — never model
 		// input, never a session entry. Checked before parseCommand so "/" and
 		// "!" stay unambiguous; while a phase is active the existing queue

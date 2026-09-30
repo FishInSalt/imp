@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
+import { createSession } from "../src/core/session/manager.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
@@ -46,7 +47,7 @@ async function navEnv(extra: { provider?: LLMProvider } = {}) {
 	store.forkBefore(q2old);
 	// current position: leaf = a1, history reloaded from the fork
 	const ids = { a1, q2old };
-	return { runner, store, ids, requests, base };
+	return { runner, store, ids, requests, base, cwd };
 }
 
 describe("runner.navigateTree (#tree)", () => {
@@ -327,5 +328,38 @@ describe("batch B: forkSessionAt rides navigateTree (#tree-b)", () => {
 		const tip = store.getLeafId();
 		await expect(runner.forkSessionAt(tip ?? "")).rejects.toThrow("not found"); // assistant ≠ fork point
 		void ids;
+	});
+});
+
+describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
+	it("keeps the log when nothing moves; clears it when the position moves", async () => {
+		const { runner, store } = await navEnv();
+		runner.recordUserInput("authorize: delete the build dir");
+		expect(runner.userInputSnapshot()).toEqual(["authorize: delete the build dir"]);
+		// target === current leaf → noop: no identity/position change, no clear
+		await runner.navigateTree(store.getLeafId() ?? "");
+		expect(runner.userInputSnapshot()).toEqual(["authorize: delete the build dir"]);
+		// navigating to q1 moves the position — the authorization is rewound away
+		const q1 = store.getTree()[0]?.entry.id;
+		await runner.navigateTree(q1 ?? "", { summarize: false });
+		expect(runner.userInputSnapshot()).toEqual([]);
+	});
+
+	it("clears on /new", async () => {
+		const { runner } = await navEnv();
+		runner.recordUserInput("something");
+		runner.newSession();
+		expect(runner.userInputSnapshot()).toEqual([]);
+	});
+
+	it("clears on a successful /resume", async () => {
+		const { runner, cwd } = await navEnv();
+		// The runner uses the default sessions dir (HOME-stubbed env), so the
+		// same default resolves to the same directory here.
+		const other = createSession(cwd);
+		other.appendMessage(user("older context"));
+		runner.recordUserInput("something");
+		runner.resumeSession(other.header.id);
+		expect(runner.userInputSnapshot()).toEqual([]);
 	});
 });

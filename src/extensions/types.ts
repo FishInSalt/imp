@@ -140,6 +140,13 @@ export interface ToolCallEvent {
 	name: string;
 	/** Schema-validated arguments (the same object execute() will receive). */
 	args: Record<string, unknown>;
+	/** #guardian-auto-mode (D17): the host's provenance fact for a call — true
+	 *  when the host verified a non-empty human-submission log for the emitting
+	 *  run. Absent or false means “no verified context”: a gate must check
+	 *  `=== true`, never the negation, before treating a call as
+	 *  auto-approvable. */
+	verifiedUserContext?: boolean;
+
 	/** True when the call comes from a subagent (task tool child), not the
 	 * main loop (M6a) — gates can apply stricter rules to children. */
 	subagent?: boolean;

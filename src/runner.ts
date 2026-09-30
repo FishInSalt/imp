@@ -63,8 +63,10 @@ import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
+import { runWithToolCallContext } from "./extensions/call-context.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
-import type { ExtensionFailure } from "./extensions/types.js";
+import type { ExtensionFailure, ToolCallDecision, ToolCallEvent } from "./extensions/types.js";
+import { UserInputLog } from "./extensions/user-input-log.js";
 import { formatTokens, shorten, usageMoneySegment, VERSION } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
@@ -296,6 +298,12 @@ export interface Runner {
 	/** Manual compaction for /compact (same code path as the auto hook, minus the gate). */
 	compactNow(signal?: AbortSignal): Promise<CompactOutcome>;
 	/** `/new`: fresh session store, empty history, re-assembled system prompt. */
+	/** #guardian-auto-mode (D11/D18): record one raw human submission — the
+	 *  repl machine's submission boundary is the only caller; the log is
+	 *  cleared on identity/history changes. */
+	recordUserInput(text: string): void;
+	/** A defensive copy of the verified user-input log (tests, diagnostics). */
+	userInputSnapshot(): readonly string[];
 	newSession(): void;
 	/** `/sessions`: sessions saved for this cwd, newest first. */
 	listSessions(): SessionInfo[];
@@ -432,6 +440,10 @@ class RunnerImpl implements Runner {
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
+	/** #guardian-auto-mode (D11/D18): provenance-verified human submissions —
+	 *  appended only at the submission boundary, cleared on identity/history
+	 *  changes; feeds the classify context block via the gate snapshot. */
+	private readonly userInputLog = new UserInputLog();
 	/** SA-05: the whole-session usage aggregate — one tracker per store instance
 	 *  (a swap on resume/new rebuilds from that store's entries). */
 	private usageTracker: UsageTotalsTracker | null = null;
@@ -592,7 +604,7 @@ class RunnerImpl implements Runner {
 				// apart (M6a — closes the M5 design Q3 gap). cwd is the child's
 				// own working directory — the worktree path under isolation (M6b).
 				onToolCall: (call, info) =>
-					this.options.extensions?.emitToolCall({
+					this.emitGatedToolCall({
 						type: "tool_call",
 						...call,
 						subagent: true,
@@ -848,6 +860,40 @@ class RunnerImpl implements Runner {
 		this.history.length = 0;
 		this.syncEstimateFloor(); // fresh session — no compaction boundary (review P0-2)
 		this.systemText = this.assembleSystem();
+		// #guardian-auto-mode D18: a new conversation invalidates every
+		// authorization the old one carried.
+		this.userInputLog.clear();
+	}
+
+	/** #guardian-auto-mode (D11): record one raw human submission. Called ONLY
+	 *  from the submission boundary (the repl machine's `handleLine`, before
+	 *  dispatch) — never for command/skill expansions (`submitPrompt`) and never
+	 *  by internal producers (task prompts, summaries, tool results). */
+	recordUserInput(text: string): void {
+		this.userInputLog.record(text);
+	}
+
+	/** A defensive copy of the verified user-input log (tests, diagnostics).
+	 *  The classify seam reads the copy frozen into the call snapshot instead. */
+	userInputSnapshot(): readonly string[] {
+		return this.userInputLog.snapshot();
+	}
+
+	/** #guardian-auto-mode (D15/D17): emit a tool_call with the host facts the
+	 *  classify seam relies on — the `verifiedUserContext` marker on the event
+	 *  and the call-scoped snapshot (frozen HERE, at the gate) around the
+	 *  dispatch. The snapshot is what the handler's `classify` call sees, not
+	 *  the live log. */
+	private emitGatedToolCall(event: ToolCallEvent): Promise<ToolCallDecision | undefined> | undefined {
+		const marked: ToolCallEvent = { ...event, verifiedUserContext: this.userInputLog.verified };
+		const context = {
+			callId: event.toolCallId,
+			subagent: event.subagent === true,
+			...(event.agent === undefined ? {} : { agent: event.agent }),
+			...(event.cwd === undefined ? {} : { cwd: event.cwd }),
+			userInputs: this.userInputLog.snapshot(),
+		};
+		return runWithToolCallContext(context, () => this.options.extensions?.emitToolCall(marked));
 	}
 
 	listSessions(): SessionInfo[] {
@@ -990,7 +1036,14 @@ class RunnerImpl implements Runner {
 		// A user-message target whose parent IS the current position ("re-type
 		// this message here") moves nothing — branchTo would rightly reject it.
 		const positionMoves = newLeaf !== store.getLeafId();
-		if (positionMoves) store.branchTo(newLeaf);
+		if (positionMoves) {
+			store.branchTo(newLeaf);
+			// #guardian-auto-mode D18: the move rewinds (or re-grows) history —
+			// authorizations recorded at the abandoned position no longer hold.
+			// Keyed on positionMoves, not on the summary's outcome: a failed
+			// branch summary still moved the position.
+			this.userInputLog.clear();
+		}
 		if (summary !== undefined) {
 			if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
 			// SA-05 stamps: usage + producing model + missing flag ride the entry.
@@ -1032,6 +1085,9 @@ class RunnerImpl implements Runner {
 		this.estimateFloor = loaded.compactionBoundary;
 		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.systemText = this.assembleSystem();
+		// #guardian-auto-mode D18: resumed history may predate the live log's
+		// entries — a restored conversation starts with none.
+		this.userInputLog.clear();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
 	}
 
@@ -1415,8 +1471,7 @@ class RunnerImpl implements Runner {
 				// knows the generic { block, reason } decision. Events carry the
 				// runner's cwd so gates resolve relative paths against the loop
 				// that is about to execute them (M6b).
-				onToolCall: (call) =>
-					this.options.extensions?.emitToolCall({ type: "tool_call", ...call, cwd: this.options.cwd }),
+				onToolCall: (call) => this.emitGatedToolCall({ type: "tool_call", ...call, cwd: this.options.cwd }),
 				onBeforeTurn: session
 					? async (history) => {
 							if (!this.autoCompact) return;

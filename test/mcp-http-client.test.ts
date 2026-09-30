@@ -292,6 +292,19 @@ describe("HttpTransport + McpClient", () => {
 		await fake.close();
 	});
 
+	it("forceKill during close abandons the DELETE; close still resolves promptly", async () => {
+		const fake = await startFakeMcpHttpServer({ deleteDelayMs: 1500 });
+		const client = makeClient(fake.url);
+		await client.connect();
+		const started = Date.now();
+		const closing = client.close();
+		expect(await waitUntil(() => fake.state.deleted === 1)).toBe(true);
+		client.forceKill();
+		await closing;
+		expect(Date.now() - started).toBeLessThan(1000); // abandoned, not awaited to 1500ms
+		await fake.close();
+	});
+
 	it("concurrent calls: a ping inside A's stream lands while B is pending", async () => {
 		const fake = await startFakeMcpHttpServer();
 		fake.options.onCall = (req, res, helpers) => {

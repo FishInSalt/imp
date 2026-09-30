@@ -39,6 +39,8 @@ export class HttpTransport implements McpTransport {
 	private protocolVersion: string | null = null;
 	private diagnostics = "";
 	private readonly controllers = new Set<AbortController>();
+	/** The DELETE issued by close(); forceKill() aborts it (M19 D4 abandon rule). */
+	private deleteController: AbortController | null = null;
 	/** Outgoing secrets scrubbed from every string this transport produces. */
 	private readonly secrets: string[];
 
@@ -81,22 +83,29 @@ export class HttpTransport implements McpTransport {
 		if (session === null) return;
 		const headers: Record<string, string> = { ...this.options.headers, "mcp-session-id": session };
 		if (this.protocolVersion !== null) headers["mcp-protocol-version"] = this.protocolVersion;
+		const controller = new AbortController();
+		this.deleteController = controller;
+		const timer = setTimeout(() => controller.abort(), DELETE_TIMEOUT_MS);
+		timer.unref?.();
 		try {
 			await fetch(this.options.url, {
 				method: "DELETE",
 				headers,
 				redirect: "error",
-				signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
+				signal: controller.signal,
 			});
 		} catch {
-			// server does not support DELETE / already gone — best effort (D4)
+			// server does not support DELETE / already gone / forceKill abandoned it (D4)
+		} finally {
+			clearTimeout(timer);
+			this.deleteController = null;
 		}
 	}
 
 	forceKill(): void {
-		if (this.closed) return;
 		this.closed = true;
 		for (const controller of [...this.controllers]) controller.abort();
+		this.deleteController?.abort();
 	}
 
 	getDiagnostics(): string {

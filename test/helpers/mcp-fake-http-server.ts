@@ -37,6 +37,7 @@ export interface FakeHttpOptions {
 	protocolVersion?: string;
 	sessionHeader?: boolean;
 	deleteStatus?: number;
+	deleteDelayMs?: number;
 	redirectTo?: string;
 	failInitialize?: 401;
 	initializeMode?: "sse" | "slow";
@@ -95,11 +96,20 @@ export async function startFakeMcpHttpServer(options: FakeHttpOptions = {}): Pro
 
 		if (req.method === "DELETE") {
 			state.deleted += 1;
-			if (options.deleteStatus !== undefined) {
-				res.writeHead(options.deleteStatus).end();
-				return;
+			const respond = (): void => {
+				try {
+					if (options.deleteStatus !== undefined) res.writeHead(options.deleteStatus).end();
+					else res.writeHead(200).end();
+				} catch {
+					// the client may have abandoned the DELETE (forceKill) — socket gone
+				}
+			};
+			if (typeof options.deleteDelayMs === "number") {
+				const timer = setTimeout(respond, options.deleteDelayMs);
+				timer.unref?.();
+			} else {
+				respond();
 			}
-			res.writeHead(200).end();
 			return;
 		}
 

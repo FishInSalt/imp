@@ -94,7 +94,7 @@ export interface ReplOptions {
 	extensions?: ExtensionRegistry;
 }
 
-type ReplState = "idle" | "running" | "compacting" | "exited";
+type ReplState = "idle" | "running" | "compacting" | "exiting" | "exited";
 
 /** Defensive cap on a non-edit fold body (tools truncate their own output
  *  already — this only bounds pathological results). */
@@ -362,6 +362,12 @@ interface ReplMachineOptions {
  */
 class ReplMachine {
 	private state: ReplState = "idle";
+	/** "exiting" is the bounded window of a graceful shutdown awaiting the
+	 *  MCP teardown (M19 D4); for every input path it behaves like "exited",
+	 *  but forceExit may still preempt it. */
+	private get isExiting(): boolean {
+		return this.state === "exited" || this.state === "exiting";
+	}
 	/** #startup-model-resolution (D5): per-SESSION one-shot guard for the
 	 *  "/settings defaultModel …" hint. Lives here (not per dispatched
 	 *  CommandContext, which is rebuilt per line) so one session hints once;
@@ -440,7 +446,7 @@ class ReplMachine {
 	}
 
 	handleLine(line: string, mode: SubmitMode = "steer"): void {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		this.receivedLine = true;
 		this.interruptCount = 0; // an accepted line resets the double-Ctrl+C counter
 		if (line.trim() === "") {
@@ -489,7 +495,7 @@ class ReplMachine {
 	 *  (M12 §11.3) overrides only the transcript echo; the session record
 	 *  keeps the full text. */
 	enqueuePrompt(text: string, display?: string): void {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		const trimmed = text.trim();
 		if (trimmed === "") return;
 		// #login-dialog: the dialog owns the machine while open — an
@@ -512,7 +518,7 @@ class ReplMachine {
 	}
 
 	handleInterrupt(): void {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		switch (this.state) {
 			case "idle": {
 				// typed-but-unsubmitted text is discarded, not counted as a quit gesture
@@ -556,7 +562,7 @@ class ReplMachine {
 	}
 
 	handleEof(): void {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		if (!this.receivedLine && !this.interactive) {
 			// zero-line piped stdin ("forgot -p"): cli prints HELP for exit code 1.
 			// On a real TTY, Ctrl+D with nothing typed is just a graceful exit.
@@ -645,7 +651,7 @@ class ReplMachine {
 	}
 
 	private async submitTurn(line: string, display?: string): Promise<void> {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		// #login-dialog: same refusal as enqueuePrompt (design §2.2.1) — all
 		// turn-start paths funnel through these two.
 		if (this.dialogOpen) {
@@ -1017,7 +1023,7 @@ class ReplMachine {
 		// M18: run boundary END — tools that connected mid-run flush now (the
 		// next run's toolMap picks them up).
 		this.mcp?.onRunEnd();
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		this.renderer.endRun();
 		// Stats placement (pi parity, 2026-09-10): the TUI transcript carries
 		// NO stats lines — per-run AND cumulative usage live in the footer.
@@ -1039,7 +1045,7 @@ class ReplMachine {
 		this.controller = null;
 		this.interruptCount = 0;
 		this.mcp?.onRunEnd(); // M18: same boundary as settleSuccess
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		this.renderer.endRun();
 		this.refreshFooter(); // partial usage may have landed before the failure
 		// Defensive: an AbortError racing the settle path is a user interrupt,
@@ -1107,7 +1113,7 @@ class ReplMachine {
 	 * the interrupt path (controller.abort); queued lines flush after, like
 	 * a turn. */
 	private async runBangCommand(command: string): Promise<void> {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		const bash = this.runner.getTool("bash");
 		if (bash === undefined) {
 			this.renderer.error("imp: ! needs the bash tool, which this session's tool set does not include");
@@ -1337,7 +1343,7 @@ class ReplMachine {
 
 	private returnToIdle(): void {
 		this.clearActivity();
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		if (this.pendingExitCode !== null) {
 			const code = this.pendingExitCode;
 			this.pendingExitCode = null;
@@ -1399,7 +1405,7 @@ class ReplMachine {
 	/** alt+up / esc+p (TUI): queued input is not a one-way door — pull it all
 	 *  back into the editor and keep editing. The run, if any, is untouched. */
 	handleDequeue(): void {
-		if (this.state === "exited") return;
+		if (this.isExiting) return;
 		if (this.queue.length === 0) {
 			this.renderer.note("▪ no queued messages to restore");
 			return;
@@ -1417,24 +1423,37 @@ class ReplMachine {
 	}
 
 	private gracefulExit(code: number): void {
-		if (this.state === "exited") return;
-		this.state = "exited";
-		void this.mcp?.close(); // M18: close MCP children before goodbye (batch D makes this awaited — M19 exiting-state design)
+		if (this.isExiting) return;
+		this.state = "exiting";
 		// #bash-abort D3: detached bash groups outlive the parent by
 		// construction — sweep them BEFORE anything else can exit the process.
 		killTrackedDetachedChildren();
 		const session = this.runner.session;
-		if (session?.isPersisted) {
-			const id8 = session.header.id.slice(0, 8);
-			this.renderer.note(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
-		} else {
-			this.renderer.note("▪ bye");
+		const note =
+			session?.isPersisted === true
+				? `▪ session ${session.header.id.slice(0, 8)} saved — resume with: imp -r ${session.header.id.slice(0, 8)}`
+				: "▪ bye";
+		void this.closeMcpThenFinish(code, note);
+	}
+
+	/** M19 D4: the graceful path awaits the bounded MCP teardown (the http
+	 *  DELETE, ≤3s) before finishing. forceExit may preempt: it flips to
+	 *  "exited" and forceKills, which abandons an in-flight DELETE; this
+	 *  continuation then settles without finishing again (finish is idempotent). */
+	private async closeMcpThenFinish(code: number, note: string): Promise<void> {
+		try {
+			await this.mcp?.close();
+		} finally {
+			if (this.state === "exiting") {
+				this.state = "exited";
+				this.renderer.note(note);
+				this.finish(code);
+			}
 		}
-		this.finish(code);
 	}
 
 	private forceExit(code: number): void {
-		if (this.state === "exited") return;
+		if (this.state === "exited") return; // "exiting" may be preempted (M19 D4)
 		this.state = "exited";
 		this.mcp?.forceKill(); // M18: synchronous best-effort kill
 		// #bash-abort D3: must run BEFORE this.exit(code) — after a real

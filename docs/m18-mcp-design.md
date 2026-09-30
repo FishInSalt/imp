@@ -1,6 +1,6 @@
 # M18 MCP 工具接入（stdio 直连）设计
 
-状态：已审批（2026-09-23，含 D6 修订 + 自审修复 P1×1/P2×4）
+状态：已审批（2026-09-23，含 D6 修订 + 自审修复 P1×1/P2×4）；**M19 扩展见 `docs/m19-mcp-http-design.md`（2026-09-29，远程 Streamable HTTP 传输）**
 分支：`feat/mcp-tools`
 参考：pi 经 `pi-mcp-adapter@2.34.0` 扩展实现（~29k 行 TS；本机源码 `/Users/z/.pi/agent/npm/node_modules/pi-mcp-adapter/`，引用坐标均指该目录）；imp 目标是**功能语义对齐**，不做架构对齐（D1）。
 
@@ -34,7 +34,7 @@ v1 协议面只有 initialize / tools/list / tools/call 三个方法 + 两个通
 
 | 项 | 场景 | 触发条件 |
 |---|---|---|
-| OAuth/HTTP 传输 | 远程托管服务器（GitHub/Notion 等），HTTPS+OAuth 2.1 | 需要用某个远程 MCP 服务器 |
+| OAuth/HTTP 传输 | 远程托管服务器（GitHub/Notion 等），HTTPS+OAuth 2.1 | 需要用某个远程 MCP 服务器（**2026-09-29 已触发**）——HTTP 传输已随 M19 落地；OAuth 子项仍延后（评估与触发条件：`docs/mcp-oauth-evaluation.md`） |
 | Sampling（服务器反向借宿主模型） | 代理型服务器不自带 key，请宿主代调 LLM | 出现依赖 sampling 的服务器 |
 | Elicitation（服务器向用户发结构化问句） | 调用中途让用户选工作区/账号 | 某服务器核心流程依赖中途问句 |
 | Resources / Prompts 面 | 文档型服务器（resources=文档页）、工作流模板 | 接入 resources 型服务器（如文档库） |
@@ -70,7 +70,7 @@ pi 把已注册工具（含 MCP）枚举进系统提示 `# Tools` 段，每行 `
 }
 ```
 
-**合并规则**：按发现序读取，后文件按服务器名覆盖前文件（项目覆盖全局）；同名服务器**整体替换**，不做字段级合并——**有意偏离 pi**（pi 的 mergeServerMaps 是字段级合并，且带“凭据绑定 url”安全规则：高优先源换了 url 不得继承低优先源的凭据，adapter config.ts:661-669；v1 stdio 无凭据面，整体替换更简单可预测）。触发条件：引入 HTTP/凭据型服务器时改为字段级合并+凭据绑定规则。`disabled: true` → 跳过连接，/mcp 显示 disabled——**与 pi 对齐**（pi 的 /mcp 面板会把 disabled 写进项目层配置，adapter config.ts:1168-1206；原设计误判为“pi 无此消费面”，审查更正）。
+**合并规则**：按发现序读取，后文件按服务器名覆盖前文件（项目覆盖全局）；同名服务器**整体替换**，不做字段级合并——**有意偏离 pi**（pi 的 mergeServerMaps 是字段级合并，且带“凭据绑定 url”安全规则：高优先源换了 url 不得继承低优先源的凭据，adapter config.ts:661-669；v1 stdio 无凭据面，整体替换更简单可预测）。触发条件：引入 HTTP/凭据型服务器时改为字段级合并+凭据绑定规则。**【已被 M19 D3 取代（2026-09-29）：维持整体替换——对跨源凭据继承构造上免疫；残余成本（字面 token 需复述）与重访触发见 docs/m19-mcp-http-design.md】**`disabled: true` → 跳过连接，/mcp 显示 disabled——**与 pi 对齐**（pi 的 /mcp 面板会把 disabled 写进项目层配置，adapter config.ts:1168-1206；原设计误判为“pi 无此消费面”，审查更正）。
 
 **环境变量展开**（pi `utils.ts:136-138` 三形态）：`command`/`args[]`/`env` 值中 `${VAR}`、`$env:VAR`、`{env:VAR}` → 展开，未定义变量替换为空串。
 

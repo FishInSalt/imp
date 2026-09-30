@@ -469,8 +469,8 @@ the shared surface entirely (see above).
 
 ## MCP (Model Context Protocol)
 
-imp can consume tools exposed by MCP servers over stdio — the same config
-files pi's adapter reads, so an existing setup works unchanged:
+imp consumes tools from MCP servers over **stdio** (`command`) or
+**Streamable HTTP** (`url`), so existing setups work unchanged:
 
 ```jsonc
 // ~/.config/mcp/mcp.json (or ~/.agents/mcp.json, or <project>/.mcp.json)
@@ -480,6 +480,16 @@ files pi's adapter reads, so an existing setup works unchanged:
 			"command": "npx",
 			"args": ["-y", "@z_ai/mcp-server"],
 			"env": { "Z_AI_API_KEY": "…" }
+		},
+		"tushare": {
+			// Tushare's MCP server carries the token in the URL — the env
+			// placeholder keeps it out of the file (export TUSHARE_MCP_TOKEN first)
+			"url": "https://api.tushare.pro/mcp/token=${TUSHARE_MCP_TOKEN}"
+		},
+		"github": {
+			// or a hosted server expecting a bearer header
+			"url": "https://api.githubcopilot.com/mcp/",
+			"headers": { "Authorization": "Bearer ${GITHUB_PAT}" }
 		}
 	}
 }
@@ -487,25 +497,34 @@ files pi's adapter reads, so an existing setup works unchanged:
 
 Discovery order (later files override earlier ones per server, whole entry):
 `~/.config/mcp/mcp.json` → `~/.agents/mcp.json` → `~/.agents/mcp/mcp.json` →
-`<project>/.mcp.json` → `<project>/mcp.json`. Values in `command`/`args`/`env`
-expand `${VAR}`, `$env:VAR` and `{env:VAR}` placeholders. `"disabled": true`
-on a server skips it (visible in `/mcp`).
+`<project>/.mcp.json` → `<project>/mcp.json`. The two project files are
+**executable resources behind the trust gate**: an untrusted directory skips
+them with a note (`--trust` to enable). Values in `command`/`args`/`env` —
+and in `url`/`headers` — expand `${VAR}`, `$env:VAR` and `{env:VAR}`
+placeholders. `"disabled": true` skips a server (visible in `/mcp`). `url`
+must be https (plain http only for loopback hosts); redirects are never
+followed — a token may ride the URL, and following one could leak it.
 
 Every server tool registers flat as `<server>_<tool>` (e.g.
-`zai-vision_analyze_image`) and is callable by the model like a built-in tool.
+`zai-vision_analyze_image`) and is callable by the model like a built-in
+tool. Server keys must be lowercase: the composite name has to match
+`^[a-z][a-z0-9_-]{0,63}$`, and a mismatched key registers zero tools while
+`/mcp` still says connected — rename the key (e.g. `tushareMcp` → `tushare`).
 Connections start asynchronously at startup (npx cold starts can take a
 while); tools that connect while a run is in flight join at the next run
 boundary. A server that dies mid-session reconnects transparently on the next
-tool call. `/mcp` shows per-server status; `IMP_MCP=0` or
+tool call; an HTTP session that expires is re-initialized and the call
+retried once. `/mcp` shows per-server status; `IMP_MCP=0` or
 `"mcp": {"enabled": false}` in settings disables the module entirely
-(no config found = zero cost, nothing spawns).
+(no config found = zero cost, nothing spawns, no requests are made).
 
-**v1 scope** (stdio + tools only; deliberate, each deferral has a trigger):
-no OAuth/HTTP transports, no sampling or elicitation, no resources/prompts
-surfaces, no per-call approval gates, no cross-vendor config import
-(cursor/claude/windsurf), and no `mcp` proxy tool (flat registration until a
-server with ≥10 tools shows up). Design + trigger table:
-`docs/m18-mcp-design.md`.
+**Scope** (tools only; deliberate, each deferral has a trigger): no OAuth
+(GitHub/Tushare authenticate with a PAT / a URL token; OAuth evaluation and
+triggers: `docs/mcp-oauth-evaluation.md`), no sampling or elicitation, no
+resources/prompts surfaces, no per-call approval gates, no cross-vendor
+config import (cursor/claude/windsurf), and no `mcp` proxy tool (flat
+registration until a server with ≥10 tools shows up). Design + trigger table:
+`docs/m18-mcp-design.md`; HTTP design: `docs/m19-mcp-http-design.md`.
 
 ## Extensions
 

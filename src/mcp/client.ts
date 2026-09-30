@@ -187,10 +187,13 @@ export class McpClient {
 		return this.transport.close();
 	}
 
-	/** Synchronous best-effort teardown for the double-Ctrl+C force path. */
+	/** Synchronous best-effort teardown for the double-Ctrl+C force path.
+	 *  Must reach the transport even when close() already ran: that is how a
+	 *  forceExit preempts an in-flight http DELETE (M19 D4 abandon rule). */
 	forceKill(): void {
-		if (this.closed) return;
-		this.markClosed(new McpConnectionError("connection closed", this.transport.getDiagnostics()));
+		if (!this.closed) {
+			this.markClosed(new McpConnectionError("connection closed", this.transport.getDiagnostics()));
+		}
 		this.transport.forceKill();
 	}
 

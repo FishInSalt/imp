@@ -43,7 +43,9 @@ imp's extension API deliberately has no model access
 (`src/extensions/types.ts:88-89`: “three read-only facts, three registration
 methods, one subscriber, one ask-the-human method — **eight members**.
 Anything an extension cannot do with this, it cannot do.”). This batch grows it
-to **nine**, with one purpose-built member, and amends that docstring.
+to **nine**, with one purpose-built member, and amends that docstring **and**
+the stale prologue in `docs/m4-extensions-design.md:227` (“Seven members
+total”) — a reader will trip on the older count otherwise.
 
 ## 2. Ownership
 
@@ -117,12 +119,12 @@ Semantics, following `api.confirm`'s promises:
 |---|---|---|
 | Request assembly | `system` = extension text + a host-appended, unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor's one-shot call: `src/core/compaction.ts:397-423`, request shape `src/provider/types.ts:19-34` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
-| Model resolution | `request.model` → `resolveModel()`; invalid/unavailable ⇒ session model, and the record says so | `src/provider/resolve.ts:110,126` |
-| Timeout | host `AbortController` + wall-clock constant (draft: 10 s) — the provider layer has no stream timeout of its own | new constant |
+| Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
+| Timeout | host `AbortController` + wall-clock constant (draft: 10 s). The provider layer has no *wall-clock* timeout of its own, but abort plumbing exists (`LLMRequest.signal`, `src/provider/types.ts:32`; honored in `anthropic.ts:220,248`) — the seam drives it. Test fakes must resolve/reject on `signal.abort`, mirroring `abortSafe` (`src/provider/shared.ts:31-35`) | |
 | Output contract | host appends: reply with exactly one JSON object `{"verdict":"allow"|"ask","reason":"<one sentence>"}` | new |
 | Defensive parse | first JSON object; `verdict` strictly `allow`/`ask` (anything else, incl. `block`, is invalid); `reason` string, capped (draft: 200 chars) and run through `sanitizeDisplay` | `src/repl/tool-presentation.ts:14` |
-| Any deviation | garbage, refusal, empty, truncated, provider error, timeout, aborted ⇒ `undefined` | |
-| Accounting | report usage under a new ledger kind `"classifier"` | `src/core/usage-ledger.ts:15` (closed union) |
+| Any deviation | garbage, refusal, empty, truncated, provider error (including a configured reference whose provider has no usable credentials — resolution succeeds, the call fails), timeout, aborted ⇒ `undefined` | |
+| Accounting | **Phase A: no ledger attribution — documented limitation.** The session totals tracker derives from append-only session entries (`src/core/usage-totals.ts:219`), and per-attempt buckets are fixed (`AttemptUsage.task/summarizer`, `src/core/usage-ledger.ts:17-30,59`); the seam's call has no entry kind, so a classifier bucket is a follow-up (§11.5). The record line still names the model actually used | |
 | Audit record | on success: one record line (draft wording in §7); on failure: one line per session (first failure only), then silent | `▪` note channel |
 
 The host does **not** expose: provider choice beyond the reference string,
@@ -131,16 +133,23 @@ raw response text. The seam is one question in, one verdict out.
 
 ### 4.3 Serving and injection — the free degradation (D8)
 
-`api.confirm` is injected by the surface: the TUI passes its handler
-(`src/cli.ts:484-505` → `loader.ts:233`), print/legacy pass nothing and
-`confirm` declines. `classify` follows the same pattern:
+`api.confirm` is injected by the surface: `src/cli.ts:540` builds the confirm
+host for **any interactive session** (`interactive ? new TtyConfirm(renderer)
+: undefined`) and passes it at `:593`; print mode passes `undefined`
+(`cli.ts:1005`). `classify` follows the same pattern, in **both interactive
+shells**:
 
-- **TUI**: the host passes a `classify` implementation that has the renderer
-  and provider access.
-- **print / legacy / tests**: nothing is passed; `api.classify` returns
-  `undefined` without touching the network — so auto mode on a non-interactive
-  host degrades to today's behavior exactly (classify unavailable → confirm →
-  false → block).
+- **Interactive — TUI *and* the legacy readline shell.** The legacy shell has a
+  real `[y/N]` prompt (`repl.ts:319`), so by I3 it must serve the seam. The
+  classify handler is created the same way as the confirm host, beside it in
+  the repl layer — which is also where `sanitizeDisplay` lives
+  (`src/repl/tool-presentation.ts:14`), so no module move is needed. The
+  classifier itself prompts nobody: only the *fallback* differs between TUI
+  (picker) and legacy ([y/N]); records go through `renderer.note` on both.
+- **Non-interactive — print mode (`cli.ts:1005`) and test harnesses.** Nothing
+  is passed; `api.classify` returns `undefined` without touching the network —
+  so auto mode on a non-interactive host degrades to today's behavior exactly
+  (classify unavailable → confirm → false → block).
 
 This is the design's cheapest safety property: a headless `imp -p` run can
 never auto-approve, no matter what the config says.
@@ -154,6 +163,18 @@ still ignore an `ask` verdict and run the tool — that power is inherent to
 `tool_call` handlers; what the seam guarantees is that the *consultation and
 verdict are on the record*. This is the same honesty principle as D9 of the
 confirm-prompt design: the host names what the host saw.)
+
+### 4.5 Concurrency and mid-flight changes
+
+- An in-flight classify call keeps the parameters it started with; a mode flip
+  or `/guardian reload` applies to the next gated call only (the mode and the
+  breaker are read before the call).
+- A classify call can overlap an open confirm picker (e.g. a child run's
+  gated call while the parent's picker is up). Records write through the `▪`
+  note channel — the same channel confirm's own record uses before its picker
+  appears — so the seam introduces no new selector interaction.
+- The config file is **read-only** in Phase A (no “remember” feature), so
+  symlinks and ownership are a non-issue; reads follow the OS.
 
 ## 5. The guardian consumer
 
@@ -204,18 +225,22 @@ cleared while manual to keep the footer quiet — draft).
 
 ### 5.4 Call site
 
-Inside the existing ask tier, replacing the unconditional `await api.confirm`:
+Inside the existing **bash** ask tier (`guardian.mjs:225`), replacing its
+unconditional `await api.confirm`. The write/edit tier (`:246`) keeps its
+unconditional confirm in Phase A (§9.1) — the mode check is added only to the
+bash branch:
 
 ```
 if (mode === "manual")            → confirm (today's code path, untouched)
-else:
+else (bash ask tier only):
   verdict = await api.classify({ system, prompt, model: config.model })
   undefined → confirm(detail + "\nclassifier unavailable")     [breaker counts]
   ask       → confirm(detail + "\nclassifier: " + reason)      [breaker counts]
   allow     → return undefined (run)                            [breaker resets]
 ```
 
-The hard-floor branch is untouched and never reaches this code.
+The hard-floor branch (`guardian.mjs:188-210`) is untouched and never reaches
+this code.
 
 ### 5.5 What the classifier sees
 
@@ -253,9 +278,9 @@ current format (append-only, never fatal — unchanged contract).
 
 | # | Invariant | Why |
 |---|---|---|
-| I1 | The hard floor is never classified and never negotiable. | A model must not be able to talk the gate out of `/etc`, `~/.ssh`, home-root rm. |
+| I1 | The floor branch **precedes** the classifier branch and returns before any classify call can happen (`guardian.mjs:188-210,241-242`). The seam cannot enforce this — it is a property of guardian's code shape, pinned by test 10. | A model must not be able to talk the gate out of `/etc`, `~/.ssh`, home-root rm. |
 | I2 | Any classifier failure ⇒ ask the human. No fail-open path exists in any branch. | The feature's purpose is to reduce interruptions, not to remove the human. |
-| I3 | A surface without an interactive prompt does not serve the seam. | Headless runs keep today's block behavior; “auto” can never mean “unattended allow”. |
+| I3 | A surface without an interactive prompt (print mode, test harnesses) does not serve the seam. The legacy readline shell **is** interactive (its `[y/N]` prompt) and therefore does serve it. | Headless runs keep today's block behavior; “auto” can never mean “unattended allow”. |
 | I4 | Phase A verdicts are `{allow, ask}`; the model cannot block. | A hallucinating classifier must not silently kill legitimate work; blocking stays deterministic. |
 | I5 | The verdict record is written by the host at call completion, before the extension's decision is known. | Auditability is a property of the seam, not of extension good behavior (D9). |
 | I6 | Manual is the default; mode changes are explicit, recorded, session-scoped. | A feature that loosens a gate must be opted into, visibly. |
@@ -279,29 +304,35 @@ The footer shows `guardian: auto` while active.
 
 **Host seam (new test file)**
 1. success: fake provider returns the contract JSON ⇒ verdict parsed, record
-   line exact bytes, usage reported as `classifier`;
+   line exact bytes;
 2. garbage / refusal / truncated output ⇒ `undefined` (each a pin);
 3. `verdict: "block"` ⇒ `undefined` (I4 at the seam);
-4. timeout ⇒ `undefined` (fake provider that never settles / respects abort);
+4. timeout ⇒ `undefined` — the fake provider must honor `request.signal`
+   (resolve/reject on abort, like `abortSafe`), else the test itself hangs;
 5. over-cap input ⇒ `undefined`, provider not called;
-6. **no-host surfaces never call the provider** (I3: print/legacy injection);
+6. **non-interactive surfaces never call the provider** (I3: print mode's
+   `undefined` injection and test harnesses);
 7. resolvable model reference is honored; unresolvable ⇒ session model + record
    notes the fallback;
-8. concurrency: two overlapping classify calls do not interleave state.
+8. concurrency: two overlapping classify calls do not interleave state;
+9. wiring: the classify handler is passed to `loadExtensionSetup` exactly when
+   `interactive` — the same condition as `confirm` (`cli.ts:540,593`).
 
 **guardian (existing double grows `classify`)**
-9. floor command in auto mode ⇒ classify **never called**, block returned (I1);
-10. allow ⇒ no `confirm` call, handler returns undefined;
-11. ask ⇒ `confirm` called, reason attached to detail;
-12. unavailable ⇒ `confirm` called;
-13. breaker: three non-allows ⇒ mode flips to manual, subsequent matches go
+10. floor command in auto mode ⇒ classify **never called**, block returned (I1);
+11. allow ⇒ no `confirm` call, handler returns undefined;
+12. ask ⇒ `confirm` called, reason attached to detail;
+13. unavailable ⇒ `confirm` called;
+14. breaker: three non-allows ⇒ mode flips to manual, subsequent matches go
     straight to confirm without classify;
-14. `/guardian` toggle/set/status/reload; unknown argument ⇒ usage;
-15. config: missing file ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
-    passed through to the request; reload picks up edits.
+15. `/guardian` toggle/set/status/reload; unknown argument ⇒ usage;
+16. config: missing file ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
+    passed through to the request; reload picks up edits;
+17. the write/edit tier in auto mode still goes straight to `confirm`
+    (no classify) — the Phase A scope pin.
 
 **TUI**
-16. the record lines of §7 render through the `▪` channel with the caller label
+18. the record lines of §7 render through the `▪` channel with the caller label
     (frozen-frame pins, like the confirm-prompt batch).
 
 **Mutation checks** (after green): drop the floor short-circuit; make a failure
@@ -311,9 +342,10 @@ sanitize/cap step — each must turn at least one pin red.
 ## 9. Phases and non-goals
 
 ### 9.1 Phase A (this batch)
-Seam + global config + `/guardian` + modes + breaker + bash ask tier + records
-+ tests. The write/edit gate stays manual (its risk is context-dependent and
-its prompt shape differs; adding it later is additive).
+Seam + global config + `/guardian` + modes + breaker + the **bash ask tier only**
+(`guardian.mjs:225`) + records + tests. The write/edit tier (`:246`) keeps its
+unconditional `confirm` (its risk is context-dependent and its prompt shape
+differs; adding it later is additive) — pinned by test 17.
 
 ### 9.2 Phase B (specified then, not now)
 User rules file (`.imp/guardian.json` project file with tighten-only keys;
@@ -374,8 +406,9 @@ write-gate classification, possibly a `block` verdict for the classifier.
 3. Failure-record dedupe: “first per session” (draft) vs every failure vs none?
 4. `auto.model` reference syntax — the exact `provider/model` grammar from
    `resolve.ts`, and what “unavailable” diagnostics look like.
-5. Ledger kind name (`classifier`) and whether cost surfaces must group it
-   with `summarizer` as “side calls”.
+5. Cost accounting for classifier calls is deferred: Phase A reports nothing
+   (the totals tracker derives from session entries, `usage-totals.ts:219`);
+   the follow-up needs a session-entry kind so `/cost`-style surfaces see it.
 6. Constants: 10 s timeout, 400 max tokens, 200-char reason, 8 KB input cap —
    all drafts.
 7. Does the footer show `guardian: manual` permanently (noise) or only `auto`
@@ -383,4 +416,19 @@ write-gate classification, possibly a `block` verdict for the classifier.
 
 ## 12. Review log
 
-- R1: *(pending)*
+- R1: **NEEDS REVISION** (8 findings, adversarial, base `1a16b75`). P0: §4.3's
+  surface list wrongly claimed the legacy shell is non-interactive — it builds
+  the same `TtyConfirm` host (`cli.ts:540,593`) and has a real `[y/N]` prompt
+  (`repl.ts:319`), so by I3 it must serve the seam. P1: the accounting claim
+  ignored that the ledger is a fixed-shape per-attempt bucket set
+  (`usage-ledger.ts:17-30,59`) and the totals tracker derives from session
+  entries (`usage-totals.ts:219`) ⇒ Phase A now documents **no attribution**
+  plus a Phase-B follow-up; §5.4 now states the mode check is wired into the
+  bash ask tier only (the write tier at `:246` stays manual, pinned by test 17).
+  P2: I1 weakened to the provable claim (branch order, pinned by test 10); the
+  timeout row now exercises the existing `LLMRequest.signal` abort plumbing and
+  requires abort-respecting fakes; §4.3 fixes the `sanitizeDisplay` layering by
+  placing the handler in the repl layer (no module move). P3: anchors corrected
+  (`resolve.ts:126`; `cli.ts:491-493,502,540,593,1005`); both stale member
+  counts amended (`types.ts:88-89`, `m4:227`); concurrency/mid-flight, symlink
+  and no-auth cases specified (§4.2, §4.5). All folded.

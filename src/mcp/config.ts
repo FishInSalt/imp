@@ -1,9 +1,11 @@
 /**
- * MCP config discovery (M18, docs/m18-mcp-design.md §2).
+ * MCP config discovery (M18, docs/m18-mcp-design.md §2; M19 D7 trust gate).
  *
  * Five locations in pi-mcp-adapter's order (adapter config.ts:15-21):
  * generic global ~/.config/mcp/mcp.json → ~/.agents/mcp.json →
  * ~/.agents/mcp/mcp.json → project .mcp.json → project mcp.json.
+ * The two project-tier files ride the M8 trust gate: `projectAllowed:false`
+ * skips them unread (one teaching note when a skipped file exists).
  * Later files override earlier ones per server name (WHOLE entry — a
  * deliberate deviation from pi's field-level merge, which carries a
  * credential-binding rule that a stdio-only v1 has no surface for).
@@ -109,11 +111,24 @@ export function discoverMcpConfig(options: {
 	cwd: string;
 	/** Full override of the discovery paths (hermetic tests). */
 	paths?: string[];
+	/** M19 F1 (docs/m19-mcp-http-design.md D7): the M8 trust bit for the
+	 *  project tier. REQUIRED — fail-closed plumbing: every caller must decide
+	 *  explicitly; false means the two project-tier files are not even read. */
+	projectAllowed: boolean;
 }): McpConfigResult {
 	const notes: string[] = [];
 	const paths = options.paths ?? mcpConfigPaths(options);
+	// The project-tier files are executable resources under the M8 trust gate:
+	// a refused directory must not read them (one teaching note, and only when
+	// a skipped file actually exists — refused dirs without mcp config stay quiet).
+	const projectPaths = new Set([join(options.cwd, ".mcp.json"), join(options.cwd, "mcp.json")]);
+	const gated = (file: string): boolean => !options.projectAllowed && projectPaths.has(file);
+	if (paths.some((file) => gated(file) && existsSync(file))) {
+		notes.push("mcp: project config skipped — directory not trusted (--trust to enable)");
+	}
 	const byName = new Map<string, McpServerConfig>();
 	for (const file of paths) {
+		if (gated(file)) continue;
 		if (!existsSync(file)) continue;
 		let parsed: unknown;
 		try {

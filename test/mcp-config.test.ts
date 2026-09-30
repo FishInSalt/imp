@@ -58,7 +58,11 @@ describe("expandEnvPlaceholders", () => {
 
 describe("discoverMcpConfig", () => {
 	it("returns zero servers and no notes when nothing exists", () => {
-		const result = discoverMcpConfig({ home: join(dir, "empty-home"), cwd: join(dir, "empty-cwd") });
+		const result = discoverMcpConfig({
+			home: join(dir, "empty-home"),
+			cwd: join(dir, "empty-cwd"),
+			projectAllowed: true,
+		});
 		expect(result.servers).toEqual([]);
 		expect(result.notes).toEqual([]);
 		expect(result.paths).toHaveLength(5);
@@ -83,7 +87,7 @@ describe("discoverMcpConfig", () => {
 				}),
 				"utf-8",
 			);
-			const result = discoverMcpConfig({ home, cwd: join(dir, "h1-cwd") });
+			const result = discoverMcpConfig({ home, cwd: join(dir, "h1-cwd"), projectAllowed: true });
 			expect(result.servers).toHaveLength(1);
 			expect(result.servers[0]?.env).toEqual({ KEY: "secret", OTHER: "secret" });
 		} finally {
@@ -96,7 +100,7 @@ describe("discoverMcpConfig", () => {
 			JSON.stringify({ mcpServers: { srv: { command: "global-cmd" }, other: { command: "keep-me" } } }),
 		);
 		writeProject(JSON.stringify({ mcpServers: { srv: { command: "project-cmd", args: ["--x"] } } }));
-		const result = discoverMcpConfig({ home: dir, cwd: dir });
+		const result = discoverMcpConfig({ home: dir, cwd: dir, projectAllowed: true });
 		// home is the dir above .config — the five paths include our global file
 		const srv = result.servers.find((s) => s.name === "srv");
 		const other = result.servers.find((s) => s.name === "other");
@@ -107,14 +111,14 @@ describe("discoverMcpConfig", () => {
 
 	it("skips a server with disabled true but keeps it visible to /mcp", () => {
 		writeProject(JSON.stringify({ mcpServers: { off: { command: "x", disabled: true } } }));
-		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir });
+		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir, projectAllowed: true });
 		expect(result.servers).toHaveLength(1);
 		expect(result.servers[0]?.disabled).toBe(true);
 	});
 
 	it("notes and skips a malformed JSON file, keeps other paths working", () => {
 		writeProject("{ not json");
-		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir });
+		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir, projectAllowed: true });
 		expect(result.servers).toEqual([]);
 		expect(result.notes).toHaveLength(1);
 		expect(result.notes[0]).toContain("not valid JSON");
@@ -130,15 +134,57 @@ describe("discoverMcpConfig", () => {
 				},
 			}),
 		);
-		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir });
+		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir, projectAllowed: true });
 		expect(result.servers.map((s) => s.name)).toEqual(["good"]);
 		expect(result.notes).toHaveLength(2);
 	});
 
 	it("notes a file whose mcpServers is not an object", () => {
 		writeProject(JSON.stringify({ mcpServers: ["nope"] }));
-		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir });
+		const result = discoverMcpConfig({ home: join(dir, "no-home"), cwd: dir, projectAllowed: true });
 		expect(result.servers).toEqual([]);
 		expect(result.notes[0]).toContain("mcpServers");
+	});
+
+	it("#mcp-trust: projectAllowed=false skips both project files and teaches once (global still read)", () => {
+		const home = join(dir, "trust-home");
+		const cwd = join(dir, "trust-cwd");
+		mkdirSync(join(home, ".config", "mcp"), { recursive: true });
+		writeFileSync(
+			join(home, ".config", "mcp", "mcp.json"),
+			JSON.stringify({ mcpServers: { g: { command: "g-cmd" } } }),
+			"utf-8",
+		);
+		mkdirSync(cwd, { recursive: true });
+		writeFileSync(
+			join(cwd, ".mcp.json"),
+			JSON.stringify({ mcpServers: { p: { command: "p-cmd" } } }),
+			"utf-8",
+		);
+		writeFileSync(
+			join(cwd, "mcp.json"),
+			JSON.stringify({ mcpServers: { q: { command: "q-cmd" } } }),
+			"utf-8",
+		);
+
+		const blocked = discoverMcpConfig({ home, cwd, projectAllowed: false });
+		expect(blocked.servers.map((s) => s.name)).toEqual(["g"]);
+		expect(blocked.notes).toEqual([
+			"mcp: project config skipped — directory not trusted (--trust to enable)",
+		]);
+		expect(blocked.paths).toHaveLength(5);
+
+		const allowed = discoverMcpConfig({ home, cwd, projectAllowed: true });
+		expect(allowed.servers.map((s) => s.name)).toEqual(["g", "p", "q"]);
+		expect(allowed.notes).toEqual([]);
+	});
+
+	it("#mcp-trust: projectAllowed=false stays silent when no project file exists", () => {
+		const home = join(dir, "trust-home-quiet");
+		const cwd = join(dir, "trust-cwd-quiet");
+		mkdirSync(cwd, { recursive: true });
+		const result = discoverMcpConfig({ home, cwd, projectAllowed: false });
+		expect(result.servers).toEqual([]);
+		expect(result.notes).toEqual([]); // no skipped file → no noise (D4's zero-cost stance)
 	});
 });

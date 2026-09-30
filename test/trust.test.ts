@@ -152,6 +152,20 @@ describe("trustRequiringResources", () => {
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 	});
 
+	it("#mcp-trust: project-tier mcp config files gate (both names, files only)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-trust-mcp-"));
+		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-mcp-home-"));
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
+		writeFileSync(join(dir, ".mcp.json"), "{}\n");
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".mcp.json"]);
+		writeFileSync(join(dir, "mcp.json"), "{}\n");
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".mcp.json", "mcp.json"]);
+		// a directory shadowing the name must not gate (SYSTEM.md precedent)
+		const shadow = mkdtempSync(join(tmpdir(), "imp-trust-mcp-shadow-"));
+		mkdirSync(join(shadow, ".mcp.json"));
+		expect(trustRequiringResources(shadow, elsewhere)).toEqual([]);
+	});
+
 	it("cwd AT the home dir gates nothing — the user's own installation (M8 review; #trust-home-fix narrowed the tree exemption)", () => {
 		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
 		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });

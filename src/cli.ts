@@ -681,13 +681,18 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 /** M18 MCP setup (interactive + print): discovery, gate, manager, and the
  *  initial fire-and-forget connections. Returns undefined when disabled or
  *  unconfigured — callers treat that as "module inert" (D4).
+ *  M19 batch 0: project-tier config rides the M8 trust gate (the same
+ *  session-resolved `projectSettingsAllowed` bit as extensions/settings).
  *  IMP_MCP=0 is the env escape hatch (mirrors IMP_AUTOCOMPACT) for CI and
  *  quick diagnostics. */
 function createMcpSetup(renderer: Renderer, runner: Runner): McpManager | undefined {
 	if (process.env.IMP_MCP === "0") return undefined;
 	const settings = runner.effectiveSettings();
 	if (settings.mcp?.enabled === false) return undefined;
-	const discovered = discoverMcpConfig({ cwd: process.cwd() });
+	const discovered = discoverMcpConfig({
+		cwd: process.cwd(),
+		projectAllowed: runner.projectSettingsAllowed,
+	});
 	for (const note of discovered.notes) renderer.note(note);
 	if (discovered.servers.length === 0) return undefined;
 	const manager = new McpManager({

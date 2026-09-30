@@ -19,7 +19,7 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D5 | User-defined filter rules (Claude Code's allowlist analog) are **Phase B**, layered *below* the classifier; Phase A ships modes + classifier + minimal config. |
 | D6 | Exactly **one new host seam member** (`api.classify`). Policy stays with the extension; model resolution, auth, accounting (deferred in Phase A — §11.5), timeouts and the audit record stay with the host. |
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
-| D8 | Failure posture is **fail-to-ask**, and every fallback is a **fresh** confirmation — no session-memory reuse (D13). A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
+| D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13). Shadow and manual are not fallbacks — they keep today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
 | D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
 | D11 | **Positioning (R4 #1)**: task-aware with **host-supplied trusted context** — the emitting run's most recent **user-role** messages (≤3, capped, host-delimited). Never assistant text: a claim of authorization by the executing model is not evidence. The classifier may allow only when safety *and* fit with the stated intent are clear from the given evidence; otherwise ask. |
@@ -375,9 +375,14 @@ active.
     shadow (I8);
 22. shadow: classify called, confirm called with today's options (sessionKey
     kept), verdict recorded, counters updated;
-23. **cached approval cannot bypass the auto fallback**: with a remembered
-    sessionKey present, the auto `ask`/unavailable path still prompts (the
-    fallback call omits `sessionKey`; I2).
+23. **fresh-fallback argument pin**: the auto `ask`/unavailable path's `confirm`
+    call carries **no `sessionKey`/`rememberLabel`** — asserted on the options
+    argument. (The guardian double's `confirm` is a bare spy
+    (`test/guardian.test.ts:20-47`) and does not model the host cache; the
+    cache lives in `TtyConfirm.sessionAllowed`, `repl.ts:263` — hence the
+    pin's real observable is the negated argument.) Optional companion pin on
+    the `TtyConfirm` side: a confirm call without `sessionKey` is never
+    short-circuited by a remembered key (I2).
 
 **TUI**
 24. the record lines of §7 render through the `▪` channel with the caller label.
@@ -496,4 +501,11 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   cache and be approved without asking ⇒ D13/I2: fresh fallback confirmations.
   Validation gap: chain tests cannot show answer quality ⇒ D14: shadow mode +
   counters + the manual → shadow → auto rollout. All folded in rev 2.
-- R5: *(pending — verification of the rev 2 fold)*
+- R5: **CONFIRMED WITH NOTES** — all four folds verified present with mechanisms
+  and pins; the new feasibility claims checked against code (post-startup
+  binding precedent `repl.ts:324-330,1643`; child `history`
+  `subagent.ts:176`; detector data at `guardian.mjs:190,115,138`); nothing from
+  R1-R3 broken. N1: test 23 reworded to the arg-negation observable (the double
+  models no cache). N2: D8 scoped to auto-mode fallbacks (shadow/manual keep
+  session memory). Both folded.
+- R6: *(pending — micro-verification of N1/N2)*

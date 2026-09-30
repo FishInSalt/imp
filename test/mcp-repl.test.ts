@@ -72,6 +72,7 @@ describe("/mcp command", () => {
 		const manager = new McpManager({
 			servers: [
 				{
+					kind: "stdio",
 					name: "up",
 					command: process.execPath,
 					args: [SERVER, "ok"],
@@ -79,13 +80,14 @@ describe("/mcp command", () => {
 					disabled: false,
 				},
 				{
+					kind: "stdio",
 					name: "down",
 					command: process.execPath,
 					args: [SERVER, "neverinit"],
 					env: {},
 					disabled: false,
 				},
-				{ name: "off", command: "x", args: [], env: {}, disabled: true },
+				{ kind: "stdio", name: "off", command: "x", args: [], env: {}, disabled: true },
 			],
 			cwd: tmp,
 			version: "test",
@@ -174,6 +176,7 @@ describe("e2e: the model calls a bridged MCP tool through the real loop", () => 
 		const manager = new McpManager({
 			servers: [
 				{
+					kind: "stdio",
 					name: "fake",
 					command: process.execPath,
 					args: [SERVER, "ok"],

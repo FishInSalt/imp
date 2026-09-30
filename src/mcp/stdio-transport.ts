@@ -55,9 +55,13 @@ export class StdioTransport implements McpTransport {
 		});
 	}
 
-	send(msg: Record<string, unknown>): void {
+	send(msg: Record<string, unknown>, _signal?: AbortSignal): void {
 		if (this.proc?.stdin?.writable !== true) return;
 		this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
+	}
+
+	setProtocolVersion(_version: string): void {
+		// stdio does not carry HTTP's MCP-Protocol-Version header (M19 D4).
 	}
 
 	async close(): Promise<void> {

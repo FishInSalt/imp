@@ -53,6 +53,7 @@ describe("runRepl wiring (review P1-1)", () => {
 		const manager = new McpManager({
 			servers: [
 				{
+					kind: "stdio",
 					name: "fake",
 					command: process.execPath,
 					args: [SERVER, "ok"],

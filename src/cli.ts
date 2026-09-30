@@ -1063,7 +1063,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 			runner.printRunStats(result);
 			runner.printSessionStats();
 		} finally {
-			mcp?.close();
+			await mcp?.close();
 		}
 	} catch (err) {
 		renderer.endRun(true);

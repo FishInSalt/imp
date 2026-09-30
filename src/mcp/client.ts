@@ -68,6 +68,16 @@ export class McpConnectionError extends Error {
 	}
 }
 
+/** A 404 on a session-bearing HTTP request (M19 D4): the session is gone.
+ *  Distinct type so the manager can bypass the reconnect cooldown — a
+ *  session that expires right after connect must not hit "on cooldown". */
+export class McpSessionExpiredError extends McpConnectionError {
+	constructor(message: string, detail: string) {
+		super(message, detail);
+		this.name = "McpSessionExpiredError";
+	}
+}
+
 export class McpClient {
 	private nextId = 1;
 	private pending = new Map<number, PendingEntry>();
@@ -108,8 +118,13 @@ export class McpClient {
 				},
 				this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
 			)) as { protocolVersion?: string; serverInfo?: { name?: string } };
-			// Lenient negotiation (design R2): accept any version back.
-			void result?.protocolVersion;
+			// Lenient negotiation (design R2): accept any version back. Record it
+			// so every subsequent request echoes the negotiated value (M19 D4).
+			const negotiated =
+				typeof result?.protocolVersion === "string" && result.protocolVersion !== ""
+					? result.protocolVersion
+					: MCP_PROTOCOL_VERSION;
+			this.transport.setProtocolVersion(negotiated);
 			this.notify("notifications/initialized", {});
 			this.connected = true;
 		} catch (err) {
@@ -282,7 +297,7 @@ export class McpClient {
 				// late response after abort: no pending entry → ignored above
 			}
 			this.pending.set(id, entry);
-			this.transport.send({ jsonrpc: "2.0", id, method, params });
+			this.transport.send({ jsonrpc: "2.0", id, method, params }, signal);
 		});
 	}
 

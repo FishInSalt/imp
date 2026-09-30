@@ -1419,7 +1419,7 @@ class ReplMachine {
 	private gracefulExit(code: number): void {
 		if (this.state === "exited") return;
 		this.state = "exited";
-		this.mcp?.close(); // M18: kill MCP children before goodbye
+		void this.mcp?.close(); // M18: close MCP children before goodbye (batch D makes this awaited — M19 exiting-state design)
 		// #bash-abort D3: detached bash groups outlive the parent by
 		// construction — sweep them BEFORE anything else can exit the process.
 		killTrackedDetachedChildren();

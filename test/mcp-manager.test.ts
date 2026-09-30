@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Tool } from "../src/core/tools/types.js";
-import type { McpServerConfig } from "../src/mcp/config.js";
+import type { McpStdioServerConfig } from "../src/mcp/config.js";
 import { McpManager } from "../src/mcp/manager.js";
 import type { Renderer } from "../src/render.js";
 
@@ -22,8 +22,13 @@ function fakeRenderer(notes: string[]): Renderer {
 	return { note: (t: string) => notes.push(t), error: (t: string) => notes.push(t) } as unknown as Renderer;
 }
 
-function serverConfig(name: string, mode: string, extra: Partial<McpServerConfig> = {}): McpServerConfig {
+function serverConfig(
+	name: string,
+	mode: string,
+	extra: Partial<McpStdioServerConfig> = {},
+): McpStdioServerConfig {
 	return {
+		kind: "stdio",
 		name,
 		command: process.execPath,
 		args: [SERVER, mode],
@@ -33,7 +38,7 @@ function serverConfig(name: string, mode: string, extra: Partial<McpServerConfig
 	};
 }
 
-function makeManager(servers: McpServerConfig[], notes: string[] = [], cooldownMs = 0) {
+function makeManager(servers: McpStdioServerConfig[], notes: string[] = [], cooldownMs = 0) {
 	return new McpManager({
 		servers,
 		cwd: process.cwd(),

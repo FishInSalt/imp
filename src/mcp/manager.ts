@@ -19,8 +19,9 @@
 import type { Tool } from "../core/tools/types.js";
 import type { Renderer } from "../render.js";
 import { bridgeTool, mapCallResult } from "./bridge.js";
-import { McpClient, McpConnectionError, TOOLS_LIST_PAGE_CAP } from "./client.js";
+import { McpClient, McpConnectionError, McpSessionExpiredError, TOOLS_LIST_PAGE_CAP } from "./client.js";
 import type { McpServerConfig } from "./config.js";
+import { HttpTransport } from "./http-transport.js";
 import { StdioTransport } from "./stdio-transport.js";
 
 /** Run-boundary retry budget for startup-failed servers. */
@@ -149,15 +150,20 @@ export class McpManager {
 			return mapCallResult(await client.callTool(toolName, args, signal));
 		} catch (err) {
 			if (!(err instanceof McpConnectionError) || signal.aborted || this.closed) throw err;
-			client = await this.ensureClient(state); // single-flight reconnect
+			// A session that expired right after connect (HTTP 404) must not be
+			// refused by the 30s cooldown — M19 D4, review blocker 2.
+			client = await this.ensureClient(state, { bypassCooldown: err instanceof McpSessionExpiredError });
 			return mapCallResult(await client.callTool(toolName, args, signal));
 		}
 	}
 
-	/** Graceful close (gracefulExit path). */
-	close(): void {
+	/** Graceful close (gracefulExit path): aggregates every client's bounded
+	 *  teardown — stdio resolves immediately, http awaits its DELETE (M19 D4). */
+	close(): Promise<void> {
 		this.closed = true;
-		for (const state of this.states.values()) state.client?.close();
+		return Promise.all(
+			[...this.states.values()].map((state) => state.client?.close() ?? Promise.resolve()),
+		).then(() => undefined);
 	}
 
 	/** Synchronous best-effort kill (double-Ctrl+C force path). */
@@ -185,20 +191,12 @@ export class McpManager {
 		state.status = "connecting";
 		state.error = null;
 		state.lastAttemptAt = Date.now();
-		const client = new McpClient(
-			new StdioTransport({
-				command: state.config.command,
-				args: state.config.args,
-				env: state.config.env,
-				cwd: state.config.cwd ?? this.options.cwd,
-			}),
-			{
-				name: state.config.name,
-				clientVersion: this.options.version,
-				connectTimeoutMs: this.options.connectTimeoutMs,
-				callTimeoutMs: this.options.callTimeoutMs,
-			},
-		);
+		const client = new McpClient(this.buildTransport(state), {
+			name: state.config.name,
+			clientVersion: this.options.version,
+			connectTimeoutMs: this.options.connectTimeoutMs,
+			callTimeoutMs: this.options.callTimeoutMs,
+		});
 		client.onDead = (reason) => this.markDead(state, reason);
 		state.client = client;
 		try {
@@ -288,15 +286,30 @@ export class McpManager {
 		this.options.onToolsChanged?.();
 	}
 
-	/** Call-triggered reconnect (single-flight, cooldown). */
-	private async ensureClient(state: ServerState): Promise<McpClient> {
+	/** One transport per config kind (M19 D2). */
+	private buildTransport(state: ServerState): StdioTransport | HttpTransport {
+		const config = state.config;
+		if (config.kind === "http") {
+			return new HttpTransport({ url: config.url, headers: config.headers });
+		}
+		return new StdioTransport({
+			command: config.command,
+			args: config.args,
+			env: config.env,
+			cwd: config.cwd ?? this.options.cwd,
+		});
+	}
+
+	/** Call-triggered reconnect (single-flight, cooldown; session expiry may
+	 *  bypass the cooldown — M19 D4). */
+	private async ensureClient(state: ServerState, options?: { bypassCooldown?: boolean }): Promise<McpClient> {
 		if (state.client?.isConnected) return state.client;
 		if (this.closed) throw new Error("imp is shutting down");
 		if (state.reconnecting !== null) {
 			await state.reconnecting;
 		} else if (
-			Date.now() - state.lastAttemptAt >=
-			(this.options.reconnectCooldownMs ?? RECONNECT_COOLDOWN_MS)
+			options?.bypassCooldown === true ||
+			Date.now() - state.lastAttemptAt >= (this.options.reconnectCooldownMs ?? RECONNECT_COOLDOWN_MS)
 		) {
 			state.reconnecting = this.connectServer(state).finally(() => {
 				state.reconnecting = null;

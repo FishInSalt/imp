@@ -26,8 +26,13 @@ export interface McpTransport {
 	readonly kind: "stdio" | "http";
 	/** Begin serving events. stdio spawns here; http validates its URL (no IO). */
 	start(events: TransportEvents): Promise<void>;
-	/** Serialize + send one JSON-RPC message. No-op after close. */
-	send(msg: Record<string, unknown>): void;
+	/** Serialize + send one JSON-RPC message. `signal` lets a transport abort
+	 *  its in-flight exchange when the caller aborts (http); stdio ignores it.
+	 *  No-op after close. */
+	send(msg: Record<string, unknown>, signal?: AbortSignal): void;
+	/** Record the version the server negotiated in initialize so subsequent
+	 *  requests can echo it back (MCP-Protocol-Version, M19 D4). stdio: no-op. */
+	setProtocolVersion(version: string): void;
 	/** Graceful close (stdio: signal sequence — resolves immediately;
 	 *  http: stream aborts + DELETE, bounded). */
 	close(): Promise<void>;

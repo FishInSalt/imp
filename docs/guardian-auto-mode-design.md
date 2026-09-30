@@ -570,4 +570,4 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   avoided; ALS leak pin, interleave wording, manual-only rate and the R8 log all
   verified. N1 (botched fold): D14 was left outside the §0 table as an orphan
   row after `## 1. Context` — restored into numeric order between D13 and D15.
-- R10: *(pending — micro-verification of the D14 restoration)*
+- R10: **CONFIRMED** — D14 back in numeric order, no other structural defects, log matches. Review closed on rev 3.1 (this reviewer). The owner's second-opinion reviewer may want to verify rev 3.1 independently before implementation starts.

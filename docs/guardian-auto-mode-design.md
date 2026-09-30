@@ -729,10 +729,12 @@ from the model; the host only stops *refusing to ask*.
   implementation surface, not just a predicate swap;
 - counters: `manualOnlyTargets` keeps counting the skips; the new
   `relaxedPatterns` counter increments **iff the old whole-command pattern
-  test would have triggered and the refined one does not**
-  (`PATTERNS.test(command) && !PATTERNS.test(region)`), evaluated for every
-  matched command at the detection point — the refinement's own "how often
-  would the old detector have skipped" metric, shown in `/guardian status`;
+  test would have triggered and the refined one does not**. `region =
+  command.slice(0, spanEnd)` holds unconditionally (a fallback ⇒ `region ==
+  command` ⇒ the counter reads false); the increment happens for every
+  matched command that reaches the classifier decision (shadow/auto), at the
+  detection point — the refinement's own "how often would the old detector
+  have skipped" metric, shown in `/guardian status`;
 - detail wording: `not classified: the command contains shell expansion or
   glob syntax` — which **updates existing pins** that carry the old string
   (`test/guardian-auto.test.ts:227`; the `manualOnlyTargets` shapes around
@@ -750,6 +752,12 @@ from the model; the host only stops *refusing to ask*.
   (also caught), and the quote-unaware `rmForceRecursive` split stay out of
   scope — their paths now degrade to whole-command conservatism instead of
   pretending to narrow;
+- the `<<` precondition is a **raw substring check**: a quoted literal
+  (`rm -rf /tmp/x && echo "a<<b"`) also forces whole-command. Accepted
+  approximation — over-triggering stays the safe direction (R2 P2);
+- non-`<<` constructs that still feed later text to a command (`… | sh`,
+  `source file`) are not modeled; unmatched by the rule table, their text is
+  the classifier's to weigh (R2 P2);
 - segments after `spanEnd` still *execute*; the classifier sees them and
   judges them. The host's guarantee narrows to: the matched invocation's own
   region carries no unresolved syntax.
@@ -786,4 +794,14 @@ of 0 → the in-quote-match pin red.
   rescan-the-rule-table must be an explicit surface, the walk must start at 0
   (quote state), quoted-region matches must be conservative, the old-wording
   pins need edits, `relaxedPatterns` must be defined exactly. All folded in
-  rev 2; awaiting R2 verification.
+  rev 2.
+- **R2 (same reviewer, verification): CONFIRMED** — heredoc class closed
+  (`<<`/`<<-`/`<<<` all contain `<<`; "anywhere" is the right scope), the
+  naive-split discrimination verified in both argument orders, walk-from-0
+  airtight on the pinned cases, `relaxedPatterns` definition correct and free
+  of double counting. Three P2 folds applied in rev 2.1: `region =
+  command.slice(0, spanEnd)` defined unconditionally (fallback ⇒
+  `region == command` ⇒ the counter reads false); the raw `<<` check is
+  documented as an accepted over-trigger for quoted literals
+  (`echo "a<<b"`); §13.4 notes the non-`<<` heredoc-likes (`| sh`, `source`)
+  it does not model. **Review closed (rev 2.1).**

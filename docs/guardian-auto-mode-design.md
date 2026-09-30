@@ -447,3 +447,6 @@ write-gate classification, possibly a `block` verdict for the classifier.
   now point at §11.5. The opinion (recorded as open question 8): a
   consulted-then-ignored verdict is invisible to enforcement; a “mismatch line”
   is a Phase B candidate. Everything else re-verified against the code.
+- R3: **CONFIRMED** — micro-verification of the two folded notes and open
+  question 8: all three accurate, no stale anchors remain. Review closed;
+  implementation may start (Phase A).

@@ -23,12 +23,16 @@ import type { Renderer } from "../render.js";
 import { sanitizeDisplay } from "./tool-presentation.js";
 
 /** Wall-clock budget for one classify call (design §4.2; no provider-level
- *  timeout exists). Draft constant — the design lists it as tunable. */
-export const CLASSIFY_TIMEOUT_MS = 10_000;
+ *  timeout exists). §14 (write-gate batch): 20 s — large payloads prefill
+ *  slower, and a timeout falls back to asking. */
+export const CLASSIFY_TIMEOUT_MS = 20_000;
 /** Reply cap: one JSON object with a one-sentence reason. */
 export const CLASSIFY_MAX_TOKENS = 400;
-/** Combined `system` + `prompt` cap; over-cap fails to “unavailable”. */
-export const CLASSIFY_MAX_INPUT_CHARS = 8 * 1024;
+/** Combined `system` + `prompt` cap on the request's own fields (the host's
+ *  context additions are bounded separately); over-cap fails to “unavailable”.
+ *  §14: 128×1024 chars — the write gate mirrors this value for its
+ *  pre-flight (pinned on both sides). */
+export const CLASSIFY_MAX_INPUT_CHARS = 128 * 1024;
 /** Rendered reason cap (after sanitization). */
 export const CLASSIFY_MAX_REASON_CHARS = 200;
 

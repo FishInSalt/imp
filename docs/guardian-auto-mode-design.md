@@ -139,16 +139,16 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, each elided at 2000 chars — **§14 draft**): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, each elided at 2000 chars — **§14**): raw submissions captured at the human submission boundary **before dispatch** — `handleLine` (`repl.ts:442`; wired by both shells at `:1606`/`:1622`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies go `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`) and never through `handleLine`. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 (identity/position change, `positionMoves`-keyed). Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
-| Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB — **§14 draft: 128×1024 chars**); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
+| Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB — **§14: 128×1024 chars**); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
 | Timeout | host `AbortController` + wall-clock constant (draft: 10 s). Abort plumbing exists (`LLMRequest.signal`, `src/provider/types.ts:32`; honored in `anthropic.ts:220,248`). Test fakes must resolve/reject on `signal.abort`, mirroring `abortSafe` (`src/provider/shared.ts:31-35`) | |
 | Output contract | host appends: reply with exactly one JSON object `{"verdict":"allow"|"ask","reason":"<one sentence>"}` | new |
 | Defensive parse | first JSON object; `verdict` strictly `allow`/`ask` (anything else, incl. `block`, is invalid); `reason` capped (draft: 200 chars) and run through `sanitizeDisplay` | `src/repl/tool-presentation.ts:14` |
 | Any deviation | garbage, refusal, empty, truncated, provider error (incl. a configured reference with no usable credentials), timeout, aborted ⇒ `undefined` | |
 | Accounting | **Phase A: no ledger attribution — documented limitation.** The totals tracker derives from session entries (`src/core/usage-totals.ts:219`); per-attempt buckets are fixed (`src/core/usage-ledger.ts:17-30,59`). Follow-up in §11.5. The record line names the model actually used | |
-| Audit record | on success: one record line (draft wording in §7); on failure: **none** (**§14 draft** — the “first failure” draft was never implemented) | `▪` note channel |
+| Audit record | on success: one record line (draft wording in §7); on failure: **none** (**§14** — the “first failure” draft was never implemented) | `▪` note channel |
 
 The host does **not** expose: provider choice beyond the reference string,
 streaming, tool use, thinking, retries beyond the provider layer's own, or the
@@ -250,7 +250,7 @@ updates the footer via `setStatus`.
 Inside the existing **bash** ask tier (`guardian.mjs:225`). The write/edit tier
 (`:246`) keeps its unconditional confirm in Phase A (§9.1).
 
-**Amendment (§14, draft)**: the classifier extends to the outside-cwd
+**Amendment (§14)**: the classifier extends to the outside-cwd
 write/edit ask tier — the sentence above describes Phase A and is superseded
 for that case once §14's review closes; manual keeps today's confirm exactly.
 
@@ -321,7 +321,7 @@ stated intent (the context block) is the authorization evidence, not the
 command's apparent usefulness.
 
 **Withheld**: the conversation transcript (beyond the host's D11 block), the
-target file's **existing** contents (never read — **§14 draft**, D21), the audit
+target file's **existing** contents (never read — **§14**, D21), the audit
 log, other tool calls, and **every model-authored message
 regardless of its stored role** (summaries, delegation prompts, tool results).
 
@@ -335,7 +335,7 @@ not decide); its counters are observational only.
 ### 5.8 Audit log
 
 `~/.imp/guardian.log` gains one line per **auto** decision: timestamp, tool,
-verdict, model, first line of the reason. (**§14 draft**: shadow decisions are
+verdict, model, first line of the reason. (**§14**: shadow decisions are
 not audited — the rev-3 “auto/shadow” wording was never implemented; shadow's
 evidence is the host verdict record and the D16 counters.) Blocked/error
 lines keep their current format (append-only, never fatal — unchanged
@@ -429,7 +429,7 @@ active.
 20. config: missing ⇒ defaults; bad JSON ⇒ defaults + diagnostic; model
     passthrough; reload picks up edits;
 21. write/edit tier in auto still goes straight to `confirm` (scope pin —
-    **superseded by §14**; replaced by pins 31–44 once §14's review closes);
+    **superseded by §14**; replaced by pins 31–44);
 22. **unresolvable target** — `target="$HOME/.ssh"; rm -rf "$target"` and
     glob/`$()` variants: auto never classifies (fresh confirm), shadow
     classifies with the marker (I8);
@@ -489,7 +489,7 @@ flipping auto; the config ships `manual` as the default.
 
 ### 9.2 Phase B (specified then, not now)
 User rules file (project tightening, global rules with `allow`/`ask`/`block`),
-write-gate classification (**draft §14**), classifier `block` verdict,
+write-gate classification (**§14**), classifier `block` verdict,
 classifier cost attribution (§11.5), a consulted-and-ignored “mismatch line”
 (§11.8).
 
@@ -543,13 +543,13 @@ classifier cost attribution (§11.5), a consulted-and-ignored “mismatch line�
 1. Member name: `classify` vs `adjudicate`/`judge`?
 2. Record wording (§7 drafts) — owner eyeballs at acceptance.
 3. Failure-record dedupe: “first per session” (draft) vs every failure vs none?
-   **(§14 draft: none — the draft was never implemented.)**
+   **(§14: none — the draft was never implemented.)**
 4. `auto.model` reference syntax — the exact `provider/model` grammar, and the
    “unavailable” diagnostics.
 5. Cost accounting deferred (Phase A reports nothing; `usage-totals.ts:219`);
    follow-up needs a session-entry kind.
 6. Constants: 10 s timeout, 400 max tokens, 200-char reason, 8 KB input cap,
-   ≤3 user messages / ~2000 chars of context — all drafts. **(§14 draft
+   ≤3 user messages / ~2000 chars of context — all drafts. **(§14
    resolves the input cap and the timeout: 128×1024 chars / 20 s; the rest
    stay drafts.)**
 7. Footer: show the mode only when not `manual` (draft)?
@@ -825,16 +825,14 @@ of 0 → the in-quote-match pin red.
 
 ## 14. Write-gate classification (draft for independent review — 2026-09-30)
 
-> Status: **rev 2.1 — review CLOSED.** R1 (adversarial) and R2
-> (verification) each returned NEEDS REVISION and are folded (rev 2 / rev
-> 2.1); R3 (verification) returned CONFIRMED (log: §14.9). Implementation
-> may start (AGENTS.md). It implements the Phase B item “write-gate
-> classification” (§9.2) for the existing outside-cwd write/edit ask gate.
-> The trigger condition, the hard floors, manual-mode behavior and the bash
-> gate's gating logic are unchanged; the deliberate deltas — the shared-seam
-> changes (budget/timeout, context elision, framing) and one bash-side fix
-> (the stale breaker flag, §14.5) — are enumerated in §14.5 and §14.8; §14.8
-> lists the earlier statements superseded.
+> Status: **rev 2.1 — review closed; IMPLEMENTED (2026-09-30).** R1
+> (adversarial) and R2 (verification) NEEDS REVISION folded (rev 2 / rev
+> 2.1); R3 (verification) CONFIRMED (log: §14.9). Pins 31–44 + the host
+> pins are in; full gates 2651/2651 green. It implements the Phase B item
+> “write-gate classification” (§9.2) for the existing outside-cwd write/edit
+> ask gate. The trigger condition, the hard floors, manual-mode behavior and
+> the bash gate's gating logic are unchanged — the deliberate deltas are
+> enumerated in §14.5/§14.8.
 
 ### 14.1 Observed problem (owner dogfooding, 2026-09-30)
 
@@ -1107,7 +1105,7 @@ Mutations (each must be caught):
 - Cost accounting for classify calls remains deferred (§11.5); the larger
   worst-case input makes that follow-up more valuable, not less.
 
-### 14.8 Amendments to earlier sections (draft — fold when the review closes)
+### 14.8 Amendments to earlier sections (folded)
 
 - §5.4 / §8 test 21 / §9.1: the Phase A sentence “the write/edit tier
   keeps its unconditional confirm” is superseded for the outside-cwd case
@@ -1180,3 +1178,10 @@ Mutations (each must be caught):
   verified correct; spot-checks across §14.4/§14.5/§14.8 and the pin list
   found no regressions; the only blemish was a cosmetic duplicate clause in
   §4.2's cell (smoothed without another round). **Review closed (rev 2.1).**
+- **Implemented** (2026-09-30): the write/edit gate is mode-aware (manual
+  byte-for-byte; shadow classifies → fresh confirm; auto gates on D17 and
+  the budget → allow runs / fresh confirm), with the mirrored pre-flight
+  and `manualOnlySize`, shared counters/breaker plus the re-arm fix,
+  auto-only audit lines, and the host changes (128×1024 / 20 s, the log
+  elision, the `ClassifyRequest` contract sentence). Pins 31–44 and the
+  host pins green; full gates 2651/2651.

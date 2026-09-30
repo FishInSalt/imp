@@ -1,8 +1,8 @@
 # 主循环输出截断处理：目录预算 + 截断工具调用拒绝 + 可见性（#output-truncation）
 
 状态：设计评审已关闭（5 轮：2×P1+7×P2+3×P3 → 3×P2+4×P3 → 4×P3 → 2×P3 笔记 →
-**CONFIRMED**，commit acc522c）。实现：commit ffb800d（实现评审第 1 轮 NEEDS-FIXES
-已折叠，第 2 轮复核中）。主人决策已签
+**CONFIRMED**，commit acc522c）。实现：commit 1d0f0d0（实现评审已关闭：
+NEEDS-FIXES → 折叠 → APPROVE WITH CORRECTIONS → 收尾修正）。主人决策已签
 （2026-09-30）：D3 = 直接用模型目录上限；D2/D4 按建议；D1 无异议。D3b（子代理同
 规则）为评审新增，已由主人确认（2026-09-30：采用目录值；子代理思考策略另立后续
 批次 SA-09，见 `docs/subagent-delegation-task-list.md`）。
@@ -172,7 +172,7 @@
 |---|---|
 | `src/core/loop.ts` | `RunAgentLoopResult.truncated?: boolean`（completed 返回路径置值，:247）；工具分支插入拒绝路径（替换 :270-271 的 `executeToolBatch` 调用）：`assistant.stopReason === "max_tokens"` → 新 helper `failToolCallsFromTruncatedMessage(toolCalls, results, onEvent)`（逐条 tool_start/tool_end + 错误结果 + `persistableResult`），否则原 `executeToolBatch`；新增文案常量。 |
 | `src/runner.ts` | 每次 run 解析 effective maxTokens（`runTurnInner`，`modelReference` 之后；替换 :1401 的 `this.options.maxTokens`）；记录 `lastRunMaxTokens`；`printRunStats` completed 分支加 truncated 注记。 |
-| `src/repl/repl.ts` | 4 个触及点：run 开始处清零 `lastRunTruncated`；`settleSuccess` 写入；`handleEof` idle 分支与 `returnToIdle` eofPending 分支按它选择 `gracefulExit(1 / 0)`。 |
+| `src/repl/repl.ts` | 4 个触及点：run 开始处清零 `lastRunTruncated`；`settleSuccess` 写入；`handleEof` idle 分支与 `returnToIdle` eofPending 分支按它选择 `gracefulExit(2 / 0)`。 |
 | `src/cli.ts` | `CliOptions.maxTokensExplicit`（默认 false；`--max-tokens` 置 true + 校验，锚点 :286-294 模式）；帮助文案 :152 引用常量；`RunnerOptions` 传 `maxTokensExplicit`；**`runPrint`（:965 起）在 `printRunStats` 后按 `result.truncated` 置 `process.exitCode = 2`**（评审 P1-1；码值经实现评审 P2 改 2）。 |
 | `src/core/constants.ts` | `DEFAULT_MAX_TOKENS = 16384`（cli 默认与 runner 回退共用单一出处；*不* 波及 `compaction.ts:55`、`thinking.ts:594` 的同值文本）。 |
 | `src/core/subagent.ts` | D3b：`launchLoop`（:337）在 `childModelMetadata().modelMaxTokens` 非 undefined 时传入 `maxTokens`（undefined 保持不传，loop 兜底 8192 不变）。 |
@@ -215,7 +215,7 @@
    `--max-tokens` 帮助行引用 `DEFAULT_MAX_TOKENS`（复用 `test/cli-model-explicit.test.ts`
    的 AST 提取模式——`HELP` 未导出、入口模块底部 `await main()`，直接 import 会触发
    启动）；
-9c. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 1
+9c. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 2
    （评审 P3-N6 的语义钉子）。
 print 模式（`-p`）退出码 2 由手动验收 11 覆盖——`runPrint` 不导出（入口模块），无
 稳定自动化承载；如需自动化，触发条件见 §5。
@@ -281,4 +281,6 @@ print 模式（`-p`）退出码 2 由手动验收 11 覆盖——`runPrint` 不�
   管道/脚本化截断收尾会污染 stdout）⇒ 折叠：两个出口面统一改专用码 2（见 §D2 码值
   说明）；3×P3（`--max-tokens` 的 `parseInt` 整数性沿 `--max-turns` 既有风格，记独立
   清理；idle/eofPending 两分支表达式相同、覆盖可后续加固；CLI e2e 依赖先构建 dist——
-  沿既有 e2e 惯例）。已折叠（本修订）。第 2 轮复核：待进行。
+  沿既有 e2e 惯例）。已折叠（本修订）。第 2 轮复核（commit 1d0f0d0）：
+  **APPROVE WITH CORRECTIONS** —— 折叠正确、门禁全绿；仅 2 处文档行未同步（§3 repl
+  行、§4 9c 的码值），已顺手修正（本修订）。**实现评审关闭**。

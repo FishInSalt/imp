@@ -1331,3 +1331,12 @@ so the host colors the name it already holds; no extension API changes.
   global-faint row) still read as a flat prohibition, D14/O9's "normal weight"
   needed forward pointers, the `yellow()` call-site flag and the pin delta needed
   precision. All five folded.
+
+Implementation facts (two corrections the pins surfaced): the frame extracted by
+`terminal.frameSince` is ANSI-stripped, so the *plain-text* row assertions are
+unchanged and only the **raw** ones (`render()` return values and
+`terminal.writes`) gain the accent; and the clipped-label row carries the accent
+reset immediately after the clipped label's own reset, so its expected bytes end
+`…\x1b[0m\x1b[0m ` (doubled reset) before the trailing space. Red-first: 5 pins
+red, then green; mutations "drop the accent" (6 pins) and "33 → 35" (6 pins) both
+caught.

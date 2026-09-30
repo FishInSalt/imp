@@ -10,12 +10,23 @@
  * and compaction summaries, child task prompts, command/skill expansions —
  * never enters this log, regardless of the role it is stored under.
  *
- * The newest `USER_INPUT_LOG_ENTRIES` submissions are kept; the classify seam
- * reads a frozen copy (see call-context.ts), never this live array.
+ * The newest `USER_INPUT_LOG_ENTRIES` submissions are kept, each elided at
+ * `USER_INPUT_LOG_ENTRY_CHARS` chars with a marker (design §14.4, folded):
+ * the log bounds what one submission can contribute to the context block;
+ * the classify seam reads a frozen copy (see call-context.ts), never this
+ * live array.
  */
 
 /** How many raw submissions ride the classify context block (design D11). */
 export const USER_INPUT_LOG_ENTRIES = 3;
+
+/** Per-entry char cap (design §14.4): longer submissions are elided with an
+ *  explicit marker so one paste cannot dominate (or overflow) the context
+ *  block. */
+export const USER_INPUT_LOG_ENTRY_CHARS = 2000;
+
+/** The elision suffix — part of the entry text, so the classifier sees it. */
+const ELISION = "…(elided)";
 
 export class UserInputLog {
 	private entries: string[] = [];
@@ -25,11 +36,15 @@ export class UserInputLog {
 		return this.entries.length > 0;
 	}
 
-	/** Record one raw submission; blanks never enter. */
+	/** Record one raw submission (elided at the entry cap); blanks never enter. */
 	record(text: string): void {
 		const trimmed = text.trim();
 		if (trimmed === "") return;
-		this.entries.push(trimmed);
+		const entry =
+			trimmed.length > USER_INPUT_LOG_ENTRY_CHARS
+				? `${trimmed.slice(0, USER_INPUT_LOG_ENTRY_CHARS)}${ELISION}`
+				: trimmed;
+		this.entries.push(entry);
 		if (this.entries.length > USER_INPUT_LOG_ENTRIES) {
 			this.entries.splice(0, this.entries.length - USER_INPUT_LOG_ENTRIES);
 		}

@@ -91,7 +91,9 @@ export interface ConfirmOptions {
  *  timeout, the audit record, and whether the seam exists on this surface at
  *  all (D8). */
 export interface ClassifyRequest {
-	/** The extension's policy framing (the system message). */
+	/** The extension's policy framing (the system message) — the request's
+	 *  `system` + `prompt` are capped by the host (§14.4); over-cap fails to
+	 *  unavailable. */
 	system: string;
 	/** What to judge (one user message): the candidate action and its context. */
 	prompt: string;

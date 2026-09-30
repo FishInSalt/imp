@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentToolCallContext } from "../src/extensions/call-context.js";
 import { loadExtensions } from "../src/extensions/loader.js";
 import type { ToolCallEvent } from "../src/extensions/types.js";
+import { USER_INPUT_LOG_ENTRY_CHARS, UserInputLog } from "../src/extensions/user-input-log.js";
 import { runRepl } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, gate, gatedTool, makeConsole, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
@@ -237,5 +238,23 @@ describe("capture at the human boundary (#guardian-auto-mode D11)", () => {
 		env.fake.send("! echo hello-from-the-shell\n");
 		await vi.waitFor(() => expect(env.fake.output()).toContain("hello-from-the-shell"));
 		expect(env.runner.userInputSnapshot()).toEqual([]);
+	});
+
+	it("elides an over-long submission at the entry cap (§14.4)", () => {
+		const log = new UserInputLog();
+		log.record("x".repeat(5000));
+		const [entry] = log.snapshot();
+		expect(entry?.endsWith("…(elided)")).toBe(true);
+		expect(entry?.length).toBe(USER_INPUT_LOG_ENTRY_CHARS + "…(elided)".length);
+		expect(log.verified).toBe(true);
+
+		log.record("y".repeat(3000));
+		log.record("z".repeat(3000));
+		const entries = log.snapshot();
+		expect(entries).toHaveLength(3);
+		expect(entries.join("").length).toBeLessThanOrEqual(
+			3 * (USER_INPUT_LOG_ENTRY_CHARS + "…(elided)".length),
+		);
+		expect(entries.at(-1)?.startsWith("z".repeat(USER_INPUT_LOG_ENTRY_CHARS))).toBe(true);
 	});
 });

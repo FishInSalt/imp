@@ -8,7 +8,7 @@ import { loadExtensions } from "../src/extensions/loader.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
 import type { ClassifyResult } from "../src/extensions/types.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
-import { CLASSIFY_MAX_INPUT_CHARS, HostClassify } from "../src/repl/classify.js";
+import { CLASSIFY_MAX_INPUT_CHARS, CLASSIFY_TIMEOUT_MS, HostClassify } from "../src/repl/classify.js";
 import { assistant, makeRenderer } from "./helpers/fakes.js";
 
 // #guardian-auto-mode Wave 2: the classify seam's host implementation
@@ -117,6 +117,25 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		const big = "x".repeat(CLASSIFY_MAX_INPUT_CHARS);
 		await expect(call(() => host.handler({ system: big, prompt: big }, "guardian"))).resolves.toBeUndefined();
 		expect(sink).toEqual([]);
+	});
+
+	it("pins the §14 contract constants", () => {
+		expect(CLASSIFY_MAX_INPUT_CHARS).toBe(128 * 1024);
+		expect(CLASSIFY_TIMEOUT_MS).toBe(20_000);
+	});
+
+	it("caps the request's own system+prompt with a strict > (§14 boundary)", async () => {
+		const { host } = makeHost();
+		const sink: LLMRequest[] = [];
+		state.provider = textProvider('{"verdict":"ask","reason":"x"}', sink);
+		// exactly at the cap ⇒ served
+		await call(() =>
+			host.handler({ system: "s".repeat(CLASSIFY_MAX_INPUT_CHARS - 1), prompt: "p" }, "guardian"),
+		);
+		expect(sink).toHaveLength(1);
+		// one char over ⇒ dropped without a provider call
+		await call(() => host.handler({ system: "s".repeat(CLASSIFY_MAX_INPUT_CHARS), prompt: "p" }, "guardian"));
+		expect(sink).toHaveLength(1);
 	});
 
 	it("wires the host exactly when the session is interactive (test 9, D8)", async () => {

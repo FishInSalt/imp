@@ -3,6 +3,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { firstLine } from "../../format.js";
 import type { ProviderName } from "../../provider/resolve.js";
+import type { ThinkingLevel } from "../../provider/thinking.js";
 import type { LLMProvider } from "../../provider/types.js";
 import type { AgentDefinition } from "../agents/registry.js";
 import { canonicalJson } from "../canonical.js";
@@ -105,6 +106,11 @@ export interface TaskToolOptions {
 	 *  (the real runner always wires it). The getModel() fallback is a
 	 *  documented approximation — SA-02 design D1. */
 	getModelReference?: () => string;
+	/** SA-09: the parent session's live thinking level, read at spawn for the
+	 *  inherit fallback (agent frontmatter `thinking:` wins). The real runner
+	 *  always wires it (getModelReference pattern); absent → children pass no
+	 *  level and keep the pre-SA-09 provider-family fallback. */
+	getThinkingLevel?: () => ThinkingLevel;
 	/** Read at spawn: `/new`/`/resume` re-assemble the system prompt. */
 	getSystem: () => string;
 	/** SA-06: launch-environment facts read at spawn (retained assembly
@@ -480,6 +486,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 				// §5.1: rebuild the tool pool with the SAME selection rules fresh
 				// dispatch uses (including the agent allowlist narrowing).
 				const resumeAgent = launch.agent === undefined ? undefined : agentsByName.get(launch.agent.name);
+				// SA-09: resume re-resolves like timeoutMs/extraSystem (current file
+				// + current parent level), pinned before the lease awaits.
+				const resumeThinking = resumeAgent?.thinking ?? options.getThinkingLevel?.();
 				const parentPool = options.getTools().filter((tool) => tool.name !== "task");
 				const poolSelection = selectChildToolPool({
 					agent: resumeAgent,
@@ -615,6 +624,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						provider: liveProvider,
 						model: launch.model.wireModelId,
 						modelReference: launch.model.reference,
+						...(resumeThinking !== undefined && { thinking: resumeThinking }),
 						system: options.getSystem(),
 						extraSystem: resumeAgent?.system,
 						tools,
@@ -716,6 +726,9 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			// precede them, and nothing may be inserted between them.
 			const parentReference = options.getModelReference?.() ?? options.getModel();
 			const provider = options.getProvider();
+			// SA-09: pinned with the pair above — read here, before the worktree
+			// awaits below, never at the runSubagent assembly site.
+			const spawnThinking = agent?.thinking ?? options.getThinkingLevel?.();
 			const resolution = resolveChildModel({
 				parentReference,
 				override: agent?.model,
@@ -855,6 +868,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					provider,
 					model: binding.wireModelId,
 					modelReference: binding.reference,
+					...(spawnThinking !== undefined && { thinking: spawnThinking }),
 					system: options.getSystem(),
 					extraSystem: agent?.system,
 					tools,

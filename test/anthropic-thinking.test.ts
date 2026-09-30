@@ -94,6 +94,15 @@ describe("anthropic thinking", () => {
 		expect(body.max_tokens).toBe(16384); // untouched
 	});
 
+	it("SA-09: claude-fable-5 (off:null) — raw off clamps up to minimal → adaptive effort low", async () => {
+		captured = [];
+		await collect(provider().stream(REQ("claude-fable-5", [], "off")));
+		const body = captured[0]?.body as Record<string, unknown>;
+		expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(body.output_config).toEqual({ effort: "low" });
+		expect(body.max_tokens).toBe(16384); // adaptive path: caller cap untouched
+	});
+
 	it('off AND undefined (the runner maps off→undefined) → {type:"disabled"} — pi reinterprets at the provider layer (:754-780)', async () => {
 		captured = [];
 		await collect(provider().stream(REQ("claude-sonnet-4-5", [], "off")));

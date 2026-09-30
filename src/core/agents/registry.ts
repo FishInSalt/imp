@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { THINKING_LEVELS, type ThinkingLevel } from "../../provider/thinking.js";
 import { escapeXml } from "../skills.js";
 
 /**
@@ -24,6 +25,10 @@ import { escapeXml } from "../skills.js";
  *                                  #  configuration error rejected at dispatch.
  *   timeout: 300                   # optional: seconds, wall clock
  *   worktree: true                 # optional: isolated git worktree (M6b)
+ *   thinking: high                 # optional: this agent's child thinking
+ *                                  # level (off|minimal|low|medium|high|
+ *                                  #  xhigh|max); omit to inherit the parent
+ *                                  #  session's level at spawn
  *   ---
  *
  *   Body appended to the child's system prompt (append-only mode).
@@ -44,6 +49,11 @@ export interface AgentDefinition {
 	model?: string;
 	/** Run this agent's tasks in an isolated git worktree (M6b). */
 	worktree?: boolean;
+	/** SA-09: thinking level for this agent's child runs — wins over the
+	 *  inherited parent level. Omit to inherit the parent session's current
+	 *  level at spawn; a blank `thinking:` is a configuration error (the file
+	 *  is skipped at parse). */
+	thinking?: ThinkingLevel;
 	/** Optional wall clock (ms), from frontmatter seconds. */
 	timeoutMs?: number;
 	/** Markdown body — appended after CHILD_SUFFIX. */
@@ -133,9 +143,11 @@ export function parseAgentFile(content: string, source: string): AgentDefinition
 		const value = line.slice(colon + 1).trim();
 		// SA-02 C6: a blank `model:` is EXPLICIT configuration, not absence —
 		// the value is preserved ("") so the resolver rejects it before launch.
-		// Omitting the field is how an agent inherits. Every other optional
+		// SA-09: a blank `thinking:` is the same family — preserved here so the
+		// parse-time validation below can reject it (registry.ts fields map).
+		// Omitting either field is how an agent inherits. Every other optional
 		// field keeps its empty-value semantics.
-		if (key !== "" && (value !== "" || key === "model")) fields.set(key, value);
+		if (key !== "" && (value !== "" || key === "model" || key === "thinking")) fields.set(key, value);
 	}
 
 	const name = fields.get("name");
@@ -162,6 +174,16 @@ export function parseAgentFile(content: string, source: string): AgentDefinition
 		}
 	}
 
+	let thinking: ThinkingLevel | undefined;
+	const thinkingRaw = fields.get("thinking");
+	if (thinkingRaw !== undefined) {
+		const normalized = thinkingRaw.trim().toLowerCase();
+		if (!(THINKING_LEVELS as readonly string[]).includes(normalized)) {
+			return `${source}: invalid "thinking" "${thinkingRaw}" — use one of: ${THINKING_LEVELS.join(", ")}`;
+		}
+		thinking = normalized as ThinkingLevel;
+	}
+
 	const toolsRaw = fields.get("tools");
 	const tools = toolsRaw
 		?.split(",")
@@ -178,6 +200,7 @@ export function parseAgentFile(content: string, source: string): AgentDefinition
 		description,
 		tools: tools && tools.length > 0 ? tools : undefined,
 		model: fields.get("model"),
+		thinking,
 		timeoutMs,
 		worktree: worktree || undefined,
 		system: body,

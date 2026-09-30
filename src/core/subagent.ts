@@ -1,6 +1,7 @@
 import { formatTokens } from "../format.js";
 import { modelMaxTokensFor } from "../provider/catalog.js";
 import { compactionSettingsFor } from "../provider/compaction-settings.js";
+import type { ThinkingLevel } from "../provider/thinking.js";
 import type { LLMProvider } from "../provider/types.js";
 import {
 	type CompactHistoryResult,
@@ -46,6 +47,10 @@ export interface SubagentOptions {
 	 *  wire routing (SA-02). The task tool always passes it; absent → the wire
 	 *  model is used as the reference (older callers unchanged). */
 	modelReference?: string;
+	/** SA-09: the resolved child thinking level (frontmatter > parent session
+	 *  level at spawn). Undefined → no level is sent; the provider family's
+	 *  pre-SA-09 fallback applies (legacy/test callers). */
+	thinking?: ThinkingLevel;
 	/** The parent's assembled system prompt (AGENTS.md + extension contexts ride along). */
 	system: string;
 	/** The parent's tool pool — the caller filters out the task tool itself. */
@@ -261,6 +266,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					signal: child.signal,
 					settings,
 					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
+					// SA-09 D5: the summarizer rides the child's resolved level (off
+					// maps to "no level" at the summarizer request seam).
+					...(options.thinking !== undefined && { thinking: options.thinking }),
 					usageLedger: ledger, // SA-04: every summarizer stream lands here
 				});
 				if (compacted) {
@@ -278,6 +286,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 					signal: child.signal,
 					settings,
 					modelMaxTokens, // #derived-budget (SA-02 D4: canonical reference)
+					// SA-09 D5: same resolved level as the session branch above.
+					...(options.thinking !== undefined && { thinking: options.thinking }),
 					usageLedger: ledger, // SA-04: every summarizer stream lands here
 				});
 				if (compacted) {
@@ -350,6 +360,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			// loop — the model catalog's output limit when known (the loop's
 			// 8,192 floor stays the fallback for catalog-less models).
 			...(modelMaxTokens !== undefined && { maxTokens: modelMaxTokens }),
+			// SA-09: the resolved level rides every request as-is — including
+			// "off"; the provider clamps and expresses it (design D2).
+			...(options.thinking !== undefined && { thinking: options.thinking }),
 			// #loop-health: children are uncapped (owner decision A). Explicit
 			// Infinity is load-bearing — the loop's default floor is 100.
 			maxIterations: Number.POSITIVE_INFINITY,

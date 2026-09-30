@@ -449,6 +449,26 @@ describe("named agents (M5c)", () => {
 		expect(sink).toHaveLength(0);
 	});
 
+	it("SA-09: frontmatter `thinking:` wins over the inherited parent level", async () => {
+		const leveled = { ...scout, thinking: "high" as const };
+		const { task, sink } = agentTask([leveled], { getThinkingLevel: () => "low" });
+		const result = await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(result.isError ?? false).toBe(false);
+		expect(sink[0]?.thinking).toBe("high");
+	});
+
+	it("SA-09: no frontmatter level → inherit the parent session's level at spawn", async () => {
+		const { task, sink } = agentTask([scout], { getThinkingLevel: () => "max" });
+		await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(sink[0]?.thinking).toBe("max");
+	});
+
+	it("SA-09: no getter and no frontmatter → no level (legacy wirings unchanged)", async () => {
+		const { task, sink } = agentTask([scout]);
+		await task.execute({ prompt: "go", agent: "scout" }, new AbortController().signal);
+		expect(sink[0]?.thinking).toBeUndefined();
+	});
+
 	it("named agent: model + tools subset + system order (parent → CHILD_SUFFIX → agent body)", async () => {
 		const { task, sink } = agentTask([scout]);
 		const result = await task.execute(

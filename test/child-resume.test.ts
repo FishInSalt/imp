@@ -99,6 +99,8 @@ interface HarnessArgs {
 	/** SA-08 round 3 (F-4): override the getter so a test can swap the
 	 *  provider inside the async spawn window. */
 	getProvider?: () => LLMProvider;
+	/** SA-09: the parent session's live thinking level (inherit fallback). */
+	getThinkingLevel?: TaskToolOptions["getThinkingLevel"];
 	withEnv?: boolean;
 }
 
@@ -110,6 +112,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 		getProvider: args.getProvider ?? (() => provider),
 		getModel: () => "parent-wire",
 		getModelReference: () => "anthropic/parent-wire",
+		...(args.getThinkingLevel === undefined ? {} : { getThinkingLevel: args.getThinkingLevel }),
 		getSystem: () => system,
 		getTools: () => args.tools ?? [],
 		getSession: args.getSessionOverride ?? (() => args.session),
@@ -1353,6 +1356,115 @@ describe("SA-07 resume", () => {
 		expect(sinkB).toHaveLength(0);
 		expect(first.taskRecord?.binding?.reference).toBe("anthropic/parent-wire");
 	}, 30_000);
+
+	it("SA-09: a thinking-level change inside the spawn window does not drift the attempt", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-think-pin-"));
+		const repo = await gitRepoWithSeed(base);
+		const parent = createSession(repo, base);
+		let level: "low" | "high" = "low";
+		const { task, sink } = harness({
+			session: parent,
+			baseDir: base,
+			cwd: repo,
+			tools: [],
+			scripts: [assistant([{ type: "text", text: "done" }])],
+			getThinkingLevel: () => level,
+			getToolsForChild: () => {
+				// The deterministic swap: runs inside the async spawn window
+				// (after the spawn-time pin, before the attempt).
+				level = "high";
+				return [];
+			},
+		});
+		const result = await task.execute({ prompt: "go", worktree: true }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(result.isError ?? false).toBe(false);
+		expect(sink[0]?.thinking).toBe("low"); // the pin, not the swap
+	}, 30_000);
+
+	it("SA-09: resume re-resolves from the CURRENT file (a level added between launches wins)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-think-resume-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-think-resume-cwd-"));
+		const parent = createSession(cwd, base);
+		const scout = (thinking?: "high"): AgentDefinition => ({
+			name: "scout",
+			description: "d",
+			system: "Scout body.",
+			source: "/x/scout.md",
+			...(thinking === undefined ? {} : { thinking }),
+		});
+		const first = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "first" }])],
+			agents: [scout()],
+			getThinkingLevel: () => "low",
+		});
+		const dispatched = await first.task.execute({ prompt: "one", agent: "scout" }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(dispatched.isError ?? false).toBe(false);
+		expect(first.sink[0]?.thinking).toBe("low"); // inherited at spawn
+		persistRecord(parent, dispatched);
+		const childId = childIdOf(dispatched);
+
+		// Between launches the file gained `thinking: high`; the parent stays low.
+		const second = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "second answer" }])],
+			agents: [scout("high")],
+			getThinkingLevel: () => "low",
+		});
+		const resumed = await second.task.execute({ resume: childId, prompt: "two" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(resumed.isError ?? false).toBe(false);
+		expect(second.sink[0]?.thinking).toBe("high"); // current file beats the parent
+	});
+
+	it("SA-09: resume re-resolves from the CURRENT parent level when the file has none", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-think-resume2-"));
+		const cwd = await mkdtemp(path.join(tmpdir(), "imp-think-resume2-cwd-"));
+		const parent = createSession(cwd, base);
+		const scout = {
+			name: "scout",
+			description: "d",
+			system: "Scout body.",
+			source: "/x/scout.md",
+		};
+		const first = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "first" }])],
+			agents: [scout],
+			getThinkingLevel: () => "low",
+		});
+		const dispatched = await first.task.execute({ prompt: "one", agent: "scout" }, signal(), {
+			toolCallId: "call-1",
+		});
+		expect(first.sink[0]?.thinking).toBe("low");
+		persistRecord(parent, dispatched);
+		const childId = childIdOf(dispatched);
+
+		const second = harness({
+			session: parent,
+			baseDir: base,
+			cwd,
+			scripts: [assistant([{ type: "text", text: "second answer" }])],
+			agents: [scout],
+			getThinkingLevel: () => "high",
+		});
+		const resumed = await second.task.execute({ resume: childId, prompt: "two" }, signal(), {
+			toolCallId: "call-2",
+		});
+		expect(resumed.isError ?? false).toBe(false);
+		expect(second.sink[0]?.thinking).toBe("high"); // the current parent level
+	});
 
 	it("SA-08/F2-a: a worktree child's cwd must sit inside the verified worktree (tampered cwd refused)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-cwd-"));

@@ -549,6 +549,8 @@ class RunnerImpl implements Runner {
 				getProvider: () => this.provider,
 				getModel: () => this.model,
 				getModelReference: () => `${this.providerName}/${this.model}`,
+				// SA-09: the inherit fallback for child thinking (frontmatter wins).
+				getThinkingLevel: () => this.thinkingLevel,
 				getAutoCompact: () => this.autoCompact,
 				getSystem: () => this.system,
 				getLaunchEnvironment: () => this.getLaunchEnvironment(),

@@ -530,6 +530,16 @@ describe("openai-completions thinking", () => {
 		void events;
 	});
 
+	it("SA-09: raw `off` on off:null pro models lifts to the sparse ladder's floor", async () => {
+		captured = [];
+		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });
+		await collect(provider.stream({ ...REQ("gpt-5-pro", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("high"); // only high is available
+		captured = [];
+		await collect(provider.stream({ ...REQ("gpt-5.2-pro", []), thinking: "off" }));
+		expect(captured[0]?.body.reasoning_effort).toBe("medium"); // medium is the floor here
+	});
+
 	it("GLM 4.x/5-turbo: the native zai object (clear_thinking), binary — no effort", async () => {
 		captured = [];
 		const provider = createOpenAICompletionsProvider({ baseUrl: `${base}:${port()}`, apiKey: "test-key" });

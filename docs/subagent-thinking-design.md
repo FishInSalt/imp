@@ -127,7 +127,7 @@ agent frontmatter thinking: <level>   → 用它
 | 每轮请求带档位；溢出重试第二轮同值；未提供→回归 | `test/subagent.test.ts` | sink 捕 `LLMRequest.thinking` + catalog `maxTokens` 组合断言（D3b 回归） |
 | resume 用当前文件 + 当前父级（两变量各测） | `test/child-resume.test.ts` | 同 sink 断言 |
 | 摘要器档位（`off` 与非 off，`off:null` 模型） | `test/child-compaction.test.ts` | 摘要器请求的 `thinking` |
-| raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled，`:283-285` 已有）、`test/openai-completions.test.ts`（`gpt-5-pro`→effort "high"；`gpt-5.2-pro`→effort "medium"——两 id 各钉）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"） | 线格 body |
+| raw `off` 在 off:null 上的 lift | `test/anthropic-thinking.test.ts`（新增 fable-5→adaptive effort "low"）、`test/moonshotai.test.ts`（kimi-k2.7-code→enabled，`:283-285` 已有）、`test/openai-completions.test.ts`（新增：`gpt-5-pro`→effort "high"；`gpt-5.2-pro`→effort "medium"——两 id 各钉）、`test/codex-responses.test.ts`（gpt-6-astra→effort "low"，`:354-357` 已有） | 线格 body |
 | GLM 5.3：off→low enabled；undefined→disabled（定格既有形状） | `test/zai.test.ts`（`:105-106` 已有 off→low，补 undefined 定格） | 线格 body |
 | 非法/空白 frontmatter → 解析期跳过 + 警告；大小写归一 | `test/agents-registry.test.ts` | `parseAgentFile` 返回值 / `loadAgentDefinitions.warnings` |
 | 回归：全量套件 | — | 基线以开工时 main 为准（不复用旧测试数） |

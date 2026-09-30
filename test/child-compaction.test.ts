@@ -679,3 +679,43 @@ describe("SA-04 accounting: exactly-once attempt usage (red evidence on baseline
 		expect(outcome.usageDetail.incomplete).toBe(false);
 	});
 });
+
+describe("SA-09 D5: the child summarizer rides the resolved level", () => {
+	const steps = (): ScriptStep[] => [
+		toolTurn("c1", "one", 500),
+		toolTurn("c2", "two", 1000),
+		toolTurn("c3", "three", 1500),
+		assistant([{ type: "text", text: "done" }]),
+	];
+
+	it("a non-off level rides the summarizer request; off maps to no level", async () => {
+		const routed = routingProvider(steps(), "SA-09-SUMMARY");
+		const outcome = await runSubagent({
+			provider: routed.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "go",
+			settings: TINY_SETTINGS,
+			thinking: "high",
+		});
+		expect(outcome.status).toBe("completed");
+		expect(routed.summaryRequests).toHaveLength(1);
+		expect(routed.summaryRequests[0]?.thinking).toBe("high");
+
+		const offRouted = routingProvider(steps(), "SA-09-SUMMARY");
+		await runSubagent({
+			provider: offRouted.provider,
+			model: "m",
+			system: "PARENT",
+			tools: [bigEcho],
+			prompt: "go",
+			settings: TINY_SETTINGS,
+			thinking: "off",
+		});
+		expect(offRouted.summaryRequests).toHaveLength(1);
+		// compaction.ts maps off → undefined at the request seam: "no level"
+		// is the summarizer's shape for off (design D5 limitation (a)).
+		expect(offRouted.summaryRequests[0]?.thinking).toBeUndefined();
+	});
+});

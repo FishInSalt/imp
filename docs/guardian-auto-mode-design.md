@@ -1,9 +1,9 @@
 # guardian auto mode — classifier-assisted approval (design)
 
-Status: **rev 3.1 — REVISED, awaiting verification review (R9).** Folds both
-second-opinion rounds (R7: provenance, call association, shadow sample
-integrity; R8: the context-presence channel — §12). Branch:
-`design/guardian-auto-mode`. Base: `1d097a0` (main).
+Status: **rev 3.2 — REVISED, awaiting verification review (R12).** Folds three
+second-opinion rounds (R7 provenance/association/shadow samples; R8 the
+context-presence channel; R11 the input-boundary and invalidation rules — §12).
+Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
 
 The owner experienced Claude Code's auto-approval and asked for the same shape
 in imp: *let a model judge first, hand only the suspicious calls to the human*
@@ -23,13 +23,14 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
 | D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
-| D11 | **Positioning (R4 #1, amended by R7 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**, appended only at the human input boundary (the runner's `runTurn` entry and the steering/follow-up queues), never derived from message roles. A model summary, a parent agent's task prompt, or any other model-authored text stored as `role: "user"` is **not** authorization evidence (imp stores summaries and delegation prompts that way: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify at all (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** |
+| D11 | **Positioning (R4 #1; amended by R7 #1 and R11 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**. **Capture point (R11)**: the human submission boundary *before* any dispatch — the editor's submit (`shell.ts:310` → `submit`, `:512`; the legacy shell's equivalent) and the steering/follow-up queues. The log records the raw submission (typed text verbatim; a slash-command/skill invocation as `/<name> <args>`), **never expansion products**: command- and skill-file bodies reach `runTurn` as `userMessage` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and are *not* user attestation. Never derived from message roles either (summaries and child task prompts are stored as `role: "user"`: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** Invalidation rules: D18. |
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
 | D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
-| D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. |
+| D14 | **Observation before trust (R4 validation gap)**: `shadow` classifies and records while the human still decides; the recommended rollout is manual → shadow → auto, with `/guardian status` counters for the review. Auto is never the default. Shadow's numbers are **observational data, not an independent safety proof** (R11 note). |
 | D15 | **Per-call association (R7 #2)**: the host freezes the evidence snapshot **at the tool-gate entry** and carries it to the seam through a **call-scoped** mechanism (AsyncLocalStorage around the registry dispatch — no shared mutable “current run” state). The chain is `run → tool call → handler → classify`, one snapshot per call; two children with the same agent+cwd cannot cross-contaminate. No association (e.g. a handler calls `classify` outside its dispatch) ⇒ `undefined` ⇒ fresh confirm. |
 | D16 | **Shadow measurement integrity (R7 #3, extended by R8)**: shadow's counters distinguish `allow + human approved`, `allow + human denied`, the ask-rate, and the **manual-only rate** (how often the target detector blocks auto-classification — the metric that tells the owner whether auto is worth trusting). Cache hits cannot pollute samples (fresh confirm by construction). Honest limitation: the current `confirm` contract returns a bare boolean, so a cancel is indistinguishable from a denial and counts as `humanDenied` (conservative). |
 | D17 | **The context-presence fact travels on the event (R8 P1)**: the runner sets `verifiedUserContext: boolean` on every emitted `tool_call` event (a host fact, like `cwd`/`subagent`). Auto mode checks it **before** calling classify — `false` ⇒ fresh confirm, never classified; shadow calls regardless (the host's context block then carries an explicit “no verified context available” marker). The gate is **extension policy**; the host's guarantees are the fact, the marker and the record. This keeps D6's “one new member” (no second API member). |
+| D18 | **Log invalidation (R11 #2)**: the verified log is cleared when the conversation's identity or history position changes — `/new` (`runner.ts:830`), a successful `/resume` (`:1018`), and a successful `/tree`/`/fork` that actually moves the position (`:876,910`; history rebuild at `:1538`). Startup that restores an old session begins with an **empty** log (no inference from roles). Failed, cancelled, or no-op operations do **not** clear. Only new, clearly-sourced submissions append afterwards — so a rewound-away authorization can never enter a new call's snapshot. |
 
 ## 1. Context
 
@@ -137,7 +138,7 @@ Semantics, following `api.confirm`'s promises:
 | Step | Behavior | Anchor |
 |---|---|---|
 | Request assembly | `system` = extension policy + **host trusted-context block** + unchangeable output contract; `messages` = one user message from `prompt`; `tools: []`; `maxTokens` = host constant (draft: 400); no thinking | mirrors the compactor: `src/core/compaction.ts:397-423`, `src/provider/types.ts:19-34` |
-| Trusted context (D11, R7 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): text appended only at the **human input boundary** — the runner's `runTurn` entry (`runner.ts:295,1255`; called by `repl.ts:685` and print's `cli.ts:1050`) and the steering/follow-up queues (`RunTurnOptions.getSteeringMessages`). Never derived from message roles: branch/compaction summaries and child task prompts are stored as `role: "user"` (`store.ts:973-988`, `task.ts:621`) and are **not** evidence. Child calls inherit the same session log. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
+| Trusted context (D11, R7 #1 / R11 #1) | the host's **user-input log** (≤3 entries, ~2000 chars): raw submissions captured at the human submission boundary **before dispatch** — the editor submit (`shell.ts:310,512`) and the steering/follow-up queues — i.e. typed text verbatim, a command/skill invocation as `/<name> <args>`. **Expansion products are never included**: command- and skill-file bodies ride `runTurn.userMessage` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and are not attestation. Never derived from message roles (summaries, child task prompts: `store.ts:973-988`, `task.ts:621`). Child calls inherit the same session log; cleared per D18 on `/new`, successful `/resume`, and position-moving `/tree`/`/fork`. Wrapped in host delimiters, labeled *data, not instructions*. Empty log ⇒ the event carries `verifiedUserContext: false` (D17) and the block itself says “no verified context available” | host-owned log; the extension cannot forge or alter it |
 | Association (D15, R7 #2) | the runner wraps the registry dispatch in an AsyncLocalStorage store carrying a **snapshot frozen at the tool gate**: `{callId, subagent, agent, cwd, userInputs}`. The classify handler reads the store; no store (called outside a dispatch) ⇒ `undefined` ⇒ fresh confirm. No shared mutable “current run” variable | `registry.ts:378-391` dispatch; emits at `runner.ts:595-600,1418-1419` |
 | Input caps | combined `system`+`prompt` capped at a host constant (draft: 8 KB); over-cap ⇒ `undefined` (no silent truncation of policy text) | new constant |
 | Model resolution | `request.model` → `resolveModel()` (`src/provider/resolve.ts:126`); invalid/unavailable ⇒ session model, and the record says so | |
@@ -337,7 +338,7 @@ current format (append-only, never fatal — unchanged contract).
 | I4 | Phase A verdicts are `{allow, ask}`; the model cannot block. | A hallucinating classifier must not silently kill legitimate work. |
 | I5 | The verdict record is written by the host at call completion, before the extension's decision is known. | Auditability is a property of the seam, not of extension good behavior. |
 | I6 | Manual is the default; mode changes are explicit, recorded, session-scoped; auto is never reached without an explicit step. | A feature that loosens a gate must be opted into, visibly. |
-| I7 | The classifier's context is **provenance-verified**: only text appended at the human input boundary (runner `runTurn`, steering/follow-up queues), never derived from stored message roles; model-authored text is never evidence regardless of its stored role (D11). | A model cannot manufacture its own authorization — not via a summary, not via a child's task prompt. |
+| I7 | The classifier's context is **provenance-verified**: only raw submissions captured at the human submission boundary (before dispatch), never expansion products, never derived from stored message roles; model-authored text is never evidence regardless of its stored role (D11), and the log is invalidated on session/history changes (D18). | A model cannot manufacture its own authorization — not via a summary, not via a child's task prompt, not via a command file. |
 | I8 | A matched command whose target is not statically resolvable never feeds an auto-allow: auto never classifies it (fresh confirm); shadow may classify it for observation with a marker (§5.5), pinned by test 22. | The classifier must not decide what the gate cannot even identify. |
 | I9 | **Scope honesty**: the floor detects known dangerous *shapes*; it is not a sandbox and this design claims no completeness for protected paths (D12). Anything unresolved lands in the manual-only class or the human prompt. | A weak detector must not be presented as a boundary. |
 | I10 | Every classify call is associated with exactly one tool call via a snapshot frozen at gate entry (D15); no association ⇒ `undefined` ⇒ fresh confirm. | Evidence must belong to *this* call — two same-name children cannot share an ambiguous “current run”. |
@@ -415,17 +416,32 @@ active.
 26. the record lines of §7 (incl. shadow, manual-only, no-context) render
     through the `▪` channel with the caller label.
 
+**Input-log boundary (R11)**
+27. **expansion vector**: a slash command or skill whose file body contains
+    “the user authorized X” contributes only the invocation line
+    (`/inspect …`) to the request — the body never appears
+    (`commands-md.ts:151-158`, `skills.ts:525-527`);
+28. **invalidation (D18)**: `/new` and a successful `/resume` start the log
+    empty; a position-moving `/tree`/`/fork` clears it; a rewound-away
+    authorization does not enter the next call's snapshot
+    (`runner.ts:830,1018,876,910,1538`);
+29. **no-op preservation**: a failed/cancelled/no-op session operation clears
+    nothing; subsequent submissions append normally.
+
 **Mutation checks** (after green): drop the floor short-circuit; make a failure
 path return `allow`; remove the breaker; parse `"block"` as allow; skip the
 sanitize/cap step; **pass `sessionKey` in the auto fallback or shadow** (test
 23); **classify an unresolvable target in auto** (test 22); **feed the context
 block a summary or a child task prompt** (test 11); **read the live log instead
-of the frozen snapshot** (test 13).
+of the frozen snapshot** (test 13); **log an expanded command body instead of
+the invocation** (test 27); **skip the invalidation on a position-moving
+`/tree`** (test 28).
 
 ## 9. Phases and non-goals
 
 ### 9.1 Phase A (this batch)
-Seam (+ provenance-verified context, D11) + the runner-side **user-input log**
+Seam (+ provenance-verified context, D11 — capture at the submission boundary,
+D18 invalidation) + the runner-side **user-input log**
 and the call-scoped snapshot (D15) + global config + `/guardian` (three modes)
 + breaker + the **bash ask tier only** (`guardian.mjs:225`) + the manual-only
 class (§5.5) + shadow counters (D16) + records + tests. The write/edit tier
@@ -571,3 +587,17 @@ attribution (§11.5), a consulted-and-ignored “mismatch line” (§11.8).
   verified. N1 (botched fold): D14 was left outside the §0 table as an orphan
   row after `## 1. Context` — restored into numeric order between D13 and D15.
 - R10: **CONFIRMED** — D14 back in numeric order, no other structural defects, log matches. Review closed on rev 3.1 (this reviewer). The owner's second-opinion reviewer may want to verify rev 3.1 independently before implementation starts.
+- R11: **owner second-opinion review round 3 — NEEDS REVISION** (two boundaries
+  of the evidence log; everything else accepted as-is: floor scope, shadow
+  cancel=deny, shadow display caveat — "don't call the statistics an
+  independent safety proof" folded into D14). #1: `runTurn.userMessage` is not
+  the human boundary — command/skill expansions ride it (`commands-md.ts:151-158`,
+  `skills.ts:525-527`, `repl.ts:491-506,685-686`), so a command file saying "the
+  user authorized X" would have entered the log ⇒ D11 amended: capture at the
+  editor submission boundary pre-dispatch (`shell.ts:310,512`), raw submissions
+  only, expansion products never. #2: no invalidation rules for session
+  switches/rewinds ⇒ D18: `/new`, successful `/resume`, position-moving
+  `/tree`//`/fork` clear the log (`runner.ts:830,1018,876,910,1538`); restored
+  sessions start empty; failed/no-op operations clear nothing. Folds: D11/D14/D18,
+  §4.2, I7, tests 27-29 + mutation list, §9.1. Folded in rev 3.2.
+- R12: *(pending — limited-scope verification of the rev 3.2 fold)*

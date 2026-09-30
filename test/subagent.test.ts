@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
@@ -5,6 +8,7 @@ import type { AgentMessage } from "../src/core/messages.js";
 import type { SubagentOutcome } from "../src/core/subagent.js";
 import { CHILD_SUFFIX, childUsageTrailer, finalAssistantText, runSubagent } from "../src/core/subagent.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
 
@@ -835,5 +839,53 @@ describe("SA-04 accounting (red evidence on baseline)", () => {
 		expect(outcome.status).toBe("timeout");
 		expect(outcome.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
 		expect(outcome.usageDetail.incomplete).toBe(true);
+	});
+});
+
+describe("#output-truncation D3b (child request budget)", () => {
+	it("the child request carries the catalog limit for its canonical reference", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "imp-child-budget-"));
+		const saved = process.env.IMP_CATALOG_PATH;
+		process.env.IMP_CATALOG_PATH = join(dir, "catalog.json");
+		writeFileSync(
+			process.env.IMP_CATALOG_PATH,
+			JSON.stringify({
+				version: 1,
+				providers: {
+					anthropic: {
+						checkedAt: Date.now(),
+						models: { "test-model": { id: "test-model", maxTokens: 60000 } },
+					},
+				},
+			}),
+			"utf-8",
+		);
+		loadCatalogCache();
+		try {
+			const sink: LLMRequest[] = [];
+			const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
+			const outcome = await runSubagent({
+				provider,
+				model: "test-model",
+				modelReference: "anthropic/test-model",
+				system: PARENT_SYSTEM,
+				tools: [],
+				prompt: "go",
+			});
+			expect(outcome.status).toBe("completed");
+			expect(sink[0]?.maxTokens).toBe(60000);
+		} finally {
+			if (saved === undefined) delete process.env.IMP_CATALOG_PATH;
+			else process.env.IMP_CATALOG_PATH = saved;
+			resetCatalogForTest();
+		}
+	});
+
+	it("a catalog miss keeps the child on the loop floor (8,192)", async () => {
+		const sink: LLMRequest[] = [];
+		const provider = scriptedProvider([assistant([{ type: "text", text: "done" }])], sink);
+		const outcome = await runSubagent({ provider, model: "m", system: "", tools: [], prompt: "go" });
+		expect(outcome.status).toBe("completed");
+		expect(sink[0]?.maxTokens).toBe(8192);
 	});
 });

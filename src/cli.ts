@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { loadMdCommands } from "./core/commands-md.js";
+import { DEFAULT_MAX_TOKENS } from "./core/constants.js";
 import { processFileArguments } from "./core/file-processor.js";
 import type { ImageBlock } from "./core/messages.js";
 import { killTrackedDetachedChildren } from "./core/process-tree.js";
@@ -113,6 +114,9 @@ interface CliOptions {
 	 *  those unreachable; pi's main.ts:422 likewise only sets on --thinking). */
 	thinking: import("./provider/thinking.js").ThinkingLevel | undefined;
 	maxTokens: number;
+	/** #output-truncation D3: true only when --max-tokens was passed
+	 *  explicitly — then the value beats the model catalog limit. */
+	maxTokensExplicit: boolean;
 	maxTurns: number;
 	/** True when --max-turns was passed explicitly — interactive mode then
 	 *  honors it instead of running uncapped (#no-turn-cap). */
@@ -149,7 +153,7 @@ Usage:
 Options:
   -p, --print <prompt>     Prompt to run
   -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
-      --max-tokens <n>     Max output tokens per turn (default: 16384)
+      --max-tokens <n>     Max output tokens per turn (default: model catalog limit; ${DEFAULT_MAX_TOKENS} when unknown)
       --max-turns <n>      Max agent turns per run (default: 100 for print/piped runs; interactive TTY sessions are uncapped)
   -nc, --no-context-files  Skip AGENTS.md discovery
   -c, --continue           Continue the most recent session in this directory
@@ -229,7 +233,8 @@ function parseArgs(argv: string[]): CliOptions {
 		modelSource: requested.source,
 		modelExplicit: false,
 		thinking: envThinking(),
-		maxTokens: 16384,
+		maxTokens: DEFAULT_MAX_TOKENS,
+		maxTokensExplicit: false,
 		// #no-turn-cap follow-up: the print/piped default rose 40 → 100 —
 		// 40 was tight for one-shot scripted work; 100 caps runaway cost at
 		// ~2.5x while honest scripted tasks finish. Explicit --max-turns wins;
@@ -279,9 +284,18 @@ function parseArgs(argv: string[]): CliOptions {
 				opts.thinking = raw as CliOptions["thinking"];
 				break;
 			}
-			case "--max-tokens":
-				opts.maxTokens = Number.parseInt(next(), 10);
+			case "--max-tokens": {
+				const raw = next();
+				opts.maxTokens = Number.parseInt(raw, 10);
+				// A NaN or non-positive cap would silently fall back to the catalog
+				// default — the opposite of what the user asked (--max-turns
+				// precedent below). An explicit value beats the model catalog limit.
+				if (!Number.isFinite(opts.maxTokens) || opts.maxTokens < 1) {
+					throw new Error(`Invalid --max-tokens value "${raw}" — must be a positive integer`);
+				}
+				opts.maxTokensExplicit = true;
 				break;
+			}
 			case "--max-turns": {
 				const raw = next();
 				opts.maxTurns = Number.parseInt(raw, 10);
@@ -840,6 +854,7 @@ function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): Ru
 		// the D2 teaching note is interactive-only (stdout byte contract).
 		thinking: opts.thinking,
 		maxTokens: opts.maxTokens,
+		maxTokensExplicit: opts.maxTokensExplicit,
 		maxTurns: opts.maxTurns,
 		noContextFiles: opts.noContextFiles,
 		noSession: opts.noSession,
@@ -1057,6 +1072,10 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 			renderer.endRun(true);
 			runner.printRunStats(result);
 			runner.printSessionStats();
+			// #output-truncation D2 (print surface): a truncated final response is a
+			// detectable failure for scripts — never exit 0 on it. Code 2, not 1:
+			// 1 is the CLI's empty-stdin HELP sentinel (implementation review P2).
+			if (result.truncated === true) process.exitCode = 2;
 		} finally {
 			mcp?.close();
 		}

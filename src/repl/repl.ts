@@ -379,6 +379,10 @@ class ReplMachine {
 	private interruptCount = 0;
 	private pendingExitCode: number | null = null;
 	private eofPending = false;
+	/** #output-truncation D2: whether the last model run ended on a truncated
+	 *  final response — drives the EOF exit code. Shell `!` runs and failed
+	 *  settles never touch it; every model run resets it at start. */
+	private lastRunTruncated = false;
 	/** Latch for the context-low note: fires once per crossing of 80%;
 	 *  dropping back below (compaction, /new) re-arms it. */
 	private lowContextNoted = false;
@@ -565,7 +569,10 @@ class ReplMachine {
 			return;
 		}
 		if (this.state === "idle") {
-			this.gracefulExit(0);
+			// #output-truncation D2: scripted REPL runs exit 2 when the last run's
+			// response was truncated — NOT 1, which cli.ts treats as the
+			// empty-stdin "print HELP" sentinel (implementation review P2).
+			this.gracefulExit(this.lastRunTruncated ? 2 : 0);
 			return;
 		}
 		this.eofPending = true; // exit after the active run/compaction settles
@@ -653,6 +660,9 @@ class ReplMachine {
 			return;
 		}
 		this.state = "running";
+		// #output-truncation D2: a fresh model run owns the exit-code state from
+		// here on (an older truncation must not leak past it).
+		this.lastRunTruncated = false;
 		// M18: run boundary START — flush any tools that connected while idle
 		// plus mid-run completions parked by the manager, and retry startup-
 		// failed servers within budget. Must precede runTurn: flushed tools
@@ -1024,6 +1034,7 @@ class ReplMachine {
 		// Print mode keeps both lines; bytes frozen.
 		this.runner.printRunStats(result, { statsLine: this.input.setFooter === undefined });
 		if (this.input.setFooter === undefined) this.runner.printSessionStats();
+		this.lastRunTruncated = result.truncated === true; // #output-truncation D2
 		this.refreshFooter(); // cumulative tokens moved
 		if (result.stopReason === "aborted") {
 			// the user pressed Ctrl+C to take control — queued lines are not run;
@@ -1345,7 +1356,7 @@ class ReplMachine {
 			return;
 		}
 		if (this.eofPending) {
-			this.gracefulExit(0);
+			this.gracefulExit(this.lastRunTruncated ? 2 : 0); // #output-truncation D2 (2 ≠ the HELP sentinel 1)
 			return;
 		}
 		this.state = "idle";

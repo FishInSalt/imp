@@ -1413,3 +1413,34 @@ describe("health notes (#loop-health)", () => {
 		expect(await env.repl).toBe(0);
 	});
 });
+
+describe("#output-truncation D2 (scripted REPL exit code)", () => {
+	const truncatedReply = (): AssistantMessage =>
+		assistant([{ type: "thinking", thinking: "long internal debate…" }], "max_tokens");
+
+	it("a truncated final run prints the stop note and exits 2 (not 1: the HELP sentinel)", async () => {
+		const env = await startRepl({ tty: false, interactive: false, scripts: [truncatedReply()] });
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("send another message to continue"));
+		env.fake.eof();
+		expect(await env.repl).toBe(2);
+	});
+
+	it("a normal run still exits 0 (regression pin)", async () => {
+		const env = await startRepl({ tty: false, interactive: false, scripts: [reply("all good")] });
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("all good"));
+		env.fake.eof();
+		expect(await env.repl).toBe(0);
+	});
+
+	it("a shell `! cmd` after the truncated run does not rewrite the exit code", async () => {
+		const env = await startRepl({ tty: false, interactive: false, scripts: [truncatedReply()] });
+		env.send("go\n");
+		await waitUntil(() => env.output().includes("send another message to continue"));
+		env.send("! echo hi\n");
+		await waitUntil(() => env.output().includes("hi"));
+		env.fake.eof();
+		expect(await env.repl).toBe(2);
+	});
+});

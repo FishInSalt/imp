@@ -346,6 +346,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 			tools: options.tools,
 			history,
 			userMessage,
+			// #output-truncation D3b: the child rides the same rule as the main
+			// loop — the model catalog's output limit when known (the loop's
+			// 8,192 floor stays the fallback for catalog-less models).
+			...(modelMaxTokens !== undefined && { maxTokens: modelMaxTokens }),
 			// #loop-health: children are uncapped (owner decision A). Explicit
 			// Infinity is load-bearing — the loop's default floor is 100.
 			maxIterations: Number.POSITIVE_INFINITY,

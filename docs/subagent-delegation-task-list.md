@@ -48,6 +48,7 @@ Do not treat the following as authorization to launch paid model calls, change g
 | SA-06 | Persist and validate resumable child launch state | New feature foundation | SA-01, SA-02, SA-03 |
 | SA-07 | Synchronous continuation of settled children | New feature | SA-03, SA-04, SA-06; regression-check SA-01 and SA-02 |
 | SA-08 | Independent integration review and acceptance | Review / release gate | All work included in the delivery |
+| SA-09 | Child thinking policy (frontmatter + settings + explicit-off semantics) | Contract gap + new feature / after SA-02 | SA-02 (child model config); #output-truncation D3b (child request budget) as budget precondition |
 
 SA-05 is not a prerequisite for building the resume engine, but its accounting integration must be verified with SA-07 before declaring the complete effort finished.
 
@@ -372,6 +373,40 @@ Deliver:
 - [ ] Independent findings resolved or explicitly deferred by the owner, not silently dismissed.
 - [ ] Documentation distinguishes current supported behavior from deferred features.
 - [ ] No claims of completed implementation, approved design, or passing tests without actual evidence.
+
+## SA-09 — Make the child thinking policy explicit and configurable
+
+Recorded 2026-09-30 (owner request: "子代理思考策略" as a follow-up batch). This entry is a backlog record, not an approved design; it must pass its own design review before implementation. It does not satisfy the design-review gate.
+
+### Problem and evidence
+
+- Children never pass `thinking` to `runAgentLoop`: `SubagentOptions` has no such field and `src/core/subagent.ts` (`launchLoop`) never sets it. Agent frontmatter supports `name`, `description`, `tools`, `model`, `timeout` only (`src/core/agents/registry.ts`).
+- With the level undefined, the wire result drifts by provider family:
+  - `deepseek` / zai-GLM (openai-completions): explicit `thinking: {type:"disabled"}` (`src/provider/openai-completions.ts:326-349`) — children run with thinking off.
+  - `anthropic-messages`: the field is omitted entirely; newer Claude models default to thinking on (`src/provider/anthropic.ts:180-199`) — children can run with model-default thinking.
+- Observed: a child session on `deepseek/deepseek-flash` produced 21 assistant turns with zero thinking blocks (child JSONL under `~/.imp/sessions/.../children/`, 2026-09-30) — de-facto "off" on this family only.
+- Ecosystem parity: `pi-subagents` implements a full policy — agent frontmatter `thinking`, `subagents.defaultThinking`, `agentOverrides.<name>.thinking`, `subagents.maxThinking`, `subagents.disableThinking`, per-run thinking suffixes; its builtin roles split levels (scout low, worker/reviewer medium, oracle high).
+- Interplay: `#output-truncation` D3b raises the child request budget to the model-catalog value (`docs/output-truncation-design.md`). That budget is a precondition for enabling child thinking: without it, thinking at today's 8,192-token child request cap recreates the "thinking eats the output budget" failure (see `docs/compaction-thinking-retry-design.md`).
+
+### Proposed minimal contract to confirm in design review
+
+- Agent frontmatter gains an optional `thinking: <level>`; absent → settings default.
+- Settings: `subagents.defaultThinking` fallback; optional ceiling (`subagents.maxThinking`) and escape hatch (`subagents.disableThinking`). Extend only after the default path passes review.
+- Resolution seam: `SubagentOptions` → `runAgentLoop({ thinking })`, clamped per family by the existing `clampThinkingLevel`.
+- "Off" must be expressed as the family's explicit disabled form where omission would not disable (anthropic protocol), not by leaving the field out.
+- Child thinking must not change model, provider, request budget, cwd, or gate behavior.
+
+### Scope / entry points
+
+- `src/core/agents/registry.ts` (frontmatter parse/validation), `src/core/subagent.ts` (`SubagentOptions`, `launchLoop`), `src/core/settings.ts` (settings schema), `src/core/tools/task.ts` (only if a per-run override is approved later).
+- Tests: fake-provider child request carries the resolved level; frontmatter and settings resolution/precedence; the anthropic omission case.
+
+### Acceptance tests
+
+- Fake-provider child run asserts the request's resolved thinking level (frontmatter / settings default / escape hatch).
+- `thinking: false` / `disableThinking` yields the family's explicit disabled form where omission would not disable.
+- Invalid or unknown levels are rejected with an error naming the source file/field.
+- Regression: a child with thinking enabled + catalog-budgeted maxTokens completes without the output-limit truncation seen in the `#output-truncation` evidence.
 
 ## Suggested assignment message
 

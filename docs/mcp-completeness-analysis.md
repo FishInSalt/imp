@@ -13,7 +13,7 @@
 
 **但相对两个参考实现，完备性只在 v1 声明范围内成立**：
 
-1. D5 七项延后的判断今日仍然成立（§3 逐项复核）。其中 sampling 一项目前与 Claude Code 同档——CC 2.1.88 的能力面只有 `roots` + `elicitation`（client.ts:989-1000），也不支持 sampling；pi 扩展则支持。
+1. D5 七项延后的判断今日仍然成立（§3 逐项复核）。（2026-09-29 追踪：第 1 项触发已命中——Tushare 官方 MCP 为远程端点；HTTP 传输工作梳理见 `docs/mcp-http-transport-scoping.md`。）其中 sampling 一项目前与 Claude Code 同档——CC 2.1.88 的能力面只有 `roots` + `elicitation`（client.ts:989-1000），也不支持 sampling；pi 扩展则支持。
 2. 新发现 **5 项 D5 未覆盖的缺口**（§4），其中 1 项是安全姿态问题，建议不等触发直接修：
    - **F1 项目级 mcp 配置不受 M8 trust 门保护**（未信任目录的 `.mcp.json` 也会在启动时 spawn 进程）——与本仓自己的信任模型矛盾，Claude Code 有项目服务器批准门；
    - F2 `notifications/tools/list_changed` 被忽略（服务器热更工具后注册表过期）；
@@ -50,7 +50,7 @@ M18 设计 §7.5 记录的两轮独立审查（P1×2/P2×5/P3×6）修复均有�
 
 | # | 项 | 参考实现现状 | imp 现状 | 结论 |
 |---|---|---|---|---|
-| 1 | OAuth/HTTP 传输 | pi：streamable-http(+SSE 回退)、unix socket、OAuth 全套（DCR/CIMD、client_credentials、密钥环/加密文件、headers command、CA）；CC：sse/http/ws(+OAuth PKCE/回环/keychain/McpAuthTool) | 无（仅 stdio） | 维持；触发：需要用远程 MCP 服务器 |
+| 1 | OAuth/HTTP 传输 | pi：streamable-http(+SSE 回退)、unix socket、OAuth 全套（DCR/CIMD、client_credentials、密钥环/加密文件、headers command、CA）；CC：sse/http/ws(+OAuth PKCE/回环/keychain/McpAuthTool) | 无（仅 stdio） | **触发已命中（2026-09-29）**：Tushare 官方 MCP 为远程 HTTP 端点——HTTP 传输进入实施梳理（`docs/mcp-http-transport-scoping.md`）；OAuth 子项维持延后但有前提——Tushare 官方配置用 URL 内嵌 token，端点同时广播 OAuth 元数据，token 形态是否足够以真机握手为准 |
 | 2 | Sampling | pi：支持（仅文本，带同意，模型偏好提示）；CC 2.1.88：**不支持**（能力面只有 roots+elicitation） | 对 `sampling/createMessage` 回 -32601 | 维持；imp 与 CC 同档 |
 | 3 | Elicitation | pi：form+url 两模式、校验、拒绝/取消语义；CC：form+url、schema 校验、hooks、完成通知 | 对 `elicitation/create` 回 -32601 | 维持；触发：某服务器核心流程依赖中途问句 |
 | 4 | Resources/Prompts | pi：资源默认暴露为 `read_*` 工具，prompts 变 `/mcp__server__prompt` 命令，`mcp:` 引用语法；CC：List/Read 工具+`@server:uri` 提及+启动预取，prompts 变命令 | 均无 | 维持；触发：接入文档型/工作流型服务器 |

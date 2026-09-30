@@ -105,6 +105,17 @@ const verdict = (v: "allow" | "ask", reason: string): ClassifyResult => ({
 });
 
 describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
+	it("27: a config-set mode reaches the footer at load (fix round)", async () => {
+		// A session that STARTS in shadow (config default) must show it before
+		// the first /guardian command — otherwise the user cannot tell the mode.
+		// The host replays load-time statuses when the machine starts (repl.ts).
+		const plain = await loadGuardian("/proj");
+		expect(plain.statuses).toEqual([["mode", undefined]]); // manual: silent no-op
+		await writeConfig({ auto: { mode: "shadow" } });
+		const shadow = await loadGuardian("/proj");
+		expect(shadow.statuses).toEqual([["mode", "guardian: shadow"]]);
+	});
+
 	it("14: the hard floor never reaches the classifier, even in auto", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");

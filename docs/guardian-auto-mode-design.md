@@ -355,6 +355,7 @@ current format (append-only, never fatal — unchanged contract).
 | manual-only skip | `▪ guardian (auto) — target not statically resolvable; asking` |
 | no verified context | `▪ guardian (auto) — no verified user context; asking` |
 | mode change | `▪ guardian: mode → shadow` / `→ auto` / `→ manual` |
+| session starts in a config-set mode | no transcript line; the **footer** shows `guardian: <mode>` from load — pushed at load and replayed by the host (`repl.ts` initial status push; fixed in the follow-up round, pinned by test 27) |
 | breaker tripped | `▪ guardian: 3 non-allows in a row — back to manual` |
 
 **Implementation note (Wave 3, channel correction):** the extension API has no

@@ -242,6 +242,11 @@ export default function (api) {
 		// Draft §7: the footer carries the mode only when it is not manual.
 		api.setStatus("mode", mode === "manual" ? undefined : `guardian: ${mode}`);
 	};
+	// A mode loaded from the config must be visible BEFORE the first /guardian
+	// command: the host replays load-time statuses when the machine starts
+	// (repl.ts: "The initial push replays statuses an extension set before the
+	// machine existed (load-time calls)"). Manual stays a silent no-op.
+	setModeStatus();
 
 	const audit = (line) => {
 		try {

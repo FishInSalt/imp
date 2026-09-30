@@ -57,7 +57,7 @@
 
 | 层 | 现状 | 需要做 |
 |---|---|---|
-| 配置 `src/mcp/config.ts` | `command` 必填；无 `url`/`headers` | 服务器条目扩展为两种形态：stdio（command/args/env/cwd）与 http（url/headers）；`command`∩`url` 互斥；`url` 值过 env 展开（三形态不变）；`headers` 对象（值均字符串、env 展开）；可选 `type` 兼容（缺省按 url 推断 http；接受 `http`/`streamableHttp`/`streamable-http` 拼写；`sse` 见 §5）；校验：https（`http://` 仅回环）、URL 可解析；**合并规则按 M18 已记触发切换**：M18 明记"引入 HTTP/凭据型服务器时改为字段级合并+凭据绑定规则"（m18-mcp-design.md:73）——本批落地字段级合并+pi 式凭据绑定（高优先源换 url 不得继承低优先源的 token/headers），或在设计文档显式重新拍板偏离；disabled/容错不变；坏条目 note 不回显 URL 原文 |
+| 配置 `src/mcp/config.ts` | `command` 必填；无 `url`/`headers` | 服务器条目扩展为两种形态：stdio（command/args/env/cwd）与 http（url/headers）；`command`∩`url` 互斥；`url` 值过 env 展开（三形态不变）；`headers` 对象（值均字符串、env 展开）；可选 `type` 兼容（缺省按 url 推断 http；接受 `http`/`streamableHttp`/`streamable-http` 拼写；`sse` 见 §5）；校验：https（`http://` 仅回环）、URL 可解析；**合并规则按 M18 已记触发切换**：M18 明记"引入 HTTP/凭据型服务器时改为字段级合并+凭据绑定规则"（m18-mcp-design.md:73）——本批落地字段级合并+pi 式凭据绑定（高优先源换 url 不得继承低优先源的 token/headers），或在设计文档显式重新拍板偏离；（**已拍板：维持整体替换——对跨源继承构造上免疫，残余成本与重访触发见 M19 D3**）disabled/容错不变；坏条目 note 不回显 URL 原文 |
 | 传输 `src/mcp/client.ts` | `McpClient` 与 stdio 绑死（spawn/NDJSON/stderr 环/信号关闭） | 抽出传输接口（建议 `{ start, send, onMessage, onClose, close }`），协议核心（pending 表/超时/abort/分页/结果映射/取消通知）原样保留；`StdioTransport` 原逻辑迁移（行为零变化，55 个既有用例必须全绿）；新增 `HttpTransport`：POST 单消息、SSE 解析、会话头、协议版本头、会话过期重初始化、DELETE 关闭、abort→`notifications/cancelled`+断流；**并发约束显式化**：v1 明确"MCP 工具保持串行"（bridge 现状不标 concurrencySafe），接口按单流设计并加测试钉住；放开并发需传输多流化（记触发） |
 | 管理器 `src/mcp/manager.ts` | 进程死亡语义（exit 事件）、`forceKill` | 复用为主；`isConnected`/`onDead`/`ensureClient` 适配 HTTP 语义（无进程；"死亡"=会话失效/连续失败；`forceKill` 对 HTTP 退化为 close）；启动重试（3 次/30s 冷却）与调线重连照用；`/mcp` 状态行不变 |
 | 密钥卫生 | stdio 无此面 | URL 路径 token 与 headers 值不得进入 note、`/mcp`、错误消息；边界明确到"任何被抛出/记录的字符串不得插值含 token 的完整 URL、不得回显重定向 Location"（fetch 的 TypeError/cause 链也不得携带 URL，夹具断言）；错误只留 origin+状态码+截断响应体 |
@@ -85,7 +85,7 @@
 2. **独立设计审查**（仓库规则：不通过不开工）。
 3. **实现批次**（每批自带测试，可独立走查；批 A 的合并规则需在设计文档先拍板）：
    - 批 0（安全，先行，独立走查）：F1——项目级 mcp 配置并入 M8 trust 门 + pid 见证测试；
-   - 批 A 配置层：url/type/headers 解析、互斥、展开、校验、脱敏 note、字段级合并+凭据绑定 + 测试；
+   - 批 A 配置层：url/type/headers 解析、互斥、展开、校验、脱敏 note、合并规则（已成文拍板：维持整体替换，见 M19 D3）+ 测试；
    - 批 B 传输抽象重构：纯重构，既有 55 个 MCP 用例全绿；
    - 批 C HTTP 传输：握手/会话/调用/abort/关闭/过期重初始化 + fake HTTP 服务器夹具（JSON 与 SSE 双响应、initialize-over-SSE 的会话头时序、通知 POST 与 DELETE 的会话头回带、MCP-Protocol-Version 见证、401/404/DELETE-405/5xx、慢调用、取消见证、重定向拒绝、大写服务器名→0 工具路径）；
    - 批 D 接线与文档：管理器状态/重连、/mcp、README、D5 更新。

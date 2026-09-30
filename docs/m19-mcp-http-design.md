@@ -200,3 +200,6 @@ M18 §2 记录：*"触发条件：引入 HTTP/凭据型服务器时改为字段�
 ### 实施期修订
 
 - **批 0（已落地）**：`trustRequiringResources` 计入两条项目级 mcp 文件（见 D7 实施修订）——审查文本只覆盖了 `projectAllowed` 的接线，漏了信任清单本身；实现时以 `resolveProjectTrust` 的"无资源短路"为证据补上，并配清单单测 + pid 见证 e2e。
+- **批次顺序说明（2026-09-29）**：为让每个提交独立全绿，实际顺序为 批 0 → 批 B（纯重构，配置未动）→ 批 A+C 合并（配置联合类型与传输同源；拆开会留下"http 已解析但未实现"的中间态）→ 批 D。交付物与 D1-D8 一致，仅提交切分不同。
+- **实施记录（提交）**：批 0 `4b8e1b7`；批 B `87855fb`；批 A+C `ff8b120`；批 D `26f1b23`：repl 退出态机（`exiting` + forceExit 抢占）+ DELETE 放弃语义 + README/M18 账本。
+- **批 D 实现发现**：`McpClient.forceKill` 原先因 `closed` 早退，close() 之后无法把力传到 transport，导致进行中的 DELETE 不会被放弃——已修（forceKill 无条件通知 transport），并加"forceKill during close abandons the DELETE"钉子（1500ms 延迟下 close 仍 <1s 解析）。

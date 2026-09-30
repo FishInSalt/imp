@@ -303,6 +303,12 @@ surface shares; it is not needed to fix the four defects.
 Recorded as a droppable, separately decidable item: if the owner wants an accent
 later, it lands as its own small change with its own acceptance.
 
+**Amendment (A2.3, §16.15, 2026-09-30)**: the owner took that option and then
+some — the **provenance name** alone now carries one host accent (yellow,
+`\x1b[33m`), on the picker's section rule. Everything else in this document's
+color story is unchanged: hint lines, dashes, record notes and chrome remain dim,
+and D12's "decision content normal / chrome faint" split still governs weights.
+
 ### D7 — Phase 2 contract (additive, both optional)
 
 ```
@@ -585,7 +591,9 @@ answer by digit, confirm the record line reads once and the options are legible.
 - Q3 (D5): one blank row above the items — enough separation, or a rule line?
 - Q4 (D1): keep the record line before the decision, or move it after so the
   transcript reads as a completed event?
-- Q5 (D6): confirm "dim only, no accent" for this batch.
+- Q5 (D6): confirm "dim only, no accent" for this batch. *(Answered: yes for
+  Phase 1; amended by A2.3 §16.15, which gives the provenance name one host
+  accent.)*
 - Q6 (D7, partly answered in round 1): is `preview.kind = "command"` the right
   first shape, given the future diff preview would need `{path, before, after}`
   and a host-side diff? Additive growth is assumed.
@@ -863,7 +871,7 @@ change in `examples/extensions/guardian.mjs`; it adds no extension-facing field.
 |---|---|
 | Removing the `● tool` header from the preview row | Cosmetic only — the command body still appears twice |
 | One copy of the command (moving the alert span onto the transcript call row) | Technically feasible (`ToolBlockFold.updateBlock`, `tool-block.ts:172-176`), but the picker would stop standing on its own: the record row can scroll out of view, and the owner would answer a prompt whose subject is off-screen |
-| Replacing global faint with an explicit colour | 74 `dim(` call sites in `src/`; 54 `\x1b[2m` byte pins across 11 test files. That is imp's whole visual language — separate proposal |
+| Replacing global faint with an explicit colour | 74 `dim(` call sites in `src/`; 54 `\x1b[2m` byte pins across 11 test files. That is imp's whole visual language — separate proposal. *(Unchanged: A2.3 §16.15 accents one element, the provenance name, and leaves faint everywhere else.)* |
 | Styling the record note on text hosts more loudly (O4) | Out of scope here; recorded as a question |
 | Login-dialog / trust-ask visual redesign beyond D11's spacer | Not part of the reported problem |
 
@@ -1077,8 +1085,9 @@ with the leanings below.
     columns in, where the eye lands first (owner decisions: left-anchored, then
     nudged right; §16.13/§16.14), and `visibleWidth(row) === width` exactly
     (`right === 0` ends the row after the label's trailing space);
-  - dashes faint, label at normal weight (D12: decision content normal, chrome
-    faint).
+  - dashes faint, label in the host accent (yellow; A2.3 §16.15 — before that,
+    normal weight; the accent is the weight signal's replacement, not an
+    addition, so D12's split still reads).
 - Placement (base `f417fba`): the generic picker box gets the rule **between** its
   leading `Spacer(1)` (`src/repl/shell.ts:879`) and its title (`:880`); the
   session tree gets it inside `boxWrapper` between `:1148` and `:1149`. Both are
@@ -1166,7 +1175,7 @@ login dialog shows no host-added rule.
 `LEAD_DASHES + 2 + labelWidth + right = width` with
 `right = avail - labelWidth >= 0` (A2.2 sets `LEAD_DASHES = 4`, §16.14) |
 | O8 | **Resolved: leave `DialogBorder` private.** The login dialog's rows are its own frame (top and bottom), not a section boundary; folding them into `SectionRule` would change their bytes for no user-visible gain. Revisit only if a third rule site appears |
-| O9 | **Resolved: label at normal weight.** It names who asks (information); the dashes are chrome — the same split D12 already draws inside the picker |
+| O9 | **Resolved: the label carries the host accent.** It names who asks (information); the dashes are chrome — the same split D12 already draws inside the picker. Initially "normal weight"; A2.3 (§16.15) replaced the weight signal with yellow |
 | O10 | **Resolved: keep both.** The owner approved the airier layout (blank row, then rule); the rule carries the name the blank row cannot |
 
 ### 16.10 Review log (A2)
@@ -1292,6 +1301,10 @@ so the host colors the name it already holds; no extension API changes.
   extension's hands; a future extension uses the same yellow.
 - **Accent**: `\x1b[33m`, via a new `yellow(text, ansi = process.stdout.isTTY
   === true)` helper in `src/format.ts`, matching `dim`/`red`/`green`/`bold`.
+  `SectionRule` calls it with `true` explicitly, exactly as it already does for
+  `dim(..., true)` (`section-rule.ts:42,49`) — the component renders only inside
+  the TUI, and the explicit flag is what keeps the byte pins deterministic under
+  vitest (whose stdout is not a TTY).
 - **Scope A (owner's choice)**: only the `SectionRule` label — `────` stays dim,
   the label is yellow, everything else (record line, picker title, preview)
   keeps today's treatment. Extending the accent to the record line's
@@ -1303,9 +1316,18 @@ so the host colors the name it already holds; no extension API changes.
 - **Empty label**: still plain dim dashes — no name, no accent.
 - **Degradation**: `SectionRule` is constructed only by the TUI shell, so
   print/legacy/no-host output gains nothing (and stays ANSI-free).
-- **Pin delta**: the exact-byte rows gain `\x1b[33m` … `\x1b[0m` around the
-  label (`:4682-4687`, `:4689-4695`, the threshold rows, the width-80 frame row
-  `:809-812`, whose "faint dashes around a normal-weight label" assertion
-  becomes "dim dashes around a yellow label"); the hostile-label pin asserts the
-  accent wraps the sanitized text; the width-identity loop is unchanged.
-- Review: round 5 (below) covers this delta before implementation.
+- **Pin delta** (review round 5, N4/N5): the exact-byte rows gain
+  `\x1b[33m` … `\x1b[0m` around the label — the width-20 `tui` row
+  (`:4682-4687`), the width-20 clipped row (`:4689-4695`), the threshold test's
+  width-8 row (`:4708-4715`), and the width-80 frame row (`:809-812`, whose
+  "faint dashes around a normal-weight label" assertion becomes "dim dashes
+  around a yellow label"). The **hostile-label pin** (`:816-830`) must be
+  rewritten to the exact shape `──── <\x1b[33mbadname\x1b[0m> ────` (the accent
+  wraps the sanitized plain text) while still proving `\x1b[31m`/`\x1b[1m` are
+  gone. **Unchanged**: the `avail < 2` fallback (`:4703-4706`, plain dashes,
+  no label, no accent) and the width-identity loop (`:4718-4725`, escapes are
+  zero-width).
+- Review: round 5 returned **NEEDS REVISION** — D6 itself (and Q5, the
+  global-faint row) still read as a flat prohibition, D14/O9's "normal weight"
+  needed forward pointers, the `yellow()` call-site flag and the pin delta needed
+  precision. All five folded.

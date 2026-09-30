@@ -569,9 +569,10 @@ class ReplMachine {
 			return;
 		}
 		if (this.state === "idle") {
-			// #output-truncation D2: scripted REPL runs exit 1 when the last run's
-			// response was truncated (interactive exit codes are harmless).
-			this.gracefulExit(this.lastRunTruncated ? 1 : 0);
+			// #output-truncation D2: scripted REPL runs exit 2 when the last run's
+			// response was truncated — NOT 1, which cli.ts treats as the
+			// empty-stdin "print HELP" sentinel (implementation review P2).
+			this.gracefulExit(this.lastRunTruncated ? 2 : 0);
 			return;
 		}
 		this.eofPending = true; // exit after the active run/compaction settles
@@ -1355,7 +1356,7 @@ class ReplMachine {
 			return;
 		}
 		if (this.eofPending) {
-			this.gracefulExit(this.lastRunTruncated ? 1 : 0); // #output-truncation D2
+			this.gracefulExit(this.lastRunTruncated ? 2 : 0); // #output-truncation D2 (2 ≠ the HELP sentinel 1)
 			return;
 		}
 		this.state = "idle";

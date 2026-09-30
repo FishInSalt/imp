@@ -1,7 +1,8 @@
 # 主循环输出截断处理：目录预算 + 截断工具调用拒绝 + 可见性（#output-truncation）
 
 状态：设计评审已关闭（5 轮：2×P1+7×P2+3×P3 → 3×P2+4×P3 → 4×P3 → 2×P3 笔记 →
-**CONFIRMED**，commit acc522c）。实现待主人确认 D3b 后开工。主人决策已签
+**CONFIRMED**，commit acc522c）。实现：commit ffb800d（实现评审第 1 轮 NEEDS-FIXES
+已折叠，第 2 轮复核中）。主人决策已签
 （2026-09-30）：D3 = 直接用模型目录上限；D2/D4 按建议；D1 无异议。D3b（子代理同
 规则）为评审新增，已由主人确认（2026-09-30：采用目录值；子代理思考策略另立后续
 批次 SA-09，见 `docs/subagent-delegation-task-list.md`）。
@@ -39,7 +40,7 @@
 验收：
 1. `stopReason === "max_tokens"` 的 assistant 消息带工具调用时：工具零执行、模型收到
    逐条错误、UI 可见失败行；
-2. 运行以截断（无工具调用）结束时：TUI 与 print 均出现截断注记；`-p` 模式退出码 1
+2. 运行以截断（无工具调用）结束时：TUI 与 print 均出现截断注记；`-p` 模式退出码 2
    （该退出码为手动验收 11，无自动化 e2e——自动化由脚本化 REPL 出口面覆盖）；
 3. deepseek-flash 默认请求 max_tokens=384000（显式 `--max-tokens` 仍优先）；
 4. 全量门禁绿（typecheck / lint / vitest）。
@@ -105,10 +106,13 @@
   数字 = 该 run 解析出的上限（见 D3，经 `lastRunMaxTokens`）。
 - **退出码（两个出口面；评审 P1-1 修正）**：
   ① print 模式走 `runPrint`（`cli.ts:965` 起），**不经过 `runRepl`**——在
-  `printRunStats` 之后按 `result.truncated` 置 `process.exitCode = 1`；
+  `printRunStats` 之后按 `result.truncated` 置 `process.exitCode = 2`；
   ② 脚本化 REPL（管道输入、无 -p）与交互 TUI 走 `runRepl` 的 EOF 路径
   （`handleEof` 的 idle 分支与 `returnToIdle` 的 eofPending 分支），以"最后一次 run
-  是否 truncated"决定 `gracefulExit(1 / 0)`；普通运行保持 0。
+  是否 truncated"决定 `gracefulExit(2 / 0)`；普通运行保持 0。
+  码值说明（实现评审第 1 轮 P2 折叠）：不用 1——`cli.ts:684-686` 对 runRepl 返回码 1
+  的旧约定是"零行管道 stdin → 补打 HELP"；截断码必须避开该哨兵，两个出口面统一为
+  专用码 2（`test/repl.test.ts` 的退出码钉子同步为 2）。
   状态语义（评审 P3-N6）：清零只发生在模型 run 入口（`submitTurn`），写只发生在
   `settleSuccess`；模型 run 之外的 shell（`! cmd`，`runBangCommand`）与失败 settle
   （`settleFailure`）不改写该状态。
@@ -169,7 +173,7 @@
 | `src/core/loop.ts` | `RunAgentLoopResult.truncated?: boolean`（completed 返回路径置值，:247）；工具分支插入拒绝路径（替换 :270-271 的 `executeToolBatch` 调用）：`assistant.stopReason === "max_tokens"` → 新 helper `failToolCallsFromTruncatedMessage(toolCalls, results, onEvent)`（逐条 tool_start/tool_end + 错误结果 + `persistableResult`），否则原 `executeToolBatch`；新增文案常量。 |
 | `src/runner.ts` | 每次 run 解析 effective maxTokens（`runTurnInner`，`modelReference` 之后；替换 :1401 的 `this.options.maxTokens`）；记录 `lastRunMaxTokens`；`printRunStats` completed 分支加 truncated 注记。 |
 | `src/repl/repl.ts` | 4 个触及点：run 开始处清零 `lastRunTruncated`；`settleSuccess` 写入；`handleEof` idle 分支与 `returnToIdle` eofPending 分支按它选择 `gracefulExit(1 / 0)`。 |
-| `src/cli.ts` | `CliOptions.maxTokensExplicit`（默认 false；`--max-tokens` 置 true + 校验，锚点 :286-294 模式）；帮助文案 :152 引用常量；`RunnerOptions` 传 `maxTokensExplicit`；**`runPrint`（:965 起）在 `printRunStats` 后按 `result.truncated` 置 `process.exitCode = 1`**（评审 P1-1）。 |
+| `src/cli.ts` | `CliOptions.maxTokensExplicit`（默认 false；`--max-tokens` 置 true + 校验，锚点 :286-294 模式）；帮助文案 :152 引用常量；`RunnerOptions` 传 `maxTokensExplicit`；**`runPrint`（:965 起）在 `printRunStats` 后按 `result.truncated` 置 `process.exitCode = 2`**（评审 P1-1；码值经实现评审 P2 改 2）。 |
 | `src/core/constants.ts` | `DEFAULT_MAX_TOKENS = 16384`（cli 默认与 runner 回退共用单一出处；*不* 波及 `compaction.ts:55`、`thinking.ts:594` 的同值文本）。 |
 | `src/core/subagent.ts` | D3b：`launchLoop`（:337）在 `childModelMetadata().modelMaxTokens` 非 undefined 时传入 `maxTokens`（undefined 保持不传，loop 兜底 8192 不变）。 |
 | `docs/output-truncation-design.md` | 本文。 |
@@ -204,7 +208,7 @@
    第二个 run 的上限。
 
 新增（print/repl 与 CLI e2e 用例，就近落位现有 `runRepl` / `bin/imp.js` 基建）：
-9. 脚本化 REPL（`runRepl` 已导出 + mock provider）：截断的最终 run → EOF 退出码 1 +
+9. 脚本化 REPL（`runRepl` 已导出 + mock provider）：截断的最终 run → EOF 退出码 2 +
    注记；正常 → 退出码 0（回归钉子）；
 9b. 帮助文案与同源双重钉子（评审第 2/3 轮：落位修正 + 同源缺口）：① `bin/imp.js --help` e2e 输出含
    新的默认说明（模型目录上限，未知时 16384）；② 源码/AST 断言 `cli.ts` 的
@@ -213,7 +217,7 @@
    启动）；
 9c. `! cmd` 不改写退出码状态：截断 run 后执行 `! echo hi`，EOF 退出码仍为 1
    （评审 P3-N6 的语义钉子）。
-print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不导出（入口模块），无
+print 模式（`-p`）退出码 2 由手动验收 11 覆盖——`runPrint` 不导出（入口模块），无
 稳定自动化承载；如需自动化，触发条件见 §5。
 
 手动验收（owner 放行后）：
@@ -229,7 +233,7 @@ print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不�
   交互模式与**子代理**（`maxIterations: Infinity` 且非交互）无轮墙，由 loop-health 监视
   （repeat-loop）部分覆盖——观察触发条件：日志出现连续 ≥3 轮"截断拒绝"（阈值可评审
   调整；子代理随 D3b 预算提升概率进一步下降）。
-- **退出码 1**：既有把 `-p` 非零视为失败的脚本从现在起能正确捕获截断（本意），发布说明
+- **退出码 2**：既有把 `-p` 非零视为失败的脚本从现在起能正确捕获截断（本意），发布说明
   需提及。print 模式的退出码暂无自动化 e2e（`runPrint` 在入口模块内、不可导入测试；
   由手动验收 11 覆盖）——触发条件：出现回归时，把 `runPrint`/退出码判定抽成可导入
   helper。
@@ -272,3 +276,9 @@ print 模式（`-p`）退出码 1 由手动验收 11 覆盖——`runPrint` 不�
   设计评审关闭；唯一未决项为主人决策 D3b（非文档缺陷）。
 - 主人确认（2026-09-30，会话）：**D3b 采用目录值**；子代理思考策略记录为后续批次
   （`docs/subagent-delegation-task-list.md` SA-09）。实现自此开工。
+- 实现评审第 1 轮（2026-09-30，独立对抗、fresh context；commit ffb800d）：
+  **NEEDS-FIXES** —— 1×P2（REPL 退出码 1 与 cli 的"空 stdin → 补打 HELP"哨兵冲突，
+  管道/脚本化截断收尾会污染 stdout）⇒ 折叠：两个出口面统一改专用码 2（见 §D2 码值
+  说明）；3×P3（`--max-tokens` 的 `parseInt` 整数性沿 `--max-turns` 既有风格，记独立
+  清理；idle/eofPending 两分支表达式相同、覆盖可后续加固；CLI e2e 依赖先构建 dist——
+  沿既有 e2e 惯例）。已折叠（本修订）。第 2 轮复核：待进行。

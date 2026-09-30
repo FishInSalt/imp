@@ -1073,8 +1073,9 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 			runner.printRunStats(result);
 			runner.printSessionStats();
 			// #output-truncation D2 (print surface): a truncated final response is a
-			// detectable failure for scripts — never exit 0 on it.
-			if (result.truncated === true) process.exitCode = 1;
+			// detectable failure for scripts — never exit 0 on it. Code 2, not 1:
+			// 1 is the CLI's empty-stdin HELP sentinel (implementation review P2).
+			if (result.truncated === true) process.exitCode = 2;
 		} finally {
 			mcp?.close();
 		}

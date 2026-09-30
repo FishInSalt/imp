@@ -243,8 +243,10 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		await h.gate({ args: { command: risky } });
 		await h.run("/guardian status");
 		const line = h.notes.at(-1) ?? "";
-		expect(line).toContain("allow→human denied 1");
+		expect(line).toContain("allow→human approved 1, denied 1");
 		expect(line).toContain("classify 2 (allow 2, ask 0, unavailable 0)");
+		expect(line).toContain("config "); // the config path is reported
+		expect(line).toContain("manual-only 0% (targets 0, no-context 0)");
 	});
 
 	it("25: auto without verified context never classifies and asks fresh", async () => {

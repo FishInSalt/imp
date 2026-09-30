@@ -78,6 +78,13 @@ function cleanReason(reason: string): string {
 		: flattened;
 }
 
+/** #guardian-auto-mode (D8): the classify host exists exactly when the confirm
+ *  host does — an interactive session with a human to escalate to. The
+ *  condition itself is pinned (print mode and test harnesses pass neither). */
+export function classifyHostFor(interactive: boolean): HostClassify | undefined {
+	return interactive ? new HostClassify() : undefined;
+}
+
 export class HostClassify {
 	private binding: HostClassifyBinding | null = null;
 

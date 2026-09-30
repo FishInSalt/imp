@@ -114,8 +114,9 @@ export type ClassifyHandler = (
 
 /**
  * The extension api: three read-only facts, three registration methods, one
- * subscriber, one ask-the-human method, one ask-the-model method — nine
- * members. Anything an extension cannot do with this, it cannot do.
+ * subscriber, one status setter, one ask-the-human method, one ask-the-model
+ * method — ten members. Anything an extension cannot do with this, it cannot
+ * do.
  */
 export interface ExtensionApi {
 	/** Absolute working directory imp was started in. */

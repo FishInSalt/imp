@@ -222,7 +222,8 @@ export default function (api) {
 	/** D16: shadow/a-metrics the owner reviews before trusting auto. */
 	const counters = {
 		matched: 0, // matched ask-tier commands seen this session
-		manualOnly: 0, // skipped classification (no context / unresolvable target)
+		manualOnlyTargets: 0, // §5.5 detector: unresolvable target
+		manualOnlyContext: 0, // D17: no verified user context
 		classify: 0,
 		allow: 0,
 		ask: 0,
@@ -308,11 +309,14 @@ export default function (api) {
 			}
 			if (arg === "status") {
 				const pct = (n, d) => (d === 0 ? "0%" : `${Math.round((n / d) * 100)}%`);
+				const manualOnly = counters.manualOnlyTargets + counters.manualOnlyContext;
 				note(
-					`▪ guardian: mode ${mode}${mode === "auto" && breakerTripped ? " (breaker tripped)" : ""} — ` +
-						`model ${config.model ?? "session default"} — matched ${counters.matched}, manual-only ${counters.manualOnly}, ` +
+					`▪ guardian: mode ${mode}${breakerTripped ? " (breaker tripped — back to manual)" : ""} — ` +
+						`model ${config.model ?? "session default"} — config ${configFile} — matched ${counters.matched}, ` +
+						`manual-only ${pct(manualOnly, counters.matched)} (targets ${counters.manualOnlyTargets}, no-context ${counters.manualOnlyContext}), ` +
 						`classify ${counters.classify} (allow ${counters.allow}, ask ${counters.ask}, unavailable ${counters.unavailable}), ` +
-						`ask-rate ${pct(counters.ask, counters.classify)}, allow→human denied ${counters.allowHumanDenied}`,
+						`ask-rate ${pct(counters.ask, counters.classify)}, ` +
+						`allow→human approved ${counters.allowHumanApproved}, denied ${counters.allowHumanDenied}`,
 				);
 				return "handled";
 			}
@@ -443,14 +447,14 @@ export default function (api) {
 				bumpBreaker();
 				const breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
 				if (noContext && verdict === undefined) {
-					counters.manualOnly += 1;
+					counters.manualOnlyContext += 1;
 					audit(`[auto] not classified (no verified user context) — ${firstLine(command)}`);
 					const approved = await askFresh(`not classified: no verified user context${breakerNote}`);
 					if (approved) return undefined;
 					return { block: true, reason: effective.reason };
 				}
 				if (unresolvable && verdict === undefined) {
-					counters.manualOnly += 1;
+					counters.manualOnlyTargets += 1;
 					audit(`[auto] not classified (target not statically resolvable) — ${firstLine(command)}`);
 					const approved = await askFresh(`not classified: target not statically resolvable${breakerNote}`);
 					if (approved) return undefined;

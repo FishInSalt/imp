@@ -119,6 +119,12 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		expect(sink).toEqual([]);
 	});
 
+	it("wires the host exactly when the session is interactive (test 9, D8)", async () => {
+		const { classifyHostFor, HostClassify: Host } = await import("../src/repl/classify.js");
+		expect(classifyHostFor(false)).toBeUndefined();
+		expect(classifyHostFor(true)).toBeInstanceOf(Host);
+	});
+
 	it("serves nothing without a binding (the non-interactive surface, D8)", async () => {
 		const { renderer } = makeRenderer();
 		const unbound = new HostClassify();

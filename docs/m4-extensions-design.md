@@ -229,7 +229,7 @@ one subscriber. This is the **entire** API; anything an extension cannot do
 with this, it cannot do in M4. *(Later milestones grew it deliberately:
 `setStatus` (task-timer), and `classify` — #guardian-auto-mode Phase A, whose
 design §0 D6 records the "one purpose-built member" decision — bring the live
-surface to nine; `src/extensions/types.ts` is the normative list.)*
+surface to ten; `src/extensions/types.ts` is the normative list.)*
 
 ```ts
 // src/extensions/types.ts

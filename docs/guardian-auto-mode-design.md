@@ -18,7 +18,7 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D3 | Switch: the **`/guardian` command** (no args toggles; with an arg sets). Custom keybindings are **deliberately deferred**. |
 | D4 | **Three modes — `manual` (default), `shadow`, `auto`** (shadow added in R4). Manual = today's behavior, byte for byte; shadow = classify + record, the human still decides; auto = the classifier may allow. |
 | D5 | User-defined filter rules (Claude Code's allowlist analog) are **Phase B**, layered *below* the classifier; Phase A ships modes + classifier + minimal config. |
-| D6 | Exactly **one new host seam member** (`api.classify`). Policy stays with the extension; model resolution, auth, accounting (deferred in Phase A — §11.5), timeouts and the audit record stay with the host. |
+| D6 | Exactly **one new host seam member** (`api.classify`; the live surface becomes ten — round-3 review caught `setStatus` missing from the old count). Policy stays with the extension; model resolution, auth, accounting (deferred in Phase A — §11.5), timeouts and the audit record stay with the host. |
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
 | D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
@@ -55,12 +55,13 @@ matched + auto:
 ```
 
 imp's extension API deliberately has no model access
-(`src/extensions/types.ts:88-89`: “three read-only facts, three registration
-methods, one subscriber, one ask-the-human method — **eight members**.
-Anything an extension cannot do with this, it cannot do.”). This batch grows it
-to **nine**, with one purpose-built member, and amends that docstring **and**
-the stale prologue in `docs/m4-extensions-design.md:227` (“Seven members
-total”). `ToolCallEvent` additionally gains one field,
+(`src/extensions/types.ts`: “three read-only facts, three registration methods,
+one subscriber, one ask-the-human method — **eight members**” at the time the
+sentence was written; `setStatus` had already brought it to nine). This batch
+grows it to **ten** with one purpose-built member, and corrects that docstring
+**and** the stale prologue in `docs/m4-extensions-design.md:227` (“Seven
+members total” — the review round flagged both undercounts). `ToolCallEvent`
+additionally gains one field,
 `verifiedUserContext: boolean` (D17) — a field on an existing event, not a new
 event name (the normative event set, `types.ts:200`, is unchanged).
 
@@ -362,7 +363,8 @@ transcript-note member (eight-plus-one members, D6), so guardian's own lines
 (the skip explanations and the `classifier: …` notes — the human sees them in
 the picker and the record), the **command's** `ctx.renderer` notes (`/guardian`
 mode changes, status, reload), and the **footer status + audit log** for the
-breaker (the next confirm's detail carries a one-time “breaker tripped” note).
+breaker (the **tripping call's own** confirm detail carries the one-time
+“breaker tripped — back to manual” note; later calls are already manual).
 No tenth member; D6 intact. The §7 lines above are the drafts those channels
 render, not literal free-standing notes.
 

@@ -31,7 +31,7 @@ import { parseModelRef } from "./provider/resolve.js";
 import { decideStartupModel, type ModelSource, type StartupModelDecision } from "./provider/startup-model.js";
 import { THINKING_LEVELS } from "./provider/thinking.js";
 import { Renderer } from "./render.js";
-import { HostClassify } from "./repl/classify.js";
+import { classifyHostFor } from "./repl/classify.js";
 import { COMMANDS } from "./repl/commands.js";
 import { historyFilePath } from "./repl/history.js";
 import { runRepl, TtyConfirm } from "./repl/repl.js";
@@ -546,7 +546,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	// Extension classify (interactive only, #guardian-auto-mode): same
 	// capability-gating as confirm — a host without a human to escalate to
 	// never serves the seam (D8).
-	const classify = interactive ? new HostClassify() : undefined;
+	const classify = classifyHostFor(interactive);
 	let releaseStartupNotes: (() => void) | undefined;
 	// Startup-note deferral (interactive only): every `▪` note emitted before
 	// the REPL owns the screen — extension lines, the context banner, trust

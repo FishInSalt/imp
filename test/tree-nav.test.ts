@@ -345,6 +345,35 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 		expect(runner.userInputSnapshot()).toEqual([]);
 	});
 
+	it("a failed branch summary still clears (the position moved)", async () => {
+		// The summarizer provider throws: the navigation proceeds anyway
+		// (review R12: clearing keys on positionMoves, not on the summary).
+		const { runner, store, ids } = await navEnv({
+			provider: scriptedProvider([
+				() => {
+					throw new Error("summarizer exploded");
+				},
+			]),
+		});
+		store.appendMessage(user("q3-new"));
+		store.appendMessage(assistant([{ type: "text", text: "a3-new" }]));
+		const a2old = store.getTree()[0]?.children[0]?.children.find((n) => n.entry.id === ids.q2old)?.children[0]
+			?.entry.id;
+		runner.recordUserInput("authorize: delete the build dir");
+		const result = await runner.navigateTree(a2old ?? "", { summarize: true });
+		if ("noop" in result || "aborted" in result) throw new Error("expected a plain result");
+		expect(result.summary).toBe("failed");
+		expect(runner.userInputSnapshot()).toEqual([]);
+	});
+
+	it("a noop navigation keeps the log and later submissions append", async () => {
+		const { runner, store } = await navEnv();
+		runner.recordUserInput("first");
+		await runner.navigateTree(store.getLeafId() ?? "");
+		runner.recordUserInput("second");
+		expect(runner.userInputSnapshot()).toEqual(["first", "second"]);
+	});
+
 	it("clears on /new", async () => {
 		const { runner } = await navEnv();
 		runner.recordUserInput("something");

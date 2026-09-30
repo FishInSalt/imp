@@ -1067,8 +1067,8 @@ with the leanings below.
   `invalidate(): void` as well (empty — the rule caches nothing, exactly like
   `DialogBorder`, `src/repl/login-dialog.ts:41`):
   - absent/empty label, or `width < 6` → `dim("─".repeat(width))` (below that
-    threshold a clipped label would render as `─ … ─`, which reads as damage
-    rather than a name);
+    threshold the clipped label is a bare ellipsis, which names nobody — the
+    A2.1 re-anchor changed this row's shape, not the threshold);
   - otherwise the label is `sanitizeDisplay`-ed, clipped with
     `truncateToWidth(label, width - 4)`, and the row is
     `dim("──") + " " + label + " " + (right > 0 ? dim("─"×right) : "")` with
@@ -1240,4 +1240,10 @@ sit left ("a centred label is harder to spot"). D13/D14 are otherwise unchanged.
   closing dashes**. The width-5 plain row and the `visibleWidth(row) === width`
   loop are unchanged (round-3 note N2: the pin *set* is unchanged, so §16.6's
   inventory still holds; only the expected bytes move).
-- Review: a short round 3 (below) covers this delta before implementation.
+- Review: round 3 (below) covered the delta before implementation; the bounded
+  implementation check returned **APPROVE** — the contract expression matched the
+  implementation byte-for-byte, and seven mutations were all caught (`──`→`─` and
+  `──`→`───`, `right` off by one in both directions, the `right > 0` guard removed,
+  and the threshold flipped to `< 5`/`< 7`); nothing survived the focused file. The
+  one doc nit it raised (D14's fallback rationale still described `─ … ─`) is
+  folded.

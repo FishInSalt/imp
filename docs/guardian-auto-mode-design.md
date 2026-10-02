@@ -22,7 +22,7 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
 | D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
-| D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
+| D10 | Circuit breaker: N=3 consecutive non-`allow` **classifier outcomes** (`ask`/unavailable; manual-only skips neutral — amended by §17/D41) flip the session back to manual (auto mode only). |
 | D11 | **Positioning (R4 #1; amended by R7 #1 and R11 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**. **Capture point (R11 #1)**: the human submission boundary *before* any dispatch — `handleLine` (`repl.ts:442`, the funnel both shells wire their input to: TUI `:1606`, legacy `:1622`) and the steering/follow-up queues. The log records the raw submission (typed text verbatim, per-entry elided at 2000 chars with a marker — R1 fold, §14.4; a slash-command/skill invocation as `/<name> <args>`), **never expansion products**: command- and skill-file bodies reach the model via `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and never through `handleLine` — they are *not* user attestation. Never derived from message roles either (summaries and child task prompts are stored as `role: "user"`: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** Invalidation rules: D18. |
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
 | D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
@@ -270,7 +270,7 @@ if (mode === "shadow"):
   → **fresh confirm** — the human decides, and the sample is a real judgment
 if (mode === "auto"):
   if (event.verifiedUserContext === false) → fresh confirm (D17; never classified)
-  if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; breaker counts)
+  if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; skip: neutral — §17/D41)
   verdict = await api.classify({ system, prompt, model: config.model })
   undefined → fresh confirm(detail + "\nclassifier unavailable")   [breaker counts]
   ask       → fresh confirm(detail + "\nclassifier: " + reason)    [breaker counts]
@@ -336,10 +336,12 @@ regardless of its stored role** (summaries, delegation prompts, tool results).
 
 ### 5.7 Circuit breaker (D10)
 
-Auto mode only. Count consecutive non-`allow` results (`ask`, unavailable, or a
-manual-only skip). On the 3rd: flip the session to manual, write a record line,
-update the status. Any `allow` resets the counter. Shadow never flips (it does
-not decide); its counters are observational only.
+Auto mode only. Count consecutive non-`allow` **classifier outcomes** — `ask`
+and unavailable. By-design manual-only skips are neutral: they neither count
+nor reset. On the 3rd: flip the session to manual, write a record line, update
+the status. Any `allow` resets. Mode-changing `/guardian` calls re-arm;
+`status` does not reset. Shadow never flips (it does not decide); its counters
+are observational only. (§17/D41 folded; rationale and review in §17.)
 
 ### 5.8 Audit log
 
@@ -779,6 +781,8 @@ from the model; the host only stops *refusing to ask*.
 - the `<<` precondition is a **raw substring check**: a quoted literal
   (`rm -rf /tmp/x && echo "a<<b"`) also forces whole-command. Accepted
   approximation — over-triggering stays the safe direction (R2 P2);
+  **superseded by §17/D40** for the analysis tiers (structured parsing
+  behind the same raw pre-filter);
 - non-`<<` constructs that still feed later text to a command (`… | sh`,
   `source file`) are not modeled; unmatched by the rule table, their text is
   the classifier's to weigh (R2 P2);
@@ -1037,7 +1041,8 @@ Guardian pins continue the existing numbering in
     field** fails safe the same way (mirror of test 25);
 35. auto + payload over the mirror cap ⇒ classify **not called**, fresh
     confirm `not classified: request exceeds the classifier input budget`,
-    status shows `size 1`, the breaker counts it;
+    status shows `size 1`; the skip is breaker-neutral (§17/D41 — pin 35's old
+    “the breaker counts it” is superseded);
 36. shadow + write ⇒ classify called (even for `allow`), fresh confirm,
     `allow + human approved/denied` counters mirror test 24; the host's
     verdict record is out of the fake's scope (real-host behavior);
@@ -1856,8 +1861,9 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 > Status: **rev 4 — design review closed (R1 NEEDS REVISION → rev 1;
 > R2 → rev 2; R3 → rev 3; R4 CONFIRMED WITH NOTES → rev 4; R5
-> CONFIRMED).** Every revision round changed this section only.
-> Implementation not started.
+> CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first, full suite
+> 2766/2766 across 140 files, baseline 2749); implementation review
+> pending.** Every revision round changed this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design

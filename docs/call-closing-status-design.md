@@ -5,8 +5,8 @@ Status: **implemented and merged (merge 4c2e9ea); design review closed
 review closed (APPROVE WITH CORRECTIONS, corrections folded; confirmation
 round CONFIRMED). Amendment 1 (owner-directed, 2026-10-02): running text
 simplified to `Ns` and the task timer joins the closing slot — Amendment 1
-short review closed (NEEDS-FIXES → NEEDS-FIXES → CONFIRMED); implementation
-on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
+implemented and merged (merge 6560b26; short review closed, implementation
+review APPROVE WITH CORRECTIONS → CONFIRMED).** Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 

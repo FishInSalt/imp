@@ -92,9 +92,10 @@ export interface ConfirmOptions {
  *  timeout, the audit record, and whether the seam exists on this surface at
  *  all (D8). */
 export interface ClassifyRequest {
-	/** The extension's policy framing (the system message) — the request's
-	 *  `system` + `prompt` are capped by the host (§14.4); over-cap fails to
-	 *  unavailable. */
+	/** The extension's policy framing (the system head) — the host appends
+	 *  the output contract and assembles the user message (HUMAN RECORD /
+	 *  WORK ORDER / this prompt); the assembled request is bounded per
+	 *  §16/D39 — over-budget fails to unavailable. */
 	system: string;
 	/** What to judge (one user message): the candidate action and its context. */
 	prompt: string;
@@ -113,6 +114,11 @@ export interface ClassifyResult {
 	verdict: "allow" | "ask";
 	/** One line, sanitized and capped by the host. */
 	reason: string;
+	/** §16/D37: the covering-evidence quote (verbatim text of a HUMAN RECORD
+	 *  entry), when the model supplied one; host-cleaned and capped
+	 *  (`CLASSIFY_MAX_BASIS_CHARS`). Absent — never `""` — when empty.
+	 *  Record-only pilot: the extension writes it to its audit lines. */
+	basis?: string;
 	/** The reference actually used (may differ from the request's). */
 	model: string;
 }

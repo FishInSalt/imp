@@ -22,6 +22,10 @@ export interface LLMRequest {
 	tools: Tool[];
 	model: string;
 	maxTokens: number;
+	/** §16/D38: optional sampling temperature (the classify seam pins 0).
+	 *  Providers forward it where the wire supports it; thinking-mode models
+	 *  may ignore it (provider semantics). */
+	temperature?: number;
 	/** Thinking level (pi parity). "off"/undefined = no thinking knob sent;
 	 *  providers map the level to their native parameter (see thinking.ts). */
 	thinking?: import("./thinking.js").ThinkingLevel;

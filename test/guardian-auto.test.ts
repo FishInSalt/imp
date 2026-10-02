@@ -671,6 +671,14 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		h.classifyImpl.fn = async () => undefined;
 		await h.gate({ args: { command: risky } });
 		exactLogLine(await readFile(logFile, "utf8"), `[auto] classifier unavailable — ${risky}`);
+
+		// §15/R4: the write auto site drops the empty-reason segment too
+		h.classifyImpl.fn = async () => verdict("allow", "");
+		await h.gate(writeCall("/outside/empty.txt"));
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			"[auto] allow — write /outside/empty.txt (anthropic/session-model)",
+		);
 	});
 
 	it("47: §15 — shadow allow is audited with the human outcome", async () => {
@@ -691,6 +699,25 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		);
 		await h.run("/guardian status");
 		expect(h.notes.at(-1)).toContain("allow→human approved 1, denied 1");
+
+		// §15/R4: the write-gate shadow verdict line, both outcomes; the payload stays out
+		const w = await loadGuardian("/proj");
+		await w.run("/guardian shadow");
+		w.classifyImpl.fn = async () => verdict("allow", "probe is fine");
+		w.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+		await w.gate(writeCall("/outside/s1.txt", "SHADOW-TOKEN-7c7d"));
+		await w.gate(writeCall("/outside/s2.txt", "SHADOW-TOKEN-7c7d"));
+		const logFile = path.join(fakeHome, ".imp", "guardian.log");
+		const both = await readFile(logFile, "utf8");
+		exactLogLine(
+			both,
+			"[shadow] allow — write /outside/s1.txt (anthropic/session-model) — reason: probe is fine — human: approved",
+		);
+		exactLogLine(
+			both,
+			"[shadow] allow — write /outside/s2.txt (anthropic/session-model) — reason: probe is fine — human: denied",
+		);
+		expect(both).not.toContain("SHADOW-TOKEN-7c7d");
 	});
 
 	it("48: §15 — shadow ask/unavailable shapes; the over-budget write line stays bare", async () => {
@@ -713,6 +740,16 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			log,
 			"[shadow] not classified (request over the classify budget) — write /outside/big.txt — human: denied",
 		);
+
+		// §15/R4: the shadow verdict site drops an empty reason's segment too
+		const s = await loadGuardian("/proj");
+		await s.run("/guardian shadow");
+		s.classifyImpl.fn = async () => verdict("ask", "");
+		await s.gate({ args: { command: risky } });
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			`[shadow] ask — ${risky} (anthropic/session-model) — human: denied`,
+		);
 	});
 
 	it("49: §15 — the shadow line is deferred until the human answers", async () => {
@@ -734,6 +771,27 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		await pending;
 		const log = await readFile(logFile, "utf8");
 		expect(log.match(/\[shadow\]/g)?.length).toBe(1);
+
+		// §15/R4: the write gate defers the same way — nothing before, one line after
+		const w = await loadGuardian("/proj");
+		await w.run("/guardian shadow");
+		w.classifyImpl.fn = async () => verdict("ask", "unsure");
+		let resolveWrite: (value: boolean) => void = () => {};
+		w.confirm.mockImplementationOnce(
+			() =>
+				new Promise<boolean>((resolve) => {
+					resolveWrite = resolve;
+				}),
+		);
+		const pendingWrite = w.gate(writeCall("/outside/deferred.txt", "probe"));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(await readFile(logFile, "utf8").catch(() => "")).not.toContain("deferred.txt");
+		resolveWrite(false);
+		await pendingWrite;
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			"[shadow] ask — write /outside/deferred.txt (anthropic/session-model) — reason: unsure — human: denied",
+		);
 	});
 
 	it("53: §15 — a write payload never reaches the log; the reason does", async () => {

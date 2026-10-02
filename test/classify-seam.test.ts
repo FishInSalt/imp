@@ -87,6 +87,15 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		expect(output()).toContain("(anthropic/session-model)");
 	});
 
+	it("§15/R4: an absent subject keeps the exact legacy record line", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"removing the build dir is safe here"}');
+		await call(() => host.handler({ system: "s", prompt: "p" }, "guardian"));
+		expect(output()).toBe(
+			"▪ guardian — classifier: allow — removing the build dir is safe here (anthropic/session-model)\n",
+		);
+	});
+
 	it("returns undefined for garbage, refusal, and truncated answers", async () => {
 		const { host } = makeHost();
 		for (const text of ["I think it is fine", "I cannot help with that", '{"verdict":"al']) {
@@ -271,6 +280,20 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 
 		await call(() => host.handler({ system: "s", prompt: "p", subject: " \u001b[0m  " }, "guardian"));
 		expect(output()).toContain("▪ guardian — classifier: ask — r (anthropic/session-model)");
+	});
+
+	it("§15/R4: the subject cap boundary — 160 renders whole, 161 → 159 + …", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"ask","reason":"r"}');
+		const subjectOf = (line: string): string =>
+			line.slice(line.indexOf("ask — ") + "ask — ".length, line.indexOf(" — r ("));
+		await call(() => host.handler({ system: "s", prompt: "p", subject: "x".repeat(160) }, "guardian"));
+		await call(() => host.handler({ system: "s", prompt: "p", subject: "x".repeat(161) }, "guardian"));
+		const lines = output()
+			.split("\n")
+			.filter((l) => l.includes("classifier: ask"));
+		expect(subjectOf(lines[0] ?? "")).toBe("x".repeat(160));
+		expect(subjectOf(lines[1] ?? "")).toBe(`${"x".repeat(159)}…`);
 	});
 
 	it("§15/D30: the record line carries neither the system nor the prompt bodies", async () => {

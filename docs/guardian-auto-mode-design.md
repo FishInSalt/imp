@@ -111,6 +111,10 @@ export interface ClassifyRequest {
    *  The host resolves it (auth, availability); an unresolvable reference
    *  falls back to the session model (noted in the record). */
   model?: string;
+  /** §15/D29: a short identifier of the call under judgment (`bash: <first
+   *  line>`, `write <path>`), rendered in the host's record line; cleaned
+   *  and capped by the host, display only. */
+  subject?: string;
 }
 
 export interface ClassifyResult {
@@ -340,11 +344,13 @@ not decide); its counters are observational only.
 ### 5.8 Audit log
 
 `~/.imp/guardian.log` gains one line per **auto** decision: timestamp, tool,
-verdict, model, first line of the reason. (**§14**: shadow decisions are
-not audited — the rev-3 “auto/shadow” wording was never implemented; shadow's
-evidence is the host verdict record and the D16 counters.) Blocked/error
-lines keep their current format (append-only, never fatal — unchanged
-contract).
+verdict, model and now the verdict's reason (**§15**/D27 — the reason claim
+above was never implemented before §15). Shadow decisions are audited too
+(**§15**/D28): one deferred `[shadow]` line per decision, written once the
+human's answer is known, carrying the verdict (or the over-budget skip),
+reason, model, identity and `human: approved|denied` — superseding §14's
+“auto-only” note. Blocked/error lines keep their current format (append-only,
+never fatal — unchanged contract).
 
 ## 6. Invariants
 
@@ -996,7 +1002,9 @@ outside-cwd + auto:
   `[auto] not classified (no verified user context) — write <path>`,
   `[auto] not classified (request over the classify budget) — write <path>`,
   `[auto] classifier unavailable — write <path>`. Shadow writes no audit
-  (parity — §5.8 amended, §14.8).
+  (parity — §5.8 amended, §14.8). **§15 supersedes both halves**: the
+  `allow`/`ask` shapes gain `— reason: …`, and shadow writes one deferred
+  `[shadow]` line per decision.
 - **Confirm surfaces**: the base message/detail stay
   (`allow writing outside <cwd>?` / `path: …\nwhy it matched: …`); fresh
   paths append the same classifier/not-classified lines the bash gate uses
@@ -1140,7 +1148,9 @@ Mutations (each must be caught):
   model-authored, and the target's existing content is never read).
 - §5.8: audit lines are **auto-only**; shadow decisions surface via the
   host verdict record and the D16 counters (the rev-3 “auto/shadow”
-  wording was never implemented).
+  wording was never implemented). **§15 supersedes this**: shadow
+  decisions are audited (D28) and auto verdict lines carry the reason
+  (D27).
 - §9.2: “write-gate classification” → this section.
 - §11.3: open question 3 (failure-record dedupe) resolves to **none**.
 - D16 / §5.3 (status): counters are session-wide across gates; the
@@ -1210,7 +1220,8 @@ Mutations (each must be caught):
 
 ## 15. Observability batch (draft for independent review — 2026-10-02)
 
-> Status: **rev 2.1 — review closed (R3 CONFIRMED); implementation pending.**
+> Status: **rev 2.2 — review closed (R3 CONFIRMED); IMPLEMENTED
+> (2026-10-02); implementation review R4 APPROVE WITH CORRECTIONS, folded.**
 > Scope: **track A** of the 2026-10-02 problem
 > triage — the read side (records only). It changes no classification input,
 > no prompt, no gate decision, no detector and no breaker: those are track B
@@ -1416,3 +1427,14 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 - **R3 (same reviewer, micro-verification): CONFIRMED** — all three folds
   verified in place; numbering and prior folds remain consistent; no
   regressions; review closed on rev 2.1.
+- **R4 (implementation review, independent, on f19fa1e): APPROVE WITH
+  CORRECTIONS** — no behavioral defect; the emitted strings, cleaning
+  order, cap arithmetic and containment were verified green (2691/2691).
+  Four pin-coverage gaps, each reproduced by mutation in a scratch copy:
+  the write-branch shadow verdict line had no assertion; the deferred-write
+  pin covered only bash; the subject cap boundary (160/161) was untested;
+  the empty-reason segment drop was unasserted at the write and shadow
+  sites. Three notes: the payload-token pin covered only auto (folded into
+  the new shadow-write pins); the absent-subject legacy assertion was
+  `toContain`-shaped (now an exact-line pin); the §4.1/§5.8/§14.5/§14.8
+  folds were absent. All folded in rev 2.2.

@@ -147,6 +147,41 @@ describe("running-suffix render and swap (#call-closing-status, design D1/D3/D4/
 		expect(plain(fold.render(40))).toEqual(["● read  src/a.ts └─ running 3s"]);
 	});
 
+	it("flips the omission notice when the running width changes the re-lay (D5)", () => {
+		const build = () => input("bash", { command: `l1\nl2\n${"y".repeat(22)}` }, bashPresentation);
+		const nine = build();
+		nine.setRunningSuffix("└─ running 9s");
+		expect(plain(nine.render(40))).toEqual([
+			"● bash  l1",
+			"    l2",
+			"    yyyyyyyyyyyyyyyyyyyyyy └─ running 9s",
+		]);
+		const ten = build();
+		ten.setRunningSuffix("└─ running 10s");
+		expect(plain(ten.render(40))).toEqual([
+			"● bash  l1",
+			"    l2",
+			"    yyyyyyyyyyyyyyyyyyyyy └─ running 10s",
+			"    … more · Ctrl+O",
+		]);
+	});
+
+	it("keeps the header-slot fallback under narrow widths (E1 shapes)", () => {
+		expect(plain(input("bash", { command: "echo hi" }, bashPresentation, 400).render(8))).toEqual([
+			"● bash ✓",
+			"    echo",
+			"     hi",
+		]);
+		const live = input("bash", { command: "echo hi" }, bashPresentation);
+		live.setRunningSuffix("└─ running 3s");
+		expect(plain(live.render(8))).toEqual(["● bash", "    echo", "     hi"]); // wide timer does not fit
+		expect(plain(input("read", { path: "src/a.ts" }, readPresentation, 400).render(8))).toEqual([
+			"● read ✓",
+			"    src/",
+			"    a.ts",
+		]);
+	});
+
 	it("never exceeds the width for any width with running or completion slots (I1)", () => {
 		const live = input("bash", { command: "echo first\necho second line with more text" }, bashPresentation);
 		live.setRunningSuffix("└─ running 9999+s");

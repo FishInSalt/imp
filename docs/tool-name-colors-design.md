@@ -1,7 +1,11 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
-Status: review closed (rounds 1-2 NEEDS-FIXES folded; round 3 CONFIRMED).
-Implementation on `feat/tool-name-colors`. Owner decisions 2026-10-02:
+Status: implemented and merged (merge 70821d4). Design review closed after
+3 rounds (NEEDS-FIXES → NEEDS-FIXES → CONFIRMED); implementation review
+APPROVE WITH CORRECTIONS → CONFIRMED (the P2 was a real prototype-chain
+lookup bug for names like `constructor` — fixed via an own-property
+`defaultToolColor` lookup and a fail-closed SGR Map). Owner decisions
+2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").

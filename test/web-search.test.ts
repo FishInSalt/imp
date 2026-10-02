@@ -55,6 +55,7 @@ beforeEach(() => {
 		registerTool(tool: RegisteredTool) {
 			tools.set(tool.name, tool);
 		},
+		suggestToolColor() {},
 	});
 	fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => response());
 	vi.stubGlobal("fetch", fetchMock);

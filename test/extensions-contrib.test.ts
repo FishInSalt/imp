@@ -56,6 +56,7 @@ interface Env {
 	runner: Runner;
 	repl: Promise<number>;
 	requests: LLMRequest[];
+	loaded: LoadedExtensions;
 	send(text: string): void;
 	output(): string;
 	sessionText(): string;
@@ -129,6 +130,7 @@ async function startRepl(args: StartArgs): Promise<Env> {
 		runner,
 		repl,
 		requests,
+		loaded,
 		send: (t) => fake.send(t),
 		output: () => fake.output(),
 		sessionText: () => readFileSync(runner.session?.filePath as string, "utf8"),
@@ -218,7 +220,9 @@ describe("web-search (Tavily search + page reader, fetch stubbed)", () => {
 			extensionFiles: webSearchFiles(),
 			env: (base) => webSearchEnv(base, ""),
 		});
-		expect(env.output()).toContain("▪ extension web-search [project] — 2 tools");
+		expect(env.output()).toContain("▪ extension web-search [project] — 2 tools, 2 suggested colors");
+		expect(env.loaded.runtime.toolColorFor("web_search")).toBe("#e6dcc3"); // the extension's own suggestion (A3)
+		expect(env.loaded.runtime.toolColorFor("url_read")).toBe("#e6dcc3");
 		env.send("search something\n");
 		await waitUntil(() => env.output().includes("got it"));
 		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];

@@ -3447,6 +3447,45 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("author suggestions paint below user registrations (#tool-name-colors A3)", async () => {
+		const tool = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo authored" } }],
+					"tool_use",
+				),
+				assistant([{ type: "toolCall", id: "t2", name: "gated", arguments: { message: "overridden" } }], "tool_use"),
+				() => tool.promise.then(() => reply("tiers")),
+			],
+			{
+				tools: [gatedTool(tool, "gated")],
+				extensionFiles: {
+					"suggest.mjs": `export default function (api) {
+	api.suggestToolColor("bash", "#d97757");
+	api.suggestToolColor("gated", "ansi256:173");
+}
+`,
+					"theme.mjs": `export default function (api) {
+	api.registerToolColor("gated", "brightCyan");
+}
+`,
+				},
+			},
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[96mgated"), 8000);
+		const raw = env.terminal.writes.join("");
+		expect(raw).toContain("\u001b[1m\u001b[38;2;217;119;87mbash"); // the suggestion paints
+		expect(raw).toContain("\u001b[1m\u001b[96mgated"); // the user registration overrides
+		expect(raw).not.toContain("\u001b[1m\u001b[38;5;173mgated");
+		tool.resolve();
+		await waitUntil(() => stripAnsi(env.terminal.writes.join("")).includes("tiers"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("the task call takes its hue from the shipped example theme (#tool-name-colors A1)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
 		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });

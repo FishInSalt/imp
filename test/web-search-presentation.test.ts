@@ -220,7 +220,7 @@ describe("web search presentation", () => {
 		);
 		vi.stubGlobal("fetch", fetch);
 		const tools = new Map<string, Tool>();
-		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool) });
+		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool), suggestToolColor: () => {} });
 		expect(tools.get("url_read")!.presentation).toBe(urlReadPresentation);
 		expect(tools.get("web_search")!.presentation).toBe(presentation);
 		const search = tools.get("web_search")!;

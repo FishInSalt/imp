@@ -335,10 +335,14 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 	it("keeps the log when nothing moves; clears it when the position moves", async () => {
 		const { runner, store } = await navEnv();
 		runner.recordUserInput("authorize: delete the build dir");
-		expect(runner.userInputSnapshot()).toEqual(["authorize: delete the build dir"]);
+		expect(runner.userInputSnapshot().map((entry) => entry.text)).toEqual([
+			"authorize: delete the build dir",
+		]);
 		// target === current leaf → noop: no identity/position change, no clear
 		await runner.navigateTree(store.getLeafId() ?? "");
-		expect(runner.userInputSnapshot()).toEqual(["authorize: delete the build dir"]);
+		expect(runner.userInputSnapshot().map((entry) => entry.text)).toEqual([
+			"authorize: delete the build dir",
+		]);
 		// navigating to q1 moves the position — the authorization is rewound away
 		const q1 = store.getTree()[0]?.entry.id;
 		await runner.navigateTree(q1 ?? "", { summarize: false });
@@ -371,7 +375,7 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 		runner.recordUserInput("first");
 		await runner.navigateTree(store.getLeafId() ?? "");
 		runner.recordUserInput("second");
-		expect(runner.userInputSnapshot()).toEqual(["first", "second"]);
+		expect(runner.userInputSnapshot().map((entry) => entry.text)).toEqual(["first", "second"]);
 	});
 
 	it("clears on /new", async () => {

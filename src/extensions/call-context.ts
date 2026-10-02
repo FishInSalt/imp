@@ -1,6 +1,6 @@
 /**
- * #guardian-auto-mode (design D15): the per-call facts a `classify` call may
- * rely on — frozen at the tool gate and carried to the extension dispatch
+ * #guardian-auto-mode (design D15/D33): the per-call facts a `classify` call
+ * may rely on — frozen at the tool gate and carried to the extension dispatch
  * through AsyncLocalStorage.
  *
  * The chain is `run → tool call → handler → classify`, one snapshot per call:
@@ -10,6 +10,7 @@
  * human. There is deliberately no shared "current run" variable.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { GateDecisionEvent, HumanRecordEntry } from "./user-input-log.js";
 
 export interface ToolCallContext {
 	/** The tool call this dispatch belongs to. */
@@ -20,8 +21,18 @@ export interface ToolCallContext {
 	agent?: string;
 	/** The loop's working directory (worktree path under isolation). */
 	cwd?: string;
-	/** Copy of the verified user-input log, frozen at gate entry (D11). */
-	userInputs: readonly string[];
+	/** §16/D33: the tool name and the host-computed call identity
+	 *  (`<tool> @ <JSON cwd> <JSON call text>`) — the gate-decision record's
+	 *  per-call identity, display/equality text; never extension-authored. */
+	tool: string;
+	callIdentity: string;
+	/** Copy of the verified submission log, frozen at gate entry (D11). */
+	userInputs: readonly HumanRecordEntry[];
+	/** Copy of the gate-decision log, frozen at gate entry (§16/D33). */
+	decisions: readonly GateDecisionEvent[];
+	/** §16/D34: the child's work order (task prompt), subagent calls only —
+	 *  scope context for the classifier, never authorization. */
+	workOrder?: string;
 }
 
 const storage = new AsyncLocalStorage<ToolCallContext>();

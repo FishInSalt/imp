@@ -302,6 +302,7 @@ export function createOpenAICompletionsProvider(options: OpenAICompletionsProvid
 				stream_options: { include_usage: true },
 				messages: toWireMessages(request.system, messages, reasoningReplay),
 				[maxTokensField(request.model)]: request.maxTokens,
+				...(request.temperature === undefined ? {} : { temperature: request.temperature }),
 			};
 			if (request.tools.length > 0) {
 				if (options.zaiToolStream === true) body.tool_stream = true; // pi compat.zaiToolStream

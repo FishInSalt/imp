@@ -153,6 +153,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 			const body: Record<string, unknown> = {
 				model: request.model,
 				max_tokens: request.maxTokens,
+				...(request.temperature === undefined ? {} : { temperature: request.temperature }),
 				system: request.system,
 				stream: true,
 				messages: toWireMessages(

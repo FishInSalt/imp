@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { currentToolCallContext } from "../src/extensions/call-context.js";
+import { currentToolCallContext, runWithToolCallContext } from "../src/extensions/call-context.js";
 import { loadExtensions } from "../src/extensions/loader.js";
 import type { ToolCallEvent } from "../src/extensions/types.js";
-import { USER_INPUT_LOG_ENTRY_CHARS, UserInputLog } from "../src/extensions/user-input-log.js";
-import { runRepl } from "../src/repl/repl.js";
+import { type HumanRecordEntry, UserInputLog } from "../src/extensions/user-input-log.js";
+import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, gate, gatedTool, makeConsole, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
@@ -25,7 +25,7 @@ afterEach(() => {
 
 interface CapturedCall {
 	event: ToolCallEvent;
-	userInputs: readonly string[] | undefined;
+	userInputs: readonly HumanRecordEntry[] | undefined;
 }
 
 /** A minimal extension runtime double: enough surface for the runner, and it
@@ -77,10 +77,10 @@ describe("tool-call snapshot at the gate (#guardian-auto-mode D15/D17)", () => {
 			// D17: the host fact rides the event; the log is non-empty here
 			expect(captured[0]?.event.verifiedUserContext).toBe(true);
 			// D15: the dispatch saw the frozen snapshot — and only it
-			expect(captured[0]?.userInputs).toEqual(["please run the gated tool"]);
+			expect(captured[0]?.userInputs?.map((entry) => entry.text)).toEqual(["please run the gated tool"]);
 			// appending after the gate does not rewrite the live call's snapshot
 			runner.recordUserInput("later message");
-			expect(captured[0]?.userInputs).toEqual(["please run the gated tool"]);
+			expect(captured[0]?.userInputs?.map((entry) => entry.text)).toEqual(["please run the gated tool"]);
 			latch.resolve();
 			await turn;
 		} finally {
@@ -222,15 +222,19 @@ describe("capture at the human boundary (#guardian-auto-mode D11)", () => {
 	it("records the typed line at submit time", async () => {
 		const env = await startRepl(false);
 		env.fake.send("hello there\n");
-		await vi.waitFor(() => expect(env.runner.userInputSnapshot()).toEqual(["hello there"]));
+		await vi.waitFor(() =>
+			expect(env.runner.userInputSnapshot().map((entry) => entry.text)).toEqual(["hello there"]),
+		);
 	});
 
 	it("records a slash-command invocation but never its expansion", async () => {
 		const env = await startRepl(true);
 		env.fake.send("/expand\n");
-		await vi.waitFor(() => expect(env.runner.userInputSnapshot()).toContain("/expand"));
+		await vi.waitFor(() =>
+			expect(env.runner.userInputSnapshot().map((entry) => entry.text)).toContain("/expand"),
+		);
 		const log = env.runner.userInputSnapshot();
-		expect(log.some((entry) => entry.includes("EXPANDED BODY"))).toBe(false);
+		expect(log.some((entry) => entry.text.includes("EXPANDED BODY"))).toBe(false);
 	});
 
 	it("never records bang commands (they are shell-direct, not model input)", async () => {
@@ -240,21 +244,73 @@ describe("capture at the human boundary (#guardian-auto-mode D11)", () => {
 		expect(env.runner.userInputSnapshot()).toEqual([]);
 	});
 
-	it("elides an over-long submission at the entry cap (§14.4)", () => {
+	it("stores submissions raw — the render cap, not storage, does the trimming (§16/D32)", () => {
 		const log = new UserInputLog();
-		log.record("x".repeat(5000));
+		const big = "x".repeat(5000);
+		log.record(big, 11);
 		const [entry] = log.snapshot();
-		expect(entry?.endsWith("…(elided)")).toBe(true);
-		expect(entry?.length).toBe(USER_INPUT_LOG_ENTRY_CHARS + "…(elided)".length);
+		expect(entry?.text).toBe(big); // no storage-side trim
+		expect(entry?.at).toBe(11);
 		expect(log.verified).toBe(true);
 
-		log.record("y".repeat(3000));
-		log.record("z".repeat(3000));
-		const entries = log.snapshot();
-		expect(entries).toHaveLength(3);
-		expect(entries.join("").length).toBeLessThanOrEqual(
-			3 * (USER_INPUT_LOG_ENTRY_CHARS + "…(elided)".length),
+		log.record("y".repeat(3000), 12);
+		expect(log.snapshot().map((e) => e.text.length)).toEqual([5000, 3000]);
+	});
+});
+
+// §16/D33 (pin 60): the confirm host records PROMPTED gate outcomes — never
+// unbound fallbacks, sessionKey replays, or confirms outside a gate dispatch.
+describe("gate-decision recording (#guardian-auto-mode §16/D33, pin 60)", () => {
+	const withGate = <T>(fn: () => Promise<T>) =>
+		runWithToolCallContext(
+			{
+				callId: "g1",
+				subagent: false,
+				cwd: "/w",
+				tool: "bash",
+				callIdentity: 'bash @ "/w" "rm -rf x"',
+				userInputs: [],
+				decisions: [],
+			},
+			fn,
 		);
-		expect(entries.at(-1)?.startsWith("z".repeat(USER_INPUT_LOG_ENTRY_CHARS))).toBe(true);
+
+	it("records picker outcomes; remember once; replay/cancel handled; unbound and no-ALS never record", async () => {
+		const { renderer } = makeRenderer();
+		const confirm = new TtyConfirm(renderer);
+		const seen: Array<[string, boolean]> = [];
+		confirm.bindRecorder((event) => seen.push([event.outcome, event.remember === true]));
+		let choice: number | null = 1; // [Yes, remember, No] with a sessionKey
+		confirm.bindSelect(async () => choice);
+
+		await withGate(async () => {
+			await confirm.handler("q1", undefined, { sessionKey: "k1", rememberLabel: "again" }); // remember
+			choice = 2;
+			await confirm.handler("q2", undefined, { sessionKey: "k2", rememberLabel: "again" }); // No
+			choice = null;
+			await confirm.handler("q3", undefined, { sessionKey: "k3", rememberLabel: "again" }); // cancelled
+		});
+		expect(seen).toEqual([
+			["approved", true],
+			["denied", false],
+			["denied", false],
+		]);
+		// a sessionKey replay is an old decision — the short-circuit records nothing new
+		choice = 0;
+		const replay = await withGate(() =>
+			confirm.handler("q1", undefined, { sessionKey: "k1", rememberLabel: "again" }),
+		);
+		expect(replay).toBe(true);
+		expect(seen).toHaveLength(3);
+		// outside a gate dispatch (no call-scoped store): nothing is recorded
+		choice = 0;
+		await confirm.handler("q4", undefined, undefined);
+		expect(seen).toHaveLength(3);
+		// unbound confirm (no human): false and no record
+		const bare = new TtyConfirm(renderer);
+		const bareSeen: unknown[] = [];
+		bare.bindRecorder((event) => bareSeen.push(event));
+		await expect(withGate(() => bare.handler("q5"))).resolves.toBe(false);
+		expect(bareSeen).toEqual([]);
 	});
 });

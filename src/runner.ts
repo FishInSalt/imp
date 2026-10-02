@@ -63,10 +63,15 @@ import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
-import { runWithToolCallContext } from "./extensions/call-context.js";
+import { runWithToolCallContext, type ToolCallContext } from "./extensions/call-context.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure, ToolCallDecision, ToolCallEvent } from "./extensions/types.js";
-import { UserInputLog } from "./extensions/user-input-log.js";
+import {
+	type GateDecisionInput,
+	GateDecisionLog,
+	type HumanRecordEntry,
+	UserInputLog,
+} from "./extensions/user-input-log.js";
 import { formatTokens, shorten, usageMoneySegment, VERSION } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
@@ -305,8 +310,11 @@ export interface Runner {
 	 *  repl machine's submission boundary is the only caller; the log is
 	 *  cleared on identity/history changes. */
 	recordUserInput(text: string): void;
-	/** A defensive copy of the verified user-input log (tests, diagnostics). */
-	userInputSnapshot(): readonly string[];
+	/** A defensive copy of the verified submission log (tests, diagnostics). */
+	userInputSnapshot(): readonly HumanRecordEntry[];
+	/** §16/D33: record one gate-decision outcome (the confirm host's
+	 *  prompted-answer boundary calls this; gate dispatches only). */
+	recordGateDecision(event: GateDecisionInput): void;
 	newSession(): void;
 	/** `/sessions`: sessions saved for this cwd, newest first. */
 	listSessions(): SessionInfo[];
@@ -447,6 +455,9 @@ class RunnerImpl implements Runner {
 	 *  appended only at the submission boundary, cleared on identity/history
 	 *  changes; feeds the classify context block via the gate snapshot. */
 	private readonly userInputLog = new UserInputLog();
+	/** §16/D33: gate-decision outcomes — recorded by the confirm host while
+	 *  a tool dispatch is active; same lifecycle as the submission log. */
+	private readonly gateDecisionLog = new GateDecisionLog();
 	/** SA-05: the whole-session usage aggregate — one tracker per store instance
 	 *  (a swap on resume/new rebuilds from that store's entries). */
 	private usageTracker: UsageTotalsTracker | null = null;
@@ -618,6 +629,7 @@ class RunnerImpl implements Runner {
 						subagent: true,
 						agent: info.agent,
 						cwd: info.cwd,
+						...(info.workOrder === undefined ? {} : { workOrder: info.workOrder }),
 					}),
 				// Child tool_end feeds extension observers (audit trails) with
 				// the same discriminator. M10: child events ALSO flow to the live
@@ -869,8 +881,9 @@ class RunnerImpl implements Runner {
 		this.syncEstimateFloor(); // fresh session — no compaction boundary (review P0-2)
 		this.systemText = this.assembleSystem();
 		// #guardian-auto-mode D18: a new conversation invalidates every
-		// authorization the old one carried.
+		// authorization the old one carried — the decision record too.
 		this.userInputLog.clear();
+		this.gateDecisionLog.clear();
 	}
 
 	/** #guardian-auto-mode (D11): record one raw human submission. Called ONLY
@@ -881,9 +894,15 @@ class RunnerImpl implements Runner {
 		this.userInputLog.record(text);
 	}
 
-	/** A defensive copy of the verified user-input log (tests, diagnostics).
+	/** §16/D33: record one gate-decision outcome (the confirm host reports
+	 *  prompted answers only — never an unbound or replayed one). */
+	recordGateDecision(event: GateDecisionInput): void {
+		this.gateDecisionLog.record(event);
+	}
+
+	/** A defensive copy of the verified submission log (tests, diagnostics).
 	 *  The classify seam reads the copy frozen into the call snapshot instead. */
-	userInputSnapshot(): readonly string[] {
+	userInputSnapshot(): readonly HumanRecordEntry[] {
 		return this.userInputLog.snapshot();
 	}
 
@@ -894,14 +913,32 @@ class RunnerImpl implements Runner {
 	 *  the live log. */
 	private emitGatedToolCall(event: ToolCallEvent): Promise<ToolCallDecision | undefined> | undefined {
 		const marked: ToolCallEvent = { ...event, verifiedUserContext: this.userInputLog.verified };
-		const context = {
+		const context: ToolCallContext = {
 			callId: event.toolCallId,
 			subagent: event.subagent === true,
 			...(event.agent === undefined ? {} : { agent: event.agent }),
 			...(event.cwd === undefined ? {} : { cwd: event.cwd }),
+			tool: event.name,
+			callIdentity: this.callIdentityFor(event),
 			userInputs: this.userInputLog.snapshot(),
+			decisions: this.gateDecisionLog.snapshot(),
+			...(event.workOrder === undefined ? {} : { workOrder: event.workOrder }),
 		};
 		return runWithToolCallContext(context, () => this.options.extensions?.emitToolCall(marked));
+	}
+
+	/** §16/D33: `<tool> @ <JSON cwd> <JSON call text>` — the decision record's
+	 *  per-call identity (display/equality text; never extension-authored). */
+	private callIdentityFor(event: ToolCallEvent): string {
+		const cwd = event.cwd ?? this.options.cwd;
+		const args = event.args;
+		const callText =
+			typeof args.command === "string"
+				? args.command
+				: typeof args.path === "string"
+					? args.path
+					: JSON.stringify(args);
+		return `${event.name} @ ${JSON.stringify(cwd)} ${JSON.stringify(callText)}`;
 	}
 
 	listSessions(): SessionInfo[] {
@@ -1051,6 +1088,7 @@ class RunnerImpl implements Runner {
 			// Keyed on positionMoves, not on the summary's outcome: a failed
 			// branch summary still moved the position.
 			this.userInputLog.clear();
+			this.gateDecisionLog.clear();
 		}
 		if (summary !== undefined) {
 			if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
@@ -1096,6 +1134,7 @@ class RunnerImpl implements Runner {
 		// #guardian-auto-mode D18: resumed history may predate the live log's
 		// entries — a restored conversation starts with none.
 		this.userInputLog.clear();
+		this.gateDecisionLog.clear();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
 	}
 

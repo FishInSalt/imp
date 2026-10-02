@@ -581,6 +581,19 @@ export default function (api) {
   and command callbacks, and is a safe no-op in print mode and the legacy
   shell. If your extension creates timers, `unref()` them — a leaked,
   referenced timer blocks process exit.
+- `registerToolColor(names, color)` colors tool **names** in the TUI call
+  header (the name span only — arguments, results and the `⎿` rows are
+  untouched). `names` is one tool name, several, or the literal `"*"` (the
+  fallback for every tool without an exact registration); `color` is one of
+  the 16 standard-16 tokens (`black`, `red`, `green`, `yellow`, `blue`,
+  `magenta`, `cyan`, `white`, `gray`, the seven `bright*` variants) or
+  `"none"` (bold-only — it also overrides a shipped default). Exact names
+  beat `"*"`; the first registration of a name wins (later ones report).
+  Shipped defaults: `bash` yellow, `read`/`ls` blue, `edit`/`write`
+  magenta, `grep`/`find` cyan, `task` bright magenta — unknown tools stay
+  bold-only. Themes are standard-16 on purpose: the hues follow your
+  terminal theme. A ready-to-copy theme lives in
+  `examples/extensions/tool-colors.mjs`.
 - A bad extension never kills imp: load failures, registration conflicts, and
   handler throws each become one `imp:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).
@@ -595,8 +608,8 @@ rule-based permission gate over destructive bash commands and out-of-project
 writes — configurable via `IMP_GUARDIAN_BLOCK`, audited to
 `~/.imp/guardian.log`), `notify.mjs` (a macOS completion notification with
 sound), `task-timer.mjs` (a live per-run timer in the TUI footer, built on
-`run_start`/`run_end` + `setStatus`), and `web-search/` (a bundled multi-file
-search tool).
+`run_start`/`run_end` + `setStatus`), `tool-colors.mjs` (a name-color theme
+for the call header), and `web-search/` (a bundled multi-file search tool).
 
 ## Development
 

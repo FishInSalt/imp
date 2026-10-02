@@ -1,0 +1,295 @@
+# #tool-name-colors — tool-name color differentiation via extensions
+
+Status: review closed (rounds 1-2 NEEDS-FIXES folded; round 3 CONFIRMED).
+Implementation on `feat/tool-name-colors`. Owner decisions 2026-10-02:
+
+1. Mechanism is **route B** — a new extension capability, so themes are
+   per-user installable modules (owner: "以后可能不同用户有不同审美").
+2. Scope is **the tool name only** — result rows (`⎿`), activity rows,
+   footers and pickers stay as they are.
+3. A shipped default palette (below, §D3); the owner picked the
+   category-per-color proposal, `task` on its own slot.
+
+## Context
+
+Every call header today renders the same way: dim `●`, **bold tool name**,
+two spaces, then the call's arguments (`src/repl/components/tool-block.ts`
+:511-519 for the fold; `renderCommandHeader` :129-152 for the confirm
+preview — the same idiom, host-owned `StyleSpan`s applied *after* the
+physical-row layout by `styled()` :12-27). Nothing distinguishes `bash`
+from `read` or `edit` at a glance, and there is deliberately no user-facing
+way to change it: the extension API (`src/extensions/types.ts` :132-190)
+exposes registrations, events, `setStatus`, `confirm` and `classify` —
+**no rendering surface** ("The host owns styling", setStatus TSDoc).
+
+This batch adds exactly one narrow capability: an extension may map tool
+names to one of 16 terminal colors (plus `none`). The host keeps ownership
+of how the color is applied and validated; the extension only supplies a
+token. Raw SGR strings, bold/italic knobs and per-argument logic are out
+of scope (§D10).
+
+## D1 — API: `api.registerToolColor(names, color)`
+
+```ts
+registerToolColor(names: string | readonly string[], color: ToolColorName): void;
+```
+
+- `ToolColorName` is a closed union of 16 standard-16 tokens — `black red
+  green yellow blue magenta cyan white gray brightRed brightGreen
+  brightYellow brightBlue brightMagenta brightCyan brightWhite` — plus
+  `"none"` (explicit opt-out: the name renders bold-only, overriding the
+  default palette entry, §D2).
+- `names` is one name or an array; each entry must match `NAME_PATTERN`
+  (`core/constants.ts` :50) or be the literal `"*"` (wildcard, §D2). The
+  registered name does **not** need to exist as a tool — a theme may style
+  tools that load later (extensions, MCP bridges); an unmatched name is
+  inert.
+- Registration is **load-gated**: valid only while the factory runs —
+  the `whileLoading` wrapper in `loader.ts` :204-227 reports post-load
+  attempts (`registration only works while the factory runs`), same as
+  `registerTool` / `registerCommand` / `registerContext`. No runtime
+  mutation ⇒ no re-render plumbing, no lifecycle (§D5).
+- Validation never throws (registry culture, `registerTool` :229-232),
+  and is **total** — every malformed shape has a defined path and one
+  report line, values quoted bounded (`firstLine(String(v), 160)`, the
+  existing `(got "…")` idiom):
+  - `names` is neither a string nor an array →
+    `imp: extension X could not register tool color — expected a name or an array of names, got <type>`;
+  - an invalid entry (non-string, empty, bad pattern) →
+    `imp: extension X could not register tool color for "<name>" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "<value>")`;
+  - `color` not a member of the closed set →
+    `imp: extension X could not register tool color — unknown color (expected one of: <16 + none>, got "<value>")`;
+  - a conflict (§D2) →
+    `imp: extension X could not register tool color for "<name>" — already registered by Y`;
+  - a duplicate entry within one call (`["bash", "bash"]`) → the same
+    conflict report; the whole call is rejected (all-or-nothing, below).
+  A thrown factory still discards the whole section atomically
+  (`discardExtension`). A valid entry inside an otherwise malformed call
+  is not partially applied: one call registers all of its names or none.
+
+## D2 — Registry storage, conflicts, resolution
+
+- Per-section storage (`{ name, color }[]`), merged on
+  `commitExtension()` into `toolColors: Map<string, ToolColorName>` plus
+  `colorOwners: Map<string, string>`; first registration **wins**, later
+  ones for the same key are rejected with the report above — exactly the
+  `conflictOwner` shape used for tools/commands/contexts (:251/:301/:327).
+  A duplicate *within* one section is rejected the same way.
+- Keys: exact tool name; plus at most one `"*"` per registry (the wildcard
+  slot has its own conflicting owner).
+- Resolution `registry.toolColorFor(name)`:
+  `exact map` → `"*" map` → `undefined`.
+- **Specificity across keys, load order only within a key** (normative):
+  an exact registration always beats a wildcard one regardless of which
+  extension loaded first — extension A (`"*" → blue`) plus extension B
+  (`"bash" → green`) resolves `bash` to green, and that is *not* a
+  conflict (no report line). Load order (alphabetical, `loader.ts` :142)
+  arbitrates only two registrations of the *same* key. Corollary: a later
+  exact `"none"` silently disables an earlier wildcard color for that
+  name — by specificity, not as an error. A two-section registry test
+  pins this (§D7).
+- Composed resolver (built once in `repl.ts`):
+  `extension exact` ?? `extension "*"` ?? `built-in default` ?? `none`.
+  The wildcard **overrides the built-in defaults** — `register("*",
+  "blue")` is a theme saying "everything blue unless I say otherwise",
+  which is the only reading that makes a wildcard useful; an extension
+  that wants the defaults to survive simply doesn't register `"*"`.
+
+## D3 — Default palette
+
+New module `src/repl/tool-colors.ts` (importable by both `extensions/`
+and `repl/` — precedent: registry already imports `repl/commands.js`):
+
+```ts
+export const DEFAULT_TOOL_COLORS: Record<string, ToolColorName> = {
+  bash: "yellow", read: "blue", ls: "blue", edit: "magenta", write: "magenta",
+  grep: "cyan", find: "cyan", task: "brightMagenta",
+};
+```
+
+- Category slots: exec / read / mutate / search / subagent. Same-category
+  tools share a hue; a new built-in lands in the table in one line.
+- Red and green are deliberately absent from the defaults — they belong to
+  `✓` / `✗`. The API still allows them (user freedom); themes own that
+  choice.
+- `task` gets the only bright slot: it is an agent call, not a tool, its
+  row is the longest, and a unique hue keeps it recognizable.
+- Unknown tools (MCP-bridged, extension-registered, future built-ins)
+  render **bold-only**, i.e. today's bytes — the host does not guess.
+- Standard-16 tokens, not 256-color absolutes, on purpose: the hues follow
+  the user's terminal theme, which is itself part of per-user aesthetics.
+  Whites/monochrome terminals degrade gracefully (hue collapses, layout
+  and semantics don't).
+- `toolColorSgr(token)`: the closed token → SGR map (30-37, 90-97);
+  `"none"` → `""`. This is the only place a token becomes bytes.
+
+## D4 — Rendering points (two, both name-span only)
+
+1. **Call header in the fold** (`tool-block.ts` :515-519): the name span
+   (`title === name`, or the interrupted variant where the name stays and
+   ` · interrupted (no result)` carries RED) becomes
+   `BOLD + toolColorSgr(token)`; `undefined`/`"none"` keeps plain `BOLD` —
+   byte-identical to today. The dim `●`, the arguments, the closing slot
+   (✓ / ✗ / `Ns`), the `⎿` rows: untouched.
+
+   Invariant recorded for the reviewer: every input-block producer sets
+   `title = sanitizeDisplay(name)` (`tool-presentation.ts` :330), the
+   interrupted suffix (:730) is the only title mutation, and
+   `ToolPresentationHooks` (`core/tools/types.ts` :54-58) cannot change
+   the title — so the guard never silently drops the color for a custom
+   presentation today. A future producer that rewrites `title` would
+   disable the color for its blocks; that is the acceptance of the guard,
+   not an accident.
+2. **Confirm preview** (`renderCommandHeader`, `tool-block.ts` :136-152):
+   same span treatment for the preview's name. Signature gains an optional
+   resolver: `renderCommandHeader(preview, colorFor?)`; the caller
+   (`shell.ts` :933) passes the shell's resolver (§D5). Hosts that don't
+   pass one (unit tests) keep today's bytes.
+
+Width/layout: zero impact by construction — spans are applied after the
+row plan and `styled()` closes each span with RESET, so the SGR bytes
+never enter `visibleWidth` / truncation / the closing-slot reservation.
+Differential rendering is stable: the style string is a session constant
+(load-gated registration), so identical rows still diff as identical.
+
+## D5 — Wiring and lifecycle
+
+- `transcript.ts`: new public field
+  `toolColorResolver: ((name: string) => ToolColorName | undefined) | null`
+  (same public-field pattern as `callSuffixResolver` :80-83, but **not**
+  shell-bound and not cleared on close — it is set once by `repl.ts`
+  from the registry + defaults and never changes: registrations happen
+  before the REPL exists, so a late-created fold pulling it at
+  construction sees the final value). Assigning at the existing :1622
+  site is sound: `runRepl` assigns unconditionally on every invocation,
+  and the trust-ask shell (`trust-ask.ts` :43) renders neither folds nor
+  previews. The fold factory (:91) passes
+  `block.kind === "input" ? this.toolColorResolver?.(block.name) : undefined`
+  into the extended constructor `new ToolBlockFold(block, nameColor?)`.
+- `shell.ts`: **`TuiShellOptions` gains an optional
+  `toolColorResolver`** — the shell is constructed inline in a ternary at
+  `repl.ts:1669` (typed `LineInput`), so a post-construction assignment at
+  :1622 is not available; the resolver rides the options object there,
+  `start()` follows at :1715. The shell stores it and uses it only at
+  :933 for the preview. Optional and immutable: nothing else writes it,
+  and there is no lifecycle.
+- `repl.ts`: builds the composed resolver next to the existing
+  `toolSink.setResolver` wiring (:1622) — `options.extensions` is in
+  scope there — assigns it to the transcript, and passes it in the
+  `TuiShell` options at :1669.
+- `ToolBlockFold` gains an optional second constructor parameter. All
+  existing call sites and byte-level fold tests stay valid (unset =
+  legacy bytes); only tests exercising the new resolver change.
+
+## D6 — Mode matrix
+
+| Host | Effect |
+|---|---|
+| TUI (the only consumer) | colored names per resolver/defaults |
+| print / plain (`-p`), legacy non-TUI | untouched (different renderer, no transcript) |
+| replay (`replay.ts` `● … no result` line) | untouched (own dim line) |
+| activity region / footer / pickers / task tree | untouched |
+| `⎿` result rows, closing slot, notices | untouched |
+
+## D7 — Tests (red-first)
+
+New `test/tool-colors.test.ts` (unit):
+- defaults table matches §D3 exactly; every default token maps to a
+  non-empty SGR; `"none"` maps to `""`; token set is closed (16 + none).
+- every built-in tool name (`BUILTIN_TOOL_NAMES`) is either in the table
+  or consciously absent (unknown-by-policy assertion, mirrors §D3).
+
+`test/extensions-registry.test.ts` additions:
+- validation: unknown color token, non-string name, invalid name,
+  empty array — each one report line, nothing stored;
+- conflict: same exact key across sections, same wildcard key, duplicate
+  within one section — including two identical entries in one call —
+  first wins, later reported;
+- `"none"` round-trips; `toolColorFor` precedence exact > wildcard;
+- thrown factory discards colors atomically (existing rollback pattern).
+
+`test/extensions-loader.test.ts`: post-load `registerToolColor` reported
+by `whileLoading`; a factory calling it normally stores via the API.
+
+`test/tui-tool-elapsed.test.ts` / `test/tool-display-colors.test.ts`
+(direct-`ToolBlockFold` byte pins — `builtin-tool-presentation.test.ts`
+is `preparedInputBlock`-level and has no fold rendering):
+- with a token → the name span carries `BOLD + SGR`, **plain text
+  unchanged** (strip comparison); without a token → legacy bytes exactly;
+- interrupted row: name span colored, ` · interrupted (no result)` stays
+  RED;
+- output blocks / `⎿` rows never colored (resolver ignored);
+- narrow widths: colored and uncolored render at identical widths (the
+  SGR bytes are zero-width by the existing post-layout application).
+
+`test/repl-tui.test.ts` (end-to-end, real wiring):
+- default palette: a `bash` call's header carries yellow on the wire
+  (`\x1b[1m\x1b[33m` before the name), a `task` call bright magenta;
+- a temp extension registering `bash → brightCyan` overrides the default;
+- `"*" → "blue"` colors an otherwise-uncolored tool (e.g. `gated`);
+- `"none"` on a defaulted tool strips the hue (bold-only);
+- confirm preview shows the colored name.
+**Affected existing tests — surveyed, expected count 0.** The textual
+escape pattern `\x1b[` (five spelled characters) appears 62 times in
+`test/repl-tui.test.ts` and 0 times in `test/extensions-repl.test.ts`;
+the 62 sites touch raw escape bytes (write assertions for warn colors
+(`:767`, `:828`), the guardian label, injection guards, queue, footer,
+OSC title and dim rules, plus paste/CSI input fixtures like `:407`,
+`:491`, `:521`) — none targets header-name bytes. Frames are read through `frameSince`
+(`:126-135`, ANSI-stripped per write) where text assertions live; the few
+raw `terminal.writes.join("")` reads are exactly the classified color
+pins above. The remaining name-byte pins are out of the color path:
+`render.test.ts` :59-266 (legacy one-line renderer, §D6-untouched),
+`tool-display-colors.test.ts` :38 and `tui-tool-elapsed.test.ts` :56-63
+(direct folds, resolver unset), `confirm-preview.test.ts` :22 (unit,
+optional argument). The implementation re-runs this survey and keeps the
+count at 0; every new assertion lives in the new tests above. New e2e runs
+go through `runRepl` (`repl-tui.test.ts` harness) so the real wiring is
+exercised.
+
+Red evidence plan: the new unit file importing the not-yet-existing
+`src/repl/tool-colors.ts` fails at transform (module resolution) on the
+pre-change tree; the registry tests fail at runtime (`registerToolColor`
+is `undefined` — vitest strips types, so this is a TypeError, not a
+compile error); the fold byte tests fail by missing bytes; the e2e
+colored-frame tests fail on the uncolored frames.
+
+## D8 — Docs & examples deliverables
+
+- `examples/extensions/tool-colors.mjs`: a ~15-line example theme
+  (overrides + wildcard) showing the whole API; **not** linked into any
+  user's `~/.imp/extensions` by us (owner choice). Loaded by tests the
+  same way `task-timer.mjs` is exercised.
+- `README.md`: one bullet under the extensions feature — tool names can
+  be colored per user via an extension; default palette listed.
+- `CHANGELOG.md` entry.
+- `docs/m4-extensions-design.md`: an amendment note — one new
+  load-gated registration (`registerToolColor`), normative semantics in
+  this document.
+- `src/extensions/types.ts`: the `ExtensionApi` TSDoc's “ten members”
+  note becomes eleven, and `registerToolColor` gets the load-gating
+  comment (factory-window only, like the other registrations).
+
+## D9 — Risks / accepted tradeoffs
+
+- Hue rendering depends on the terminal theme (accepted; see §D3).
+- Two extensions styling the same key: first registration wins (report
+  line); across different keys, specificity decides — exact beats
+  wildcard regardless of load order (§D2), which is deterministic,
+  tested, and documented rather than silent.
+- Defaults change production bytes of call headers — every downstream
+  byte-level expectation must be updated consciously (§D7); no visual
+  width change.
+- A theme can style a name that never appears (typo, unloaded tool) —
+  inert, not diagnosed further (matching the "does not need to exist"
+  rule).
+- `setStatus`/`confirm` remain the only *runtime* extension surfaces; if
+  a future knob (bold, per-argument) is wanted it must extend this
+  contract through its own design review.
+
+## D10 — Explicitly out of scope
+
+Result-row (`⎿`) coloring, closing-slot coloring, activity/footer rows,
+selector/tree rows, print/replay/legacy rendering, raw SGR strings,
+bold/italic/underline knobs, per-argument or per-run dynamic styles,
+256-color absolutes, theming of non-tool UI.

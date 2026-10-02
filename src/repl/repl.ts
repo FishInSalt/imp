@@ -45,6 +45,7 @@ import type {
 } from "./line-input.js";
 import { replaySession } from "./replay.js";
 import { type AutocompleteOptions, TuiShell } from "./shell.js";
+import { composeToolColorResolver } from "./tool-colors.js";
 import { inputBlock, preparedInputBlock, type ToolPresentationSink } from "./tool-presentation.js";
 import { type PreparedToolCall, prepareCall, prepareResult } from "./tool-presentation-hooks.js";
 import type { TranscriptSink } from "./transcript.js";
@@ -1663,6 +1664,13 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	};
 
 	if (tuiSink !== null) renderer.setToolSink(tuiSink.toolSink);
+	// #tool-name-colors (design D5): one composed resolver — extension
+	// registrations (exact, then `*`) beat the shipped defaults; unknown
+	// tools stay uncolored. Built here and handed to both consumers: the
+	// transcript pulls it per fold at creation, the shell uses it for the
+	// confirm preview. Static by construction: registrations are load-gated.
+	const toolColorResolver = composeToolColorResolver(options.extensions);
+	if (tuiSink !== null) tuiSink.toolColorResolver = toolColorResolver;
 	let machine: ReplMachine;
 	const input: LineInput =
 		tuiSink !== null
@@ -1678,6 +1686,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 					terminal: options.terminal,
 					autocomplete,
 					historyPath: options.inputHistoryPath,
+					toolColorResolver,
 				})
 			: new ReplInput({
 					input: stdin,

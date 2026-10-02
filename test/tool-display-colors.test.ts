@@ -134,3 +134,50 @@ describe("minimal tool display colors", () => {
 		expect(new ToolBlockFold(block).render(40)[0]).toBe(`  ${dim}⎿${reset}\x1b[32m + new${reset}`);
 	});
 });
+
+describe("tool name colors (#tool-name-colors, design D4)", () => {
+	const yellow = "\x1b[33m";
+	const brightMagenta = "\x1b[95m";
+	it("paints exactly the name span; plain text and visible widths unchanged", () => {
+		for (const width of [40, 12]) {
+			const colored = new ToolBlockFold(call(), "yellow").render(width);
+			const legacy = new ToolBlockFold(call()).render(width);
+			expect(plain(colored)).toEqual(plain(legacy));
+			expect(colored.map(visibleWidth)).toEqual(legacy.map(visibleWidth));
+		}
+		expect(new ToolBlockFold(call(), "yellow").render(40)).toEqual([
+			`${dim}●${reset} ${bold}${yellow}bash${reset}  echo ok${reset}`,
+		]);
+	});
+	it("none and an unset token keep the legacy bold-only bytes", () => {
+		const legacy = [`${dim}●${reset} ${bold}bash${reset}  echo ok${reset}`];
+		expect(new ToolBlockFold(call(), "none").render(40)).toEqual(legacy);
+		expect(new ToolBlockFold(call()).render(40)).toEqual(legacy);
+	});
+	it("colors the interrupted name; the suffix stays red", () => {
+		const block = { ...call(), title: "bash · interrupted (no result)", error: true, lines: [] };
+		const painted = cells(new ToolBlockFold(block, "brightMagenta").render(40));
+		expect(
+			painted
+				.filter((c) => c.state.includes(1) && c.state.includes(95))
+				.map((c) => c.text)
+				.join(""),
+		).toBe("bash");
+		expect(
+			painted
+				.filter((c) => c.state.includes(31))
+				.map((c) => c.text)
+				.join(""),
+		).toBe(" · interrupted (no result)");
+		expect(painted.some((c) => c.state.includes(95) && c.text !== "b" && !"bash".includes(c.text))).toBe(
+			false,
+		);
+	});
+	it("ignores the token for output blocks", () => {
+		const colored = new ToolBlockFold(result("one\ntwo"), "yellow").render(40);
+		const legacy = new ToolBlockFold(result("one\ntwo")).render(40);
+		expect(colored).toEqual(legacy);
+		expect(colored.join("")).not.toContain(yellow);
+		expect(colored.join("")).not.toContain(brightMagenta);
+	});
+});

@@ -5,6 +5,7 @@ import type { ToolCallDecision } from "../core/loop.js";
 import type { Tool } from "../core/tools/types.js";
 import { firstLine } from "../format.js";
 import { COMMANDS, type SlashCommand } from "../repl/commands.js";
+import { isToolColorName, TOOL_COLOR_NAMES, type ToolColorName } from "../repl/tool-colors.js";
 import type {
 	ClassifyHandler,
 	ClassifyRequest,
@@ -78,6 +79,8 @@ interface OpenSection {
 	tools: Tool[];
 	commands: RegisteredExtensionCommand[];
 	contexts: ContextSection[];
+	/** #tool-name-colors: `{ name, color }` pairs registered by this factory. */
+	colors: { name: string; color: ToolColorName }[];
 	hooks: StoredHandler[];
 	/** SA-06: entry-module identity, when the loader could capture it. */
 	identity?: ExtensionModuleIdentity;
@@ -141,6 +144,10 @@ export class ExtensionRegistry {
 	private readonly contextOwners = new Map<string, string>();
 	/** Committed handlers in load order (chain order is load order, design §6.1). */
 	private readonly handlers: StoredHandler[] = [];
+	/** #tool-name-colors: committed name (or `*`) → token, and its owner map
+	 *  (same first-wins conflict policy as tools/commands/contexts). */
+	private readonly toolColors = new Map<string, ToolColorName>();
+	private readonly colorOwners = new Map<string, string>();
 	private section: OpenSection | null = null;
 	/** Status texts by extension bucket (`origin:name`) then author key. */
 	private readonly statuses = new Map<string, Map<string, string>>();
@@ -182,8 +189,8 @@ export class ExtensionRegistry {
 	beginExtension(name: string, origin: ExtensionOrigin, identity?: ExtensionModuleIdentity): void {
 		this.section =
 			identity === undefined
-				? { name, origin, tools: [], commands: [], contexts: [], hooks: [] }
-				: { name, origin, tools: [], commands: [], contexts: [], hooks: [], identity };
+				? { name, origin, tools: [], commands: [], contexts: [], colors: [], hooks: [] }
+				: { name, origin, tools: [], commands: [], contexts: [], colors: [], hooks: [], identity };
 	}
 
 	/** Merge the open section into the record; returns its banner summary. */
@@ -201,6 +208,10 @@ export class ExtensionRegistry {
 		for (const context of section.contexts) {
 			this.contextSections.push(context);
 			this.contextOwners.set(context.id, section.name);
+		}
+		for (const { name, color } of section.colors) {
+			this.toolColors.set(name, color);
+			this.colorOwners.set(name, section.name);
 		}
 		this.handlers.push(...section.hooks);
 		if (section.identity !== undefined) this.moduleIdList.push(section.identity);
@@ -332,6 +343,62 @@ export class ExtensionRegistry {
 			return;
 		}
 		section.contexts.push({ id, text });
+	}
+
+	/** #tool-name-colors (design D1/D2): register a name (or `*`) → color
+	 *  token. Total — every malformed shape becomes one report line and the
+	 *  call stores nothing (all-or-nothing, so a multi-name call never lands
+	 *  partially); duplicates (against earlier sections, earlier calls in
+	 *  this section, or within this very call) reject the whole call, first
+	 *  registration wins. An empty `names` array is a vacuous no-op. */
+	registerToolColor(names: string | readonly string[], color: unknown): void {
+		const section = this.section;
+		if (section === null) return;
+		const list: readonly unknown[] | null =
+			typeof names === "string" ? [names] : Array.isArray(names) ? names : null;
+		if (list === null) {
+			this.report(
+				`imp: extension ${section.name} could not register tool color — expected a name or an array of names, got ${typeof names}`,
+			);
+			return;
+		}
+		if (!isToolColorName(color)) {
+			this.report(
+				`imp: extension ${section.name} could not register tool color — unknown color (expected one of: ${TOOL_COLOR_NAMES.join(" ")}, got "${firstLine(String(color), 160)}")`,
+			);
+			return;
+		}
+		for (const entry of list) {
+			if (typeof entry !== "string" || (entry !== "*" && !NAME_PATTERN.test(entry))) {
+				const shown = firstLine(String(entry), 160);
+				this.report(
+					`imp: extension ${section.name} could not register tool color for "${shown}" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "${shown}")`,
+				);
+				return;
+			}
+		}
+		const seen = new Set<string>();
+		for (const entry of list) {
+			const name = entry as string;
+			const owner =
+				this.conflictOwner(this.colorOwners, section.colors, name, (c) => c.name) ??
+				(seen.has(name) ? section.name : undefined);
+			if (owner !== undefined) {
+				this.report(
+					`imp: extension ${section.name} could not register tool color for "${name}" — already registered by ${owner}`,
+				);
+				return;
+			}
+			seen.add(name);
+		}
+		for (const entry of list) section.colors.push({ name: entry as string, color: color as ToolColorName });
+	}
+
+	/** #tool-name-colors: extension lookup — exact name first, then the `*`
+	 *  slot (specificity across keys; load order only arbitrates one key).
+	 *  The composed resolver layers defaults on top of this (repl.ts). */
+	toolColorFor(name: string): ToolColorName | undefined {
+		return this.toolColors.get(name) ?? this.toolColors.get("*");
 	}
 
 	/** api.on(): validate the event name and handler, then store in load order. */

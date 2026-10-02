@@ -222,6 +222,19 @@ function extensionApi(
 			),
 		registerContext: (id, text) =>
 			whileLoading(`register context "${String(id)}"`, () => registry.registerContext(id, text)),
+		// #tool-name-colors: the post-load report names what was attempted —
+		// a single name verbatim (bounded), an array by its count.
+		registerToolColor: (names, color) =>
+			whileLoading(
+				`register tool color${
+					typeof names === "string"
+						? ` for "${firstLine(names, 40)}"`
+						: Array.isArray(names)
+							? ` for ${names.length} name${names.length === 1 ? "" : "s"}`
+							: ""
+				}`,
+				() => registry.registerToolColor(names, color),
+			),
 		on: (event: ExtensionEventName, handler: ExtensionEventHandlerMap[ExtensionEventName]): void => {
 			whileLoading(`subscribe to ${String(event)}`, () => registry.subscribe(event, handler));
 		},

@@ -1,5 +1,6 @@
 import { formatToolElapsed } from "../../format.js";
 import { type Component, truncateToWidth, visibleWidth } from "../../tui.js";
+import { type ToolColorName, toolColorSgr } from "../tool-colors.js";
 import { type RawSection, sanitizeDisplay, type ToolBlock } from "../tool-presentation.js";
 
 const RESET = "\x1b[0m";
@@ -133,14 +134,21 @@ export function commandPreviewText(preview: unknown): string {
  *  `Text` block that carries the result (the same mechanism the detail block
  *  uses), so a long command wraps without repeating the header. Returns "" for
  *  anything unusable. */
-export function renderCommandHeader(preview: unknown): string {
+export function renderCommandHeader(
+	preview: unknown,
+	/** #tool-name-colors: the host's resolver — same contract and defaults as
+	 *  the fold's `nameColor` (undefined / `"none"` stay legacy). */
+	colorFor?: (name: string) => ToolColorName | undefined,
+): string {
 	const parts = splitPreview(preview);
 	if (parts === undefined) return "";
 	const decoration = "● ";
 	const head = `${decoration}${parts.name}  `;
+	const token = colorFor?.(parts.name);
+	const nameStyle = token === undefined || token === "none" ? BOLD : `${BOLD}${toolColorSgr(token)}`;
 	const spans: StyleSpan[] = [
 		{ start: 0, end: 1, style: DIM },
-		{ start: decoration.length, end: decoration.length + parts.name.length, style: BOLD },
+		{ start: decoration.length, end: decoration.length + parts.name.length, style: nameStyle },
 	];
 	for (const [start, end] of alertRanges(parts.spans, parts.body.length)) {
 		spans.push({ start: head.length + start, end: head.length + end, style: WARN });
@@ -180,7 +188,17 @@ export class ToolBlockFold implements Component {
 		suffix: number;
 		rows: string[];
 	};
-	constructor(public block: ToolBlock) {}
+	constructor(
+		public block: ToolBlock,
+		/** #tool-name-colors: the resolved token for the call's name span;
+		 *  undefined / `"none"` keep the legacy bold-only bytes. */
+		private readonly nameColor: ToolColorName | undefined = undefined,
+	) {}
+	/** The name-span style: BOLD, plus the token's SGR when one applies. */
+	private nameStyle(): string {
+		const token = this.nameColor;
+		return token === undefined || token === "none" ? BOLD : `${BOLD}${toolColorSgr(token)}`;
+	}
 	updateBlock(block: ToolBlock): void {
 		this.block = block;
 		this.invalidate();
@@ -513,7 +531,11 @@ export class ToolBlockFold implements Component {
 			const name = sanitizeDisplay(block.name);
 			const spans: StyleSpan[] = decoration ? [{ start: 0, end: 1, style: DIM }] : [];
 			if (title === name || title === `${name} · interrupted (no result)`) {
-				spans.push({ start: decoration.length, end: decoration.length + name.length, style: BOLD });
+				spans.push({
+					start: decoration.length,
+					end: decoration.length + name.length,
+					style: this.nameStyle(),
+				});
 				if (title !== name)
 					spans.push({ start: decoration.length + name.length, end: header.length, style: RED });
 			}

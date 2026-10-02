@@ -7,6 +7,21 @@ All notable changes to imp are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Tool-name colors via extensions (#tool-name-colors).** Tool names in the
+  TUI call header can carry a color now: a shipped default palette (`bash`
+  yellow, `read`/`ls` blue, `edit`/`write` magenta, `grep`/`find` cyan,
+  `task` bright magenta) plus a new load-gated extension registration,
+  `api.registerToolColor(names, color)` — one name, several, or `"*"`, with
+  any of the 16 standard-16 tokens or `"none"` (bold-only). Exact names beat
+  the wildcard, the first registration of a key wins, unknown tools and
+  unregistered names stay bold-only, and print/replay/legacy surfaces are
+  untouched. Colors never affect layout — spans are applied after the row
+  plan, so visible widths are unchanged. Example theme:
+  `examples/extensions/tool-colors.mjs`. Design + three adversarial review
+  rounds: `docs/tool-name-colors-design.md`.
+
 ### Changed
 
 - **Task live view in its own header (#task-inline-live-rows).** A running

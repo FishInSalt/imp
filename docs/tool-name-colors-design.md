@@ -3,7 +3,9 @@
 Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
 defaults, palette to the example theme) implemented and merged (merge
 b4db87b); Amendment 2 (absolute color tokens `ansi256:N` / `#rrggbb`,
-owner-approved) under review on `feat/tool-name-colors-a2`. Design review
+owner-approved) implemented and merged (merge 4c1f0aa; design review
+NEEDS-FIXES → CONFIRMED, implementation review APPROVE WITH CORRECTIONS →
+CONFIRMED). Design review
 closed after 3 rounds; implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →

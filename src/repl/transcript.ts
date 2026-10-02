@@ -84,7 +84,8 @@ export class TranscriptSink implements Component {
 	callSuffixResolver: ((key: string) => string | null) | null = null;
 	/** #tool-name-colors (design D5): the resolved name-color token for each
 	 *  call, pulled at fold-creation time like `callSuffixResolver` — but set
-	 *  once by repl.ts (extensions first, then the default palette) and never
+	 *  once by repl.ts (extension registrations only — A1 removed the shipped
+	 *  defaults) and never
 	 *  re-bound or cleared: registrations are load-gated, so the value is
 	 *  final before any fold exists. */
 	toolColorResolver: ((name: string) => ToolColorName | undefined) | null = null;

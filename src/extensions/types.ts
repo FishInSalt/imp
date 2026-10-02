@@ -148,7 +148,8 @@ export interface ExtensionApi {
 	 *  `names` is one tool name, several, or the literal `"*"` (fallback for
 	 *  every tool without an exact registration); `color` is one of the 16
 	 *  standard-16 tokens or `"none"` (leave the name bold-only, overriding
-	 *  a default palette entry). Load-gated like the other registrations —
+	 *  another registration for the same name). Load-gated like the other
+	 *  registrations —
 	 *  valid only while the factory runs — validated, never throws; exact
 	 *  names beat `"*"` at render lookup, duplicate keys keep the first
 	 *  registration (reported). Styling a name that never loads is inert. */
@@ -303,6 +304,9 @@ export interface ExtensionSummary {
 	contextCount: number;
 	/** Total on() subscriptions (any event). */
 	hookCount: number;
+	/** #tool-name-colors: total tool-name color registrations (names, not
+	 *  calls — the `*` slot counts as one name). */
+	colorCount: number;
 	/** SA-06: canonical entry-module path + content hash, when capturable
 	 *  (absent = the file could not be hashed — omitted, never guessed). */
 	sourcePath?: string;

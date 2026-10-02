@@ -1664,11 +1664,12 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	};
 
 	if (tuiSink !== null) renderer.setToolSink(tuiSink.toolSink);
-	// #tool-name-colors (design D5): one composed resolver — extension
-	// registrations (exact, then `*`) beat the shipped defaults; unknown
-	// tools stay uncolored. Built here and handed to both consumers: the
-	// transcript pulls it per fold at creation, the shell uses it for the
-	// confirm preview. Static by construction: registrations are load-gated.
+	// #tool-name-colors (design D5; A1): one composed resolver — extension
+	// registrations only (exact, then `*`, inside the registry); without one
+	// every name renders the legacy bold-only bytes. Built here and handed to
+	// both consumers: the transcript pulls it per fold at creation, the shell
+	// uses it for the confirm preview. Static by construction: registrations
+	// are load-gated.
 	const toolColorResolver = composeToolColorResolver(options.extensions);
 	if (tuiSink !== null) tuiSink.toolColorResolver = toolColorResolver;
 	let machine: ReplMachine;

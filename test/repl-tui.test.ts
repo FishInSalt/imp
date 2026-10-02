@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -3353,7 +3353,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("default palette paints call-header names (#tool-name-colors)", async () => {
+	it("no extension leaves call-header names uncolored (#tool-name-colors A1)", async () => {
 		const env = await startTuiRepl([
 			assistant(
 				[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo painted" } }],
@@ -3363,10 +3363,12 @@ describe("runRepl with shell:tui", () => {
 		]);
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[33mbash"), 8000);
+		await waitUntil(() => stripAnsi(env.terminal.writes.join("")).includes("echo painted"), 8000);
 		const raw = env.terminal.writes.join("");
-		expect(raw).toContain("\u001b[1m\u001b[33mbash"); // bold + yellow on the wire
-		expect(stripAnsi(env.terminal.frameSince(0))).toContain("● bash  echo painted");
+		// the exact legacy header bytes — no hue anywhere on the name span
+		expect(raw).toContain("\u001b[2m●\u001b[0m \u001b[1mbash\u001b[0m  echo painted");
+		expect(raw).not.toContain("\u001b[1m\u001b[33mbash");
+		expect(raw).not.toContain("\u001b[1m\u001b[95mtask");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -3411,7 +3413,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("the task call paints bright magenta while other calls keep their defaults (#tool-name-colors)", async () => {
+	it("the task call takes its hue from the shipped example theme (#tool-name-colors A1)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
 		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
 		await writeFile(
@@ -3429,7 +3431,13 @@ describe("runRepl with shell:tui", () => {
 				() => tool.promise.then(() => reply("scout done")),
 				reply("all done"),
 			],
-			{ agentsHomeDir: agentsHome, tools: [gatedTool(tool, "gated")] },
+			{
+				agentsHomeDir: agentsHome,
+				tools: [gatedTool(tool, "gated")],
+				extensionFiles: {
+					"tool-colors.mjs": readFileSync(path.resolve("examples/extensions/tool-colors.mjs"), "utf8"),
+				},
+			},
 		);
 		await settle();
 		env.terminal.data("go\r");

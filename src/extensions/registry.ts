@@ -222,6 +222,7 @@ export class ExtensionRegistry {
 			commandCount: section.commands.length,
 			contextCount: section.contexts.length,
 			hookCount: section.hooks.length,
+			colorCount: section.colors.length,
 			...(section.identity === undefined
 				? {}
 				: { sourcePath: section.identity.path, sha256: section.identity.sha256 }),

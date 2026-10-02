@@ -1,22 +1,20 @@
-/** #tool-name-colors: a theme example for the tool-name palette.
+/** #tool-name-colors: the owner's tool-name theme.
  *
- * Copy this file (or link it) into `~/.imp/extensions/` and edit the pairs —
- * tool names in the TUI call header take the chosen color. `"*"` is the
- * fallback for every tool without an exact registration; `"none"` leaves the
- * name bold-only (it also overrides a shipped default). Colors are the 16
- * standard-16 tokens (`black` … `brightWhite`) and follow your terminal
- * theme, unlike fixed 256-color values.
+ * Link or copy this file into `~/.imp/extensions/` to switch it on — with
+ * no theme extension nothing is colored (the pre-#tool-name-colors look).
+ * The pairs below are the preference palette: exec yellow, reads blue,
+ * writes magenta, search cyan, and the task call on its own bright magenta
+ * slot. Edit freely: any of the 16 standard-16 tokens (`black` …
+ * `brightWhite`) or `"none"` (bold-only, overriding another registration);
+ * `"*"` is the fallback for every tool without an exact registration, and
+ * exact names beat the wildcard. Colors follow your terminal theme.
  *
  * @param {import("../../src/extensions/types.js").ExtensionApi} api
  */
 export default function (api) {
-	// A brighter variant of the shipped exec hue.
-	api.registerToolColor("bash", "brightYellow");
-	// Reads and writes get the same hues as the defaults, one step brighter.
-	api.registerToolColor(["read", "ls"], "brightBlue");
-	api.registerToolColor(["edit", "write"], "brightMagenta");
-	// This theme's agent hue — task keeps its own slot.
-	api.registerToolColor("task", "brightCyan");
-	// Uncomment to tint everything else (exact registrations above still win):
-	// api.registerToolColor("*", "blue");
+	api.registerToolColor("bash", "yellow"); // exec
+	api.registerToolColor(["read", "ls"], "blue"); // reads
+	api.registerToolColor(["edit", "write"], "magenta"); // writes
+	api.registerToolColor(["grep", "find"], "cyan"); // search
+	api.registerToolColor("task", "brightMagenta"); // the subagent's own slot
 }

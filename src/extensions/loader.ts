@@ -326,6 +326,9 @@ export function extensionBannerLines(summaries: readonly ExtensionSummary[]): st
 		count(summary.commandCount, "command", "commands");
 		count(summary.contextCount, "context", "contexts");
 		count(summary.hookCount, "hook", "hooks");
+		// #tool-name-colors (A1): a colors-only theme extension no longer reads
+		// "— no registrations"; zero keeps every pre-existing banner byte.
+		count(summary.colorCount, "color", "colors");
 		const tail = parts.length > 0 ? ` — ${parts.join(", ")}` : " — no registrations";
 		return `▪ extension ${summary.name} [${summary.origin}]${tail}`;
 	});

@@ -587,13 +587,14 @@ export default function (api) {
   fallback for every tool without an exact registration); `color` is one of
   the 16 standard-16 tokens (`black`, `red`, `green`, `yellow`, `blue`,
   `magenta`, `cyan`, `white`, `gray`, the seven `bright*` variants) or
-  `"none"` (bold-only — it also overrides a shipped default). Exact names
+  `"none"` (bold-only, overriding another registration). Exact names
   beat `"*"`; the first registration of a name wins (later ones report).
-  Shipped defaults: `bash` yellow, `read`/`ls` blue, `edit`/`write`
-  magenta, `grep`/`find` cyan, `task` bright magenta — unknown tools stay
-  bold-only. Themes are standard-16 on purpose: the hues follow your
-  terminal theme. A ready-to-copy theme lives in
-  `examples/extensions/tool-colors.mjs`.
+  **No colors are shipped by default** — with no theme extension every
+  name keeps the plain bold look; opt in by linking or copying the theme
+  `examples/extensions/tool-colors.mjs` (exec yellow, reads blue, writes
+  magenta, search cyan, `task` bright magenta) into `~/.imp/extensions/`
+  and editing it to taste. Themes are standard-16 on purpose: the hues
+  follow your terminal theme.
 - A bad extension never kills imp: load failures, registration conflicts, and
   handler throws each become one `imp:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).

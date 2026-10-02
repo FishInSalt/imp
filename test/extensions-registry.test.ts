@@ -449,12 +449,13 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 	it("stores exact, wildcard and none; exact beats wildcard at lookup", () => {
 		const lines: string[] = [];
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
-		loadOne(registry, "alpha", () => {
+		const summary = loadOne(registry, "alpha", () => {
 			registry.registerToolColor(["bash", "read"], "yellow");
 			registry.registerToolColor("*", "blue");
 			registry.registerToolColor("task", "none");
 		});
 		expect(lines).toEqual([]);
+		expect(summary?.colorCount).toBe(4); // bash, read, *, task — name-based, not call-based
 		expect(registry.toolColorFor("bash")).toBe("yellow");
 		expect(registry.toolColorFor("read")).toBe("yellow");
 		expect(registry.toolColorFor("task")).toBe("none");

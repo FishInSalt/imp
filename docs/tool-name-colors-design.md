@@ -1,19 +1,21 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
 Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
-defaults, palette to the example theme) under review on
-`feat/tool-name-colors-a1`. Design review closed after 3 rounds (NEEDS-FIXES
+defaults, palette to the example theme) reviewed (1 round NEEDS-FIXES →
+CONFIRMED) and implemented on `feat/tool-name-colors-a1`. Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (the P2 was a real prototype-chain lookup bug for names like
-`constructor` — fixed via an own-property `defaultToolColor` lookup and a
-fail-closed SGR Map). Owner decisions 2026-10-02:
+`constructor` — fixed at the time via an own-property `defaultToolColor`
+lookup and a fail-closed SGR Map; A1 later deleted that lookup with the
+defaults). Owner decisions 2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").
 2. Scope is **the tool name only** — result rows (`⎿`), activity rows,
    footers and pickers stay as they are.
-3. A shipped default palette (below, §D3); the owner picked the
-   category-per-color proposal, `task` on its own slot.
+3. A category-per-color palette, `task` on its own slot — **as the owner's
+   theme, not a shipped default** (Amendment 1 removed the factory palette;
+   check-in colors are opt-in).
 
 ## Context
 
@@ -42,8 +44,8 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
 - `ToolColorName` is a closed union of 16 standard-16 tokens — `black red
   green yellow blue magenta cyan white gray brightRed brightGreen
   brightYellow brightBlue brightMagenta brightCyan brightWhite` — plus
-  `"none"` (explicit opt-out: the name renders bold-only, overriding the
-  default palette entry, §D2).
+  `"none"` (explicit opt-out: the name renders bold-only, overriding
+  another registration for the same name, §D2).
 - `names` is one name or an array; each entry must match `NAME_PATTERN`
   (`core/constants.ts` :50) or be the literal `"*"` (wildcard, §D2). The
   registered name does **not** need to exist as a tool — a theme may style
@@ -93,12 +95,10 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
   exact `"none"` silently disables an earlier wildcard color for that
   name — by specificity, not as an error. A two-section registry test
   pins this (§D7).
-- Composed resolver (built once in `repl.ts`):
-  `extension exact` ?? `extension "*"` ?? `built-in default` ?? `none`.
-  The wildcard **overrides the built-in defaults** — `register("*",
-  "blue")` is a theme saying "everything blue unless I say otherwise",
-  which is the only reading that makes a wildcard useful; an extension
-  that wants the defaults to survive simply doesn't register `"*"`.
+- Composed resolver (built once in `repl.ts`; Amendment 1):
+  `extension exact` ?? `extension "*"` ?? `none` — extensions are the only
+  source. `register("*", "blue")` is a theme saying "everything blue
+  unless I say otherwise"; with no extension nothing is colored.
 
 ## D3 — Default palette
 
@@ -163,7 +163,7 @@ Differential rendering is stable: the style string is a session constant
   `toolColorResolver: ((name: string) => ToolColorName | undefined) | null`
   (same public-field pattern as `callSuffixResolver` :80-83, but **not**
   shell-bound and not cleared on close — it is set once by `repl.ts`
-  from the registry + defaults and never changes: registrations happen
+  from the registry (Amendment 1: no defaults) and never changes: registrations happen
   before the REPL exists, so a late-created fold pulling it at
   construction sees the final value). Assigning at the existing :1622
   site is sound: `runRepl` assigns unconditionally on every invocation,
@@ -199,10 +199,10 @@ Differential rendering is stable: the style string is a session constant
 ## D7 — Tests (red-first)
 
 New `test/tool-colors.test.ts` (unit):
-- defaults table matches §D3 exactly; every default token maps to a
-  non-empty SGR; `"none"` maps to `""`; token set is closed (16 + none).
-- every built-in tool name (`BUILTIN_TOOL_NAMES`) is either in the table
-  or consciously absent (unknown-by-policy assertion, mirrors §D3).
+- token set is closed (16 + none); every token maps to a non-empty SGR
+  (`"none"` → `""`); out-of-contract tokens fail closed to `""` (A1).
+- composition (A1): no registry — and a registry answering `undefined` —
+  yields `undefined` for every name; extensions are the only source.
 
 `test/extensions-registry.test.ts` additions:
 - validation: unknown color token, non-string name, invalid name,
@@ -227,12 +227,13 @@ is `preparedInputBlock`-level and has no fold rendering):
 - narrow widths: colored and uncolored render at identical widths (the
   SGR bytes are zero-width by the existing post-layout application).
 
-`test/repl-tui.test.ts` (end-to-end, real wiring):
-- default palette: a `bash` call's header carries yellow on the wire
-  (`\x1b[1m\x1b[33m` before the name), a `task` call bright magenta;
-- a temp extension registering `bash → brightCyan` overrides the default;
+`test/repl-tui.test.ts` (end-to-end, real wiring; A1):
+- no extension: the exact legacy header bytes, no hue on any name;
+- the shipped example theme (loaded through the real loader) paints the
+  `task` call bright magenta;
+- a temp extension registering `bash → brightCyan` / `gated → brightCyan`;
 - `"*" → "blue"` colors an otherwise-uncolored tool (e.g. `gated`);
-- `"none"` on a defaulted tool strips the hue (bold-only);
+- `"none"` strips a hue another registration had set (bold-only);
 - confirm preview shows the colored name.
 **Affected existing tests — surveyed, expected count 0.** The textual
 escape pattern `\x1b[` (five spelled characters) appears 62 times in
@@ -266,7 +267,8 @@ colored-frame tests fail on the uncolored frames.
   user's `~/.imp/extensions` by us (owner choice). Loaded by tests the
   same way `task-timer.mjs` is exercised.
 - `README.md`: one bullet under the extensions feature — tool names can
-  be colored per user via an extension; default palette listed.
+  be colored per user via an extension; no colors by default, opt-in via
+  the example theme (A1).
 - `CHANGELOG.md` entry.
 - `docs/m4-extensions-design.md`: an amendment note — one new
   load-gated registration (`registerToolColor`), normative semantics in
@@ -305,7 +307,8 @@ Owner, after the batch merged: "出厂默认不调色" — the shipped default
 palette is removed, and the previously approved hue table becomes the
 owner's preference theme in `examples/extensions/tool-colors.mjs`.
 
-- **D3 revised.** `DEFAULT_TOOL_COLORS` and `defaultToolColor` are deleted;
+- **D3 revised.** `DEFAULT_TOOL_COLORS` and `defaultToolColor` are deleted
+  (no src importer besides the module itself — dead-code check done);
   `composeToolColorResolver(registry)` resolves extension registrations only
   (`registry.toolColorFor`), so with no extension every call header renders
   exactly the pre-batch bytes (bold name, no hue). The own-property-guard
@@ -313,21 +316,47 @@ owner's preference theme in `examples/extensions/tool-colors.mjs`.
   hosted it; the registry's Map lookups and the fail-closed SGR Map stay.
 - **The palette**: `examples/extensions/tool-colors.mjs` now registers the
   approved table verbatim — bash yellow, read/ls blue, edit/write magenta,
-  grep/find cyan, task brightMagenta. Users opt in by linking or copying the
-  file into `~/.imp/extensions/` (nothing loads it automatically). The file
-  remains the API's living example, now owned by the owner's taste.
+  grep/find cyan, task brightMagenta. That is **five calls / eight names**
+  (colors are stored per name), so the example's banner reads `— 8 colors`;
+  the loader smoke asserts all eight lookups **and** that banner line.
+  Users opt in by linking or copying the file into `~/.imp/extensions/`
+  (nothing loads it automatically). The file remains the API's living
+  example, now owned by the owner's taste.
 - **Banner gap (found while amending).** A colors-only extension used to
   banner as `— no registrations` (the summary counted tools/commands/
-  contexts/hooks only). `ExtensionSummary` gains `colorCount`; the banner
-  adds the segment only when positive (`1 color`, `6 colors`), so every
-  existing banner line stays byte-identical when no colors are registered.
-- **Tests revised**: the unit defaults test is replaced by "no registry →
-  undefined for every name"; the repl-tui default-palette e2e is inverted
-  (no extension → legacy bytes, no hue); the task e2e drives its colors by
-  loading the shipped example file through the real loader (which also keeps
-  the example under test); the loader smoke asserts the example's six
-  registrations and the new banner count. Red evidence: inverted tests fail
-  on the pre-amendment tree (defaults still active).
+  contexts/hooks only). `ExtensionSummary` gains a required `colorCount`
+  (only `commitExtension` builds summaries — no test literal constructs the
+  type); the banner appends the segment after `hookCount` and only when
+  positive (`1 color`, `8 colors`), so every existing banner line stays
+  byte-identical when no colors are registered (existing pins at
+  `extensions-loader.test.ts:275-278`, `extensions-repl.test.ts:204/259/307/878`,
+  `extensions-contrib.test.ts:153/221` are safe).
+- **Tests revised** (red evidence: inverted pins fail on the pre-amendment
+  tree while the defaults still answer):
+  - unit: the defaults test is replaced by "no registry → undefined for
+    every name" and the compose pin `composeToolColorResolver()("task")`
+    flips from `"brightMagenta"` to `undefined` (also for a registry whose
+    `toolColorFor` always returns undefined);
+  - `repl-tui` default-palette e2e inverted: no extension → **exact legacy
+    header bytes** (`\x1b[2m●\x1b[0m \x1b[1mbash\x1b[0m  echo painted`),
+    not merely "no yellow";
+  - the task e2e drives its colors by loading the shipped example file
+    through the real loader (keeps the example under test);
+  - stale titles/comments at `repl-tui.test.ts:3374/3406` rewritten with
+    their pins.
+- **Removal inventory (complete — the implementation commit updates each
+  in place):** this doc's owner decision 3 (:15), D2 composition
+  (:96-102), D5 provenance (:164-166), D7 unit/e2e entries (:199,
+  :231-232), D8 README deliverable (:269); source wording
+  `src/extensions/types.ts:151` ("overriding a default palette entry"),
+  `src/repl/transcript.ts:87`, `src/repl/repl.ts:1667-1668`,
+  `src/repl/tool-colors.ts:2/9`; the example's own comments
+  (`examples/extensions/tool-colors.mjs:3-6`); README :590/:592-597; CHANGELOG :11-21;
+  `docs/m4-extensions-design.md` Amendment A. `PROJECT_PLAN.md:744` is the
+  merged batch's history and is **not** rewritten — this amendment lands its
+  own ledger bullet (same precedent as #call-closing-status A1). No
+  interaction with the `tui-tool-elapsed` / `call-closing-status` docs:
+  colors stay post-layout, zero width.
 - **Docs**: README, CHANGELOG and m4 Amendment A wording drops "shipped
   defaults" and describes opt-in themes.
 

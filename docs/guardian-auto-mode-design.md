@@ -112,8 +112,8 @@ export interface ClassifyRequest {
    *  falls back to the session model (noted in the record). */
   model?: string;
   /** §15/D29: a short identifier of the call under judgment (`bash: <first
-   *  line>`, `write <path>`), rendered in the host's record line; cleaned
-   *  and capped by the host, display only. */
+   *  line>`, `write <path>`, `edit <path>`), rendered in the host's record
+   *  line; cleaned and capped by the host, display only. */
   subject?: string;
 }
 
@@ -1438,3 +1438,12 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
   the new shadow-write pins); the absent-subject legacy assertion was
   `toContain`-shaped (now an exact-line pin); the §4.1/§5.8/§14.5/§14.8
   folds were absent. All folded in rev 2.2.
+- **R5 (same reviewer, verification of the R4 folds): CONFIRMED WITH
+  NOTES** — the write-shadow inverted-outcome, cap-boundary and
+  empty-reason mutations were re-run and caught; two folds were
+  incomplete: pin 49's write half lacked the exactly-one-line count, and
+  the empty-reason case covered only the bash verdict site; the write
+  shadow's unavailable branch had no exercise; and §4.1's comment missed
+  `edit <path>`. All folded (pins count 1/2 around the write deferral; the
+  empty-reason and unavailable cases now cover the write site; the §4.1
+  comment completed).

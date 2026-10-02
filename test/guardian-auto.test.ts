@@ -741,14 +741,27 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			"[shadow] not classified (request over the classify budget) — write /outside/big.txt — human: denied",
 		);
 
-		// §15/R4: the shadow verdict site drops an empty reason's segment too
+		// §15/R4: both shadow verdict sites drop an empty reason's segment
 		const s = await loadGuardian("/proj");
 		await s.run("/guardian shadow");
 		s.classifyImpl.fn = async () => verdict("ask", "");
 		await s.gate({ args: { command: risky } });
+		await s.gate(writeCall("/outside/empty2.txt"));
+		const withEmpty = await readFile(logFile, "utf8");
+		exactLogLine(withEmpty, `[shadow] ask — ${risky} (anthropic/session-model) — human: denied`);
+		exactLogLine(
+			withEmpty,
+			"[shadow] ask — write /outside/empty2.txt (anthropic/session-model) — human: denied",
+		);
+
+		// §15/R4: the write shadow unavailable branch shape
+		const u = await loadGuardian("/proj");
+		await u.run("/guardian shadow");
+		u.classifyImpl.fn = async () => undefined;
+		await u.gate(writeCall("/outside/unavailable.txt"));
 		exactLogLine(
 			await readFile(logFile, "utf8"),
-			`[shadow] ask — ${risky} (anthropic/session-model) — human: denied`,
+			"[shadow] classifier unavailable — write /outside/unavailable.txt — human: denied",
 		);
 	});
 
@@ -785,11 +798,14 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		);
 		const pendingWrite = w.gate(writeCall("/outside/deferred.txt", "probe"));
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(await readFile(logFile, "utf8").catch(() => "")).not.toContain("deferred.txt");
+		const beforeWrite = await readFile(logFile, "utf8").catch(() => "");
+		expect(beforeWrite.match(/\[shadow\]/g)?.length).toBe(1); // only the bash half's line
 		resolveWrite(false);
 		await pendingWrite;
+		const afterWrite = await readFile(logFile, "utf8");
+		expect(afterWrite.match(/\[shadow\]/g)?.length).toBe(2); // one per gate, exactly once
 		exactLogLine(
-			await readFile(logFile, "utf8"),
+			afterWrite,
 			"[shadow] ask — write /outside/deferred.txt (anthropic/session-model) — reason: unsure — human: denied",
 		);
 	});

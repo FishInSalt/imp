@@ -4,9 +4,9 @@ Status: **implemented and merged (merge 4c2e9ea); design review closed
 (round 3: CONFIRMED WITH NOTES, notes folded in rev 4) and implementation
 review closed (APPROVE WITH CORRECTIONS, corrections folded; confirmation
 round CONFIRMED). Amendment 1 (owner-directed, 2026-10-02): running text
-simplified to `Ns` and the task timer joins the closing slot — short design
-review round 1 folded (NEEDS-FIXES: time-base inheritance, D5 numbers);
-implementation on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
+simplified to `Ns` and the task timer joins the closing slot — Amendment 1
+short review closed (NEEDS-FIXES → NEEDS-FIXES → CONFIRMED); implementation
+on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 
@@ -390,6 +390,10 @@ Reviewer (round 2):
   line, D5's option-(b) waste, the floor bullet's parenthetical, the flip
   bullet's 14→18 jump) — all corrected in place; confirmation pending the
   reviewer's re-check of those lines only.
+
+- Amendment 1, round 3 (same reviewer, targeted, 2026-10-02): **CONFIRMED** —
+  the four corrected lines verified; no new findings. Amendment 1 design
+  review closed; implementation proceeds on `feat/call-closing-status-a1`.
 
 - Round 1 (independent adversarial, fresh context, 2026-10-02; reviewed the
   uncommitted draft): **NEEDS-FIXES** — P1: trailing-LF blank row breaks

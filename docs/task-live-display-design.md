@@ -70,7 +70,7 @@ Keep the activity region separate from persistent input folds. It reports pendin
 
 Project each task row into three independent lines, rather than one wrap-prone concatenation:
 
-1. Status/elapsed plus stable short parent discriminator and agent name: for example `└─ pending #2 scout 8s`.
+1. Status/elapsed plus stable short parent discriminator and agent name: for example `└─ pending #2 scout` (the elapsed time moved to the call's closing slot by `docs/call-closing-status-design.md` Amendment 1).
 2. Parent task prompt/summary, single-line, width-truncated.
 3. Child detail, if present: `3 tool starts · last: bash ...`, single-line, width-truncated.
 

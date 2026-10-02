@@ -59,7 +59,9 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
   - `color` not a member of the closed set →
     `imp: extension X could not register tool color — unknown color (expected one of: <16 + none>, got "<value>")`;
   - a conflict (§D2) →
-    `imp: extension X could not register tool color for "<name>" — already set by Y`.
+    `imp: extension X could not register tool color for "<name>" — already registered by Y`;
+  - a duplicate entry within one call (`["bash", "bash"]`) → the same
+    conflict report; the whole call is rejected (all-or-nothing, below).
   A thrown factory still discards the whole section atomically
   (`discardExtension`). A valid entry inside an otherwise malformed call
   is not partially applied: one call registers all of its names or none.
@@ -132,7 +134,7 @@ export const DEFAULT_TOOL_COLORS: Record<string, ToolColorName> = {
    Invariant recorded for the reviewer: every input-block producer sets
    `title = sanitizeDisplay(name)` (`tool-presentation.ts` :330), the
    interrupted suffix (:730) is the only title mutation, and
-   `ToolPresentationHooks` (`core/tools/types.ts` :58-62) cannot change
+   `ToolPresentationHooks` (`core/tools/types.ts` :54-58) cannot change
    the title — so the guard never silently drops the color for a custom
    presentation today. A future producer that rewrites `title` would
    disable the color for its blocks; that is the acceptance of the guard,
@@ -200,7 +202,8 @@ New `test/tool-colors.test.ts` (unit):
 - validation: unknown color token, non-string name, invalid name,
   empty array — each one report line, nothing stored;
 - conflict: same exact key across sections, same wildcard key, duplicate
-  within one section — first wins, later reported;
+  within one section — including two identical entries in one call —
+  first wins, later reported;
 - `"none"` round-trips; `toolColorFor` precedence exact > wildcard;
 - thrown factory discards colors atomically (existing rollback pattern).
 
@@ -225,17 +228,22 @@ is `preparedInputBlock`-level and has no fold rendering):
 - `"*" → "blue"` colors an otherwise-uncolored tool (e.g. `gated`);
 - `"none"` on a defaulted tool strips the hue (bold-only);
 - confirm preview shows the colored name.
-**Affected existing tests — surveyed, expected count 0.** The e2e
-helpers strip ANSI (`repl-tui.test.ts` :126-135 wraps every write), and
-`grep -c $'\x1b\['` over `test/repl-tui.test.ts` and
-`test/extensions-repl.test.ts` is 0 — no raw-frame byte pin exists there.
-The remaining byte pins are out of the color path: `render.test.ts` :59-94
-(legacy one-line renderer, §D6-untouched), `tool-display-colors.test.ts`
-:38 and `tui-tool-elapsed.test.ts` :56-63 (direct folds, resolver unset),
-`confirm-preview.test.ts` :20-26 (unit, optional argument). The
-implementation re-runs this survey and keeps the count at 0; every new
-assertion lives in the new tests above. New e2e runs go through `runRepl`
-(`repl-tui.test.ts` harness) so the real wiring is exercised.
+**Affected existing tests — surveyed, expected count 0.** The textual
+escape pattern `\x1b[` (four spelled characters) appears 62 times in
+`test/repl-tui.test.ts` and 0 times in `test/extensions-repl.test.ts`;
+all 62 classify as raw-write assertions for warn colors (`:767`, `:828`),
+the guardian label, injection guards, queue, footer, OSC title and dim
+rules — none pins header-name bytes. Frames are read through `frameSince`
+(`:126-135`, ANSI-stripped per write) where text assertions live; the few
+raw `terminal.writes.join("")` reads are exactly the classified color
+pins above. The remaining name-byte pins are out of the color path:
+`render.test.ts` :59-266 (legacy one-line renderer, §D6-untouched),
+`tool-display-colors.test.ts` :38 and `tui-tool-elapsed.test.ts` :56-63
+(direct folds, resolver unset), `confirm-preview.test.ts` :22 (unit,
+optional argument). The implementation re-runs this survey and keeps the
+count at 0; every new assertion lives in the new tests above. New e2e runs
+go through `runRepl` (`repl-tui.test.ts` harness) so the real wiring is
+exercised.
 
 Red evidence plan: the new unit file importing the not-yet-existing
 `src/repl/tool-colors.ts` fails at transform (module resolution) on the

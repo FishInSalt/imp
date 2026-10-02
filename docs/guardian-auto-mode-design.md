@@ -1854,8 +1854,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 ## 17. Detector `<<` structure & breaker counting — track C (draft for independent review — 2026-10-03)
 
-> Status: **rev 3 — R1/R2/R3 findings folded; awaiting R4 (same
-> reviewer).** Every revision round changed this section only.
+> Status: **rev 4 — design review closed (R1→rev 1; R2→rev 2;
+> R3→rev 3; R4 CONFIRMED WITH NOTES → P3 wording folded); awaiting
+> R5 micro-verification for closure.** Every revision round changed
+> this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design
@@ -1965,12 +1967,13 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     Not found ⇒ `ok=false`. Multiple operators consume bodies in
     operator order (POSIX); a `<<` inside a body is body text.
   - Shell consumer (§17.2 D40; R2 N2; R3-1): the operator's pipeline —
-    its `;`/`&`/newline segment plus every `|`-joined segment (same
-    segmentation as §13); tokenize the pipeline's live text on unquoted
-    whitespace **and the shell metacharacters** `| & ; ( ) < >` (a
-    real shell word splitter, not whitespace-only: `bash<<EOF`,
-    `|bash`, `cat<<EOF|bash` must split into shell words), quote-remove
-    for the compare; **any** word whose basename is in
+    §13's `;`/`&`/newline segmentation, extended to the full
+    `|`-pipeline that contains the operator; tokenize the pipeline's
+    live text on whitespace and the shell metacharacters
+    `| & ; ( ) < >` (the split runs outside quotes — a real shell word
+    splitter, not whitespace-only: `bash<<EOF`, `|bash`,
+    `cat<<EOF|bash` must split into shell words), quote-remove for the
+    compare; **any** word whose basename is in
     `bash sh zsh dash ksh` ⇒ `ok=false`. A word scan on purpose
     (over-approximate; `bash` as an ordinary argument also falls back)
     — the N2 bypasses and the R3-1 adjacent spellings all close.
@@ -2085,8 +2088,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 78. Continuation guards (R1 P1-3; R2 N6): (i) `cat <<'EOF' \` +
     newline + `&& rm -rf /tmp/y/*.log` skips; (ii) `rm -rf /tmp/x &&
     cat <<E\` + newline + `OF` skips (word continuation); (iii) the
-    positive twin — quoted body containing backslash-newline plus a
-    masked `{}` — classifies; (iv) completeness twin with a real
+    positive twin — `rm -rf /tmp/x && cat <<'EOF'` + quoted body with
+    backslash-newline plus `{}` — classifies (dedicated mutation:
+    fire the continuation guard inside heredoc bodies ⇒ skip);
+    (iv) completeness twin with a real
     heredoc: `rm -rf /tmp/x && echo 'a\` + newline + `b' && cat
     <<'EOF'` + body `{}` + `EOF` + `touch f{1,2}` — the single-quoted
     continuation is literal, the body is masked, the trailing pattern
@@ -2098,8 +2103,9 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X
     bash`, `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash` —
     each with body `rm -rf /tmp/y/*.log` (rule token + globs): all
-    skip; a non-shell consumer (`node <<'EOF'`, body free of live
-    hazards) classifies (masking applies; §17.6 residual).
+    skip; a non-shell consumer (`rm -rf /tmp/x && node <<'EOF'` +
+    body `const s = {};`) classifies (masking applies; §17.6
+    residual).
 80. Boundaries — no weakening: `rm -rf` inside a quoted body still
     matches the rule (gated, label `recursive force delete`) and a
     protected path in the body still floor-denies; `bash s.sh` after a
@@ -2126,6 +2132,7 @@ stripping; swap body order (pin 71); treat `<<<` as a body; treat
 quoted `<<` as an operator; make the scanner `ok=true` on an
 unterminated body; add `\r` tolerance (pin 74); drop the comment guard
 (pin 77); drop either continuation guard (pin 78); fire the
+continuation guard inside heredoc bodies (pin 78-iii); fire the
 continuation guard inside single quotes (pin 78-iv); drop the
 shell-consumer guard (pin 79); narrow the shell scan back to the
 leading word only (pin 79's bypass table); tokenize on whitespace
@@ -2217,7 +2224,16 @@ formula (pin 84).
   completeness residual (allowlist). Mutation audit: pin 80 gains a
   dedicated mutation (rule/floor body scanning is the write-then-
   execute defense); pins 75/81 remain assertion-only. All folded in
-  rev 3; R4 requested.
+  rev 3 (pin 78-iii's named command and mutation completed in rev 4);
+  R4 requested.
+- R4 (same reviewer, micro-verification of rev 3): **CONFIRMED WITH
+  NOTES** — metacharacter split verified on the prototype (adjacent
+  spellings fall back, plain `cat` unaffected); pin 78-iv command
+  complete and the mutation red; pin 80 both mutation directions red;
+  shell-set residual recorded. Remaining P3 wording: pin 78-iii named
+  command + dedicated mutation, the pin 79 node clause, two §17.3-A
+  phrasings — folded in rev 4; R5 micro-verification requested for
+  closure.
 
 ### 17.9 Amendments to earlier sections (folded)
 

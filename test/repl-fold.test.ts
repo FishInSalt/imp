@@ -604,13 +604,34 @@ describe("TranscriptSink tool result placement (#tool-result-follows-call)", () 
 
 	it("a running task's live row sits above its own result (#task-inline-live-rows)", () => {
 		const transcript = new TranscriptSink();
-		transcript.taskLiveRowsResolver = (key) => (key === "t" ? ["pending #1 scout 3s"] : null);
+		transcript.callLiveRowsResolver = (key) => (key === "t" ? ["pending #1 scout 3s"] : null);
 		transcript.toolSink.start("t", "task", { agent: "scout", prompt: "PROMPT-T" });
 		expect(at(rows(transcript), "pending #1 scout 3s")).toBeGreaterThanOrEqual(0);
-		transcript.setTaskLiveRows("t", null);
+		transcript.setCallLiveRows("t", null);
 		transcript.toolSink.end({ toolCallId: "t", toolName: "task", content: "DONE-T", isError: false });
 		const text = rows(transcript);
 		expect(text.some((row) => row.includes("pending #"))).toBe(false);
 		expect(at(text, "PROMPT-T")).toBeLessThan(at(text, "DONE-T"));
+	});
+
+	it("a running tool's live row sits under its own header, above its result (#tool-inline-live-rows)", () => {
+		const transcript = new TranscriptSink();
+		transcript.callLiveRowsResolver = (key) => (key === "t" ? ["└─ running 3s"] : null);
+		transcript.toolSink.start("t", "bash", { command: "echo hi" });
+		const text0 = rows(transcript);
+		expect(at(text0, "└─ running 3s")).toBeGreaterThan(at(text0, "echo hi"));
+		expect(text0.filter((row) => row.includes("echo hi"))).toHaveLength(1); // the row never repeats the label
+		transcript.setCallLiveRows("t", null);
+		transcript.toolSink.end({
+			toolCallId: "t",
+			toolName: "bash",
+			content: "DONE-T",
+			isError: false,
+			durationMs: 3200,
+		});
+		const text = rows(transcript);
+		expect(text.some((row) => row.includes("running"))).toBe(false);
+		expect(text.some((row) => row.includes("✓"))).toBe(true);
+		expect(at(text, "echo hi")).toBeLessThan(at(text, "DONE-T"));
 	});
 });

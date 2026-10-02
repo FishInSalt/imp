@@ -637,6 +637,7 @@ export function createToolSink(
 	append: (block: ToolBlock) => void,
 	update?: (previous: ToolBlock, next: ToolBlock) => void,
 	clock: () => number = Date.now,
+	onTerminalDuplicate?: (id: string) => void,
 ): ToolPresentationSink {
 	const entries = new Map<
 		string,
@@ -662,7 +663,14 @@ export function createToolSink(
 		start: (id, name, args) => {
 			prepare(id, name, args);
 			const entry = entries.get(id)!;
-			if (entry.terminal || entry.input) return;
+			if (entry.terminal) {
+				// #tool-inline-live-rows: this start is suppressed (the id's previous
+				// lifecycle is still terminal — no fold and no result will be produced),
+				// so the owner must not address the superseded fold with live rows.
+				onTerminalDuplicate?.(id);
+				return;
+			}
+			if (entry.input) return;
 			entry.startedAt = clock();
 			entry.input = preparedInputBlock(entry.record!);
 			append(entry.input);

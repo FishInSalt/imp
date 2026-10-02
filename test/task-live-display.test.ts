@@ -214,7 +214,7 @@ describe("task inline live rows (B1)", () => {
 
 	it("pulls rows from the resolver when the fold is created after publication", () => {
 		const transcript = new TranscriptSink();
-		transcript.taskLiveRowsResolver = (key) => (key === "t1" ? ["└─ pending #1 scout 3s"] : null);
+		transcript.callLiveRowsResolver = (key) => (key === "t1" ? ["└─ pending #1 scout 3s"] : null);
 		transcript.toolSink.start("t1", "task", { prompt: "go" });
 		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("pending #1 scout 3s");
 	});
@@ -228,7 +228,7 @@ describe("task inline live rows (B1)", () => {
 	it("resolver is a pure read: fold creation never re-enters the render path", () => {
 		const transcript = new TranscriptSink();
 		let calls = 0;
-		transcript.taskLiveRowsResolver = () => {
+		transcript.callLiveRowsResolver = () => {
 			calls++;
 			return null;
 		};
@@ -237,12 +237,47 @@ describe("task inline live rows (B1)", () => {
 		expect(transcript.toolFolds).toHaveLength(1); // the resolver created nothing
 	});
 
-	it("forwards setTaskLiveRows to a known fold and ignores an unknown key", () => {
+	it("forwards setCallLiveRows to a known fold and ignores an unknown key", () => {
 		const { transcript, fold } = withInputFold();
-		transcript.setTaskLiveRows("t1", ["└─ pending #1 scout 1s"]);
+		transcript.setCallLiveRows("t1", ["└─ pending #1 scout 1s"]);
 		expect(sanitizeDisplay(fold.render(80).join("\n"))).toContain("pending #1 scout 1s");
-		expect(() => transcript.setTaskLiveRows("nope", ["live row"])).not.toThrow();
+		expect(() => transcript.setCallLiveRows("nope", ["live row"])).not.toThrow();
 		transcript.clear();
-		expect(() => transcript.setTaskLiveRows("t1", ["live row"])).not.toThrow();
+		expect(() => transcript.setCallLiveRows("t1", ["live row"])).not.toThrow();
+	});
+
+	it("notifies a terminal duplicate start, never an in-flight one (#tool-inline-live-rows)", () => {
+		const blocks: ToolBlock[] = [];
+		const duplicated: string[] = [];
+		const sink = createToolSink(
+			(b) => blocks.push(b),
+			undefined,
+			undefined,
+			(id) => duplicated.push(id),
+		);
+		sink.start("a", "extension", {});
+		sink.start("a", "extension", {}); // in-flight duplicate: suppressed, no notification
+		expect(duplicated).toEqual([]);
+		sink.end(result("a"));
+		sink.start("a", "extension", {}); // terminal duplicate: suppressed + notified
+		expect(duplicated).toEqual(["a"]);
+		expect(blocks).toHaveLength(2); // the first lifecycle's input + output only
+	});
+
+	it("a suppressed duplicate start clears pushed rows from the settled fold and drops the id", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("t1", "extension", {});
+		transcript.toolSink.end(result("t1"));
+		transcript.setCallLiveRows("t1", ["└─ running 5s"]); // the shell push for the reused id
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("running 5s");
+		transcript.toolSink.start("t1", "extension", {}); // terminal duplicate: suppressed
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+		// The mapping is dropped: later pushes no-op until a new fold is created.
+		transcript.setCallLiveRows("t1", ["└─ running 9s"]);
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+		transcript.toolSink.finalize();
+		transcript.toolSink.start("t1", "extension", {});
+		transcript.setCallLiveRows("t1", ["└─ running 7s"]);
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("running 7s");
 	});
 });

@@ -1,7 +1,7 @@
 # Tool inline live rows: design for independent review
 
-Status: **rev 2 — round-1 findings folded; awaiting round-2 confirmation**.
-This document
+Status: **rev 3 — design review closed (round 2: CONFIRMED WITH NOTES; the
+four text notes are folded below)**. This document
 changes no runtime behavior. No commit to `main`, merge, provider request,
 deployment, or release is part of this work.
 
@@ -189,11 +189,14 @@ string[]>`:
   agent.sourceId || ""`, ordinals, three-row groups).
 
 Key namespace: tool keys are raw tool_call ids; agent keys are task call ids
-or `sourceId` UUIDs. The two sets cannot coexist in one snapshot — batch
-processing is sequential (`src/core/loop.ts:452-487`), so a task run's rows
-are gone before the next serial call's `tool_start`, and vice versa — so the
-unified map has no collision case to arbitrate. (The pre-change region
-namespaced its container keys `tool:`/`agent:` only for component reuse.)
+or `sourceId` UUIDs. `tools` and `agents` can be non-empty in one snapshot —
+a chunk of adjacent concurrency-safe calls emits every `tool_start` before
+any result (`src/core/loop.ts:499-524`), reachable via an extension
+`concurrencySafe` tool. The id spaces are still disjoint: tool_call ids are
+unique per assistant message and a task call id cannot equal a same-message
+tool call id, and `sourceId` is a UUID — so the unified map has no collision
+case to arbitrate. (The pre-change region namespaced its container keys
+`tool:`/`agent:` only for component reuse.)
 
 Push changed rows via `transcript.setCallLiveRows(key, rows)` (renamed, §5.5),
 push `null` for keys that left the map, and on the `idle` branch clear every
@@ -225,8 +228,10 @@ Accepted, recorded consequences:
    gate wait — `docs/tui-tool-elapsed-design.md` D3 records “includes
    approval-gate waits”; only chunk calls (concurrency-safe, i.e. `task`
    today) carry an execution-only `durationMs` (`src/core/loop.ts:537-539`).
-   Live counter and settled time are consistent per call; no new “executing”
-   signal is added.
+   Live and settled values are consistent for serial calls (task rows are
+   unchanged by this batch — their live counter is gate-inclusive while their
+   settled `durationMs` is execution-only); no new “executing” signal is
+   added.
 2. A picker opened mid-run by a command like `/model` hides a genuinely
    running tool row — D10 already accepted this for the region (recorded in
    `docs/confirm-prompt-design.md` §15, "`/model` … hides real activity
@@ -333,7 +338,8 @@ Affected existing pins (verify by running the suites; update where the
 mechanism changed):
 
 Round-1 review reproduced the breakage by suppressing the tools loop in a
-scratch copy: 7 failures in `test/repl-tui.test.ts`, everything else green.
+scratch copy: 7 failures in `test/repl-tui.test.ts`; the other TUI suites
+stayed green (the scratch run did not execute the full suite).
 The corrected inventory:
 
 - `test/repl-tui.test.ts:4494` + `:4521` + `:4544` + `:4559` (the D10 picker
@@ -371,8 +377,11 @@ New pins:
 - terminal-duplicate hook (§5.4): within-run reuse — push rows for the reused
   id before its (suppressed) `start`; assert the settled fold never shows the
   row, the id mapping is dropped (subsequent pushes are no-ops), and a
-  post-finalize fold re-registers. Also a task-path variant to lock the shared
-  fix.
+  post-finalize fold re-registers. Negative case: an in-flight duplicate start
+  (`entry.input && !entry.terminal`) neither notifies nor drops the mapping —
+  an implementation keyed on `entry.input || entry.terminal` would clear a
+  valid running row and the shell's content-dedup would not re-push it until
+  the next seconds tick. Also a task-path variant to lock the shared fix.
 - TUI level (`test/repl-tui.test.ts`): a real tool run shows header + its own
   `└─ running` row (position asserted); seconds tick; settle hands off in one
   frame (no frame contains both `running` and the settled `✓` for the same
@@ -466,3 +475,12 @@ parentheticals pointed at this document.
   P3s (citations, ordering overclaims, namespace note, mixed-batch premise,
   `ToolActivity`'s test-only generic mode, historical-doc policy, zero-second
   wording) all folded. Round 2 requested.
+- **Round 2 (same reviewer, 2026-10-02): CONFIRMED WITH NOTES** — §5.4's
+  mechanism re-attacked with scratch reproductions (notification point,
+  push-then-clear ordering under the 16ms throttle, mapping deletion,
+  `inputEntryById`, task-pin interaction): all hold. Four text notes folded
+  without re-review: §5.2's namespace justification (coexistence is possible
+  via an extension `concurrencySafe` tool — disjointness comes from
+  per-message id uniqueness), the unqualified consistency sentence (§5.3.1),
+  the terminal-duplicate pin's missing negative case (§7), and the scratch-run
+  scope claim (§7). Design review **closed**; implementation follows.

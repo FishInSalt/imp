@@ -33,6 +33,7 @@ import type {
 	TreeSelectRequest,
 } from "./line-input.js";
 import { LoginDialog, type LoginDialogOptions } from "./login-dialog.js";
+import type { ToolColorName } from "./tool-colors.js";
 import { sanitizeDisplay } from "./tool-presentation.js";
 import type { TranscriptSink } from "./transcript.js";
 
@@ -70,6 +71,10 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** Cross-session input history file (M11 #4). Absent (tests, hermetic
 	 *  runs) disables persistence entirely — in-memory recall still works. */
 	historyPath?: string;
+	/** #tool-name-colors: the composed name-color resolver (extensions, then
+	 *  defaults), set once by repl.ts at construction; used for the confirm
+	 *  preview's call-header idiom. Absent keeps the legacy bytes. */
+	toolColorResolver?: (name: string) => ToolColorName | undefined;
 	/** M13 batch 2: Ctrl+V image paste. Reads the system clipboard, writes
 	 *  a tmp file, inserts the path at the cursor. Injected in tests. */
 	pasteImage?: () => Promise<ClipboardImage | null>;
@@ -930,7 +935,7 @@ export class TuiShell implements LineInput {
 		// #confirm-prompt (Phase 2 D7): the extension's command preview renders in
 		// the transcript's call-header idiom, above the items. Malformed previews
 		// render nothing (the helper returns "").
-		const previewHeader = renderCommandHeader(options.preview);
+		const previewHeader = renderCommandHeader(options.preview, this.options.toolColorResolver);
 		if (previewHeader !== "") box.addChild(new Text(previewHeader, 0, 0));
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;

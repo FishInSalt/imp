@@ -90,3 +90,19 @@ describe("#confirm-prompt Phase 2: command preview rendering", () => {
 		expect(commandPreviewText({ kind: "command", tool: "bash", text: "" })).toBe("");
 	});
 });
+
+describe("#tool-name-colors: the preview name follows the injected resolver", () => {
+	it("paints exactly the name span when the resolver returns a token; legacy bytes otherwise", () => {
+		const yellow = renderCommandHeader(preview(), (name) => (name === "bash" ? "yellow" : undefined));
+		expect(yellow).toBe("\x1b[2m●\x1b[0m \x1b[1m\x1b[33mbash\x1b[0m  rm -rf node_modules && npm i");
+		// no resolver (unit hosts), unknown name, and none keep the plain bold bytes
+		expect(renderCommandHeader(preview())).toContain("\x1b[1mbash\x1b[0m");
+		expect(renderCommandHeader(preview(), () => undefined)).toContain("\x1b[1mbash\x1b[0m");
+		expect(renderCommandHeader(preview(), () => "none")).toContain("\x1b[1mbash\x1b[0m");
+		expect(renderCommandHeader(preview(), () => "none")).not.toContain("\x1b[33m");
+		// the warn span is untouched by the name color
+		const warn = renderCommandHeader(preview({ warnSpans: [[0, 6]] }), () => "yellow");
+		expect(warn).toContain("\x1b[1;31mrm -rf\x1b[0m");
+		expect(warn).toContain("\x1b[1m\x1b[33mbash\x1b[0m");
+	});
+});

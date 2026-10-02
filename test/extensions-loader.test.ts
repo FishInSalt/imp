@@ -402,3 +402,52 @@ describe("api.setStatus at load time (task-timer design §4.2/§4.6)", () => {
 		delete (globalThis as Record<string, unknown>).__capturedSetStatus;
 	});
 });
+
+describe("tool name colors through the api (#tool-name-colors)", () => {
+	it("a factory registers colors at load; a post-load call is reported by the factory-window guard", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"hue.mjs": `export default function (api) {
+	api.registerToolColor(["bash"], "yellow");
+	globalThis.__impHueApi = api;
+}
+`,
+		});
+		const { loaded, lines } = await load(env);
+		expect(lines).toEqual([]);
+		expect(loaded.runtime.toolColorFor("bash")).toBe("yellow");
+		try {
+			const api = (globalThis as { __impHueApi?: { registerToolColor(names: string, color: string): void } })
+				.__impHueApi;
+			api?.registerToolColor("read", "blue");
+		} finally {
+			delete (globalThis as { __impHueApi?: unknown }).__impHueApi;
+		}
+		expect(lines).toEqual([
+			'imp: extension hue could not register tool color for "read" — registration only works while the factory runs',
+		]);
+		expect(loaded.runtime.toolColorFor("read")).toBeUndefined();
+	});
+
+	it("the array form names its count in the post-load report", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"hues.mjs": `export default function (api) {
+	globalThis.__impHuesApi = api;
+}
+`,
+		});
+		const { lines } = await load(env);
+		try {
+			const api = (
+				globalThis as { __impHuesApi?: { registerToolColor(names: string[], color: string): void } }
+			).__impHuesApi;
+			api?.registerToolColor(["read", "ls"], "blue");
+		} finally {
+			delete (globalThis as { __impHuesApi?: unknown }).__impHuesApi;
+		}
+		expect(lines).toEqual([
+			"imp: extension hues could not register tool color for 2 names — registration only works while the factory runs",
+		]);
+	});
+});

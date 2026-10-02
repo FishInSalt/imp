@@ -12,6 +12,7 @@ import type { ToolCallDecision } from "../core/loop.js";
 import type { AssistantMessage, Usage } from "../core/messages.js";
 import type { Tool } from "../core/tools/types.js";
 import type { SlashCommand } from "../repl/commands.js";
+import type { ToolColorName } from "../repl/tool-colors.js";
 
 export type {
 	Tool,
@@ -124,9 +125,9 @@ export type ClassifyHandler = (
 ) => Promise<ClassifyResult | undefined>;
 
 /**
- * The extension api: three read-only facts, three registration methods, one
+ * The extension api: three read-only facts, four registration methods, one
  * subscriber, one status setter, one ask-the-human method, one ask-the-model
- * method — ten members. Anything an extension cannot do with this, it cannot
+ * method — eleven members. Anything an extension cannot do with this, it cannot
  * do.
  */
 export interface ExtensionApi {
@@ -143,6 +144,15 @@ export interface ExtensionApi {
 	registerCommand(command: SlashCommand): void;
 	/** Append a titled section to the system prompt, after AGENTS.md context (M4c). */
 	registerContext(id: string, text: string): void;
+	/** Register tool-name colors for the TUI call header (#tool-name-colors).
+	 *  `names` is one tool name, several, or the literal `"*"` (fallback for
+	 *  every tool without an exact registration); `color` is one of the 16
+	 *  standard-16 tokens or `"none"` (leave the name bold-only, overriding
+	 *  a default palette entry). Load-gated like the other registrations —
+	 *  valid only while the factory runs — validated, never throws; exact
+	 *  names beat `"*"` at render lookup, duplicate keys keep the first
+	 *  registration (reported). Styling a name that never loads is inert. */
+	registerToolColor(names: string | readonly string[], color: ToolColorName): void;
 
 	/** Subscribe to a loop/turn event. "tool_call" handlers may block (M4c). */
 	on(event: "tool_call", handler: ToolCallHandler): void;

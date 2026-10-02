@@ -960,3 +960,17 @@ corrections: `SessionShutdownEvent` is at types.ts:609-616 (not 795-801); REPORT
 "tool_call handler error → tool blocked" is real but **emergent** — `emitToolCall` itself has
 no try/catch; the block comes from agent-loop's surrounding catch. imp makes it an explicit
 contract (§7.2).
+
+## Amendment A — `registerToolColor` (#tool-name-colors, 2026-10-02)
+
+One new member joins `ExtensionApi` (the "ten members" note in
+`src/extensions/types.ts` now reads eleven): `registerToolColor(names,
+color)` — a load-gated registration (factory-window only, like
+`registerTool` / `registerCommand` / `registerContext`) that maps tool names
+(or the literal `"*"`) to one of the 16 standard-16 color tokens or
+`"none"`. It colors the tool-name span of TUI call headers only. The
+normative semantics — token set, validation messages, first-wins conflicts,
+exact-over-wildcard resolution, the shipped default palette, rendering
+points, the test plan — live in `docs/tool-name-colors-design.md` (review
+closed, 3 rounds). M4's registration culture is unchanged: validated,
+never throws, atomic per call, conflicts reported with the owner's name.

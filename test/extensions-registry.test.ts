@@ -444,3 +444,86 @@ describe("extension status channel (task-timer design §4.2)", () => {
 		expect(pushes).toEqual(["after bind", "after bind second", "second"]);
 	});
 });
+
+describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
+	it("stores exact, wildcard and none; exact beats wildcard at lookup", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "alpha", () => {
+			registry.registerToolColor(["bash", "read"], "yellow");
+			registry.registerToolColor("*", "blue");
+			registry.registerToolColor("task", "none");
+		});
+		expect(lines).toEqual([]);
+		expect(registry.toolColorFor("bash")).toBe("yellow");
+		expect(registry.toolColorFor("read")).toBe("yellow");
+		expect(registry.toolColorFor("task")).toBe("none");
+		expect(registry.toolColorFor("grep")).toBe("blue");
+		expect(registry.toolColorFor("unstyled")).toBe("blue");
+		expect(registry.toolColorFor("task")).not.toBe("blue");
+	});
+
+	it("specificity is per key: a later exact registration beats an earlier wildcard silently; the same key conflicts loudly, first wins", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "alpha", () => registry.registerToolColor("*", "blue"));
+		loadOne(registry, "beta", () => {
+			registry.registerToolColor("bash", "green"); // specificity, not a conflict
+			registry.registerToolColor("read", "red");
+		});
+		loadOne(registry, "gamma", () => registry.registerToolColor("bash", "black")); // same exact key
+		loadOne(registry, "delta", () => registry.registerToolColor("*", "white")); // same wildcard key
+		expect(registry.toolColorFor("bash")).toBe("green");
+		expect(registry.toolColorFor("read")).toBe("red");
+		expect(lines).toEqual([
+			'imp: extension gamma could not register tool color for "bash" — already registered by beta',
+			'imp: extension delta could not register tool color for "*" — already registered by alpha',
+		]);
+	});
+
+	it("validates every malformed shape with one bounded report and stores nothing (all-or-nothing per call)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "clumsy", () => {
+			registry.registerToolColor("bash", "orange" as never);
+			registry.registerToolColor("Bash", "red");
+			registry.registerToolColor([42 as never], "red");
+			registry.registerToolColor(["bash", "read"], "orange" as never);
+			registry.registerToolColor(42 as never, "red");
+			registry.registerToolColor([], "red"); // vacuous no-op, no report
+			registry.registerToolColor(["ok", "ok2"], "red"); // the one good call stands
+		});
+		expect(lines).toEqual([
+			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, got "orange")',
+			'imp: extension clumsy could not register tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
+			'imp: extension clumsy could not register tool color for "42" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "42")',
+			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, got "orange")',
+			"imp: extension clumsy could not register tool color — expected a name or an array of names, got number",
+		]);
+		// the failed call left nothing behind — no partial ["bash"] from the color rejection
+		expect(registry.toolColorFor("bash")).toBeUndefined();
+		expect(registry.toolColorFor("read")).toBeUndefined();
+		expect(registry.toolColorFor("ok")).toBe("red");
+		expect(registry.toolColorFor("ok2")).toBe("red");
+	});
+
+	it("a duplicate entry within one call is a conflict — the whole call is rejected", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "echo", () => registry.registerToolColor(["read", "read"], "red"));
+		expect(lines).toEqual([
+			'imp: extension echo could not register tool color for "read" — already registered by echo',
+		]);
+		expect(registry.toolColorFor("read")).toBeUndefined();
+	});
+
+	it("a discarded section rolls colors back atomically; the key stays free", () => {
+		const registry = new ExtensionRegistry();
+		registry.beginExtension("doomed", "cli");
+		registry.registerToolColor("bash", "yellow");
+		registry.discardExtension();
+		expect(registry.toolColorFor("bash")).toBeUndefined();
+		loadOne(registry, "next", () => registry.registerToolColor("bash", "cyan"));
+		expect(registry.toolColorFor("bash")).toBe("cyan"); // no owner leak
+	});
+});

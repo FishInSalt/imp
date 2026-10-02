@@ -13,6 +13,7 @@ import { buildTaskRecord } from "../src/core/task-record.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import { taskPresentation } from "../src/core/tools/presentation.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { type LoadedExtensions, loadExtensions } from "../src/extensions/loader.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
 import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
@@ -39,6 +40,7 @@ import {
 	scriptedProvider,
 	ticks,
 	waitUntil,
+	writeExtensionFiles,
 } from "./helpers/fakes.js";
 
 // ── fakes ────────────────────────────────────────────────────────────────
@@ -209,6 +211,7 @@ function makeShell(options?: {
 	onDequeue?: () => void;
 	autocomplete?: AutocompleteOptions;
 	historyPath?: string;
+	toolColorResolver?: (name: string) => import("../src/repl/tool-colors.js").ToolColorName | undefined;
 	pasteImage?: () => Promise<import("../src/repl/clipboard-image.js").ClipboardImage | null>;
 	pasteText?: () => Promise<string | null>;
 }) {
@@ -220,6 +223,7 @@ function makeShell(options?: {
 		terminal,
 		autocomplete: options?.autocomplete,
 		historyPath: options?.historyPath,
+		toolColorResolver: options?.toolColorResolver,
 		pasteImage: options?.pasteImage,
 		pasteText: options?.pasteText,
 		onLine: (line, mode) => {
@@ -1572,6 +1576,9 @@ describe("runRepl with shell:tui", () => {
 			seedSession?: (store: SessionStore) => void; // raw seeding (entries incl. compaction)
 			noSession?: boolean;
 			markdown?: boolean;
+			/** #tool-name-colors: real .mjs fixtures loaded by the real loader,
+			 *  written to <cwd>/.imp/extensions before the runner starts. */
+			extensionFiles?: Record<string, string>;
 			/** #tui-tool-elapsed: deterministic sink clock for duration pins. */
 			clock?: () => number;
 		},
@@ -1585,6 +1592,16 @@ describe("runRepl with shell:tui", () => {
 			for (const message of options?.seed ?? []) store.appendMessage(message);
 		}
 		const requests: LLMRequest[] = [];
+		let loaded: LoadedExtensions | undefined;
+		if (options?.extensionFiles !== undefined) {
+			await writeExtensionFiles(baseDir, options.extensionFiles);
+			loaded = await loadExtensions({
+				cwd: baseDir,
+				cliPaths: [],
+				home: path.join(baseDir, "ext-home"), // hermetic: never the real dir
+				onDiagnostic: () => {},
+			});
+		}
 		const provider: LLMProvider | undefined =
 			options?.provider ?? (options?.realProvider === true ? undefined : scriptedProvider(scripts, requests));
 		const terminal = new FakeTerminal();
@@ -1628,6 +1645,7 @@ describe("runRepl with shell:tui", () => {
 			terminal,
 			interactive: true,
 			confirm,
+			extensions: loaded?.runtime,
 			exit: (code: number) => {
 				throw new Error(`force-exit:${code}`);
 			},
@@ -3335,6 +3353,93 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("default palette paints call-header names (#tool-name-colors)", async () => {
+		const env = await startTuiRepl([
+			assistant(
+				[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo painted" } }],
+				"tool_use",
+			),
+			reply("painted"),
+		]);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[33mbash"), 8000);
+		const raw = env.terminal.writes.join("");
+		expect(raw).toContain("\u001b[1m\u001b[33mbash"); // bold + yellow on the wire
+		expect(stripAnsi(env.terminal.frameSince(0))).toContain("● bash  echo painted");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("an extension overrides defaults, a wildcard paints the unlisted tool, none de-colors (#tool-name-colors)", async () => {
+		const tool = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo plain" } }],
+					"tool_use",
+				),
+				assistant(
+					[{ type: "toolCall", id: "t2", name: "gated", arguments: { message: "wild" } }],
+					"tool_use",
+				),
+				() => tool.promise.then(() => reply("colored")),
+			],
+			{
+				tools: [gatedTool(tool, "gated")],
+				extensionFiles: {
+					"hue.mjs": `export default function (api) {
+	api.registerToolColor("*", "blue");
+	api.registerToolColor("bash", "none");
+	api.registerToolColor("gated", "brightCyan");
+}
+`,
+				},
+			},
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[96mgated"), 8000);
+		const raw = env.terminal.writes.join("");
+		expect(raw).toContain("\u001b[1m\u001b[96mgated"); // the exact token beats the wildcard
+		expect(raw).toContain("\u001b[1mbash\u001b[0m"); // none → bold-only, no default yellow
+		expect(raw).not.toContain("\u001b[1m\u001b[33mbash");
+		expect(raw).not.toContain("\u001b[1m\u001b[34mgated");
+		tool.resolve();
+		await waitUntil(() => stripAnsi(env.terminal.writes.join("")).includes("colored"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("the task call paints bright magenta while other calls keep their defaults (#tool-name-colors)", async () => {
+		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		const tool = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "task", arguments: { prompt: "explore", agent: "scout" } }],
+					"tool_use",
+				),
+				() => tool.promise.then(() => reply("scout done")),
+				reply("all done"),
+			],
+			{ agentsHomeDir: agentsHome, tools: [gatedTool(tool, "gated")] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[95mtask"), 8000);
+		tool.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("child edit results never reach the Renderer or fold — zero ⎿, the one ▸ is the task result (P2#3)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
 		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
@@ -4728,6 +4833,25 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const frame = stripAnsi(terminal.frameSince(mark));
 		expect(frame).not.toMatch(/echo hi \d+s/); // the tool slot is suppressed (D10)
 		expect(frame).toMatch(/● task {2}scout · explore \d+s/); // the task slot is exempt (A1.2)
+		shell.close();
+	});
+
+	it("#tool-name-colors: the confirm preview name follows the shell's resolver", async () => {
+		const { terminal, shell } = makeShell({
+			toolColorResolver: (name) => (name === "bash" ? "yellow" : undefined),
+		});
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "allow?",
+			preview: { kind: "command", tool: "bash", text: "rm -rf x" },
+			items: [{ label: "Yes" }],
+		});
+		await settle();
+		const raw = terminal.writes.join("");
+		expect(raw).toContain("\u001b[2m●\u001b[0m \u001b[1m\u001b[33mbash\u001b[0m  rm -rf x");
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
 		shell.close();
 	});
 

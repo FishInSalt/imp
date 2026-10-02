@@ -1,6 +1,7 @@
 import type { ThinkingSection, ThinkingSink } from "../thinking-sink.js";
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../tui.js";
 import { ToolBlockFold } from "./components/tool-block.js";
+import type { ToolColorName } from "./tool-colors.js";
 import { createToolSink, type ToolBlock, type ToolPresentationSink } from "./tool-presentation.js";
 
 const USER_BLOCK_BG = "\x1b[48;5;237m";
@@ -81,6 +82,12 @@ export class TranscriptSink implements Component {
 	 *  call, pulled at fold-creation time the same way as `callLiveRowsResolver`
 	 *  (same public-field + ownership-guard pattern). */
 	callSuffixResolver: ((key: string) => string | null) | null = null;
+	/** #tool-name-colors (design D5): the resolved name-color token for each
+	 *  call, pulled at fold-creation time like `callSuffixResolver` — but set
+	 *  once by repl.ts (extensions first, then the default palette) and never
+	 *  re-bound or cleared: registrations are load-gated, so the value is
+	 *  final before any fold exists. */
+	toolColorResolver: ((name: string) => ToolColorName | undefined) | null = null;
 	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
 	 *  tests (production passes nothing — the sink defaults to Date.now). */
 	readonly toolSink: ToolPresentationSink;
@@ -88,7 +95,10 @@ export class TranscriptSink implements Component {
 	constructor(options: { clock?: () => number } = {}) {
 		this.toolSink = createToolSink(
 			(block) => {
-				const fold = new ToolBlockFold(block);
+				const fold = new ToolBlockFold(
+					block,
+					block.kind === "input" ? this.toolColorResolver?.(block.name) : undefined,
+				);
 				fold.setRawArguments(this.rawToolArguments);
 				this.inputFolds.set(block, fold);
 				this.toolFolds.push(fold);

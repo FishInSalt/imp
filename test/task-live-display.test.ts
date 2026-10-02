@@ -177,15 +177,11 @@ describe("task inline live rows (B1)", () => {
 
 	it("paints live rows directly under the call header and clears them", () => {
 		const { transcript, fold } = withInputFold();
-		expect(fold.setLiveRows(["└─ pending #1 scout 1s", "explore", "2 tool starts"])).toBe(true);
+		expect(fold.setLiveRows(["└─ pending #1 scout", "explore", "2 tool starts"])).toBe(true);
 		const rows = plain(transcript.render(80));
 		const header = rows.findIndex((row) => row.startsWith("● task"));
 		expect(header).toBeGreaterThanOrEqual(0);
-		expect(rows.slice(header + 1, header + 4)).toEqual([
-			"└─ pending #1 scout 1s",
-			"explore",
-			"2 tool starts",
-		]);
+		expect(rows.slice(header + 1, header + 4)).toEqual(["└─ pending #1 scout", "explore", "2 tool starts"]);
 		fold.setLiveRows(null);
 		expect(plain(transcript.render(80)).join("\n")).not.toContain("pending #");
 	});

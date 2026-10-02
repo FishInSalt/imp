@@ -616,11 +616,11 @@ describe("TranscriptSink tool result placement (#tool-result-follows-call)", () 
 
 	it("a running tool's timer closes its call info, above its result (#call-closing-status)", () => {
 		const transcript = new TranscriptSink();
-		transcript.callSuffixResolver = (key) => (key === "t" ? "└─ running 3s" : null);
+		transcript.callSuffixResolver = (key) => (key === "t" ? "3s" : null);
 		transcript.toolSink.start("t", "bash", { command: "echo hi" });
 		const text0 = rows(transcript);
-		expect(text0.some((row) => row.includes("echo hi") && row.includes("└─ running 3s"))).toBe(true);
-		expect(text0.filter((row) => row.includes("└─ running 3s"))).toHaveLength(1); // never duplicated
+		expect(text0.some((row) => row.includes("echo hi 3s"))).toBe(true);
+		expect(text0.filter((row) => row.includes("echo hi 3s"))).toHaveLength(1); // never duplicated
 		transcript.setCallSuffix("t", null);
 		transcript.toolSink.end({
 			toolCallId: "t",
@@ -630,7 +630,7 @@ describe("TranscriptSink tool result placement (#tool-result-follows-call)", () 
 			durationMs: 3200,
 		});
 		const text = rows(transcript);
-		expect(text.some((row) => row.includes("running"))).toBe(false);
+		expect(text.some((row) => row.includes("echo hi 3s"))).toBe(false);
 		expect(text.some((row) => row.includes("✓"))).toBe(true);
 		expect(at(text, "echo hi")).toBeLessThan(at(text, "DONE-T"));
 	});

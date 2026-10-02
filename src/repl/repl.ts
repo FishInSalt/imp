@@ -1254,7 +1254,10 @@ class ReplMachine {
 					cwd: info.cwd ?? null,
 					lastTool: null,
 					toolCount: 0,
-					startedAtMs: Date.now(),
+					// #call-closing-status A1.2: inherit the call's start so the
+					// closing-slot timer never resets when this row replaces the
+					// provisional parent row.
+					startedAtMs: parent?.startedAtMs ?? Date.now(),
 				};
 				this.activityAgents.set(key, row);
 				if (info.taskToolCallId) this.activityAgents.delete(`task:${info.taskToolCallId}`);

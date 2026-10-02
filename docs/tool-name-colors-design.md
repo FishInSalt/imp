@@ -495,6 +495,12 @@ add a weak **author tier**; the existing method becomes the **user tier**;
     tier).
   - Cross-tier is **never** a conflict: the same key may be both
     registered and suggested (no report); resolution favors the user side.
+  - Post-load report (review fold): the loader's `whileLoading` gains a
+    tail-word parameter so the suggest variant reads exactly
+    `imp: extension X could not suggest tool color for "web_search" —
+    suggestions only work while the factory runs` (register keeps
+    `registration only works while the factory runs` byte-for-byte); the
+    name/count shaping (`for "name"` / `for N names`) is reused.
 - **Resolution order** (`registry.toolColorFor`; the render lookup and
   everything downstream is unchanged):
   1. user exact name → 2. user `*` → 3. suggested exact name →
@@ -532,27 +538,44 @@ add a weak **author tier**; the existing method becomes the **user tier**;
     registrations. The header comment teaches the two tiers.
 - **Compat**: with no suggestions anywhere, lookup is byte-identical to
   Amendment 2; no existing theme or extension changes behavior.
-- **Re-pin inventory** (verified 2026-10-02):
+- **Re-pin inventory** (design round-1 review folded — the original list
+  was incomplete):
   - `test/extensions-loader.test.ts:455-474` tool-colors smoke → eight
     lookups, `web_search`/`url_read` now `undefined` (that file alone no
     longer colors them), `colorCount === 8`, banner `— 8 colors`, title
-    wording;
+    wording; plus a new post-load suggest pin mirroring
+    `:435-450`;
   - `test/extensions-contrib.test.ts:221` web-search banner `— 2 tools` →
     `— 2 tools, 2 suggested colors`, plus a `toolColorFor("web_search")
     === "#e6dcc3"` assertion via the suggestion;
-  - `test/tool-display-refinement.test.ts:262/295` minimal `register({…})`
-    stubs gain a `suggestToolColor` member (the example now calls it);
-  - docs: `src/extensions/types.ts` (ExtensionApi TSDoc sibling +
-    `ExtensionSummary.suggestedColorCount`), `README.md` API bullet,
-    `CHANGELOG.md`, `docs/m4-extensions-design.md`, and the two D1/D2
-    supersede pointers above.
+  - **web-search factory stubs — all three** (the factory now calls
+    `api.suggestToolColor`, a missing member is a TypeError inside the
+    example and can kill whole files): `test/tool-display-refinement.test.ts:262/295`,
+    `test/web-search.test.ts:54` (would kill every case in the file),
+    `test/web-search-presentation.test.ts:223`;
+  - docs, enumerated: `src/extensions/types.ts:130` "eleven members" →
+    twelve; `types.ts:147-159` TSDoc duplicate sentence gains the
+    cross-tier qualifier ("within its tier") + a `suggestToolColor`
+    sibling; `README.md:594` same qualifier, `README.md:598` reworded (the
+    web-search beige now comes from the extension's own suggestion);
+    `CHANGELOG.md:24` `— 10 colors` → `— 8 colors` (plus the suggestion
+    story); `docs/m4-extensions-design.md`; the two D1/D2 supersede
+    pointers above; and the stale pre-A1 comment at
+    `registry.ts:397-399` ("layers defaults on top of this") is rewritten
+    while touching `toolColorFor`.
 - **Tests (red-first)**:
   - registry — a lone suggestion lands; full resolution matrix (user
     exact > user `*` > suggested exact > suggested `*`); same key in both
-    tiers (no report, user side wins); in-tier duplicate pin (`already
-    suggested by X`); validation pins ×2 with the suggest prefix;
-    per-call atomicity; hex canonicalized in the suggested tier;
-  - loader — banner pins (tools + suggestions; suggestions-only);
+    tiers **in both registration orders** (register→suggest and
+    suggest→register; no report, user side wins); in-tier duplicate pin
+    (`already suggested by X`); validation pins ×2 with the suggest
+    prefix; per-call atomicity; hex canonicalized in the suggested tier;
+    a thrown factory discards suggestions too (mirror of the existing
+    discard path); dual-error precedence in one call (bad name + bad
+    color → the color check fires first, matching `registry.ts:333-337`)
+    pinned;
+  - loader — banner pins (tools + suggestions; suggestions-only;
+    singular `1 suggested color`); the post-load suggest report pin;
   - repl-tui — an extension file calling `suggestToolColor` paints the
     wire bytes; a user registration for the same name overrides it;
   - contrib — the real web-search load asserts the suggestion + banner.

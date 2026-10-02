@@ -582,3 +582,9 @@ add a weak **author tier**; the existing method becomes the **user tier**;
     wire bytes; a user registration for the same name overrides it;
   - contrib — the real web-search load asserts the suggestion + banner.
   Existing 16-token / A2 pins and confirm-preview stay untouched.
+
+Status: implemented and merged (merge 3b35bc7; design review NEEDS-FIXES ×2
+→ CONFIRMED; implementation review APPROVE WITH CORRECTIONS — one P3
+wording fix — → CONFIRMED; red-first evidence verified by the reviewer:
+exactly 12 failures / 4 files on the pre-change tree; 140 files / 2728
+tests green).

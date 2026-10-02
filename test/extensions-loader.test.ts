@@ -1,4 +1,4 @@
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -449,5 +449,21 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 		expect(lines).toEqual([
 			"imp: extension hues could not register tool color for 2 names — registration only works while the factory runs",
 		]);
+	});
+});
+
+describe("examples/extensions/tool-colors.mjs (#tool-name-colors, review P3-1)", () => {
+	it("loads through the real loader and applies every registration", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"tool-colors.mjs": readFileSync(path.resolve("examples/extensions/tool-colors.mjs"), "utf8"),
+		});
+		const { loaded, lines } = await load(env);
+		expect(lines).toEqual([]);
+		expect(loaded.runtime.toolColorFor("bash")).toBe("brightYellow");
+		expect(loaded.runtime.toolColorFor("read")).toBe("brightBlue");
+		expect(loaded.runtime.toolColorFor("ls")).toBe("brightBlue");
+		expect(loaded.runtime.toolColorFor("edit")).toBe("brightMagenta");
+		expect(loaded.runtime.toolColorFor("task")).toBe("brightCyan");
 	});
 });

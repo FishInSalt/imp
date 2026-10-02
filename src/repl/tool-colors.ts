@@ -36,29 +36,31 @@ export function isToolColorName(value: unknown): value is ToolColorName {
 	return typeof value === "string" && TOOL_COLOR_SET.has(value);
 }
 
-const TOOL_COLOR_SGR: Record<ToolColorName, string> = {
-	black: "\u001b[30m",
-	red: "\u001b[31m",
-	green: "\u001b[32m",
-	yellow: "\u001b[33m",
-	blue: "\u001b[34m",
-	magenta: "\u001b[35m",
-	cyan: "\u001b[36m",
-	white: "\u001b[37m",
-	gray: "\u001b[90m",
-	brightRed: "\u001b[91m",
-	brightGreen: "\u001b[92m",
-	brightYellow: "\u001b[93m",
-	brightBlue: "\u001b[94m",
-	brightMagenta: "\u001b[95m",
-	brightCyan: "\u001b[96m",
-	brightWhite: "\u001b[97m",
-	none: "",
-};
+const TOOL_COLOR_SGR = new Map<string, string>([
+	["black", "\u001b[30m"],
+	["red", "\u001b[31m"],
+	["green", "\u001b[32m"],
+	["yellow", "\u001b[33m"],
+	["blue", "\u001b[34m"],
+	["magenta", "\u001b[35m"],
+	["cyan", "\u001b[36m"],
+	["white", "\u001b[37m"],
+	["gray", "\u001b[90m"],
+	["brightRed", "\u001b[91m"],
+	["brightGreen", "\u001b[92m"],
+	["brightYellow", "\u001b[93m"],
+	["brightBlue", "\u001b[94m"],
+	["brightMagenta", "\u001b[95m"],
+	["brightCyan", "\u001b[96m"],
+	["brightWhite", "\u001b[97m"],
+	["none", ""],
+]);
 
-/** Token → SGR bytes; `none` maps to the empty string (bold-only name). */
+/** Token → SGR bytes; `none` maps to the empty string (bold-only name).
+ *  Keyed through a Map so an out-of-contract token (a buggy resolver) fails
+ *  closed to bold-only — never `Object.prototype` members or `undefined`. */
 export function toolColorSgr(token: ToolColorName): string {
-	return TOOL_COLOR_SGR[token];
+	return TOOL_COLOR_SGR.get(token) ?? "";
 }
 
 /** The shipped default palette (design D3): category slots, red/green left
@@ -74,3 +76,20 @@ export const DEFAULT_TOOL_COLORS: Readonly<Record<string, ToolColorName>> = {
 	find: "cyan",
 	task: "brightMagenta",
 };
+
+/** Own-property lookup into the default palette. A plain `table[name]`
+ *  would answer inherited members for tool names like `constructor` or
+ *  `toString` (NAME_PATTERN accepts them; MCP can bridge them), handing the
+ *  renderer a function instead of a token. Anything not own dies here. */
+export function defaultToolColor(name: string): ToolColorName | undefined {
+	return Object.hasOwn(DEFAULT_TOOL_COLORS, name) ? DEFAULT_TOOL_COLORS[name] : undefined;
+}
+
+/** The composed resolver (design D2/D5): extension exact → extension `*` →
+ *  shipped default → uncolored. `registry` is structurally typed; repl.ts
+ *  passes the ExtensionRegistry, unit hosts may pass any map-shaped stub. */
+export function composeToolColorResolver(registry?: {
+	toolColorFor(name: string): ToolColorName | undefined;
+}): (name: string) => ToolColorName | undefined {
+	return (name) => registry?.toolColorFor(name) ?? defaultToolColor(name);
+}

@@ -1459,10 +1459,9 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 > Status: **rev 2.3 — design review closed (R1→rev 1; R2→rev 1.1;
 > R3→rev 1.2; R4 CONFIRMED); IMPLEMENTED at f4862e2; implementation
-> review R5 APPROVE WITH CORRECTIONS → folds (rev 2.1); R6 CONFIRMED
-> WITH NOTES → folds (rev 2.2); R7 CONFIRMED WITH NOTES → single-site
-> bash child pin folded (rev 2.3). The `basis`/D30 conflict was resolved
-> by owner decision (option (b), D37). Awaiting R8 micro-verification.**
+> review: R5 APPROVE WITH CORRECTIONS → rev 2.1; R6 → rev 2.2; R7 →
+> rev 2.3; R8 CONFIRMED — implementation review closed. The `basis`/D30
+> conflict was resolved by owner decision (option (b), D37).**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1848,4 +1847,7 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   form); the exact-4096 invariant verified across digit boundaries and
   large inputs. One remaining single-site gap: the bash builder's
   `subagent:` line was unpinned (its write twin was) — folded in rev
-  2.3. R8 (micro-verification) pending.
+  2.3.
+- **R8 (same reviewer, micro-verification of rev 2.3): CONFIRMED** —
+  both builders' child-fact forms are pinned (either single-site revert
+  now fails test 44); no remaining notes; implementation review closed.

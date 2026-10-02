@@ -381,9 +381,10 @@ themes.
   - `ansi256:N` — `^ansi256:(0|[1-9][0-9]{0,2})$` plus a value ≤ 255 check
     (canonical: `ansi256:0`..`ansi256:255`; `00`, `+8`, ` 8`, `0x8`, `8e0`
     all rejected). Renders `ESC[38;5;Nm`.
-  - `#rrggbb` — `^#[0-9a-fA-F]{6}$`; hex case is **accepted** and the stored
-    value is **normalized to lowercase** at validation (one canonical stored
-    form). No `#rgb`/`rgb()` shorthand. Renders `ESC[38;2;R;G;Bm`.
+  - `#rrggbb` — `^#[0-9a-fA-F]{6}$`; hex case is **accepted** and
+    `registerToolColor` stores the lowercased form after the check
+    (`canonicalToolColor`; `isToolColor` itself only predicates). No
+    `#rgb`/`rgb()` shorthand. Renders `ESC[38;2;R;G;Bm`.
   - Prefix `ansi256:` is lowercase-only (`ANSI256:5` → unknown color).
 - **`toolColorSgr(token: ToolColor)` contract**: named tokens keep the exact
   Map lookup (bytes unchanged); absolute tokens are re-validated (via the
@@ -405,18 +406,23 @@ themes.
   terminal support (256 is the portable choice; named tokens remain the
   theme-relative default).
 - **Types**: `ToolColor = ToolColorName | \`ansi256:${number}\` | \`#${string}\``
-  — template forms are DX-only (they admit `ansi256:007`, `#gggggg` at the
-  type level; verified with tsc); `isToolColor` gates every boundary, no
-  casts. `isToolColorName` is kept (the named-only check; still imported by
+  — template forms are DX-only (verified with tsc: `ansi256:007`, `-1`,
+  `1.5`, `1e3`, `#gggggg`, `#` all satisfy the template types);
+  `isToolColor` gates every boundary, no casts. `isToolColorName` is kept (the named-only check; still imported by
   the token-set test). Widened signatures (verified complete):
   `registry.ts:8/83/149/366/395/401`, `types.ts:15/156`,
   `tool-block.ts:3/141/195`, `transcript.ts:4/91`, `shell.ts:36/77`,
   `repl.ts:48/1673-74/1690`, `tool-colors.ts:33-76`; `loader.ts:227` is
   inferred. No wiring changes. `test/repl-tui.test.ts:214`'s inline
   annotation widens too.
-- **Report line** (exact literal; `TOOL_COLOR_NAMES.join(" ")` already ends
-  in `none`): `unknown color (expected one of: <names>, ansi256:N (0-255),
-  or #rrggbb, got "<value>")` with the 160-char `firstLine` bound kept. Two
+- **Report line** (exact interpolation; `TOOL_COLOR_NAMES.join(" ")`
+  already ends in `none`): `unknown color (expected one of:
+  ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got
+  "${firstLine(String(color), 160)}")` — i.e. for the pinned test input:
+  `unknown color (expected one of: black red green yellow blue magenta cyan
+  white gray brightRed brightGreen brightYellow brightBlue brightMagenta
+  brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got
+  "orange")`. The 160-char bound is kept. Two
   existing pins update: `test/extensions-registry.test.ts:498` and `:501`.
   `TOOL_COLOR_NAMES` stays 17 entries (its own pin at
   `test/tool-colors.test.ts:11-27` is untouched).

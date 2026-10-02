@@ -94,6 +94,7 @@ const TOOL_COLOR_SGR = new Map<string, string>([
  *  anything out of contract fails closed to `""` — never `Object.prototype`
  *  members or `undefined` (A2). */
 export function toolColorSgr(token: ToolColor): string {
+	if (typeof token !== "string") return ""; // defense in depth: Symbol would throw in exec
 	const named = TOOL_COLOR_SGR.get(token);
 	if (named !== undefined) return named;
 	const match = ANSI256_PATTERN.exec(token);

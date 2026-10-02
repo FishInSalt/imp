@@ -92,6 +92,7 @@ describe("#tool-name-colors — tokens and SGR map (design D1/D3, Amendment 1)",
 		expect(toolColorSgr("ansi256:256" as never)).toBe("");
 		expect(toolColorSgr("#gggggg" as never)).toBe("");
 		expect(toolColorSgr("ANSI256:5" as never)).toBe("");
+		expect(toolColorSgr(Symbol("x") as never)).toBe(""); // never throws
 	});
 });
 

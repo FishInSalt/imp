@@ -1457,11 +1457,10 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 ## 16. Classifier context mechanism — track B (draft for independent review — 2026-10-02)
 
-> Status: **rev 1.2 — R1 (NEEDS REVISION) folded in rev 1; R2
-> CONFIRMED WITH NOTES (12 notes folded in rev 1.1); R3 CONFIRMED WITH
-> NOTES (4 documentation-precision notes folded here). The `basis`/D30
-> conflict was resolved by owner decision (option (b), D37 — locked
-> 2026-10-02). Awaiting R4 micro-verification. Not implemented.**
+> Status: **rev 2.0 — design review closed (R1 NEEDS REVISION → rev 1;
+> R2 CONFIRMED WITH NOTES → rev 1.1; R3 CONFIRMED WITH NOTES → rev 1.2;
+> R4 CONFIRMED). The `basis`/D30 conflict was resolved by owner decision
+> (option (b), D37 — locked 2026-10-02). Not implemented.**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1799,5 +1798,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   CALL's `tool`/`path`/`resolved` facts stated; the `manualOnlySize`
   pointer in D39 resolved (the §14.4 clause is amended to include the
   pre-flight band); pin 62 asserts the empty-record lead-in bytes; D32's
-  raw-storage rationale scoped to large typed submissions. R4
-  (micro-verification, same reviewer) pending.
+  raw-storage rationale scoped to large typed submissions.
+- **R4 (same reviewer, micro-verification of rev 1.2): CONFIRMED** — all
+  four notes verified folded; no new inconsistency; the §16 design text,
+  decisions (D31–D39), formats, pins 54–67 and fold list are mutually
+  consistent and red-first authorable. Design review closed.

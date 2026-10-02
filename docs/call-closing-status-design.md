@@ -1,7 +1,7 @@
 # Call closing status: design for independent review
 
-Status: **rev 3 — round-2 findings folded; round-3 targeted confirmation
-pending**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
+Status: **rev 4 — design review closed (round 3: CONFIRMED WITH NOTES,
+notes folded); implementation in progress on this branch**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 
@@ -144,7 +144,10 @@ continuation rows. Metadata rows and omission notices are not info.
 - Multi-row inline body: the slot closes the LAST non-empty info row
   (mechanism in D8). Empty post-wrap rows (trailing-LF artifacts) are
   skipped for targeting and may still render below the slot.
-- Single-row info and the collapsed pathFirst row: unchanged from today.
+- Single-row info and the collapsed pathFirst row: unchanged from today
+  **when the re-lay does not split**; when the single row splits under the
+  reduced budget, the slot follows D8 (last visible chunk) — this is the
+  intended end-of-info placement, not legacy parity.
 - Collapsed cap: when the info is cut at the 3-row budget, the slot closes
   the last visible info row, before any omission notice.
 - Expanded mode: no inline body; the slot closes the header row (today's
@@ -244,9 +247,9 @@ plus a single re-lay; the shared streaming emitter used by result/diff
 blocks is untouched. Steps to implement and pin:
 
 1. Build the inline info's row plan completely — every row the current
-   emitter would lay out, uncapped, in emission order (`body[0]` chunks,
-   tail-loop continuation rows); metadata rows are excluded and keep their
-   current position.
+   emitter would lay out, uncapped AND unreserved, in emission order
+   (`body[0]` chunks, tail-loop continuation rows); metadata rows are
+   excluded and keep their current position.
 2. Target = the last non-empty row among the first `limit` planned rows
    (trailing-LF empty rows are skipped; rows after the target — e.g. empty
    trailing rows — stay in the plan and render below the slot). If no
@@ -254,8 +257,8 @@ blocks is untouched. Steps to implement and pin:
 3. Re-lay ONLY the target row with its wrap budget reduced by `suffixW`
    (I3's single-row reduction, retargeted); its chunks replace it in the
    plan in order. If the extra chunks push the plan past the cap, the slot
-   attaches to the last chunk that remains visible and the omission
-   decision follows the new count (D5's accepted flip).
+   attaches to the last OF THE TARGET'S chunks that remains visible and the
+   omission decision follows the new count (D5's accepted flip).
 4. `summaryVisible`/`consumed` accounting uses the reduced budget for
    EVERY chunk of the re-laid target row, not only the slot-bearing one
    (the N-B parity rule, extended from first to last).
@@ -266,7 +269,8 @@ blocks is untouched. Steps to implement and pin:
 
 New pins:
 
-- single-row completion byte-identical to today; multi-row completion
+- single-row completion byte-identical to today when the re-lay does not
+  split (and last-chunk placement when it does); multi-row completion
   closes the last non-empty row (long single-line command; multi-line
   command; long task summary); trailing-LF command skips the blank row;
 - cap-truncated info: slot on the last visible row, before `… more`;
@@ -352,3 +356,11 @@ Reviewer (round 2):
   text's target there. All folded in rev 3: D8 replaced the streaming
   buffer with a bounded plan/re-lay (complete plan, single re-lay, parity
   widened to every re-laid chunk).
+
+- Round 3 (same reviewer, targeted, 2026-10-02): **CONFIRMED WITH NOTES** —
+  D8 verified against three case walks (single-row split, 5-row cap cut,
+  trailing-LF), I1-safe, never places the slot on a hidden chunk; notes
+  folded in rev 4: scope "single-row byte-identical" to the non-split
+  re-lay, say "uncapped and unreserved" in D8 step 1, and write "last of
+  the target's chunks that remains visible" in step 3. Design review
+  closed.

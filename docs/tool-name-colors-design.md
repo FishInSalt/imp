@@ -1,6 +1,7 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
-Status: rev2 (round-1 NEEDS-FIXES folded; re-review pending). Owner decisions 2026-10-02:
+Status: review closed (rounds 1-2 NEEDS-FIXES folded; round 3 CONFIRMED).
+Implementation on `feat/tool-name-colors`. Owner decisions 2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").
@@ -229,11 +230,12 @@ is `preparedInputBlock`-level and has no fold rendering):
 - `"none"` on a defaulted tool strips the hue (bold-only);
 - confirm preview shows the colored name.
 **Affected existing tests — surveyed, expected count 0.** The textual
-escape pattern `\x1b[` (four spelled characters) appears 62 times in
+escape pattern `\x1b[` (five spelled characters) appears 62 times in
 `test/repl-tui.test.ts` and 0 times in `test/extensions-repl.test.ts`;
-all 62 classify as raw-write assertions for warn colors (`:767`, `:828`),
-the guardian label, injection guards, queue, footer, OSC title and dim
-rules — none pins header-name bytes. Frames are read through `frameSince`
+the 62 sites touch raw escape bytes (write assertions for warn colors
+(`:767`, `:828`), the guardian label, injection guards, queue, footer,
+OSC title and dim rules, plus paste/CSI input fixtures like `:407`,
+`:491`, `:521`) — none targets header-name bytes. Frames are read through `frameSince`
 (`:126-135`, ANSI-stripped per write) where text assertions live; the few
 raw `terminal.writes.join("")` reads are exactly the classified color
 pins above. The remaining name-byte pins are out of the color path:

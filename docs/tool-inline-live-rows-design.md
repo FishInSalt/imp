@@ -1,6 +1,7 @@
 # Tool inline live rows: design for independent review
 
-Status: **draft — awaiting independent adversarial review**. This document
+Status: **rev 2 — round-1 findings folded; awaiting round-2 confirmation**.
+This document
 changes no runtime behavior. No commit to `main`, merge, provider request,
 deployment, or release is part of this work.
 
@@ -66,17 +67,24 @@ row push (§5.3). The seam gains call-generic names (§5.5).
 
 Producer / snapshot:
 
-- `ReplMachine.trackActivity` (`src/repl/repl.ts:1224`) runs before
-  `renderer.event` for every event (`src/repl/repl.ts:756-763`).
+- For renderer-routed events, `ReplMachine.trackActivity`
+  (`src/repl/repl.ts:1224`) runs before `renderer.event`
+  (`src/repl/repl.ts:756-763`), so a row push precedes fold creation. Two
+  paths bypass the renderer by design: `health` (`:739-743`) and
+  `tool_settled` (`:748-754`; the latter still reaches `trackActivity`), and
+  the truncated-message refusal path emits `tool_start`+`tool_end` in one tick
+  with no gate (`src/core/loop.ts:337-345`).
 - Top-level non-task `tool_start` stores an `ActivityToolLine`
   (`{id, name, label, startedAtMs}`, `src/repl/line-input.ts:166-174`) in
   `activityTools` (`src/repl/repl.ts:1310-1315`); `tool_end`/`tool_settled`
   delete it (`src/repl/repl.ts:1322`). `pushActivity` copies
   `{phase, tools, agents}` to the shell (`src/repl/repl.ts:1351-1366`).
-- Non-task tools are never concurrency-safe (only `task` is,
-  `src/core/tools/task.ts:354`), so non-task calls run one at a time on the
-  serial path (`src/core/loop.ts:457-461`); at most one entry exists in
-  `activityTools` at any moment (the map handles N regardless).
+- `concurrencySafe` is a public `Tool` flag (`src/core/tools/types.ts:108`);
+  no built-in non-task tool sets it (`task` is the only built-in safe tool,
+  `src/core/tools/task.ts:354`), but extension tools may and the loop honors
+  the flag (`src/core/loop.ts:451`). For built-ins, non-task calls therefore
+  run one at a time on the serial path (`:457-461`); the per-key map handles
+  N rows regardless.
 - `tool_start` precedes the gate in both execution paths (serial:
   `src/core/loop.ts:458-459` then the gate at `:656`; chunk phase 1:
   `:504-520`). A snapshot can therefore hold a call that is not executing
@@ -86,20 +94,24 @@ Shell:
 
 - `TuiShell.renderActivity` (`src/repl/shell.ts:660`) paints the tools loop at
   `:702-711` (status + label rows via `ToolActivity`), inside the D10 guard
-  `if (this.selector === null)`; the agents loop at `:716-748` already routes
-  rows to `transcript.setTaskLiveRows`. `setSelector` (`:647`) repaints on
-  every transition — D10's suppression is pulled, not pushed.
+  `if (this.selector === null)`; the agents loop at `:716-748` aggregates rows
+  and pushes/clears them via `transcript.setTaskLiveRows` at `:749-757`.
+  `setSelector` (`:647`) repaints on every transition — D10's suppression is
+  pulled, not pushed.
 
 Channel (reused as-is):
 
-- `ToolBlockFold.setLiveRows` (`src/repl/components/tool-block.ts:178-197`);
+- `ToolBlockFold.setLiveRows` (`src/repl/components/tool-block.ts:178-192`);
   live rows splice after the header chain at `headerEnd` (`:573`, `:767`);
-  the render cache key includes `liveRevision` (`:212-219`); input folds only
+  the render cache key includes `liveRevision` (`:213-218`); input folds only
   (a result fold can never carry live rows).
 - `TranscriptSink.inputFoldById` (`src/repl/transcript.ts:64`),
   `taskLiveRowsResolver` (`:78`), the append callback's displaced-fold clear
   (`:103-104`) and resolver pull (`:108`), `setTaskLiveRows` (`:169-173`),
-  `clear()` (`:127`).
+  `clear()` (`:127`). The sink is built by `createToolSink`
+  (`src/repl/tool-presentation.ts:636`), whose `start`/`end` suppress a second
+  lifecycle for an id whose entry is still `terminal` (`:662-675`) — the
+  reused-id behavior §5.4 builds on.
 - `TuiShell` installs the resolver in `start()` (`:300-301`) and unbinds it
   behind the ownership guard in `stopTerminal()` (`:1223-1224`). The 120ms
   ticker recomputes rows while the phase is not `idle` and pushes only content
@@ -116,9 +128,9 @@ Goals:
    `running` (D10 semantics preserved).
 3. The settled transcript, replay, print mode, and the legacy shell stay
    byte-identical.
-4. Existing channel guarantees carry over: used-id safety, clear on
-   end/idle/interrupt/exit, no live rows in replay, resolver pull for a fold
-   created after the row was published.
+4. Existing channel guarantees carry over: used-id safety (both reuse cases,
+   §5.4), clear on end/idle/interrupt/exit, no live rows in replay, resolver
+   pull for a fold created after the row was published.
 
 Non-goals:
 
@@ -129,13 +141,33 @@ Non-goals:
 - Streaming tool output (a separate batch; see §5.6).
 - Snapshot shape changes beyond naming.
 
+### 4.1 Amendments to existing design docs
+
+- `docs/tui-tool-elapsed-design.md` non-goal 1 ("No live/ticking elapsed in
+transcript rows"; its parenthetical currently amends the rule for the
+running-task live row only) is superseded **for top-level tool live rows as
+well**: the `└─ running Ns` row defined here is the second — and for non-task
+tools the only — transient row in the transcript. Non-task rows otherwise
+stay settle-only.
+- `docs/task-live-display-design.md` §2 ("Keep the activity region separate
+from persistent input folds"; same task-only parenthetical) is superseded for
+non-task live rows too. The section's other constraints (identity-first
+content, bounded rows, `pending` wording for task rows) stand unchanged.
+
+Both parentheticals are updated to point at this document as part of the
+batch's deliverables (§7), mirroring the task batch's amendment commit
+`546a61b`.
+
 ## 5. Design
 
 ### 5.1 Row shape
 
-One row per running tool call: `└─ running`, then `└─ running 1s`, …,
-`└─ running 9999+s` (floor; `activityCount` semantics; zero omitted, matching
-today's region `elapsed()`). No name and no args label — the header directly
+One row per running tool call — `└─ running`, then `└─ running 1s`, …,
+`└─ running 9999+s`: the count is omitted while `seconds === 0`, otherwise it
+is `activityCount(seconds)` (floors; caps at `9999+`). Zero omitted matches
+today's region
+`elapsed()`; the task rows' always-`0s` form is intentionally not copied. No
+name and no args label — the header directly
 above carries both; this is the duplication being removed. No spinner frames:
 the ticking seconds are the liveness signal, identical to the task rows'
 cadence, and avoid per-frame fold-cache churn (`liveRevision` changes only
@@ -155,6 +187,13 @@ string[]>`:
   `rows = ["└─ running…"]` computed from `tool.startedAtMs` against `now`;
 - agents: unchanged aggregation (`parentKey = agent.taskToolId ||
   agent.sourceId || ""`, ordinals, three-row groups).
+
+Key namespace: tool keys are raw tool_call ids; agent keys are task call ids
+or `sourceId` UUIDs. The two sets cannot coexist in one snapshot — batch
+processing is sequential (`src/core/loop.ts:452-487`), so a task run's rows
+are gone before the next serial call's `tool_start`, and vice versa — so the
+unified map has no collision case to arbitrate. (The pre-change region
+namespaced its container keys `tool:`/`agent:` only for component reuse.)
 
 Push changed rows via `transcript.setCallLiveRows(key, rows)` (renamed, §5.5),
 push `null` for keys that left the map, and on the `idle` branch clear every
@@ -180,8 +219,14 @@ D10's paint-time rule; `setSelector` repaints both edges, so:
 Accepted, recorded consequences:
 
 1. The elapsed counter accumulates from `tool_start` (gate wait included),
-   identical to today's region row and to the task rows; the settled `✓/✗`
-   duration remains the execution-only measurement (`#tool-settle`).
+   identical to today's region row. The settled `✓/✗` time for serial calls
+   comes from the sink's fallback (`clock() - startedAt`,
+   `src/repl/tool-presentation.ts:684-686`) and therefore also includes the
+   gate wait — `docs/tui-tool-elapsed-design.md` D3 records “includes
+   approval-gate waits”; only chunk calls (concurrency-safe, i.e. `task`
+   today) carry an execution-only `durationMs` (`src/core/loop.ts:537-539`).
+   Live counter and settled time are consistent per call; no new “executing”
+   signal is added.
 2. A picker opened mid-run by a command like `/model` hides a genuinely
    running tool row — D10 already accepted this for the region (recorded in
    `docs/confirm-prompt-design.md` §15, "`/model` … hides real activity
@@ -195,9 +240,26 @@ Accepted, recorded consequences:
   one frame, no intermediate state.
 - idle / `clearActivity` / interrupt / exit: all live rows cleared (idle
   branch), exactly as task rows are today.
-- reused tool_call ids (providers may synthesize `call_${index}`): the
-  existing displaced-fold clear in the append callback (`transcript.ts:103-104`)
-  covers any input fold; the pushed row addresses the newest fold only.
+- reused tool_call ids (providers may synthesize `call_${index}`; ids repeat
+  across assistant messages of one run): two cases.
+  - After the sink is finalized/cleared (turn boundary — `clearActivity`
+    calls `finalize()`): a new fold is created; the append callback clears
+    the displaced fold first (`transcript.ts:103-104`) and the resolver pull
+    seeds the new one. Pinned by the task batch (`test/repl-tui.test.ts:4916`).
+  - Within a run (no finalize between assistant messages): the sink suppresses
+    the duplicate lifecycle (`tool-presentation.ts:662-675`) — no new fold
+    and no result are produced for the duplicate (pre-existing behavior; the
+    settled transcript is untouched). The displaced-fold clear never fires
+    here, so the shell's row push (which precedes `renderer.event`) would
+    land on the superseded settled fold and clear only at `tool_end`
+    (verified experimentally: the duplicate's `└─ running` renders under the
+    previous call's header). This batch closes the gap: `createToolSink`
+    gains an optional terminal-duplicate notification (4th parameter), and
+    the transcript responds by clearing any rows already pushed for that id
+    and dropping the id mapping (`inputFoldById.delete`), so nothing is
+    painted onto a settled fold — not even transiently. A later fold for the
+    same id (created after finalize/clear) re-registers the mapping as usual.
+    The same residual existed for task rows; the fix covers both call types.
 - fold created after the row was published: the resolver pull
   (`transcript.ts:108`) covers it, unchanged.
 
@@ -212,15 +274,21 @@ The seam is now call-generic, so rename it:
 
 `ToolBlockFold.setLiveRows` keeps its name (the two-layer distinction the task
 batch's §5.2 established). Comments referencing task-only semantics are
-updated. The historical `docs/task-inline-live-rows-design.md` is not edited
-(it records the state at its baseline).
+updated. Historical design docs (`task-inline-live-rows`,
+`tool-result-follows-call`, `confirm-prompt`) keep their baseline seam names
+and are not edited; only the two live *rules* amended in §4.1
+(`tui-tool-elapsed-design.md`, `task-live-display-design.md`) get pointer
+updates, as deliverables.
 
 ### 5.6 Unchanged on purpose
 
 - Task rows and their three-line shape; the ordinal machinery.
 - Activity phase rows (`thinking` / `compacting`) and the D10 picker
   suppression of tool rows — extended, not replaced.
-- The `ToolActivity` component and its defensive zero-parent path.
+- The `ToolActivity` component and its defensive zero-parent path. After the
+  tools loop is removed, the component's generic `(status, label)` mode has no
+  production caller (`setTaskRows` remains); it stays with its unit coverage
+  (`test/tool-presentation.test.ts:33-56`) pending the trim decision (§8.5).
 - The snapshot field set: `ActivityToolLine.name` / `.label` are no longer
   used for display, but they stay as accurate descriptors in the machine→shell
   contract; trimming them is churn without display benefit (open point §8.5).
@@ -264,23 +332,32 @@ lighter.
 Affected existing pins (verify by running the suites; update where the
 mechanism changed):
 
-- `test/repl-tui.test.ts:4494` (D10 picker pin): re-aim — while the picker is
-  open, no `running` text renders anywhere (the fold live row is suppressed)
-  and the call header stays inspectable; after approval the row returns. The
-  synthetic `not.toContain("echo hi")` assertion is replaced (a real fold's
-  header legitimately carries the command even while gated; the current
-  assertion only works because this unit test's snapshot has no fold).
-- `test/repl-tui.test.ts:4793` (payload-preview reuse): the tools path no
-  longer builds `ToolActivity` rows, so this cache assertion must be deleted
-  or re-pointed at an agent row.
+Round-1 review reproduced the breakage by suppressing the tools loop in a
+scratch copy: 7 failures in `test/repl-tui.test.ts`, everything else green.
+The corrected inventory:
+
+- `test/repl-tui.test.ts:4494` + `:4521` + `:4544` + `:4559` (the D10 picker
+  family driving a synthetic snapshot with `label: "echo hi"`): re-aim — a
+  synthetic snapshot has no fold, so under the new routing it renders no row
+  at all; drive a real fold (or assert on `running` only). The picker-open,
+  repaint-within-20ms, Esc-restore and Ctrl+C-restore intents stay; the
+  `echo hi` assertions either move to the header (real fold) or drop.
+- `test/repl-tui.test.ts:4788` (payload-preview reuse; the doc's earlier
+  `:4793` label was off): delete or re-point — the tools path no longer
+  builds `ToolActivity` rows, and identical generic-mode coverage already
+  exists at `test/tool-presentation.test.ts:33-56` (reviewer-verified).
 - `test/repl-tui.test.ts:4852` (region rows incl. `bash echo hi`): rewrite —
   the tool part must drive a real fold and assert the live row sits under its
   own header.
-- `test/repl-tui.test.ts:2837` (pending tool pin): rewrite — the live row is
-  the fold's `└─ running Ns`; the "spinner+name only ever appeared in the
-  activity region" comment and assertion die.
+- `test/repl-tui.test.ts:4996` (layout order, `ORDER-TOOL` probe): move the
+  tool-order probe to a task row or a phase row; the layout-order intent
+  (transcript < folds < activity < ask) is preserved.
+- `test/repl-tui.test.ts:2837` (pending tool pin): passes as written, but is
+  rewritten/strengthened — the live row is the fold's `└─ running Ns` and the
+  "spinner+name only ever appeared in the activity region" rationale is
+  false; assert the fold live row + settle handoff.
 - `test/repl-tui.test.ts:3183` (`not.toContain("└─ running")`, task-only):
-  unaffected; keep (it gains nothing to change).
+  unaffected; keep.
 - Mechanical rename touch-ups: `test/repl-fold.test.ts:607-610`,
   `test/task-live-display.test.ts:217-246`, `test/repl-tui.test.ts:4971`.
 
@@ -291,6 +368,11 @@ New pins:
   then carries `✓` + time; resolver pull when rows are published before the
   fold exists; a reused id clears the superseded fold (tool variant of the
   existing task pin).
+- terminal-duplicate hook (§5.4): within-run reuse — push rows for the reused
+  id before its (suppressed) `start`; assert the settled fold never shows the
+  row, the id mapping is dropped (subsequent pushes are no-ops), and a
+  post-finalize fold re-registers. Also a task-path variant to lock the shared
+  fix.
 - TUI level (`test/repl-tui.test.ts`): a real tool run shows header + its own
   `└─ running` row (position asserted); seconds tick; settle hands off in one
   frame (no frame contains both `running` and the settled `✓` for the same
@@ -302,11 +384,12 @@ New pins:
   (best-effort; the sub-frame window is not observable through the throttle).
 
 Gates: lint 0, typecheck (both configs) 0, full suite green (baseline
-count + new pins), build 0. README and CHANGELOG updated as deliverables
-(README's `Interactive mode` bullet currently says the running status "sits in
-the activity region (`running 3s`)" — `README.md:177-179`; CHANGELOG
-`[Unreleased]` gets a `### Changed` entry `#tool-inline-live-rows` stating
-display-only scope).
+count + new pins), build 0. Documentation deliverables: README's `Interactive
+mode` bullet currently says the running status "sits in the activity region
+(`running 3s`)" (`README.md:177-179`) — rewrite to the fold-attached row;
+CHANGELOG `[Unreleased]` gets a `### Changed` entry `#tool-inline-live-rows`
+stating display-only scope; the two amended rule docs (§4.1) get their
+parentheticals pointed at this document.
 
 ## 8. Risks and open points for the reviewer
 
@@ -324,19 +407,30 @@ display-only scope).
    verify (no residual `taskLiveRows` usages, comments updated).
 5. **`name` / `label` fields now display-unused.** Keep (contract descriptors)
    vs trim (dead data). This document keeps them; reviewer may object.
-6. **Payload-preview test removal** (`:4793`): confirm the coverage it
-   provided (label sanitized once per payload) is not needed elsewhere; after
-   this batch the row carries no label, so the concern mostly evaporates for
-   tools.
-7. **Elapsed includes gate wait.** Matches today's region row and the task
-   rows; the settled duration stays execution-only. Reviewer to confirm
-   consistency is preferable to a new "executing" signal (which would require
-   a new event — explicitly avoided).
-8. **Mixed batches.** `#task-inline-live-rows` §8.8 recorded that a batch
-   mixing `task` and a non-task tool spans two regions while running. With
-   this batch both call types render in the transcript, which removes that
-   inconsistency — a check the reviewer should confirm against the current
-   code.
+6. **Payload-preview test removal** (`:4788`): round-1 review verified the
+   generic-mode coverage already exists at `test/tool-presentation.test.ts:33-56`;
+   deletion is coverage-neutral.
+7. **Elapsed includes gate wait for serial calls.** Corrected in rev 2:
+   serial settled times also include the gate wait (sink fallback;
+   `docs/tui-tool-elapsed-design.md` D3); only chunk calls are
+   execution-measured. Live and settled values are consistent per call.
+   Reviewer to confirm this is preferable to a new "executing" signal (which
+   would require a new event — explicitly avoided).
+8. **Mixed batches.** `#task-inline-live-rows` §8.8 recorded a two-region split
+   for batches mixing `task` and a non-task tool. With built-in tools the
+   split is unreachable anyway (batch processing is sequential, so the calls
+   never overlap); it could only arise via an extension `concurrencySafe`
+   tool — and under this batch both call types render in transcript folds, so
+   even that case loses the split. Reviewer should confirm the reasoning
+   (rev 1 wrongly assumed built-ins could mix; corrected in rev 2).
+9. **Terminal-duplicate hook (new mechanism).** `createToolSink`'s 4th
+   parameter is additive; the transcript clears pushed rows and drops
+   `inputFoldById` for the duplicated id. Reviewer to attack: (a) is deleting
+   the mapping safe against a legitimate later start for the same id (no new
+   fold can appear before finalize/clear — the sink still holds the terminal
+   entry); (b) `inputEntryById` is intentionally left alone (no result can
+   arrive for a suppressed duplicate); (c) the fix is shared by task and tool
+   rows, so it cannot regress the task pins.
 
 ## 9. Alternatives considered
 
@@ -360,4 +454,15 @@ display-only scope).
 
 ## Review log
 
-- (pending — independent adversarial review not yet run)
+- **Round 1 (independent adversarial, 2026-10-02): NEEDS REVISION** — 2 P1,
+  3 P2, 7 P3. P1s: missing amendments to `tui-tool-elapsed-design.md` /
+  `task-live-display-design.md` (folded as §4.1); incomplete and partly wrong
+  test inventory (folded, with the reviewer's empirically reproduced list
+  4494/4521/4544/4559/4788/4852/4996). P2s: the "execution-only settle"
+  claim (corrected, §5.3/§8.7); the "never concurrency-safe" overclaim
+  (corrected, §3); the reused-id claim — the within-run case was wrong,
+  resolved by the terminal-duplicate hook (§5.4) after an independent
+  experimental reproduction (row lands on the settled fold; no permanence).
+  P3s (citations, ordering overclaims, namespace note, mixed-batch premise,
+  `ToolActivity`'s test-only generic mode, historical-doc policy, zero-second
+  wording) all folded. Round 2 requested.

@@ -150,6 +150,73 @@ describe("tool-call snapshot at the gate (#guardian-auto-mode D15/D17)", () => {
 		expect(runner.gateDecisionSnapshot()).toEqual([]);
 	});
 
+	it("§16/D33: runRepl binds the confirm host's recorder to the runner", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-gate-ctx-"));
+		const { renderer } = makeRenderer();
+		const confirm = new TtyConfirm(renderer);
+		confirm.bindSelect(async () => 0); // [Yes, No] → approved
+		const captured: CapturedCall[] = [];
+		const latch = gate();
+		let runner!: Runner;
+		try {
+			runner = await createRunner({
+				cwd: base,
+				argv: [],
+				settingsPath: path.join(base, "settings.json"),
+				model: "test-model",
+				maxTokens: 1024,
+				maxTurns: 4,
+				noContextFiles: true,
+				noSession: true,
+				renderer,
+				tools: [gatedTool(latch, "gated")],
+				extensions: {
+					...capturingRuntime(captured),
+					// The gate dispatch asks the real confirm host — the runRepl wiring
+					// is what routes the prompted outcome into the runner's log.
+					emitToolCall: async (event: ToolCallEvent): Promise<undefined> => {
+						const store = currentToolCallContext();
+						captured.push({
+							event,
+							userInputs: store?.userInputs,
+							tool: store?.tool,
+							callIdentity: store?.callIdentity,
+							decisions: store?.decisions,
+						});
+						await confirm.handler("allow this?", undefined, {});
+						return undefined;
+					},
+				} as never,
+				provider: scriptedProvider([
+					assistant([{ type: "toolCall", id: "t1", name: "gated", arguments: { message: "x" } }], "tool_use"),
+					assistant([{ type: "text", text: "done" }]),
+				]),
+			});
+			const fake = makeConsole({ tty: true });
+			runRepl({
+				runner,
+				commands: [],
+				input: fake.stdin,
+				output: fake.stdout,
+				interactive: true,
+				shell: "legacy",
+				confirm,
+				exit: (code) => {
+					throw new Error(`force-exit:${code}`);
+				},
+			});
+			const turn = runner.runTurn({ userMessage: "go" });
+			await vi.waitFor(() => expect(captured.length).toBe(1));
+			latch.resolve();
+			await turn;
+		} finally {
+			latch.resolve();
+		}
+		expect(runner.gateDecisionSnapshot()).toHaveLength(1);
+		expect(runner.gateDecisionSnapshot()[0]?.tool).toBe("gated");
+		expect(runner.gateDecisionSnapshot()[0]?.outcome).toBe("approved");
+	});
+
 	it("marks the event false when the log is empty (D17)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-gate-ctx-"));
 		const { renderer } = makeRenderer();

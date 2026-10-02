@@ -474,17 +474,59 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		await h.gate(writeCall("/outside/file.txt", "x"));
 		const writeRequest = h.classify.mock.calls[1]?.[0] as ClassifyRequest;
 		expect(writeRequest.prompt).toContain("gate rule matched: write outside the working directory");
+		expect(writeRequest.prompt).toContain(
+			"CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):",
+		);
+		// the child fact form (D35: `true (agent: <name>)`)
+		h.classifyImpl.fn = async () => verdict("allow", "ok");
+		await h.gate(writeCall("/outside/kid.txt", "x", { subagent: true, agent: "explorer" }));
+		const kidRequest = h.classify.mock.calls[2]?.[0] as ClassifyRequest;
+		expect(kidRequest.prompt).toContain("subagent: true (agent: explorer)");
 	});
 
-	it("45: §16/D37 — the audited verdict lines carry the basis segment when present", async () => {
+	it("45: §16/D37 — every reason-bearing audit line carries the basis segment", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");
 		h.classifyImpl.fn = async () => ({ ...verdict("allow", "fine"), basis: "the user said go" });
-		await h.gate(writeCall("/outside/file.txt", "x"));
+		await h.gate({ args: { command: "rm -rf /tmp/probe" }, cwd: "/proj" }); // bash allow
+		h.classifyImpl.fn = async () => ({ ...verdict("ask", "unsure"), basis: "the user said maybe" });
+		await h.gate({ args: { command: "rm -rf /tmp/probe2" }, cwd: "/proj" }); // bash ask
+		h.classifyImpl.fn = async () => ({ ...verdict("allow", "w ok"), basis: "the user said write" });
+		await h.gate(writeCall("/outside/f1.txt", "x")); // write allow
+		h.classifyImpl.fn = async () => ({ ...verdict("ask", "w ask"), basis: "the user said write2" });
+		await h.gate(writeCall("/outside/f2.txt", "x")); // write ask
 		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
 		exactLogLine(
 			log,
-			'[auto] allow — write /outside/file.txt (anthropic/session-model) — reason: fine — basis: "the user said go"',
+			'[auto] allow — rm -rf /tmp/probe (anthropic/session-model) — reason: fine — basis: "the user said go"',
+		);
+		exactLogLine(
+			log,
+			'[auto] ask — rm -rf /tmp/probe2 (anthropic/session-model) — reason: unsure — basis: "the user said maybe"',
+		);
+		exactLogLine(
+			log,
+			'[auto] allow — write /outside/f1.txt (anthropic/session-model) — reason: w ok — basis: "the user said write"',
+		);
+		exactLogLine(
+			log,
+			'[auto] ask — write /outside/f2.txt (anthropic/session-model) — reason: w ask — basis: "the user said write2"',
+		);
+		// shadow verdict lines: the basis rides before the human outcome
+		const s = await loadGuardian("/proj");
+		await s.run("/guardian shadow");
+		s.classifyImpl.fn = async () => ({ ...verdict("allow", "shadow ok"), basis: "the user said yes" });
+		await s.gate({ args: { command: "rm -rf /tmp/probe3" }, cwd: "/proj" }); // bash shadow
+		s.classifyImpl.fn = async () => ({ ...verdict("allow", "w shadow"), basis: "the user said w" });
+		await s.gate(writeCall("/outside/f3.txt", "x")); // write shadow
+		const sl = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(
+			sl,
+			'[shadow] allow — rm -rf /tmp/probe3 (anthropic/session-model) — reason: shadow ok — basis: "the user said yes" — human: denied',
+		);
+		exactLogLine(
+			sl,
+			'[shadow] allow — write /outside/f3.txt (anthropic/session-model) — reason: w shadow — basis: "the user said w" — human: denied',
 		);
 	});
 

@@ -485,9 +485,9 @@ describe("§16.3 record renderer (pins 54/56/57/58/62)", () => {
 		expect(heavy).toContain("…(elided ");
 	});
 
-	it("pin 63: the WORK ORDER section is ≤ 4096 chars including lead and marker", () => {
+	it("pin 63: the WORK ORDER section is exactly 4096 at the cap (lead + marker included)", () => {
 		const section = renderWorkOrder("w".repeat(8000));
-		expect(section.length).toBeLessThanOrEqual(WORK_ORDER_MAX_CHARS);
+		expect(section.length).toBe(WORK_ORDER_MAX_CHARS);
 		expect(section).toContain("…(elided ");
 		expect(section.startsWith("WORK ORDER (model-authored")).toBe(true);
 		expect(renderWorkOrder("short order")).not.toContain("elided");

@@ -335,6 +335,11 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 	it("keeps the log when nothing moves; clears it when the position moves", async () => {
 		const { runner, store } = await navEnv();
 		runner.recordUserInput("authorize: delete the build dir");
+		runner.recordGateDecision({
+			tool: "bash",
+			callIdentity: 'bash @ "/w" "rm -rf build"',
+			outcome: "approved",
+		});
 		expect(runner.userInputSnapshot().map((entry) => entry.text)).toEqual([
 			"authorize: delete the build dir",
 		]);
@@ -343,10 +348,12 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 		expect(runner.userInputSnapshot().map((entry) => entry.text)).toEqual([
 			"authorize: delete the build dir",
 		]);
+		expect(runner.gateDecisionSnapshot()).toHaveLength(1);
 		// navigating to q1 moves the position — the authorization is rewound away
 		const q1 = store.getTree()[0]?.entry.id;
 		await runner.navigateTree(q1 ?? "", { summarize: false });
 		expect(runner.userInputSnapshot()).toEqual([]);
+		expect(runner.gateDecisionSnapshot()).toEqual([]);
 	});
 
 	it("a failed branch summary still clears (the position moved)", async () => {
@@ -392,7 +399,9 @@ describe("user-input log invalidation (#guardian-auto-mode D18)", () => {
 		const other = createSession(cwd);
 		other.appendMessage(user("older context"));
 		runner.recordUserInput("something");
+		runner.recordGateDecision({ tool: "bash", callIdentity: 'bash @ "/w" "x"', outcome: "denied" });
 		runner.resumeSession(other.header.id);
 		expect(runner.userInputSnapshot()).toEqual([]);
+		expect(runner.gateDecisionSnapshot()).toEqual([]);
 	});
 });

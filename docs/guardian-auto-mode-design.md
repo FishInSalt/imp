@@ -1457,12 +1457,12 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 ## 16. Classifier context mechanism — track B (draft for independent review — 2026-10-02)
 
-> Status: **rev 2.1 — design review closed (R1 NEEDS REVISION → rev 1;
-> R2 CONFIRMED WITH NOTES → rev 1.1; R3 CONFIRMED WITH NOTES → rev 1.2;
-> R4 CONFIRMED); IMPLEMENTED at f4862e2; implementation review R5:
-> APPROVE WITH CORRECTIONS — folds applied (rev 2.1). The `basis`/D30
-> conflict was resolved by owner decision (option (b), D37). Awaiting R6
-> verification.**
+> Status: **rev 2.2 — design review closed (R1→rev 1; R2→rev 1.1;
+> R3→rev 1.2; R4 CONFIRMED); IMPLEMENTED at f4862e2; implementation
+> review R5 APPROVE WITH CORRECTIONS → folds (rev 2.1); R6 CONFIRMED
+> WITH NOTES → 6 precision notes folded (rev 2.2). The `basis`/D30
+> conflict was resolved by owner decision (option (b), D37). Awaiting R7
+> micro-verification.**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1701,7 +1701,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     no-context sentence; auto never classifies (D17 upstream), shadow
     renders it; decisions-only renders decision lines and keeps
     `verifiedUserContext` false.
-63. Work order: subagent-only; 4096/4097 head+tail; absent ⇒ section
+63. Work order: subagent-only; the whole section (lead + newline + body +
+    marker) ≤ 4096 — long input renders exactly 4096; absent ⇒ section
     omitted; one JSON-quoted line.
 64. Prompt bytes: policy v1.4 + contract exact in captured requests; the
     teaching-reason substring never appears; the neutral-label mapping is
@@ -1819,10 +1820,24 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   extension half (64/65/67), readline + recorder wiring (60),
   decisions→snapshot and D18 clearing (F4), level cascade/clamp/
   escape-heavy (57/58), WORK ORDER section cap (63) — all added;
-  mutations M2/M6–M14 are now caught (M1/M3/M4/M5 already were). P3
+  mutations M2 (write site)/M6–M9/M11–M13 are caught (M1/M3/M4/M5 also
+  already were; the residual site-specific gaps — bash-site basis, write
+  lead-in, subagent form, the individual D18 decision clears, the
+  runRepl binding, the WO cap lower bound — were folded in rev 2.2). P3
   folds: the CALL lead-in is emitted (F2); the `subagent:` fact matches
   the documented `true (agent: <name>)` form; `workOrder` no longer
   rides `ToolCallEvent` (passed through the gate call — no unlisted
   event-surface addition); marker-on-top wording recorded in §16.3; the
   contract block matches the emitted bytes. R6 (micro-verification)
   pending.
+- **R6 (same reviewer, micro-verification of rev 2.1): CONFIRMED WITH
+  NOTES** — both P2 corrections verified (the WO section is now exactly
+  4096 and the old under-fire probe now classifies; the mirror
+  arithmetic closes exactly); the missing pins verified with mutations.
+  Six precision notes folded in rev 2.2: the runRepl `bindRecorder`
+  wiring pin (a real repl-mode confirm into `gateDecisionSnapshot`);
+  basis pinned across all six reason-bearing sites; the write CALL
+  lead-in and the `subagent: true (agent: …)` form pinned; the resume-
+  and tree-site decision clears pinned individually; pin 63 tightened to
+  the exact-length form (catches both over- and under-use); the R5 log
+  coverage sentence corrected. R7 (micro-verification) pending.

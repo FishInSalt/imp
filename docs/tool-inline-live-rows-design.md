@@ -510,3 +510,12 @@ parentheticals pointed at this document.
   shared-path pins (`test/task-live-display.test.ts:209-213`, the
   transcript-level hook tests, `test/repl-tui.test.ts:4968`). Final gates:
   suite 2660, lint 0, typecheck 0, build 0.
+
+- **Supersession (owner-directed, 2026-10-02):** non-task live rows are
+  replaced by the call's closing slot — the running timer (`└─ running Ns`)
+  renders at the end of the call info, in the same slot the completion
+  suffix closes with (`docs/call-closing-status-design.md`). §5.1's row shape
+  and the non-task half of §5.2's routing are superseded; the task rows
+  (§5.2) and all lifecycle rules (resolver pull, displaced-fold clear,
+  terminal-duplicate clear, D10 suppression, idle clear) stand and are
+  carried by the suffix channel.

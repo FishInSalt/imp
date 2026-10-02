@@ -534,6 +534,16 @@ Amendment 2 is a follow-up on the same surface).
   **CONFIRMED** — five findings FIXED; two cosmetic notas (line-range
   precision, this log entry) folded on close.
 
+- Amendment 4 (owner-directed, 2026-10-02): the suffix no longer closes the
+  call block's first row for the inline layout — it closes the LAST visible
+  non-empty row of the call info, and the shell's running timer renders in
+  the same slot while the call is in flight (`└─ running Ns`), swapping to
+  the completion form in place. D2's placement clause, I3's first-row
+  reserve (now the closing-row reserve for the inline plan), and I4's
+  header-only wording (fallback layouts keep first-row placement, E1) are
+  superseded per `docs/call-closing-status-design.md`. This document's
+  marker/time gating, measurement, and field semantics stand unchanged.
+
 ## Process
 
 - Independent adversarial design review (fresh context) is required before

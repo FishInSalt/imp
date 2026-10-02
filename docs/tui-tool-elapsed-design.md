@@ -88,8 +88,9 @@ unconditional for measured successes; the time stays ≥ 1s-gated).
 
 1. **No live/ticking elapsed in transcript rows** — the activity region owns
    in-flight state and is unchanged. Transcript rows stay settle-only. (Amended
-   for the running-task live row only by
-   `docs/task-inline-live-rows-design.md` §4.1; every other tool row keeps this
+   for the running-task live row by `docs/task-inline-live-rows-design.md` §4.1
+   and for every top-level tool live row by
+   `docs/tool-inline-live-rows-design.md` §4.1; settled content rows keep this
    rule.)
 2. **Legacy shell and print mode byte-for-byte unchanged** — no edits to
    `src/render.ts` rendering paths; the legacy completion format stays as is.

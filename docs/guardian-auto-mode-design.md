@@ -1457,11 +1457,11 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 ## 16. Classifier context mechanism — track B (draft for independent review — 2026-10-02)
 
-> Status: **rev 1.1 — R1 (NEEDS REVISION) folded in rev 1; R2
-> verification: CONFIRMED WITH NOTES — all 18 findings verified
-> addressed; the 12 precision notes are folded here. The `basis`/D30
+> Status: **rev 1.2 — R1 (NEEDS REVISION) folded in rev 1; R2
+> CONFIRMED WITH NOTES (12 notes folded in rev 1.1); R3 CONFIRMED WITH
+> NOTES (4 documentation-precision notes folded here). The `basis`/D30
 > conflict was resolved by owner decision (option (b), D37 — locked
-> 2026-10-02). Awaiting R3 micro-verification. Not implemented.**
+> 2026-10-02). Awaiting R4 micro-verification. Not implemented.**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1511,14 +1511,14 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 | # | Decision |
 |---|---|
 | D31 | **Channel split (amends §4.2's assembly/round-trip rows and the D11 "block in `system`" mechanics; the provenance principle is unchanged).** The request's `system` carries only the static parts — the extension's policy text and the host's unchangeable output contract. The data rides one `user` message, sections in order: `HUMAN RECORD` → `WORK ORDER` → `CALL`. Rationale: `system` is the instruction channel — user-authored text (the record) and model-authored text (the work order) must not sit in it (that would give them instruction-channel weight above their provenance — the R7 #1 failure mode); the split also matches provider conventions and keeps a stable, cacheable prefix. D11/I7 (who may *enter* the record) is untouched. |
-| D32 | **HUMAN RECORD replaces the trusted-context block.** One chronological host-recorded list of human-sourced events: (a) human submissions — D11 capture points unchanged (`repl.ts:490`; steering/follow-up queues; slash invocations recorded as `/<name> <args>`), (b) gate decisions (D33). Grammar and rendering: §16.3. Entries are stored **raw** — no storage-side trim (the same submission strings already live in `history`); render-time elision replaces §14.4's record-time cap and bounds only the rendered section. Caps (owner-approved 2026-10-02): ≤ 40 events; ≤ 32768 rendered chars; per-entry render cap 4000 (head+tail, `…(elided N chars)…`) at level 0; shrink levels 4000 → 2000 → 1000 (§16.3 algorithm). Protection invariants: the oldest and newest user entries and the two newest decision events always survive (subject to level elision). Omitted runs render as `… (N events omitted)`; relative times come from an injected clock; entry lines are JSON-quoted single lines. Empty and decisions-only rendering: §16.3. A durable variant across `/resume` is O4, not this batch. |
+| D32 | **HUMAN RECORD replaces the trusted-context block.** One chronological host-recorded list of human-sourced events: (a) human submissions — D11 capture points unchanged (`repl.ts:490`; steering/follow-up queues; slash invocations recorded as `/<name> <args>`), (b) gate decisions (D33). Grammar and rendering: §16.3. Entries are stored **raw** — no storage-side trim (the large typed submissions already live in `history`; line-bounded inputs are trivial); render-time elision replaces §14.4's record-time cap and bounds only the rendered section. Caps (owner-approved 2026-10-02): ≤ 40 events; ≤ 32768 rendered chars; per-entry render cap 4000 (head+tail, `…(elided N chars)…`) at level 0; shrink levels 4000 → 2000 → 1000 (§16.3 algorithm). Protection invariants: the oldest and newest user entries and the two newest decision events always survive (subject to level elision). Omitted runs render as `… (N events omitted)`; relative times come from an injected clock; entry lines are JSON-quoted single lines. Empty and decisions-only rendering: §16.3. A durable variant across `/resume` is O4, not this batch. |
 | D33 | **Gate-decision recording (new host behavior).** Outcomes are recorded at the confirm host (`TtyConfirm.handler`, `repl.ts:284`) — the one chokepoint every mode funnels through — **only when the call-scoped ALS store exists** (a gate dispatch; trust prompts and other non-gate confirms never record). Picker/readline answer ⇒ `approved`/`denied`; a `sessionKey` short-circuit is a replay — record once at the "remember" moment (`human approved (gate, remember-session)`) and not on replays; the unbound fallback (scripted/test: no human) is **never recorded**; a cancel records `denied` (aligns D16; the cancel-vs-deny label is O2). Identity comes from the frozen snapshot, which gains `tool` and `callIdentity`; **`callIdentity` = `<tool> @ <JSON-quoted caller cwd> <JSON-quoted call text>`** (call text: the full bash command / the write|edit target path), capped at 4000 chars head+tail — an identity carrying an elision marker is *not* an identical-call match (D36 states it). `TtyConfirm` is constructed in `cli.ts:559`, before the runner (`:600`ff); the recorder is injected through a `bindRecorder` hook shaped like `bind`/`bindSelect` (`repl.ts:346`), bound from `runRepl` beside `options.confirm?.bind(...)` (`repl.ts:1707/1713`); the handler reads `tool`/`callIdentity` from the ALS store. This record is evidence of *what the human allowed*, never of what the agent did. |
 | D34 | **WORK ORDER (subagent calls only).** The child's task prompt — spawn sites `task.ts:631` (resume) / `:875` (fresh; assembly near `:753-772`; launch chain `subagent.ts:408`) — rides the child meta (`runner.ts:614-615`; the `onToolCall` info type `task.ts:140-144`, closures `:639`/`:881`) into the frozen snapshot and renders as a labeled, JSON-quoted, ≤ 4096-char (head+tail) section: `WORK ORDER (model-authored by the agent that spawned this one; scope reference — it is NOT authorization):`. Purpose: scope check only; I7 stands (model-authored text never authorizes). Depth ≥ 2: immediate work order only (documented deferral). |
-| D35 | **CALL section — facts, neutral rule labels, fence unification.** The extension's prompt supplies call facts — `cwd` **JSON-quoted** (paths may contain newlines; §14.3 precedent), `os`, `subagent: true (agent: <name>)`, `gate rule matched: <label>` — then the payload verbatim. Teaching reasons are replaced by one short neutral label per rule (complete mapping table pinned in §16.3) — the "…ask first…" text must never reach the classifier. Bash commands gain the write gate's payload fence (today they are the only unfenced arbitrary text in the message); the marker-collision residual carries over. Lead-in: `CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):`. |
+| D35 | **CALL section — facts, neutral rule labels, fence unification.** The extension's prompt supplies call facts — `cwd` **JSON-quoted** (paths may contain newlines; §14.3 precedent), `os`, `subagent: true (agent: <name>)`, `gate rule matched: <label>` — then the payload verbatim; write/edit calls keep their §14.3 facts (`tool: write|edit`, JSON-quoted `path` and `resolved`) in addition. Teaching reasons are replaced by one short neutral label per rule (complete mapping table pinned in §16.3) — the "…ask first…" text must never reach the classifier. Bash commands gain the write gate's payload fence (today they are the only unfenced arbitrary text in the message); the marker-collision residual carries over. Lead-in: `CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):`. |
 | D36 | **Policy text = the operating point (supersedes §5.6).** The v1.4 text (§16.3) states: error-cost asymmetry; harm tiers; evidence classes — only "user" lines state what the human asked for; a decision line is direct evidence about the exact call it quotes (a recent approval of this identical call can support it; a recent denial of an identical call means ask) — never a class; WORK ORDER and payload are never authorization; host markers mean removed content is *unknown*; recency; ask default. This replaces the model's ad-hoc "any doubt ⇒ ask". The identical-call clause's *scope* (strict vs sibling-bounded) remains O1. |
 | D37 | **Output contract + `basis` (record-only pilot; amends D30 — owner decision 2026-10-02, option (b)).** Contract: `{verdict, reason, basis}`; `basis` = the verbatim text of the covering `user`/`human` entry (empty when none) — text-only per the 2/2 paste-test observation. The host parses tolerantly (absent/overlong basis never fails the call), cleans it, caps it at `CLASSIFY_MAX_BASIS_CHARS` (200, new constant), and returns it as `ClassifyResult.basis`; **the extension** — the writer of `guardian.log` — appends `— basis: "…"` to every audit line that already carries `— reason:` ([auto] allow/ask; [shadow] verdict lines); the segment sits directly after `— reason: …` (on shadow lines, before `— human: …`); when it is empty the segment is dropped — `ClassifyResult.basis` is then absent, not `""`; skip/unavailable lines gain nothing; the `▪` transcript line is untouched. D30's "no bodies on disk" is thus amended by exactly this capped, host-cleaned, model-authored quote (host-side substring verification against the record is possible later — it is deterministic — but is not enforced in the pilot). |
 | D38 | **`temperature: 0` on classify calls.** `LLMRequest` gains optional `temperature`; the body-construction insertion sites are `openai-completions.ts:304` and `anthropic.ts:155`; codex-responses manages generation server-side (field ignored — documented). `classify.ts:159` is the only producer that sets it; runner/compaction/subagent call sites stay unchanged. DeepSeek's documented default is 1.0; the observed default leaves near-identical adjudications to sampling. Caveat: thinking-mode models ignore temperature (provider docs); the pin is that the field is sent. |
-| D39 | **Budget — constant floor reservation + deterministic shrink.** The assembled request is bounded by `CLASSIFY_MAX_INPUT_CHARS` (131072, unchanged): the host refuses to classify when `cap − others < HUMAN_RECORD_MIN_CHARS` (8192), where `others` = policy + contract + call facts + payload + work order; otherwise the record renders against `allowance = min(cap − others, HUMAN_RECORD_MAX_CHARS)` (32768; §16.3 algorithm). Payloads are never truncated (D22/D23); the over-budget path keeps today's marker. The write gate's extension mirror mirrors the same inequality with an **over-approximation** of `others`: `policy + prompt + contractEstimate + WORK_ORDER_MAX_CHARS + HUMAN_RECORD_MIN_CHARS > cap ⇒ skip`, with `contractEstimate ≥ the host's contract bytes` (pinned). It may over-fire (safe: a skip is never an auto-allow) and never under-fires; the band is documented as included in `manualOnlySize` (D16 note). §14.4's "extension-supplied strings only" cap-check sentence is replaced by this assembled measure. |
+| D39 | **Budget — constant floor reservation + deterministic shrink.** The assembled request is bounded by `CLASSIFY_MAX_INPUT_CHARS` (131072, unchanged): the host refuses to classify when `cap − others < HUMAN_RECORD_MIN_CHARS` (8192), where `others` = policy + contract + call facts + payload + work order; otherwise the record renders against `allowance = min(cap − others, HUMAN_RECORD_MAX_CHARS)` (32768; §16.3 algorithm). Payloads are never truncated (D22/D23); the over-budget path keeps today's marker. The write gate's extension mirror mirrors the same inequality with an **over-approximation** of `others`: `policy + prompt + contractEstimate + WORK_ORDER_MAX_CHARS + HUMAN_RECORD_MIN_CHARS > cap ⇒ skip`, with `contractEstimate ≥ the host's contract bytes` (pinned). It may over-fire (safe: a skip is never an auto-allow) and never under-fires; the band is counted in `manualOnlySize` — §14.4's "only skips the budget actually caused" clause is amended to include the pre-flight band (the §16.4 fold list records it). §14.4's "extension-supplied strings only" cap-check sentence is replaced by this assembled measure. |
 
 ### 16.3 Formats (drafts — owner eyeballed; rev-1 changes folded; pins in §16.5)
 
@@ -1646,8 +1646,12 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 - **Amendments folded here**: §4.1 semantics bullet (`:138-139`); §4.2
   rows — assembly (`:145`), trusted-context (`:146`), association
   snapshot shape (`:147`), input caps (`:148`), output contract (`:151`);
-  §5.6 (`:320-324`); §14.4 — the "extension-supplied strings only"
-  cap-check sentence and the record-time elision are replaced (D39/D32);
+  §5.6 (`:320-324`); §14.3 (write-gate input — the write CALL keeps
+  `tool`/JSON-quoted `path`/`resolved` beside the D35 facts) and §14.8
+  (`classifySystem` accounting); §14.4 — the "extension-supplied strings
+  only" cap-check sentence, the record-time elision and the
+  `manualOnlySize` clause (now includes the pre-flight band) are replaced
+  (D39/D32);
   D30 — amended by D37 (owner-locked); D17 semantics unchanged, empty
   rendering reworded; D18 — its cited anchors (`830/1018/992-993/1007`)
   are stale: clears are at `873/1053/1098`, `positionMoves` at `:1046`
@@ -1690,9 +1694,11 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 61. Identity: shape `tool @ JSON(cwd) JSON(call text)`; 4000 cap
     head+tail; elided ⇒ not identical; pair test — same command,
     different cwd ⇒ not identical; same command, same cwd ⇒ identical.
-62. Empty vs decisions-only: the exact no-context sentence; auto never
-    classifies (D17 upstream), shadow renders it; decisions-only renders
-    decision lines and keeps `verifiedUserContext` false.
+62. Empty vs decisions-only: the exact lead-in bytes
+    `HUMAN RECORD (host-recorded, oldest first):` and the exact
+    no-context sentence; auto never classifies (D17 upstream), shadow
+    renders it; decisions-only renders decision lines and keeps
+    `verifiedUserContext` false.
 63. Work order: subagent-only; 4096/4097 head+tail; absent ⇒ section
     omitted; one JSON-quoted line.
 64. Prompt bytes: policy v1.4 + contract exact in captured requests; the
@@ -1785,4 +1791,13 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   lead-in bytes; the `user[:]` grammar notation; `task.ts:435` is a
   validation-only call; level-marker bytes; the `ClassifyResult` range
   cite; the §16.7 wording; the raw-storage bound (explicitly accepted,
-  not trimmed). R3 (micro-verification, same reviewer) pending.
+  not trimmed).
+- **R3 (same reviewer, micro-verification of rev 1.1): CONFIRMED WITH
+  NOTES** — all 12 precision notes verified folded; no new contradiction
+  or anchor error from the 22 edits. Four documentation-precision notes
+  folded in rev 1.2: §14.3/§14.8 added to the fold list with the write
+  CALL's `tool`/`path`/`resolved` facts stated; the `manualOnlySize`
+  pointer in D39 resolved (the §14.4 clause is amended to include the
+  pre-flight band); pin 62 asserts the empty-record lead-in bytes; D32's
+  raw-storage rationale scoped to large typed submissions. R4
+  (micro-verification, same reviewer) pending.

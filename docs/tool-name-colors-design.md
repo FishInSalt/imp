@@ -39,7 +39,7 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
   `"none"` (explicit opt-out: the name renders bold-only, overriding the
   default palette entry, §D2).
 - `names` is one name or an array; each entry must match `NAME_PATTERN`
-  (`core/constants.ts` :48) or be the literal `"*"` (wildcard, §D2). The
+  (`core/constants.ts` :50) or be the literal `"*"` (wildcard, §D2). The
   registered name does **not** need to exist as a tool — a theme may style
   tools that load later (extensions, MCP bridges); an unmatched name is
   inert.

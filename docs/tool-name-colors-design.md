@@ -305,7 +305,8 @@ Owner, after the batch merged: "出厂默认不调色" — the shipped default
 palette is removed, and the previously approved hue table becomes the
 owner's preference theme in `examples/extensions/tool-colors.mjs`.
 
-- **D3 revised.** `DEFAULT_TOOL_COLORS` and `defaultToolColor` are deleted;
+- **D3 revised.** `DEFAULT_TOOL_COLORS` and `defaultToolColor` are deleted
+  (no src importer besides the module itself — dead-code check done);
   `composeToolColorResolver(registry)` resolves extension registrations only
   (`registry.toolColorFor`), so with no extension every call header renders
   exactly the pre-batch bytes (bold name, no hue). The own-property-guard
@@ -313,21 +314,46 @@ owner's preference theme in `examples/extensions/tool-colors.mjs`.
   hosted it; the registry's Map lookups and the fail-closed SGR Map stay.
 - **The palette**: `examples/extensions/tool-colors.mjs` now registers the
   approved table verbatim — bash yellow, read/ls blue, edit/write magenta,
-  grep/find cyan, task brightMagenta. Users opt in by linking or copying the
-  file into `~/.imp/extensions/` (nothing loads it automatically). The file
-  remains the API's living example, now owned by the owner's taste.
+  grep/find cyan, task brightMagenta. That is **five calls / eight names**
+  (colors are stored per name), so the example's banner reads `— 8 colors`;
+  the loader smoke asserts all eight lookups **and** that banner line.
+  Users opt in by linking or copying the file into `~/.imp/extensions/`
+  (nothing loads it automatically). The file remains the API's living
+  example, now owned by the owner's taste.
 - **Banner gap (found while amending).** A colors-only extension used to
   banner as `— no registrations` (the summary counted tools/commands/
-  contexts/hooks only). `ExtensionSummary` gains `colorCount`; the banner
-  adds the segment only when positive (`1 color`, `6 colors`), so every
-  existing banner line stays byte-identical when no colors are registered.
-- **Tests revised**: the unit defaults test is replaced by "no registry →
-  undefined for every name"; the repl-tui default-palette e2e is inverted
-  (no extension → legacy bytes, no hue); the task e2e drives its colors by
-  loading the shipped example file through the real loader (which also keeps
-  the example under test); the loader smoke asserts the example's six
-  registrations and the new banner count. Red evidence: inverted tests fail
-  on the pre-amendment tree (defaults still active).
+  contexts/hooks only). `ExtensionSummary` gains a required `colorCount`
+  (only `commitExtension` builds summaries — no test literal constructs the
+  type); the banner appends the segment after `hookCount` and only when
+  positive (`1 color`, `8 colors`), so every existing banner line stays
+  byte-identical when no colors are registered (existing pins at
+  `extensions-loader.test.ts:275-278`, `extensions-repl.test.ts:204/259/307/878`,
+  `extensions-contrib.test.ts:153/221` are safe).
+- **Tests revised** (red evidence: inverted pins fail on the pre-amendment
+  tree while the defaults still answer):
+  - unit: the defaults test is replaced by "no registry → undefined for
+    every name" and the compose pin `composeToolColorResolver()("task")`
+    flips from `"brightMagenta"` to `undefined` (also for a registry whose
+    `toolColorFor` always returns undefined);
+  - `repl-tui` default-palette e2e inverted: no extension → **exact legacy
+    header bytes** (`\x1b[2m●\x1b[0m \x1b[1mbash\x1b[0m  echo painted`),
+    not merely "no yellow";
+  - the task e2e drives its colors by loading the shipped example file
+    through the real loader (keeps the example under test);
+  - stale titles/comments at `repl-tui.test.ts:3374/3406` rewritten with
+    their pins.
+- **Removal inventory (complete — the implementation commit updates each
+  in place):** this doc's owner decision 3 (:15), D2 composition
+  (:99-102), D5 provenance (:164-166), D7 unit/e2e entries (:199,
+  :231-232), D8 README deliverable (:269); source wording
+  `src/extensions/types.ts:151` ("overriding a default palette entry"),
+  `src/repl/transcript.ts:87`, `src/repl/repl.ts:1667-1668`,
+  `src/repl/tool-colors.ts:2/9`; README :590/:592-597; CHANGELOG :11-21;
+  `docs/m4-extensions-design.md` Amendment A. `PROJECT_PLAN.md:744` is the
+  merged batch's history and is **not** rewritten — this amendment lands its
+  own ledger bullet (same precedent as #call-closing-status A1). No
+  interaction with the `tui-tool-elapsed` / `call-closing-status` docs:
+  colors stay post-layout, zero width.
 - **Docs**: README, CHANGELOG and m4 Amendment A wording drops "shipped
   defaults" and describes opt-in themes.
 

@@ -561,7 +561,7 @@ add a weak **author tier**; the existing method becomes the **user tier**;
     `CHANGELOG.md:24` `— 10 colors` → `— 8 colors` (plus the suggestion
     story); `docs/m4-extensions-design.md`; the two D1/D2 supersede
     pointers above; and the stale pre-A1 comment at
-    `registry.ts:397-399` ("layers defaults on top of this") is rewritten
+    `registry.ts:400-402` ("layers defaults on top of this") is rewritten
     while touching `toolColorFor`.
 - **Tests (red-first)**:
   - registry — a lone suggestion lands; full resolution matrix (user
@@ -571,9 +571,11 @@ add a weak **author tier**; the existing method becomes the **user tier**;
     (`already suggested by X`); validation pins ×2 with the suggest
     prefix; per-call atomicity; hex canonicalized in the suggested tier;
     a thrown factory discards suggestions too (mirror of the existing
-    discard path); dual-error precedence in one call (bad name + bad
-    color → the color check fires first, matching `registry.ts:333-337`)
-    pinned;
+    discard path); report precedence pinned precisely: `names` of a
+    non-string/non-array type is rejected first (`registry.ts:361-365`),
+    then a bad color (`:367`) before any entry-name check (`:374`) — the
+    pin uses an entry-level bad name + bad color to lock the
+    color-before-entry order;
   - loader — banner pins (tools + suggestions; suggestions-only;
     singular `1 suggested color`); the post-load suggest report pin;
   - repl-tui — an extension file calling `suggestToolColor` paints the

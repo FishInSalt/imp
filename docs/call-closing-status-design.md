@@ -184,8 +184,9 @@ instead of the live-row channel for non-task tools. The channel must carry
 the same lifecycle machinery as live rows, with matching tests: resolver
 pull for late-created folds, displaced-fold clear on id reuse,
 terminal-duplicate clear, `stopTerminal` ownership guard, D10 suppression
-(no running text while a picker is open), idle clear. Task calls set no
-running suffix (O1 default).
+(no running text while a picker is open — the task suffix is exempt,
+Amendment 1), idle clear. Task calls receive the same suffix (Amendment 1 /
+A1.2; the `└─ pending` row drops its seconds).
 
 ### D4 — Swap
 
@@ -236,7 +237,9 @@ slot. Sub-second calls: ` 0s` → bare ` ✓`. Failed calls: ` ✗ [X.Ys]`.
 ### D7 — Task and doc amendments
 
 Task completion closes the last summary row (owner: "including task").
-Task running block: unchanged (O1 default). Amended deliverables:
+Task running block: the status row drops its seconds and the call receives
+the running suffix (Amendment 1 / A1.2); the prompt and progress rows stand.
+Amended deliverables:
 
 - `docs/tui-tool-elapsed-design.md`: D2 placement ("first row") → closing
   slot for the inline layout; I3 retargeted; I4 and the fallback shapes

@@ -174,8 +174,9 @@ shared conversation and session:
 imp            # interactive REPL (streaming, one-line tool status)
 ```
 
-- Tool calls render as one-line transcript rows: while a call runs, its live
-  state sits directly under its own call line — `└─ running 3s`, gone once
+- Tool calls render as one-line transcript rows: while a call runs, its
+  elapsed seconds close the call's own info row — a dim `3s`, ticking,
+  `task` calls included — and become the completion marker in place once
   the call settles; the finished row carries a green `✓` (red `✗` on
   failure) plus a dim wall time when the call took ≥1s — `● bash  npm test
   ✓ 2.3s` — with a `⎿` preview of the result beneath it. **Ctrl+O** expands

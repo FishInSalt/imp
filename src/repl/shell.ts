@@ -233,8 +233,9 @@ export class TuiShell implements LineInput {
 	 *  at fold-creation time, and diffed against the next pass so identical
 	 *  rows never invalidate the fold cache. */
 	private callLiveRows = new Map<string, readonly string[]>();
-	/** #call-closing-status (D3): the running timer text per non-task call
-	 *  (`└─ running Ns`), rendered in the call fold's closing slot. */
+	/** #call-closing-status (D3, Amendment 1): the running timer text per
+	 *  call (`Ns`, a bare ticking count), rendered in the call fold's closing
+	 *  slot. */
 	private callSuffixes = new Map<string, string>();
 	/** Ownership guard for the shared sink's resolver (mirrors boundOnUpdate). */
 	private boundLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;

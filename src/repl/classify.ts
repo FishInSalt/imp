@@ -35,6 +35,8 @@ export const CLASSIFY_MAX_TOKENS = 400;
 export const CLASSIFY_MAX_INPUT_CHARS = 128 * 1024;
 /** Rendered reason cap (after sanitization). */
 export const CLASSIFY_MAX_REASON_CHARS = 200;
+/** §15/D29: rendered subject cap — the ellipsis is included. */
+export const CLASSIFY_MAX_SUBJECT_CHARS = 160;
 
 /** The host-appended output contract — the extension cannot change it. */
 const OUTPUT_CONTRACT =
@@ -75,12 +77,14 @@ function parseVerdict(text: string): Verdict | undefined {
 }
 
 /** One line: control sequences stripped, whitespace collapsed, capped. */
-function cleanReason(reason: string): string {
-	const flattened = sanitizeDisplay(reason).replaceAll(/\s+/gu, " ").trim();
-	return flattened.length > CLASSIFY_MAX_REASON_CHARS
-		? `${flattened.slice(0, CLASSIFY_MAX_REASON_CHARS - 1)}…`
-		: flattened;
+function cleanLine(text: string, cap: number): string {
+	const flattened = sanitizeDisplay(text).replaceAll(/\s+/gu, " ").trim();
+	return flattened.length > cap ? `${flattened.slice(0, cap - 1)}…` : flattened;
 }
+
+const cleanReason = (reason: string): string => cleanLine(reason, CLASSIFY_MAX_REASON_CHARS);
+/** §15/D29: the record-line subject uses the same cleaning with its own cap. */
+const cleanSubject = (subject: string): string => cleanLine(subject, CLASSIFY_MAX_SUBJECT_CHARS);
 
 /** #guardian-auto-mode (D8): the classify host exists exactly when the confirm
  *  host does — an interactive session with a human to escalate to. The
@@ -168,10 +172,11 @@ export class HostClassify {
 		if (verdict === undefined) return undefined;
 
 		const reason = cleanReason(verdict.reason);
+		const subject = request.subject === undefined ? "" : cleanSubject(request.subject);
 		const label = source === undefined || source === "" ? "extension" : source;
 		const note = fallback ? ` — note: model "${request.model}" unavailable, used ${reference}` : "";
 		binding.renderer.note(
-			`▪ ${label} — classifier: ${verdict.verdict}${reason === "" ? "" : ` — ${reason}`} (${reference})${note}`,
+			`▪ ${label} — classifier: ${verdict.verdict}${subject === "" ? "" : ` — ${subject}`}${reason === "" ? "" : ` — ${reason}`} (${reference})${note}`,
 		);
 		return { verdict: verdict.verdict, reason, model: reference };
 	};

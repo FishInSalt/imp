@@ -99,6 +99,12 @@ export interface ClassifyRequest {
 	prompt: string;
 	/** Optional provider/model reference; absent → the session model. */
 	model?: string;
+	/** §15/D29: a short extension-authored identifier of the call under
+	 *  judgment (`bash: <first line>`, `write <path>`, `edit <path>`),
+	 *  rendered in the host's record line. Display only — the host cleans
+	 *  and caps it (CLASSIFY_MAX_SUBJECT_CHARS) and never verifies it
+	 *  against the tool arguments. */
+	subject?: string;
 }
 
 export interface ClassifyResult {

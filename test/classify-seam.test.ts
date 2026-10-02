@@ -243,6 +243,50 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		expect(output()).not.toContain("\u001b[31m");
 	});
 
+	it("§15/D29: renders the optional subject between the verdict and the reason", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"scratch dir matches the task"}');
+		await call(() =>
+			host.handler({ system: "s", prompt: "p", subject: "bash: rm -rf /tmp/a1-red" }, "guardian"),
+		);
+		expect(output()).toContain(
+			"▪ guardian — classifier: allow — bash: rm -rf /tmp/a1-red — scratch dir matches the task (anthropic/session-model)",
+		);
+	});
+
+	it("§15/D29: cleans and caps the subject (160 incl. …); an empty subject is omitted", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"ask","reason":"r"}');
+		await call(() =>
+			host.handler({ system: "s", prompt: "p", subject: `\u001b[31m  a\n b ${"s".repeat(300)}` }, "guardian"),
+		);
+		const line =
+			output()
+				.split("\n")
+				.find((l) => l.includes("classifier: ask")) ?? "";
+		const subject = line.slice(line.indexOf("ask — ") + "ask — ".length, line.indexOf(" — r ("));
+		expect(subject.startsWith("a b ")).toBe(true);
+		expect(subject.endsWith("…")).toBe(true);
+		expect(subject.length).toBe(160);
+
+		await call(() => host.handler({ system: "s", prompt: "p", subject: " \u001b[0m  " }, "guardian"));
+		expect(output()).toContain("▪ guardian — classifier: ask — r (anthropic/session-model)");
+	});
+
+	it("§15/D30: the record line carries neither the system nor the prompt bodies", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"ok"}');
+		await call(() =>
+			host.handler(
+				{ system: "SYSTEM-TOKEN-1a2b", prompt: "PROMPT-TOKEN-3c4d", subject: "bash: probe" },
+				"guardian",
+			),
+		);
+		expect(output()).toContain("bash: probe");
+		expect(output()).not.toContain("SYSTEM-TOKEN-1a2b");
+		expect(output()).not.toContain("PROMPT-TOKEN-3c4d");
+	});
+
 	it("wires the handler through loadExtensions with the extension's name as the source (D9 idiom)", async () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-classify-"));
 		const modulePath = path.join(base, "probe.mjs");

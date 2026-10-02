@@ -335,6 +335,9 @@ export default function (api) {
 		}
 	};
 
+	/** §15/D27: the verdict reason rides the audit line; empty reasons are dropped. */
+	const reasonSuffix = (reason) => (reason === "" ? "" : ` — reason: ${reason}`);
+
 	/** The extension-authored policy framing (§5.6). The host appends the
 	 *  provenance-verified user context and the output contract itself. */
 	const classifySystem = [
@@ -530,6 +533,7 @@ export default function (api) {
 					verdict = await api.classify({
 						system: classifySystem,
 						prompt: classifyPrompt(event, cwd, command, effective, { noContext, unresolvable }),
+						subject: `bash: ${firstLine(command)}`,
 						...(config.model !== undefined ? { model: config.model } : {}),
 					});
 					counters.classify += 1;
@@ -555,6 +559,12 @@ export default function (api) {
 							? "classifier unavailable — asking"
 							: `classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}`,
 					);
+					// §15/D28: the shadow line is deferred until the human answers.
+					audit(
+						verdict === undefined
+							? `[shadow] classifier unavailable — ${firstLine(command)} — human: ${approved ? "approved" : "denied"}`
+							: `[shadow] ${verdict.verdict} — ${firstLine(command)} (${verdict.model})${reasonSuffix(verdict.reason)} — human: ${approved ? "approved" : "denied"}`,
+					);
 					if (approved) return undefined;
 					return { block: true, reason: effective.reason };
 				}
@@ -562,7 +572,7 @@ export default function (api) {
 				// auto
 				if (verdict !== undefined && verdict.verdict === "allow") {
 					resetBreaker();
-					audit(`[auto] allow — ${firstLine(command)} (${verdict.model})`);
+					audit(`[auto] allow — ${firstLine(command)} (${verdict.model})${reasonSuffix(verdict.reason)}`);
 					return undefined; // allowed by the classifier — run it
 				}
 				bumpBreaker();
@@ -587,7 +597,7 @@ export default function (api) {
 					if (approved) return undefined;
 					return { block: true, reason: effective.reason };
 				}
-				audit(`[auto] ask — ${firstLine(command)} (${verdict.model})`);
+				audit(`[auto] ask — ${firstLine(command)} (${verdict.model})${reasonSuffix(verdict.reason)}`);
 				const approved = await askFresh(
 					`classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}${breakerNote}`,
 				);
@@ -630,6 +640,7 @@ export default function (api) {
 					verdict = await api.classify({
 						system: classifySystem,
 						prompt,
+						subject: `${tool} ${firstLine(event.args.path)}`,
 						...(config.model !== undefined ? { model: config.model } : {}),
 					});
 					counters.classify += 1;
@@ -660,6 +671,19 @@ export default function (api) {
 								? "classifier unavailable — asking"
 								: `classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}`,
 					);
+					// §15/D28: the shadow line is deferred until the human answers.
+					const subject = `${tool} ${firstLine(event.args.path)}`;
+					if (overBudget) {
+						audit(
+							`[shadow] not classified (request over the classify budget) — ${subject} — human: ${approved ? "approved" : "denied"}`,
+						);
+					} else if (verdict === undefined) {
+						audit(`[shadow] classifier unavailable — ${subject} — human: ${approved ? "approved" : "denied"}`);
+					} else {
+						audit(
+							`[shadow] ${verdict.verdict} — ${subject} (${verdict.model})${reasonSuffix(verdict.reason)} — human: ${approved ? "approved" : "denied"}`,
+						);
+					}
 					if (approved) return undefined;
 					return { block: true, reason: blockReason };
 				}
@@ -667,7 +691,7 @@ export default function (api) {
 				// auto
 				if (verdict !== undefined && verdict.verdict === "allow") {
 					resetBreaker();
-					audit(`[auto] allow — ${tool} ${firstLine(event.args.path)} (${verdict.model})`);
+					audit(`[auto] allow — ${tool} ${firstLine(event.args.path)} (${verdict.model})${reasonSuffix(verdict.reason)}`);
 					return undefined; // allowed by the classifier — run it
 				}
 				bumpBreaker();
@@ -696,7 +720,7 @@ export default function (api) {
 					if (approved) return undefined;
 					return { block: true, reason: blockReason };
 				}
-				audit(`[auto] ask — ${tool} ${firstLine(event.args.path)} (${verdict.model})`);
+				audit(`[auto] ask — ${tool} ${firstLine(event.args.path)} (${verdict.model})${reasonSuffix(verdict.reason)}`);
 				const approved = await askFresh(
 					`classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}${breakerNote}`,
 				);

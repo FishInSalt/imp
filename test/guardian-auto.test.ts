@@ -122,6 +122,11 @@ const fencedBody = (prompt: string): string => {
 	return prompt.slice(begin + "-----BEGIN PAYLOAD-----".length + 1, end - 1);
 };
 
+/** §15 pins: an audit line is exact behind its ISO timestamp. */
+const exactLogLine = (log: string, rest: string): void => {
+	expect(log).toMatch(new RegExp(`^\\S+ ${rest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+};
+
 const verdict = (v: "allow" | "ask", reason: string): ClassifyResult => ({
 	verdict: v,
 	reason,
@@ -448,7 +453,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(over.classify).not.toHaveBeenCalled();
 	});
 
-	it("43: §14 — write audit lines are auto-only (all five shapes)", async () => {
+	it("43: §15 — the five auto write-audit shapes are exact (reason on verdicts)", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");
 		h.classifyImpl.fn = async () => verdict("allow", "fine");
@@ -464,20 +469,12 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		h.classifyImpl.fn = async () => undefined;
 		await h.gate(writeCall("/outside/gone.txt")); // unavailable
 
-		const logFile = path.join(fakeHome, ".imp", "guardian.log");
-		const log = await readFile(logFile, "utf8");
-		expect(log).toContain("[auto] allow — write /outside/file.txt (anthropic/session-model)");
-		expect(log).toContain("[auto] ask — write /outside/asked.txt (anthropic/session-model)");
-		expect(log).toContain("[auto] not classified (no verified user context) — write /outside/noctx.txt");
-		expect(log).toContain(
-			"[auto] not classified (request over the classify budget) — write /outside/big.txt",
-		);
-		expect(log).toContain("[auto] classifier unavailable — write /outside/gone.txt");
-
-		const shadow = await loadGuardian("/proj");
-		await shadow.run("/guardian shadow");
-		await shadow.gate(writeCall("/outside/shadow-only.txt"));
-		expect(await readFile(logFile, "utf8")).not.toContain("write /outside/shadow-only.txt");
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(log, "[auto] allow — write /outside/file.txt (anthropic/session-model) — reason: fine");
+		exactLogLine(log, "[auto] ask — write /outside/asked.txt (anthropic/session-model) — reason: unsure");
+		exactLogLine(log, "[auto] not classified (no verified user context) — write /outside/noctx.txt");
+		exactLogLine(log, "[auto] not classified (request over the classify budget) — write /outside/big.txt");
+		exactLogLine(log, "[auto] classifier unavailable — write /outside/gone.txt");
 	});
 
 	it("44: §14 — shadow's write prompt carries the no-context marker", async () => {
@@ -617,5 +614,135 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(options.sessionKey).toContain("guardian:bash:");
 		expect(options.rememberLabel).toBe("this command pattern");
 		expect(h.classify).not.toHaveBeenCalled();
+	});
+
+	it("45: §15 — auto verdicts carry the reason; classify calls carry the subject", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "removing a scratch dir");
+		await h.gate({ args: { command: risky } });
+		expect(h.classify.mock.calls[0]?.[0]).toMatchObject({ subject: `bash: ${risky}` });
+		const logFile = path.join(fakeHome, ".imp", "guardian.log");
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			`[auto] allow — ${risky} (anthropic/session-model) — reason: removing a scratch dir`,
+		);
+
+		h.classifyImpl.fn = async () => verdict("ask", "not clearly within the user's request");
+		await h.gate({ args: { command: risky } });
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			`[auto] ask — ${risky} (anthropic/session-model) — reason: not clearly within the user's request`,
+		);
+
+		const w = await loadGuardian("/proj");
+		await w.run("/guardian auto");
+		w.classifyImpl.fn = async () => verdict("allow", "ok");
+		await w.gate(writeCall("/outside/file.txt"));
+		expect(w.classify.mock.calls[0]?.[0]).toMatchObject({ subject: "write /outside/file.txt" });
+
+		const e = await loadGuardian("/proj");
+		await e.run("/guardian auto");
+		e.classifyImpl.fn = async () => verdict("allow", "ok");
+		await e.gate(editCall("/outside/config.txt", [{ oldText: "a", newText: "b" }]));
+		expect(e.classify.mock.calls[0]?.[0]).toMatchObject({ subject: "edit /outside/config.txt" });
+	});
+
+	it("46: §15 — skip/unavailable lines stay exact; an empty reason drops the segment", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		const logFile = path.join(fakeHome, ".imp", "guardian.log");
+
+		await h.gate({ args: { command: risky }, verifiedUserContext: false });
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			`[auto] not classified (no verified user context) — ${risky}`,
+		);
+		await h.gate({ args: { command: 'target="$HOME/.ssh"; rm -rf "$target"' } });
+		exactLogLine(
+			await readFile(logFile, "utf8"),
+			'[auto] not classified (shell expansion or glob syntax) — target="$HOME/.ssh"; rm -rf "$target"',
+		);
+
+		h.classifyImpl.fn = async () => verdict("allow", "");
+		await h.gate({ args: { command: risky } });
+		exactLogLine(await readFile(logFile, "utf8"), `[auto] allow — ${risky} (anthropic/session-model)`);
+
+		h.classifyImpl.fn = async () => undefined;
+		await h.gate({ args: { command: risky } });
+		exactLogLine(await readFile(logFile, "utf8"), `[auto] classifier unavailable — ${risky}`);
+	});
+
+	it("47: §15 — shadow allow is audited with the human outcome", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian shadow");
+		h.classifyImpl.fn = async () => verdict("allow", "looks fine");
+		h.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+		await h.gate({ args: { command: risky } });
+		await h.gate({ args: { command: risky } });
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(
+			log,
+			`[shadow] allow — ${risky} (anthropic/session-model) — reason: looks fine — human: approved`,
+		);
+		exactLogLine(
+			log,
+			`[shadow] allow — ${risky} (anthropic/session-model) — reason: looks fine — human: denied`,
+		);
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("allow→human approved 1, denied 1");
+	});
+
+	it("48: §15 — shadow ask/unavailable shapes; the over-budget write line stays bare", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian shadow");
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		await h.gate({ args: { command: risky } });
+		h.classifyImpl.fn = async () => undefined;
+		await h.gate({ args: { command: risky } });
+		const logFile = path.join(fakeHome, ".imp", "guardian.log");
+		let log = await readFile(logFile, "utf8");
+		exactLogLine(log, `[shadow] ask — ${risky} (anthropic/session-model) — reason: unsure — human: denied`);
+		exactLogLine(log, `[shadow] classifier unavailable — ${risky} — human: denied`);
+
+		const w = await loadGuardian("/proj");
+		await w.run("/guardian shadow");
+		await w.gate(writeCall("/outside/big.txt", "x".repeat(CLASSIFY_MAX_INPUT_CHARS)));
+		log = await readFile(logFile, "utf8");
+		exactLogLine(
+			log,
+			"[shadow] not classified (request over the classify budget) — write /outside/big.txt — human: denied",
+		);
+	});
+
+	it("49: §15 — the shadow line is deferred until the human answers", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian shadow");
+		h.classifyImpl.fn = async () => verdict("allow", "looks fine");
+		let resolveConfirm: (value: boolean) => void = () => {};
+		h.confirm.mockImplementationOnce(
+			() =>
+				new Promise<boolean>((resolve) => {
+					resolveConfirm = resolve;
+				}),
+		);
+		const pending = h.gate({ args: { command: risky } });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const logFile = path.join(fakeHome, ".imp", "guardian.log");
+		expect(await readFile(logFile, "utf8").catch(() => "")).not.toContain("[shadow]");
+		resolveConfirm(false);
+		await pending;
+		const log = await readFile(logFile, "utf8");
+		expect(log.match(/\[shadow\]/g)?.length).toBe(1);
+	});
+
+	it("53: §15 — a write payload never reaches the log; the reason does", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "clearly authorized");
+		await h.gate(writeCall("/outside/secret.txt", "PAYLOAD-TOKEN-9f3a2b"));
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		expect(log).toContain("— reason: clearly authorized");
+		expect(log).not.toContain("PAYLOAD-TOKEN-9f3a2b");
 	});
 });

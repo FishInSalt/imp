@@ -970,7 +970,9 @@ color)` — a load-gated registration (factory-window only, like
 (or the literal `"*"`) to one of the 16 standard-16 color tokens or
 `"none"`. It colors the tool-name span of TUI call headers only. The
 normative semantics — token set, validation messages, first-wins conflicts,
-exact-over-wildcard resolution, the shipped default palette, rendering
-points, the test plan — live in `docs/tool-name-colors-design.md` (review
-closed, 3 rounds). M4's registration culture is unchanged: validated,
+exact-over-wildcard resolution, rendering points, the test plan — live in
+`docs/tool-name-colors-design.md` (review closed, 3 rounds + Amendment 1:
+no shipped default colors — themes are opt-in extensions, an example in
+`examples/extensions/tool-colors.mjs`). M4's registration culture is
+unchanged: validated,
 never throws, atomic per call, conflicts reported with the owner's name.

@@ -1,8 +1,10 @@
-/** #tool-name-colors (design D1/D3): the closed token set for tool-name
- *  colors, the shipped default palette, and the one place a token becomes
- *  SGR bytes. Importable by both `extensions/` (API validation, registry
- *  storage) and `repl/` (rendering) — same dependency direction as
- *  `repl/commands.js`, which the registry already imports. */
+/** #tool-name-colors (design D1/D3; Amendment 1): the closed token set for
+ *  tool-name colors and the one place a token becomes SGR bytes. There are
+ *  NO shipped default colors — extensions are the only source, so without
+ *  one every call header renders the pre-#tool-name-colors bytes.
+ *  Importable by both `extensions/` (API validation, registry storage) and
+ *  `repl/` (rendering) — same dependency direction as `repl/commands.js`,
+ *  which the registry already imports. */
 
 /** The 16 standard-16 color tokens (theme-relative on purpose — the hues
  *  follow the user's terminal theme) plus `none`: an explicit opt-out that
@@ -63,33 +65,13 @@ export function toolColorSgr(token: ToolColorName): string {
 	return TOOL_COLOR_SGR.get(token) ?? "";
 }
 
-/** The shipped default palette (design D3): category slots, red/green left
- *  to the ✓/✗ semantics, `task` the only bright hue. Unknown tools get no
- *  entry — they render bold-only (today's bytes), never a guessed color. */
-export const DEFAULT_TOOL_COLORS: Readonly<Record<string, ToolColorName>> = {
-	bash: "yellow",
-	read: "blue",
-	ls: "blue",
-	edit: "magenta",
-	write: "magenta",
-	grep: "cyan",
-	find: "cyan",
-	task: "brightMagenta",
-};
-
-/** Own-property lookup into the default palette. A plain `table[name]`
- *  would answer inherited members for tool names like `constructor` or
- *  `toString` (NAME_PATTERN accepts them; MCP can bridge them), handing the
- *  renderer a function instead of a token. Anything not own dies here. */
-export function defaultToolColor(name: string): ToolColorName | undefined {
-	return Object.hasOwn(DEFAULT_TOOL_COLORS, name) ? DEFAULT_TOOL_COLORS[name] : undefined;
-}
-
-/** The composed resolver (design D2/D5): extension exact → extension `*` →
- *  shipped default → uncolored. `registry` is structurally typed; repl.ts
- *  passes the ExtensionRegistry, unit hosts may pass any map-shaped stub. */
+/** The composed resolver (design D2/D5; Amendment 1): extension
+ *  registrations only — exact lookup then `*`, both inside the registry —
+ *  and `undefined` for everything else (no token, no color). `registry` is
+ *  structurally typed; repl.ts passes the ExtensionRegistry, unit hosts
+ *  may pass any map-shaped stub. */
 export function composeToolColorResolver(registry?: {
 	toolColorFor(name: string): ToolColorName | undefined;
 }): (name: string) => ToolColorName | undefined {
-	return (name) => registry?.toolColorFor(name) ?? defaultToolColor(name);
+	return (name) => registry?.toolColorFor(name);
 }

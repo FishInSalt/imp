@@ -452,18 +452,26 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 	});
 });
 
-describe("examples/extensions/tool-colors.mjs (#tool-name-colors, review P3-1)", () => {
-	it("loads through the real loader and applies every registration", async () => {
+describe("examples/extensions/tool-colors.mjs (#tool-name-colors, A1)", () => {
+	it("loads through the real loader: eight registrations, banner counts colors", async () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, {
 			"tool-colors.mjs": readFileSync(path.resolve("examples/extensions/tool-colors.mjs"), "utf8"),
 		});
 		const { loaded, lines } = await load(env);
 		expect(lines).toEqual([]);
-		expect(loaded.runtime.toolColorFor("bash")).toBe("brightYellow");
-		expect(loaded.runtime.toolColorFor("read")).toBe("brightBlue");
-		expect(loaded.runtime.toolColorFor("ls")).toBe("brightBlue");
-		expect(loaded.runtime.toolColorFor("edit")).toBe("brightMagenta");
-		expect(loaded.runtime.toolColorFor("task")).toBe("brightCyan");
+		expect(loaded.runtime.toolColorFor("bash")).toBe("yellow");
+		expect(loaded.runtime.toolColorFor("read")).toBe("blue");
+		expect(loaded.runtime.toolColorFor("ls")).toBe("blue");
+		expect(loaded.runtime.toolColorFor("edit")).toBe("magenta");
+		expect(loaded.runtime.toolColorFor("write")).toBe("magenta");
+		expect(loaded.runtime.toolColorFor("grep")).toBe("cyan");
+		expect(loaded.runtime.toolColorFor("find")).toBe("cyan");
+		expect(loaded.runtime.toolColorFor("task")).toBe("brightMagenta");
+		expect(loaded.summaries[0]?.colorCount).toBe(8);
+		// a colors-only extension no longer reads "— no registrations"
+		expect(extensionBannerLines(loaded.summaries)).toEqual([
+			"\u25aa extension tool-colors [project] — 8 colors",
+		]);
 	});
 });

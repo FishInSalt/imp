@@ -1,11 +1,12 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
-Status: implemented and merged (merge 70821d4). Design review closed after
-3 rounds (NEEDS-FIXES → NEEDS-FIXES → CONFIRMED); implementation review
-APPROVE WITH CORRECTIONS → CONFIRMED (the P2 was a real prototype-chain
-lookup bug for names like `constructor` — fixed via an own-property
-`defaultToolColor` lookup and a fail-closed SGR Map). Owner decisions
-2026-10-02:
+Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
+defaults, palette to the example theme) under review on
+`feat/tool-name-colors-a1`. Design review closed after 3 rounds (NEEDS-FIXES
+→ NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
+CONFIRMED (the P2 was a real prototype-chain lookup bug for names like
+`constructor` — fixed via an own-property `defaultToolColor` lookup and a
+fail-closed SGR Map). Owner decisions 2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").
@@ -297,3 +298,38 @@ Result-row (`⎿`) coloring, closing-slot coloring, activity/footer rows,
 selector/tree rows, print/replay/legacy rendering, raw SGR strings,
 bold/italic/underline knobs, per-argument or per-run dynamic styles,
 256-color absolutes, theming of non-tool UI.
+
+## Amendment 1 — no shipped defaults; the palette moves to an example theme (owner directive, 2026-10-02)
+
+Owner, after the batch merged: "出厂默认不调色" — the shipped default
+palette is removed, and the previously approved hue table becomes the
+owner's preference theme in `examples/extensions/tool-colors.mjs`.
+
+- **D3 revised.** `DEFAULT_TOOL_COLORS` and `defaultToolColor` are deleted;
+  `composeToolColorResolver(registry)` resolves extension registrations only
+  (`registry.toolColorFor`), so with no extension every call header renders
+  exactly the pre-batch bytes (bold name, no hue). The own-property-guard
+  class of bug (implementation review P2-1) disappears with the lookup that
+  hosted it; the registry's Map lookups and the fail-closed SGR Map stay.
+- **The palette**: `examples/extensions/tool-colors.mjs` now registers the
+  approved table verbatim — bash yellow, read/ls blue, edit/write magenta,
+  grep/find cyan, task brightMagenta. Users opt in by linking or copying the
+  file into `~/.imp/extensions/` (nothing loads it automatically). The file
+  remains the API's living example, now owned by the owner's taste.
+- **Banner gap (found while amending).** A colors-only extension used to
+  banner as `— no registrations` (the summary counted tools/commands/
+  contexts/hooks only). `ExtensionSummary` gains `colorCount`; the banner
+  adds the segment only when positive (`1 color`, `6 colors`), so every
+  existing banner line stays byte-identical when no colors are registered.
+- **Tests revised**: the unit defaults test is replaced by "no registry →
+  undefined for every name"; the repl-tui default-palette e2e is inverted
+  (no extension → legacy bytes, no hue); the task e2e drives its colors by
+  loading the shipped example file through the real loader (which also keeps
+  the example under test); the loader smoke asserts the example's six
+  registrations and the new banner count. Red evidence: inverted tests fail
+  on the pre-amendment tree (defaults still active).
+- **Docs**: README, CHANGELOG and m4 Amendment A wording drops "shipped
+  defaults" and describes opt-in themes.
+
+Implementation on `feat/tool-name-colors-a1`; short adversarial review
+round before implementation, per the working agreements.

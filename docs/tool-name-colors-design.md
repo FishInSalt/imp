@@ -376,42 +376,73 @@ Owner-approved direction: **keep the 16 named tokens, add absolute-color
 tokens** — additive, default behavior unchanged, zero migration for existing
 themes.
 
-- **Grammar** (new accepted values, alongside the 16 names + `none`):
-  - `ansi256:N` — decimal integer 0–255, canonical spelling (no leading
-    zeros except `0` itself). Renders `ESC[38;5;Nm`.
-  - `#rrggbb` — exactly six hex digits, case-insensitive, no `#rgb`/`rgb()`
-    shorthand. Renders `ESC[38;2;R;G;Bm` with the parsed bytes.
-  - Prefix `ansi256:` is lowercase-only; hex case is accepted both ways and
-    needs no normalization (rendering parses digits).
+- **Grammar** (new accepted values, alongside the 16 names + `none`),
+  anchored full matches, no trimming:
+  - `ansi256:N` — `^ansi256:(0|[1-9][0-9]{0,2})$` plus a value ≤ 255 check
+    (canonical: `ansi256:0`..`ansi256:255`; `00`, `+8`, ` 8`, `0x8`, `8e0`
+    all rejected). Renders `ESC[38;5;Nm`.
+  - `#rrggbb` — `^#[0-9a-fA-F]{6}$`; hex case is **accepted** and the stored
+    value is **normalized to lowercase** at validation (one canonical stored
+    form). No `#rgb`/`rgb()` shorthand. Renders `ESC[38;2;R;G;Bm`.
+  - Prefix `ansi256:` is lowercase-only (`ANSI256:5` → unknown color).
+- **`toolColorSgr(token: ToolColor)` contract**: named tokens keep the exact
+  Map lookup (bytes unchanged); absolute tokens are re-validated (via the
+  absolute half of `isToolColor`) before parsing, and the hex parse is
+  case-insensitive regardless of stored form (defense in depth for callers
+  that bypass validation, e.g. unit tests) — `#D97757` and `#d97757` render
+  identical bytes (`ESC[38;2;217;119;87m`). Anything out of contract still
+  fails closed to `""` (bold-only), pinned.
 - **Unchanged**: validation never-throws; per-key first-wins conflicts;
   `"*"` wildcard; `"none"`; per-name storage; exact-over-wildcard; the
   loader's factory-window gate; `ExtensionSummary.colorCount`.
-- **Documented pitfall**: `ansi256:0..15` are the theme's first 16 slots —
-  they shift with the terminal theme exactly like the named tokens; indices
-  16–255 are the standard fixed cube/grays (a few themes remap those too).
-  "Exact orange" means `ansi256:208` or `#d97757`, never `ansi256:3`.
-- **Accepted tradeoff** (owner's point of the request): absolute tokens do
-  not follow the terminal theme. Named tokens remain theme-relative; users
-  choose per color.
+- **Documented pitfall**: `ansi256:0..15` *usually* alias the theme's first
+  16 slots (identical or near-identical bytes, emulator-dependent — aliasing
+  is common, not guaranteed); indices 16–255 are the standard fixed
+  cube/grays (a few themes remap those too). "Exact orange" means
+  `ansi256:208` or `#d97757`, never `ansi256:3`.
+- **Accepted tradeoffs** (owner's point of the request): absolute tokens do
+  not follow the terminal theme; truecolor hex additionally depends on
+  terminal support (256 is the portable choice; named tokens remain the
+  theme-relative default).
 - **Types**: `ToolColor = ToolColorName | \`ansi256:${number}\` | \`#${string}\``
-  (template forms for DX; runtime validation is the authority via a new
-  `isToolColor`). Widened signatures: registry storage/`toolColorFor`, the
-  API's `registerToolColor(color: ToolColor)`, `toolColorSgr`,
-  `ToolBlockFold.nameColor`, `renderCommandHeader`'s `colorFor`,
-  `transcript.toolColorResolver`, `TuiShellOptions.toolColorResolver`,
-  `composeToolColorResolver`. No wiring changes.
-- **Report line** grows: `… unknown color (expected one of: <16 names>
-  none, ansi256:N (0-255), or #rrggbb, got "<value>")` — the existing pin
-  in `test/extensions-registry.test.ts` is updated in the same commit.
+  — template forms are DX-only (they admit `ansi256:007`, `#gggggg` at the
+  type level; verified with tsc); `isToolColor` gates every boundary, no
+  casts. `isToolColorName` is kept (the named-only check; still imported by
+  the token-set test). Widened signatures (verified complete):
+  `registry.ts:8/83/149/366/395/401`, `types.ts:15/156`,
+  `tool-block.ts:3/141/195`, `transcript.ts:4/91`, `shell.ts:36/77`,
+  `repl.ts:48/1673-74/1690`, `tool-colors.ts:33-76`; `loader.ts:227` is
+  inferred. No wiring changes. `test/repl-tui.test.ts:214`'s inline
+  annotation widens too.
+- **Report line** (exact literal; `TOOL_COLOR_NAMES.join(" ")` already ends
+  in `none`): `unknown color (expected one of: <names>, ansi256:N (0-255),
+  or #rrggbb, got "<value>")` with the 160-char `firstLine` bound kept. Two
+  existing pins update: `test/extensions-registry.test.ts:498` and `:501`.
+  `TOOL_COLOR_NAMES` stays 17 entries (its own pin at
+  `test/tool-colors.test.ts:11-27` is untouched).
 - **The owner's theme** (`examples/extensions/tool-colors.mjs`): task →
-  `brightCyan` (named, still theme-relative); bash/read/edit/write/grep/
-  find/ls → `#d97757`; web_search/url_read → `#e6dcc3`. Ten names total —
-  the loader smoke asserts every lookup plus the banner `— 10 colors`.
-- **Tests (red-first)**: unit — boundary validation (`ansi256:0`/`255`
-  accepted; `256`, `-1`, `007`, `ansi256:`, `#D97757` accepted-case vs
-  `#rgb`, `#gggggg`, five-digit rejected), SGR bytes for both forms
-  (`#d97757` → `ESC[38;2;217;119;87m`, `ansi256:173` → `ESC[38;5;173m`),
-  fail-closed junk; registry — new tokens round-trip, message pin updated;
-  repl-tui e2e — an extension registering a hex and an ansi256 color, the
-  exact SGR bytes on the wire; the example-file smoke re-pinned to the
-  owner's palette. Existing 16-token tests and pins are untouched.
+  `brightCyan`; bash/read/edit/write/grep/find/ls → `#d97757`;
+  web_search/url_read → `#e6dcc3`. Ten names total. Required re-pins:
+  `test/repl-tui.test.ts:3444` (`\u001b[1m\u001b[95mtask` →
+  `\u001b[1m\u001b[96mtask` — the task e2e now loads the brightCyan
+  theme), `test/extensions-loader.test.ts:456` title ("eight registrations"
+  → ten), the smoke asserts all ten lookups plus banner `— 10 colors`, and
+  the example file's own comments.
+- **Docs deliverables** (all asserting the 16-token closure today):
+  `README.md:588-597`, `CHANGELOG.md:15`, `docs/m4-extensions-design.md:967-970`,
+  `src/extensions/types.ts:147-153` TSDoc, the example comments, and this
+  doc's D3 (:127) / D10 (:305) get supersede notes pointing here.
+- **Tests (red-first)**:
+  - unit — boundary validation (`ansi256:0`/`255` accepted; `256`, `-1`,
+    `007`, `ansi256:`, `+8`, `ANSI256:5`, `#rgb`, `#gggggg`, five-digit hex
+    rejected; `#D97757` accepted and stored lowercase); SGR bytes for both
+    forms (`#d97757` and `#D97757` → `ESC[38;2;217;119;87m`, `ansi256:0` →
+    `ESC[38;5;0m`, `ansi256:255` → `ESC[38;5;255m`), fail-closed junk;
+  - registry — new tokens round-trip (exact and wildcard), `"none"`
+    overrides an absolute token, message pin ×2 updated;
+  - repl-tui e2e — an extension registering `#d97757` and `ansi256:173`
+    paints the exact wire bytes; the example-file smoke re-pinned to the
+    owner's palette (task brightCyan, built-ins hex orange, web-search
+    beige);
+  - confirm-preview — absolute token renders byte-exactly.
+  Existing 16-token tests and all other pins are untouched.

@@ -1,7 +1,9 @@
 # Call closing status: design for independent review
 
-Status: **rev 4 — design review closed (round 3: CONFIRMED WITH NOTES,
-notes folded); implementation in progress on this branch**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
+Status: **implemented and merged (merge 4c2e9ea); design review closed
+(round 3: CONFIRMED WITH NOTES, notes folded in rev 4) and implementation
+review closed (APPROVE WITH CORRECTIONS, corrections folded; confirmation
+round CONFIRMED)**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 

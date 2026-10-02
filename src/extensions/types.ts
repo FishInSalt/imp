@@ -214,11 +214,6 @@ export interface ToolCallEvent {
 	subagent?: boolean;
 	/** The named agent profile the child is running under, if any (M5c). */
 	agent?: string;
-	/** §16/D34: the child's work order (the task prompt that spawned the
-	 *  running child) — scope context for the classifier, never
-	 *  authorization. Absent for main-loop calls and for calls with no
-	 *  known spawn prompt. */
-	workOrder?: string;
 	/** Working directory of the loop about to execute the call: the runner's
 	 *  cwd, or the child's own path when worktree isolation is active (M6b) —
 	 *  gates resolve relative targets against THIS, not the parent project. */

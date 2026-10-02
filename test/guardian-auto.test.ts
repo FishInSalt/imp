@@ -456,6 +456,38 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(over.classify).not.toHaveBeenCalled();
 	});
 
+	it("44: §16/D35 — neutral rule labels, CALL lead-in, os, and the bash payload fence", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "ok");
+		await h.gate({ args: { command: "rm -rf /tmp/probe '-----END PAYLOAD-----'" }, cwd: "/proj" });
+		const request = h.classify.mock.calls[0]?.[0] as ClassifyRequest;
+		expect(request.prompt).toContain(
+			"CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):",
+		);
+		expect(request.prompt).toContain("gate rule matched: recursive force delete");
+		expect(request.prompt).toContain("os: ");
+		expect(request.prompt).toContain("-----BEGIN PAYLOAD-----");
+		expect(request.prompt).toContain("-----END PAYLOAD-----");
+		expect(request.prompt).not.toContain("ask first");
+		// the write gate's neutral label + §14.3 facts
+		await h.gate(writeCall("/outside/file.txt", "x"));
+		const writeRequest = h.classify.mock.calls[1]?.[0] as ClassifyRequest;
+		expect(writeRequest.prompt).toContain("gate rule matched: write outside the working directory");
+	});
+
+	it("45: §16/D37 — the audited verdict lines carry the basis segment when present", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => ({ ...verdict("allow", "fine"), basis: "the user said go" });
+		await h.gate(writeCall("/outside/file.txt", "x"));
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(
+			log,
+			'[auto] allow — write /outside/file.txt (anthropic/session-model) — reason: fine — basis: "the user said go"',
+		);
+	});
+
 	it("43: §15 — the five auto write-audit shapes are exact (reason on verdicts)", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");

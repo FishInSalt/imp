@@ -67,6 +67,7 @@ import { runWithToolCallContext, type ToolCallContext } from "./extensions/call-
 import type { ExtensionRegistry } from "./extensions/registry.js";
 import type { ExtensionFailure, ToolCallDecision, ToolCallEvent } from "./extensions/types.js";
 import {
+	type GateDecisionEvent,
 	type GateDecisionInput,
 	GateDecisionLog,
 	type HumanRecordEntry,
@@ -315,6 +316,8 @@ export interface Runner {
 	/** §16/D33: record one gate-decision outcome (the confirm host's
 	 *  prompted-answer boundary calls this; gate dispatches only). */
 	recordGateDecision(event: GateDecisionInput): void;
+	/** A defensive copy of the gate-decision log (tests, diagnostics). */
+	gateDecisionSnapshot(): readonly GateDecisionEvent[];
 	newSession(): void;
 	/** `/sessions`: sessions saved for this cwd, newest first. */
 	listSessions(): SessionInfo[];
@@ -623,14 +626,16 @@ class RunnerImpl implements Runner {
 				// apart (M6a — closes the M5 design Q3 gap). cwd is the child's
 				// own working directory — the worktree path under isolation (M6b).
 				onToolCall: (call, info) =>
-					this.emitGatedToolCall({
-						type: "tool_call",
-						...call,
-						subagent: true,
-						agent: info.agent,
-						cwd: info.cwd,
-						...(info.workOrder === undefined ? {} : { workOrder: info.workOrder }),
-					}),
+					this.emitGatedToolCall(
+						{
+							type: "tool_call",
+							...call,
+							subagent: true,
+							agent: info.agent,
+							cwd: info.cwd,
+						},
+						{ workOrder: info.workOrder },
+					),
 				// Child tool_end feeds extension observers (audit trails) with
 				// the same discriminator. M10: child events ALSO flow to the live
 				// turn's onEvent tap (this.turnEventTap) with their info — the REPL
@@ -900,6 +905,11 @@ class RunnerImpl implements Runner {
 		this.gateDecisionLog.record(event);
 	}
 
+	/** A defensive copy of the gate-decision log (tests, diagnostics). */
+	gateDecisionSnapshot(): readonly GateDecisionEvent[] {
+		return this.gateDecisionLog.snapshot();
+	}
+
 	/** A defensive copy of the verified submission log (tests, diagnostics).
 	 *  The classify seam reads the copy frozen into the call snapshot instead. */
 	userInputSnapshot(): readonly HumanRecordEntry[] {
@@ -911,7 +921,10 @@ class RunnerImpl implements Runner {
 	 *  and the call-scoped snapshot (frozen HERE, at the gate) around the
 	 *  dispatch. The snapshot is what the handler's `classify` call sees, not
 	 *  the live log. */
-	private emitGatedToolCall(event: ToolCallEvent): Promise<ToolCallDecision | undefined> | undefined {
+	private emitGatedToolCall(
+		event: ToolCallEvent,
+		extras: { workOrder?: string } = {},
+	): Promise<ToolCallDecision | undefined> | undefined {
 		const marked: ToolCallEvent = { ...event, verifiedUserContext: this.userInputLog.verified };
 		const context: ToolCallContext = {
 			callId: event.toolCallId,
@@ -922,7 +935,7 @@ class RunnerImpl implements Runner {
 			callIdentity: this.callIdentityFor(event),
 			userInputs: this.userInputLog.snapshot(),
 			decisions: this.gateDecisionLog.snapshot(),
-			...(event.workOrder === undefined ? {} : { workOrder: event.workOrder }),
+			...(extras.workOrder === undefined ? {} : { workOrder: extras.workOrder }),
 		};
 		return runWithToolCallContext(context, () => this.options.extensions?.emitToolCall(marked));
 	}

@@ -229,10 +229,27 @@ function layoutRecord(
 	return lines.join("\n");
 }
 
-/** §16/D34: the WORK ORDER section (subagent calls only), JSON-quoted and
- *  capped head+tail. */
+/** §16/D34: the WORK ORDER section (subagent calls only), JSON-quoted; the
+ *  WHOLE section (lead + newline + body + marker) is ≤ WORK_ORDER_MAX_CHARS
+ *  so the extension mirror's reservation covers the true maximum. */
 export function renderWorkOrder(text: string): string {
-	return `${WORK_ORDER_LEAD}\n${elideRendered(JSON.stringify(text), WORK_ORDER_MAX_CHARS)}`;
+	const bodyBudget = WORK_ORDER_MAX_CHARS - WORK_ORDER_LEAD.length - 1;
+	return `${WORK_ORDER_LEAD}\n${elideWithin(JSON.stringify(text), bodyBudget)}`;
+}
+
+/** Head+tail elision whose RESULT (marker included) fits `budget` — the
+ *  marker's digit count depends on the elided length N, so solve for the
+ *  kept length instead of assuming a fixed marker size. */
+function elideWithin(text: string, budget: number): string {
+	if (text.length <= budget) return text;
+	let keep = budget;
+	for (; keep > budget - 32; keep -= 1) {
+		const marker = `…(elided ${text.length - keep} chars)…`;
+		if (keep + marker.length <= budget) break;
+	}
+	const marker = `…(elided ${text.length - keep} chars)…`;
+	const head = Math.ceil(keep * 0.6);
+	return `${text.slice(0, head)}${marker}${text.slice(text.length - (keep - head))}`;
 }
 
 /** #guardian-auto-mode (D8): the classify host exists exactly when the confirm

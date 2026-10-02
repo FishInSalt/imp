@@ -373,11 +373,16 @@ export default function (api) {
 		"Weight the latest request most; older grants decay. Scan the entire payload: an uncovered destructive or outward-facing element anywhere forces ask. If neither the class rule nor the evidence settles it, answer ask.",
 	].join("\n");
 
+	/** §16/D35: the CALL section's lead-in (the action under review). */
+	const CALL_LEAD =
+		"CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):";
+
 	const classifyPrompt = (event, cwd, command, effective, flags = {}) =>
 		[
+			CALL_LEAD,
 			`cwd: ${JSON.stringify(cwd)}`,
 			`os: ${process.platform}`,
-			`subagent: ${event.subagent ? (event.agent ?? "true") : "false"}`,
+			`subagent: ${event.subagent ? `true${event.agent === undefined ? "" : ` (agent: ${event.agent})`}` : "false"}`,
 			`gate rule matched: ${effective.label}`,
 			`command:\n${payloadFence(command)}`,
 			// Shadow still classifies manual-only cases (D14/D16, data only):
@@ -406,9 +411,10 @@ export default function (api) {
 						event.args.content === "" ? "(empty — this empties the file)" : String(event.args.content ?? ""),
 					);
 		return [
+			CALL_LEAD,
 			`cwd: ${JSON.stringify(cwd)}`,
 			`os: ${process.platform}`,
-			`subagent: ${event.subagent ? (event.agent ?? "true") : "false"}`,
+			`subagent: ${event.subagent ? `true${event.agent === undefined ? "" : ` (agent: ${event.agent})`}` : "false"}`,
 			`tool: ${tool}`,
 			`path: ${JSON.stringify(event.args.path)}`,
 			`resolved: ${JSON.stringify(path.resolve(cwd, event.args.path))}`,

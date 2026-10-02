@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentToolCallContext, runWithToolCallContext } from "../src/extensions/call-context.js";
 import { loadExtensions } from "../src/extensions/loader.js";
 import type { ToolCallEvent } from "../src/extensions/types.js";
-import { type HumanRecordEntry, UserInputLog } from "../src/extensions/user-input-log.js";
+import {
+	type GateDecisionEvent,
+	type HumanRecordEntry,
+	UserInputLog,
+} from "../src/extensions/user-input-log.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, gate, gatedTool, makeConsole, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
@@ -26,6 +30,9 @@ afterEach(() => {
 interface CapturedCall {
 	event: ToolCallEvent;
 	userInputs: readonly HumanRecordEntry[] | undefined;
+	tool?: string;
+	callIdentity?: string;
+	decisions?: readonly GateDecisionEvent[] | undefined;
 }
 
 /** A minimal extension runtime double: enough surface for the runner, and it
@@ -33,7 +40,14 @@ interface CapturedCall {
 function capturingRuntime(captured: CapturedCall[]) {
 	return {
 		emitToolCall: async (event: ToolCallEvent): Promise<undefined> => {
-			captured.push({ event, userInputs: currentToolCallContext()?.userInputs });
+			const store = currentToolCallContext();
+			captured.push({
+				event,
+				userInputs: store?.userInputs,
+				tool: store?.tool,
+				callIdentity: store?.callIdentity,
+				decisions: store?.decisions,
+			});
 			return undefined;
 		},
 		emitToolEnd: () => {},
@@ -81,11 +95,59 @@ describe("tool-call snapshot at the gate (#guardian-auto-mode D15/D17)", () => {
 			// appending after the gate does not rewrite the live call's snapshot
 			runner.recordUserInput("later message");
 			expect(captured[0]?.userInputs?.map((entry) => entry.text)).toEqual(["please run the gated tool"]);
+			// §16/D33: the snapshot carries the host-computed call identity
+			expect(captured[0]?.tool).toBe("gated");
+			expect(captured[0]?.callIdentity).toBe(
+				`gated @ ${JSON.stringify(base)} ${JSON.stringify(JSON.stringify({ message: "x" }))}`,
+			);
 			latch.resolve();
 			await turn;
 		} finally {
 			latch.resolve();
 		}
+	});
+
+	it("§16/D33: recorded decisions reach the frozen snapshot; /new clears them (D18)", async () => {
+		const base = await mkdtemp(path.join(tmpdir(), "imp-gate-ctx-"));
+		const { renderer } = makeRenderer();
+		const captured: CapturedCall[] = [];
+		const latch = gate();
+		let runner!: Runner;
+		try {
+			runner = await createRunner({
+				cwd: base,
+				argv: [],
+				settingsPath: path.join(base, "settings.json"),
+				model: "test-model",
+				maxTokens: 1024,
+				maxTurns: 4,
+				noContextFiles: true,
+				noSession: true,
+				renderer,
+				tools: [gatedTool(latch, "gated")],
+				extensions: capturingRuntime(captured) as never,
+				provider: scriptedProvider([
+					assistant([{ type: "toolCall", id: "t1", name: "gated", arguments: { message: "x" } }], "tool_use"),
+					assistant([{ type: "text", text: "done" }]),
+				]),
+			});
+			runner.recordGateDecision({
+				tool: "bash",
+				callIdentity: 'bash @ "/w" "rm -rf x"',
+				outcome: "approved",
+			});
+			expect(runner.gateDecisionSnapshot()).toHaveLength(1);
+			const turn = runner.runTurn({ userMessage: "go" });
+			await vi.waitFor(() => expect(captured.length).toBe(1));
+			expect(captured[0]?.decisions?.map((event) => event.callIdentity)).toEqual(['bash @ "/w" "rm -rf x"']);
+			latch.resolve();
+			await turn;
+		} finally {
+			latch.resolve();
+		}
+		// D18: a new conversation invalidates the decision record too
+		runner.newSession();
+		expect(runner.gateDecisionSnapshot()).toEqual([]);
 	});
 
 	it("marks the event false when the log is empty (D17)", async () => {
@@ -306,6 +368,16 @@ describe("gate-decision recording (#guardian-auto-mode §16/D33, pin 60)", () =>
 		choice = 0;
 		await confirm.handler("q4", undefined, undefined);
 		expect(seen).toHaveLength(3);
+		// readline path: the bound ask records its boolean answer
+		const rl = new TtyConfirm(renderer);
+		const rlSeen: string[] = [];
+		rl.bindRecorder((event) => rlSeen.push(event.outcome));
+		let answer = true;
+		rl.bind(async () => answer);
+		await withGate(() => rl.handler("q6"));
+		answer = false;
+		await withGate(() => rl.handler("q7"));
+		expect(rlSeen).toEqual(["approved", "denied"]);
 		// unbound confirm (no human): false and no record
 		const bare = new TtyConfirm(renderer);
 		const bareSeen: unknown[] = [];

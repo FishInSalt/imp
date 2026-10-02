@@ -1457,10 +1457,12 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 ## 16. Classifier context mechanism — track B (draft for independent review — 2026-10-02)
 
-> Status: **rev 2.0 — design review closed (R1 NEEDS REVISION → rev 1;
+> Status: **rev 2.1 — design review closed (R1 NEEDS REVISION → rev 1;
 > R2 CONFIRMED WITH NOTES → rev 1.1; R3 CONFIRMED WITH NOTES → rev 1.2;
-> R4 CONFIRMED). The `basis`/D30 conflict was resolved by owner decision
-> (option (b), D37 — locked 2026-10-02). Not implemented.**
+> R4 CONFIRMED); IMPLEMENTED at f4862e2; implementation review R5:
+> APPROVE WITH CORRECTIONS — folds applied (rev 2.1). The `basis`/D30
+> conflict was resolved by owner decision (option (b), D37). Awaiting R6
+> verification.**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1541,9 +1543,7 @@ Weight the latest request most; older grants decay. Scan the entire payload: an 
 **Output contract (host-appended; cannot be changed by the extension):**
 
 ```
-Reply with exactly one JSON object and nothing else:
-{"verdict":"allow"|"ask","reason":"<one short sentence>","basis":"<verbatim text of the covering user:/human: entry, or empty>"}
-Use "ask" whenever you are not certain; never invent authorization.
+Reply with exactly one JSON object and nothing else: {"verdict":"allow"|"ask","reason":"<one short sentence>","basis":"<verbatim text of the covering user:/human: entry, or empty>"}. Use "ask" whenever you are not certain; never invent authorization.
 ```
 
 **Rendering (one `user` message; oldest first; entry lines are JSON-quoted single lines).** The owner-validated paste artifact updated with the rev-1 changes (caller `cwd` in decision lines; `(latest)` tag):
@@ -1588,7 +1588,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 ```
 
   Invariants: anchors survive at every level (elided to the level's cap);
-  the caps apply to the rendered (post-escaping) text, so at level 1000
+  the caps count the kept (post-escaping) content — the elision marker
+  rides on top — so at level 1000
   the anchor set is ≤ ~4.6K rendered chars < 8192 and the loop always
   terminates before refusal when `allowance ≥ 8192`; the defensive
   `refuse` returns the same not-classified path as the caller's refusal;
@@ -1603,8 +1604,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   `privilege escalation (sudo)`; `IMP_GUARDIAN_BLOCK` patterns →
   `user-defined pattern`; write/edit outside the caller's cwd →
   `write outside the working directory`.
-- Long entries elide head+tail with `…(elided N chars)…`; bash commands
-  ride the same payload fence as writes (D35).
+- Long entries elide head+tail with `…(elided N chars)…`; the WORK ORDER
+  section's total (lead + newline + body + marker) is ≤
+  `WORK_ORDER_MAX_CHARS`; bash commands ride the same payload fence as
+  writes (D35).
 
 ### 16.4 Surfaces that change
 
@@ -1803,3 +1806,23 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   four notes verified folded; no new inconsistency; the §16 design text,
   decisions (D31–D39), formats, pins 54–67 and fold list are mutually
   consistent and red-first authorable. Design review closed.
+- **R5 (implementation review, independent, on f4862e2): APPROVE WITH
+  CORRECTIONS** — no P1; the channel split, record renderer
+  (escape-then-elide, anchors, caps, determinism), decisions
+  store/rendering, basis contract, temperature plumbing, work-order
+  threading, D18 clearing and the policy text all verified against §16
+  with 2706/2706 green. Two P2 corrections: (1) the rendered WORK ORDER
+  section could exceed the mirror's 4096 reservation (lead + body +
+  marker up to ~4230), so the mirror could under-fire for subagent write
+  calls — the section is now capped end-to-end (`elideWithin`) and
+  pinned; (2) missing pins — identity (61), labels/fence/lead-in/basis
+  extension half (64/65/67), readline + recorder wiring (60),
+  decisions→snapshot and D18 clearing (F4), level cascade/clamp/
+  escape-heavy (57/58), WORK ORDER section cap (63) — all added;
+  mutations M2/M6–M14 are now caught (M1/M3/M4/M5 already were). P3
+  folds: the CALL lead-in is emitted (F2); the `subagent:` fact matches
+  the documented `true (agent: <name>)` form; `workOrder` no longer
+  rides `ToolCallEvent` (passed through the gate call — no unlisted
+  event-surface addition); marker-on-top wording recorded in §16.3; the
+  contract block matches the emitted bytes. R6 (micro-verification)
+  pending.

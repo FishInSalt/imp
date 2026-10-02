@@ -21,6 +21,7 @@ import {
 	CLASSIFY_TIMEOUT_MS,
 	HostClassify,
 	renderHumanRecord,
+	renderWorkOrder,
 	WORK_ORDER_MAX_CHARS,
 } from "../src/repl/classify.js";
 import { assistant, makeRenderer } from "./helpers/fakes.js";
@@ -463,6 +464,35 @@ describe("§16.3 record renderer (pins 54/56/57/58/62)", () => {
 		expect(only?.startsWith("HUMAN RECORD (host-recorded, oldest first;")).toBe(true);
 	});
 
+	it("pin 57/58: the shrink cascade reaches level 1000", () => {
+		// Anchors alone exceed the allowance at levels 4000 and 2000; only the
+		// 1000 level fits — a regression that drops the cascade returns undefined.
+		const big = "q".repeat(3900);
+		const inputs = [u(big, 50), u(big, 1)];
+		const decisions = [
+			d(`bash @ "/w" "${"r".repeat(3900)}"`, 40),
+			d(`bash @ "/w" "${"s".repeat(3900)}"`, 30),
+		];
+		const text = renderHumanRecord(inputs, decisions, 6000, T_NOW);
+		expect(text).toBeDefined();
+		expect(text).toContain("…(elided ");
+		expect(text).toContain("[1m ago] user (latest):");
+	});
+
+	it("pin 57: escape-heavy content still respects the caps and anchor survival", () => {
+		const heavy = renderHumanRecord([u("\u0001".repeat(2000), 1)], [], 100_000, T_NOW);
+		expect(heavy).toBeDefined();
+		expect(heavy).toContain("…(elided ");
+	});
+
+	it("pin 63: the WORK ORDER section is ≤ 4096 chars including lead and marker", () => {
+		const section = renderWorkOrder("w".repeat(8000));
+		expect(section.length).toBeLessThanOrEqual(WORK_ORDER_MAX_CHARS);
+		expect(section).toContain("…(elided ");
+		expect(section.startsWith("WORK ORDER (model-authored")).toBe(true);
+		expect(renderWorkOrder("short order")).not.toContain("elided");
+	});
+
 	it("pin 54: the §16 constant set is exact", () => {
 		expect(HUMAN_RECORD_MAX_EVENTS).toBe(40);
 		expect(HUMAN_RECORD_ENTRY_CHARS).toBe(4000);
@@ -526,6 +556,18 @@ describe("§16 host assembly (pins 55/63/66/67 + the D39 floor)", () => {
 		expect(sink).toHaveLength(2);
 		await call(() => host.handler({ system: "s".repeat(atFloor + 1), prompt: "p" }, "guardian"));
 		expect(sink).toHaveLength(2); // room 8191 → undefined, no provider call
+	});
+
+	it("pin 58: the record clamp (min(room, 32768)) bounds a huge natural record", async () => {
+		const { host } = makeHost();
+		const sink: LLMRequest[] = [];
+		state.provider = textProvider('{"verdict":"ask","reason":"x"}', sink);
+		const inputs = Array.from({ length: 50 }, () => "R".repeat(1000));
+		await call(() => host.handler({ system: "s", prompt: "p" }, "guardian"), inputs);
+		const user = userTextOf(sink[0]);
+		const record = user.slice(0, user.length - "p".length - 2);
+		expect(record.length).toBeLessThanOrEqual(HUMAN_RECORD_MAX_CHARS); // 32768
+		expect(record.length).toBeGreaterThan(30_000); // the room was actually used
 	});
 
 	it("pin 67: basis parses tolerantly, cleans/caps, and is absent when missing", async () => {

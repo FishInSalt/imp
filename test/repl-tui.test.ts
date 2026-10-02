@@ -2891,6 +2891,80 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("aborting a running tool clears its live row (real run)", async () => {
+		const g = gate();
+		const slow: Tool = {
+			name: "slow",
+			description: "resolves on the gate or abort",
+			parameters: Type.Object({}),
+			async execute(_args, signal) {
+				await new Promise<void>((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+					void g.promise.then(() => resolve());
+				});
+				return { output: "done-after-abort" };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "s1", name: "slow", arguments: {} }], "tool_use"),
+				reply("after"),
+			],
+			{ tools: [slow] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("└─ running"));
+		const mark = env.terminal.writes.length;
+		env.terminal.data("\x1b"); // Esc aborts the turn; the tool resolves on the signal
+		// positive control: the post-abort fold paints (the result can never be skipped silently)
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(mark)).includes("done-after-abort"), 8000);
+		await settle(30);
+		expect(stripAnsi(env.terminal.frameSince(mark))).not.toContain("running");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("a reused tool_call id within one run never paints a live row (e2e, #tool-inline-live-rows)", async () => {
+		const first = gate();
+		const second = gate();
+		let calls = 0;
+		const held: Tool = {
+			name: "held",
+			description: "held",
+			parameters: Type.Object({ n: Type.Number() }),
+			async execute() {
+				calls++;
+				if (calls === 1) await first.promise;
+				else await second.promise;
+				return { output: `out${calls}` };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "dup", name: "held", arguments: { n: 1 } }], "tool_use"),
+				assistant([{ type: "toolCall", id: "dup", name: "held", arguments: { n: 2 } }], "tool_use"),
+				reply("done"),
+			],
+			{ tools: [held] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => calls === 1);
+		first.resolve();
+		await waitUntil(() => calls === 2);
+		await settle(400); // several 120ms ticks: a leaked row would repaint
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
+		second.resolve();
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"));
+		// The suppressed duplicate renders no fold of its own (pre-existing sink
+		// suppression; this batch only ensures it cannot paint live rows).
+		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("pi parity: the result fold renders INLINE — directly under its ● completion line, above the text that follows", async () => {
 		const g = gate();
 		const env = await startTuiRepl(
@@ -4593,6 +4667,23 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		shell.close();
 	});
 
+	it("a denied gate leaves no running row (suppress → close → clear, one chain)", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
+		await settle(150); // picker open: the row is suppressed
+		const mark = terminal.writes.length;
+		terminal.data("2"); // quick-pick: No (denied)
+		// The production chain: the picker's close repaints (the row would reappear)
+		// and the blocked tool_end lands in the same event chain, before any 16ms
+		// paint — no frame may ever carry a running row.
+		shell.setActivity({ phase: "working", tools: [], agents: [] });
+		await settle(30);
+		expect(stripAnsi(terminal.frameSince(mark))).not.toContain("running");
+		shell.close();
+	});
+
 	it("close() tears the picker down and the rows are gone with the shell (no stale rows)", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
@@ -4927,6 +5018,32 @@ describe("TuiShell activity region (M10 B)", () => {
 		shell.setActivity({ phase: "idle", tools: [], agents: [] });
 		await settle(30);
 		expect(stripAnsi(terminal.frameSince(mark))).not.toContain("└─ running");
+		shell.close();
+	});
+
+	it("tool live row shape: zero seconds omitted, count capped", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+			agents: [],
+		});
+		await settle(30);
+		const zero = stripAnsi(terminal.frameSince(0))
+			.split("\n")
+			.find((line) => line.includes("running"));
+		expect(zero?.trim()).toBe("└─ running"); // no `0s` form
+		const mark = terminal.writes.length;
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() - 10_000_000 }],
+			agents: [],
+		});
+		await settle(30);
+		expect(stripAnsi(terminal.frameSince(mark))).toContain("└─ running 9999+s");
 		shell.close();
 	});
 

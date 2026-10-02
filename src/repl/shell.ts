@@ -671,9 +671,12 @@ export class TuiShell implements LineInput {
 		}
 		const now = Date.now();
 		const frame = SPINNER_FRAMES[this.activityFrame] ?? "⠋";
-		const elapsed = (startedAtMs: number): string => {
+		// #tool-inline-live-rows (§5.1): zero omitted; the count is floored and
+		// capped at `9999+` by activityCount (the task rows' always-`0s` form is
+		// intentionally not copied).
+		const runningRow = (startedAtMs: number): string => {
 			const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1000));
-			return seconds === 0 ? "" : ` ${seconds}s`;
+			return seconds === 0 ? "└─ running" : `└─ running ${activityCount(seconds)}s`;
 		};
 		// The live status row. Label "working…" (pi's WorkingStatusIndicator
 		// wording): the model is active — streaming, thinking, or between
@@ -700,7 +703,7 @@ export class TuiShell implements LineInput {
 		// rows (genuine progress) stay, exactly as D10 established.
 		if (this.selector === null) {
 			for (const tool of this.activity.tools) {
-				nextLiveRows.set(tool.id, [`└─ running${elapsed(tool.startedAtMs)}`]);
+				nextLiveRows.set(tool.id, [runningRow(tool.startedAtMs)]);
 			}
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer

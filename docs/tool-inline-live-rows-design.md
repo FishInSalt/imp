@@ -484,3 +484,19 @@ parentheticals pointed at this document.
   per-message id uniqueness), the unqualified consistency sentence (§5.3.1),
   the terminal-duplicate pin's missing negative case (§7), and the scratch-run
   scope claim (§7). Design review **closed**; implementation follows.
+- **Implementation review (independent adversarial, 2026-10-02): APPROVE WITH
+  CORRECTIONS** — no P0/P1/P2. Mutation checks on scratch copies: dropping the
+  terminal-duplicate notification reddens 2 pins; keying it on
+  `entry.terminal || entry.input` reddens the negative pin; dropping the
+  picker suppression reddens 4; making `setCallLiveRows` ignore `null`
+  reddens 10. One survivor plus contract drift: `activityCount`'s `9999+` cap
+  was unimplemented and `elapsed()` was retained even though §5.1/§5.2
+  promised otherwise. Corrections folded: the tool row is built by
+  `runningRow()` (`└─ running`, zero omitted; `activityCount` seconds,
+  `9999+` cap) and `elapsed()` is deleted; new pins — exact row shape
+  (zero/cap), e2e reused-id through a real run (the hook's ordering), the
+  denied-gate same-chain frame, and a real-run abort; `createToolSink`'s
+  TSDoc documents the 4th parameter. §7's width sweep and the task-path
+  duplicate variant are covered by the shared-path pins
+  (`test/task-live-display.test.ts:209-213` and the transcript-level hook
+  tests); no separate duplicates added. Full suite after corrections: 2660.

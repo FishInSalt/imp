@@ -72,6 +72,9 @@ function formatResults(data, options) {
 
 /** @param {import("../../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
+	// The author's default for this extension's two tools (#tool-name-colors
+	// A3): a warm beige, overridable by any user registration in a theme.
+	api.suggestToolColor(["web_search", "url_read"], "#e6dcc3");
 	const cache = new Map();
 	let credential;
 	let generation = 0;

@@ -3455,7 +3455,10 @@ describe("runRepl with shell:tui", () => {
 					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo authored" } }],
 					"tool_use",
 				),
-				assistant([{ type: "toolCall", id: "t2", name: "gated", arguments: { message: "overridden" } }], "tool_use"),
+				assistant(
+					[{ type: "toolCall", id: "t2", name: "gated", arguments: { message: "overridden" } }],
+					"tool_use",
+				),
 				() => tool.promise.then(() => reply("tiers")),
 			],
 			{

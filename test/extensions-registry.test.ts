@@ -482,16 +482,17 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 
 	it("suggestions land below user registrations; the full order is user exact > user * > suggested exact > suggested * (A3)", () => {
 		const registry = new ExtensionRegistry();
-		loadOne(registry, "theme", () => registry.registerToolColor("bash", "green"));
-		const summary = loadOne(registry, "search", () => {
+		const themeSummary = loadOne(registry, "theme", () => registry.registerToolColor("bash", "green"));
+		const searchSummary = loadOne(registry, "search", () => {
 			registry.suggestToolColor("gated", "#E6DCC3"); // absolute tokens work here too, canonicalized
 			registry.suggestToolColor("*", "yellow");
 		});
 		expect(registry.toolColorFor("bash")).toBe("green"); // user exact
 		expect(registry.toolColorFor("gated")).toBe("#e6dcc3"); // suggested exact beats suggested *
 		expect(registry.toolColorFor("other")).toBe("yellow"); // suggested *
-		expect(summary?.colorCount).toBe(1);
-		expect(summary?.suggestedColorCount).toBe(2);
+		expect(themeSummary?.colorCount).toBe(1);
+		expect(themeSummary?.suggestedColorCount).toBe(0);
+		expect(searchSummary?.suggestedColorCount).toBe(2);
 	});
 
 	it("layer beats specificity: a user wildcard outranks an author's exact suggestion (A3)", () => {
@@ -546,7 +547,7 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 			registry.suggestToolColor("Bash", "red");
 			registry.suggestToolColor(["Bash"], "orange" as never); // color checked before entry names
 			registry.suggestToolColor(42 as never, "red");
-			registry.suggestToolColor("*", "cyan"); // the one good call stands
+			registry.suggestToolColor("ok", "cyan"); // the one good call stands
 		});
 		expect(lines).toEqual([
 			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
@@ -554,8 +555,8 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
 			"imp: extension clumsy could not suggest tool color — expected a name or an array of names, got number",
 		]);
-		expect(registry.toolColorFor("bash")).toBeUndefined();
-		expect(registry.toolColorFor("other")).toBe("cyan");
+		expect(registry.toolColorFor("bash")).toBeUndefined(); // rejected calls left nothing behind
+		expect(registry.toolColorFor("ok")).toBe("cyan");
 	});
 
 	it("a discarded section rolls suggestions back atomically; the key stays free (A3)", () => {

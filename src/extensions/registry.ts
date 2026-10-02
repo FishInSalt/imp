@@ -81,6 +81,8 @@ interface OpenSection {
 	contexts: ContextSection[];
 	/** #tool-name-colors: `{ name, color }` pairs registered by this factory. */
 	colors: { name: string; color: ToolColor }[];
+	/** #tool-name-colors A3: the author tier — `{ name, color }` suggestions. */
+	suggestedColors: { name: string; color: ToolColor }[];
 	hooks: StoredHandler[];
 	/** SA-06: entry-module identity, when the loader could capture it. */
 	identity?: ExtensionModuleIdentity;
@@ -145,9 +147,12 @@ export class ExtensionRegistry {
 	/** Committed handlers in load order (chain order is load order, design §6.1). */
 	private readonly handlers: StoredHandler[] = [];
 	/** #tool-name-colors: committed name (or `*`) → token, and its owner map
-	 *  (same first-wins conflict policy as tools/commands/contexts). */
+	 *  (same first-wins conflict policy as tools/commands/contexts).
+	 *  A3: the suggested pair mirrors it one tier lower. */
 	private readonly toolColors = new Map<string, ToolColor>();
 	private readonly colorOwners = new Map<string, string>();
+	private readonly suggestedToolColors = new Map<string, ToolColor>();
+	private readonly suggestedColorOwners = new Map<string, string>();
 	private section: OpenSection | null = null;
 	/** Status texts by extension bucket (`origin:name`) then author key. */
 	private readonly statuses = new Map<string, Map<string, string>>();
@@ -189,8 +194,18 @@ export class ExtensionRegistry {
 	beginExtension(name: string, origin: ExtensionOrigin, identity?: ExtensionModuleIdentity): void {
 		this.section =
 			identity === undefined
-				? { name, origin, tools: [], commands: [], contexts: [], colors: [], hooks: [] }
-				: { name, origin, tools: [], commands: [], contexts: [], colors: [], hooks: [], identity };
+				? { name, origin, tools: [], commands: [], contexts: [], colors: [], suggestedColors: [], hooks: [] }
+				: {
+						name,
+						origin,
+						tools: [],
+						commands: [],
+						contexts: [],
+						colors: [],
+						suggestedColors: [],
+						hooks: [],
+						identity,
+					};
 	}
 
 	/** Merge the open section into the record; returns its banner summary. */
@@ -213,6 +228,10 @@ export class ExtensionRegistry {
 			this.toolColors.set(name, color);
 			this.colorOwners.set(name, section.name);
 		}
+		for (const { name, color } of section.suggestedColors) {
+			this.suggestedToolColors.set(name, color);
+			this.suggestedColorOwners.set(name, section.name);
+		}
 		this.handlers.push(...section.hooks);
 		if (section.identity !== undefined) this.moduleIdList.push(section.identity);
 		const summary: ExtensionSummary = {
@@ -223,6 +242,7 @@ export class ExtensionRegistry {
 			contextCount: section.contexts.length,
 			hookCount: section.hooks.length,
 			colorCount: section.colors.length,
+			suggestedColorCount: section.suggestedColors.length,
 			...(section.identity === undefined
 				? {}
 				: { sourcePath: section.identity.path, sha256: section.identity.sha256 }),
@@ -348,25 +368,42 @@ export class ExtensionRegistry {
 
 	/** #tool-name-colors (design D1/D2, A2): register a name (or `*`) → a
 	 *  named token, an absolute `ansi256:N`/`#rrggbb`, or `none` (hex is
-	 *  stored lowercased). Total — every malformed shape becomes one report line and the
-	 *  call stores nothing (all-or-nothing, so a multi-name call never lands
+	 *  stored lowercased). The user tier (A3) — it outranks any suggestion.
+	 *  Total — every malformed shape becomes one report line and the call
+	 *  stores nothing (all-or-nothing, so a multi-name call never lands
 	 *  partially); duplicates (against earlier sections, earlier calls in
 	 *  this section, or within this very call) reject the whole call, first
 	 *  registration wins. An empty `names` array is a vacuous no-op. */
 	registerToolColor(names: string | readonly string[], color: unknown): void {
+		this.storeToolColor(false, names, color);
+	}
+
+	/** #tool-name-colors (A3): the author tier — a tool's own extension
+	 *  suggests its default look; any user registration (exact or `*`)
+	 *  outranks any suggestion. Same validation, all-or-nothing and
+	 *  first-wins policy, scoped to its own tier (cross-tier is never a
+	 *  conflict). */
+	suggestToolColor(names: string | readonly string[], color: unknown): void {
+		this.storeToolColor(true, names, color);
+	}
+
+	/** Shared tiered storage (A3): wording and destination follow the tier;
+	 *  validation and per-call atomicity are identical. */
+	private storeToolColor(suggest: boolean, names: unknown, color: unknown): void {
 		const section = this.section;
 		if (section === null) return;
+		const verb = suggest ? "suggest tool color" : "register tool color";
 		const list: readonly unknown[] | null =
 			typeof names === "string" ? [names] : Array.isArray(names) ? names : null;
 		if (list === null) {
 			this.report(
-				`imp: extension ${section.name} could not register tool color — expected a name or an array of names, got ${typeof names}`,
+				`imp: extension ${section.name} could not ${verb} — expected a name or an array of names, got ${typeof names}`,
 			);
 			return;
 		}
 		if (!isToolColor(color)) {
 			this.report(
-				`imp: extension ${section.name} could not register tool color — unknown color (expected one of: ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got "${firstLine(String(color), 160)}")`,
+				`imp: extension ${section.name} could not ${verb} — unknown color (expected one of: ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got "${firstLine(String(color), 160)}")`,
 			);
 			return;
 		}
@@ -374,34 +411,43 @@ export class ExtensionRegistry {
 			if (typeof entry !== "string" || (entry !== "*" && !NAME_PATTERN.test(entry))) {
 				const shown = firstLine(String(entry), 160);
 				this.report(
-					`imp: extension ${section.name} could not register tool color for "${shown}" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "${shown}")`,
+					`imp: extension ${section.name} could not ${verb} for "${shown}" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "${shown}")`,
 				);
 				return;
 			}
 		}
+		const entries = suggest ? section.suggestedColors : section.colors;
+		const owners = suggest ? this.suggestedColorOwners : this.colorOwners;
 		const seen = new Set<string>();
 		for (const entry of list) {
 			const name = entry as string;
 			const owner =
-				this.conflictOwner(this.colorOwners, section.colors, name, (c) => c.name) ??
+				this.conflictOwner(owners, entries, name, (c) => c.name) ??
 				(seen.has(name) ? section.name : undefined);
 			if (owner !== undefined) {
 				this.report(
-					`imp: extension ${section.name} could not register tool color for "${name}" — already registered by ${owner}`,
+					`imp: extension ${section.name} could not ${verb} for "${name}" — already ${
+						suggest ? "suggested" : "registered"
+					} by ${owner}`,
 				);
 				return;
 			}
 			seen.add(name);
 		}
-		for (const entry of list)
-			section.colors.push({ name: entry as string, color: canonicalToolColor(color) });
+		for (const entry of list) entries.push({ name: entry as string, color: canonicalToolColor(color) });
 	}
 
-	/** #tool-name-colors: extension lookup — exact name first, then the `*`
-	 *  slot (specificity across keys; load order only arbitrates one key).
-	 *  The composed resolver layers defaults on top of this (repl.ts). */
+	/** #tool-name-colors: extension lookup (A3 tiers) — user exact, user
+	 *  `*`, then the author suggestions in the same shape. Layer beats
+	 *  specificity: any user entry outranks any suggestion. Nothing here
+	 *  means bold-only at the render point. */
 	toolColorFor(name: string): ToolColor | undefined {
-		return this.toolColors.get(name) ?? this.toolColors.get("*");
+		return (
+			this.toolColors.get(name) ??
+			this.toolColors.get("*") ??
+			this.suggestedToolColors.get(name) ??
+			this.suggestedToolColors.get("*")
+		);
 	}
 
 	/** api.on(): validate the event name and handler, then store in load order. */

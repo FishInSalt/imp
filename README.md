@@ -591,12 +591,20 @@ export default function (api) {
   token** — `#rrggbb` (truecolor) or `ansi256:N` (0–255; the portable
   choice). Named tokens follow your terminal theme; absolute tokens
   deliberately do not (that is the point of choosing one). Exact names
-  beat `"*"`; the first registration of a name wins (later ones report).
-  **No colors are shipped by default** — with no theme extension every
-  name keeps the plain bold look; opt in by linking or copying the theme
-  `examples/extensions/tool-colors.mjs` (built-ins Claude-orange, `task`
-  bright cyan, the web-search tools beige) into `~/.imp/extensions/`
-  and editing it to taste.
+  beat `"*"`; the first registration of a name wins within the tier
+  (later ones report).
+  `suggestToolColor(names, color)` is the same API one tier weaker: a
+  tool's own extension suggests its default look, and **any user
+  registration outranks any suggestion** (resolution: user exact > user
+  `"*"` > suggested exact > suggested `"*"`; cross-tier duplicates are
+  legal, suggestions conflict only among themselves). Use it in
+  tool-providing extensions; use `registerToolColor` in themes.
+  **No colors are shipped by default** — with no theme extension the
+  built-ins keep the plain bold look; opt in by linking or copying the
+  theme `examples/extensions/tool-colors.mjs` (built-ins Claude-orange,
+  `task` bright cyan; the web-search tools take their beige from the
+  web-search extension's own suggestion) into `~/.imp/extensions/` and
+  editing it to taste.
 - A bad extension never kills imp: load failures, registration conflicts, and
   handler throws each become one `imp:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).

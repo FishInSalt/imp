@@ -15,15 +15,19 @@ All notable changes to imp are documented here. The format follows
   `"*"`, with any of the 16 standard-16 tokens, `"none"` (bold-only), or an
   absolute token: `#rrggbb` (truecolor) or `ansi256:N` (0–255). Named
   tokens follow the terminal theme; absolute tokens do not, by design.
-  Nothing is colored by default; opt-in themes ship as extensions (the
-  owner's palette lives in `examples/extensions/tool-colors.mjs`, which also
-  doubles as the API example). Exact names beat the wildcard, the first
-  registration of a key wins, hex is stored lowercased, and
-  print/replay/legacy surfaces are untouched. Colors never affect layout —
-  spans are applied after the row plan, so visible widths are unchanged; a
-  colors-only theme counts in the startup banner (`— 10 colors`). Design +
-  three adversarial review rounds + two amendments:
-  `docs/tool-name-colors-design.md`.
+  `api.suggestToolColor(names, color)` is the author tier: a tool's own
+  extension suggests its default look, and any user registration outranks
+  any suggestion (resolution: user exact > user `"*"` > suggested exact >
+  suggested `"*"`). Nothing is colored by default; opt-in themes ship as
+  extensions (the owner's palette lives in
+  `examples/extensions/tool-colors.mjs`, which also doubles as the API
+  example). Exact names beat the wildcard, the first registration of a key
+  wins within its tier, hex is stored lowercased, and print/replay/legacy
+  surfaces are untouched. Colors never affect layout — spans are applied
+  after the row plan, so visible widths are unchanged; a colors-only theme
+  counts in the startup banner (`— 8 colors`), suggestions as their own
+  count (`— 2 tools, 2 suggested colors`). Design + three adversarial
+  review rounds + three amendments: `docs/tool-name-colors-design.md`.
 
 ### Changed
 

@@ -170,6 +170,7 @@ describe("extension load isolation (design §7)", () => {
 			return { output: "never" };
 		},
 	});
+	api.suggestToolColor("bash", "red");
 	throw new Error("factory exploded");
 }
 `,
@@ -179,6 +180,7 @@ describe("extension load isolation (design §7)", () => {
 		expect(lines).toEqual(["imp: extension bad failed to load — factory exploded"]);
 		expect(loaded.summaries.map((s) => s.name)).toEqual(["good"]);
 		expect(loaded.runtime.tools.map((t) => t.name)).toEqual(["good_tool"]); // atomic discard
+		expect(loaded.runtime.toolColorFor("bash")).toBeUndefined(); // suggestions discard too (A3)
 		expect(loaded.failures[0]?.error).toBe("factory exploded");
 	});
 });
@@ -450,10 +452,60 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 			"imp: extension hues could not register tool color for 2 names — registration only works while the factory runs",
 		]);
 	});
+
+	it("the suggest form has its own post-load wording (A3)", async () => {
+		const env = await setup();
+		await writeExtensionFiles(env.cwd, {
+			"hues.mjs": `export default function (api) {
+	globalThis.__impHuesApi3 = api;
+}
+`,
+		});
+		const { lines, loaded } = await load(env);
+		try {
+			const api = (
+				globalThis as {
+					__impHuesApi3?: { suggestToolColor(names: string | string[], color: string): void };
+				}
+			).__impHuesApi3;
+			api?.suggestToolColor("read", "blue");
+			api?.suggestToolColor(["ls", "find"], "blue");
+		} finally {
+			delete (globalThis as { __impHuesApi3?: unknown }).__impHuesApi3;
+		}
+		expect(lines).toEqual([
+			'imp: extension hues could not suggest tool color for "read" — suggestions only work while the factory runs',
+			"imp: extension hues could not suggest tool color for 2 names — suggestions only work while the factory runs",
+		]);
+		expect(loaded.runtime.toolColorFor("read")).toBeUndefined();
+	});
+
+	it("banner counts suggested colors separately, singular and plural (A3)", () => {
+		const base = {
+			origin: "project" as const,
+			toolCount: 0,
+			commandCount: 0,
+			contextCount: 0,
+			hookCount: 0,
+			colorCount: 0,
+			suggestedColorCount: 0,
+		};
+		expect(
+			extensionBannerLines([
+				{ ...base, name: "both", toolCount: 1, suggestedColorCount: 2 },
+				{ ...base, name: "solo", suggestedColorCount: 1 },
+				{ ...base, name: "none" },
+			]),
+		).toEqual([
+			"\u25aa extension both [project] — 1 tool, 2 suggested colors",
+			"\u25aa extension solo [project] — 1 suggested color",
+			"\u25aa extension none [project] — no registrations",
+		]);
+	});
 });
 
 describe("examples/extensions/tool-colors.mjs (#tool-name-colors, A1/A2)", () => {
-	it("loads through the real loader: ten registrations, banner counts colors", async () => {
+	it("loads through the real loader: eight registrations, banner counts colors", async () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, {
 			"tool-colors.mjs": readFileSync(path.resolve("examples/extensions/tool-colors.mjs"), "utf8"),
@@ -463,12 +515,13 @@ describe("examples/extensions/tool-colors.mjs (#tool-name-colors, A1/A2)", () =>
 		for (const name of ["bash", "read", "edit", "write", "grep", "find", "ls"])
 			expect(loaded.runtime.toolColorFor(name)).toBe("#d97757");
 		expect(loaded.runtime.toolColorFor("task")).toBe("brightCyan");
-		expect(loaded.runtime.toolColorFor("web_search")).toBe("#e6dcc3");
-		expect(loaded.runtime.toolColorFor("url_read")).toBe("#e6dcc3");
-		expect(loaded.summaries[0]?.colorCount).toBe(10);
+		expect(loaded.runtime.toolColorFor("web_search")).toBeUndefined(); // web-search owns these now (A3)
+		expect(loaded.runtime.toolColorFor("url_read")).toBeUndefined();
+		expect(loaded.summaries[0]?.colorCount).toBe(8);
+		expect(loaded.summaries[0]?.suggestedColorCount).toBe(0);
 		// a colors-only extension no longer reads "— no registrations"
 		expect(extensionBannerLines(loaded.summaries)).toEqual([
-			"\u25aa extension tool-colors [project] — 10 colors",
+			"\u25aa extension tool-colors [project] — 8 colors",
 		]);
 	});
 });

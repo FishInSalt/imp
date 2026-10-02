@@ -259,7 +259,7 @@ describe("URL reading and deterministic formatter fixtures", () => {
 	);
 	it("keeps execute text unchanged and permits local addresses with fully stubbed fetch", async () => {
 		const tools = new Map<string, Tool>();
-		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool) });
+		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool), suggestToolColor: () => {} });
 		const fetch = vi
 			.fn()
 			.mockResolvedValue(
@@ -292,7 +292,7 @@ describe("URL reading and deterministic formatter fixtures", () => {
 		);
 		vi.stubGlobal("fetch", fetch);
 		const tools = new Map<string, Tool>();
-		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool) });
+		register({ registerTool: (tool: Tool) => tools.set(tool.name, tool), suggestToolColor: () => {} });
 		const tool = tools.get("web_search")!;
 		const args = { query: "test", max_results: 10, full: true };
 		const raw = await tool.execute(args, new AbortController().signal);

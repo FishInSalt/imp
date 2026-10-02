@@ -201,15 +201,27 @@ function extensionApi(
 	facts: { cwd: string; version: string; origin: ExtensionOrigin; name: string },
 	report: (line: string) => void,
 ): ExtensionApi {
-	const whileLoading = (what: string, register: () => void): void => {
+	const whileLoading = (
+		what: string,
+		register: () => void,
+		tail = "registration only works while the factory runs",
+	): void => {
 		if (!registry.hasOpenSection()) {
-			report(
-				`imp: extension ${facts.name} could not ${what} — registration only works while the factory runs`,
-			);
+			report(`imp: extension ${facts.name} could not ${what} — ${tail}`);
 			return;
 		}
 		register();
 	};
+	// #tool-name-colors (A2/A3): the colo(u)r registrations report the
+	// attempted names — a single name verbatim (bounded), an array by count.
+	const colorWhat = (verb: string, names: unknown): string =>
+		`${verb}${
+			typeof names === "string"
+				? ` for "${firstLine(names, 40)}"`
+				: Array.isArray(names)
+					? ` for ${names.length} name${names.length === 1 ? "" : "s"}`
+					: ""
+		}`;
 	return {
 		cwd: facts.cwd,
 		version: facts.version,
@@ -225,15 +237,12 @@ function extensionApi(
 		// #tool-name-colors: the post-load report names what was attempted —
 		// a single name verbatim (bounded), an array by its count.
 		registerToolColor: (names, color) =>
+			whileLoading(colorWhat("register tool color", names), () => registry.registerToolColor(names, color)),
+		suggestToolColor: (names, color) =>
 			whileLoading(
-				`register tool color${
-					typeof names === "string"
-						? ` for "${firstLine(names, 40)}"`
-						: Array.isArray(names)
-							? ` for ${names.length} name${names.length === 1 ? "" : "s"}`
-							: ""
-				}`,
-				() => registry.registerToolColor(names, color),
+				colorWhat("suggest tool color", names),
+				() => registry.suggestToolColor(names, color),
+				"suggestions only work while the factory runs",
 			),
 		on: (event: ExtensionEventName, handler: ExtensionEventHandlerMap[ExtensionEventName]): void => {
 			whileLoading(`subscribe to ${String(event)}`, () => registry.subscribe(event, handler));
@@ -329,6 +338,9 @@ export function extensionBannerLines(summaries: readonly ExtensionSummary[]): st
 		// #tool-name-colors (A1): a colors-only theme extension no longer reads
 		// "— no registrations"; zero keeps every pre-existing banner byte.
 		count(summary.colorCount, "color", "colors");
+		// A3: author suggestions count separately — they are defaults, not
+		// decisions; zero keeps every pre-existing byte.
+		count(summary.suggestedColorCount, "suggested color", "suggested colors");
 		const tail = parts.length > 0 ? ` — ${parts.join(", ")}` : " — no registrations";
 		return `▪ extension ${summary.name} [${summary.origin}]${tail}`;
 	});

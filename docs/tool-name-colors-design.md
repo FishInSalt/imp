@@ -90,8 +90,12 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
 - Keys: exact tool name; plus at most one `"*"` per registry (the wildcard
   slot has its own conflicting owner).
 - Resolution `registry.toolColorFor(name)`:
-  `exact map` → `"*" map` → `undefined`.
-- **Specificity across keys, load order only within a key** (normative):
+  `exact map` → `"*" map` → `undefined`. *(Superseded by Amendment 3:
+  two tiers — user exact → user `*` → suggested exact → suggested `*` →
+  `undefined`.)*
+- **Specificity across keys, load order only within a key** (normative;
+  within one tier — Amendment 3 adds the author-suggestion tier below the
+  user tier):
   an exact registration always beats a wildcard one regardless of which
   extension loaded first — extension A (`"*" → blue`) plus extension B
   (`"bash" → green`) resolves `bash` to green, and that is *not* a
@@ -458,3 +462,123 @@ themes.
     beige);
   - confirm-preview — absolute token renders byte-exactly.
   Existing 16-token tests and all other pins are untouched.
+
+## Amendment 3 — source tiers: the tool's extension suggests, the user decides (owner direction, 2026-10-02)
+
+Context: owner principle — "扩展注册的工具，应该由扩展来决定其颜色"
+(the tool's own extension owns its default appearance), while keeping the
+original motivation, "不同用户有不同审美" (the user has the final say).
+Precedent: Claude Code subagent definitions carry `color:` while the host's
+`<color>_FOR_SUBAGENTS_ONLY` tokens let a theme remap what each color looks
+like; opencode agents carry `color:`. The flat model cannot express
+"author default + user override": one key has exactly one winner, decided
+by extension-name load order — whether a theme can override an extension's
+color (or vice versa) is name-luck, not contract.
+
+Owner-approved direction ("开 Amendment 3" in response to this proposal):
+add a weak **author tier**; the existing method becomes the **user tier**;
+**layer beats specificity**.
+
+- **API**: new `api.suggestToolColor(names, color)` — same signature; same
+  validation (`isToolColor`, the `NAME_PATTERN` / `"*"` check, hex
+  canonicalized lowercased); same per-call atomicity (any bad name or
+  in-tier conflict drops the whole call with one report); same load-gating
+  and never-throws contract. `api.registerToolColor(names, color)` is
+  unchanged and becomes the user tier by semantics only.
+- **Two tiers**:
+  - *user tier* — `registerToolColor`; report prefix `could not register
+    tool color`, duplicate reads `already registered by X` (both
+    unchanged);
+  - *author tier* — `suggestToolColor`; report prefix `could not suggest
+    tool color`, duplicate reads `already suggested by X`; first
+    suggestion of a key wins (the same first-wins policy, inside the
+    tier).
+  - Cross-tier is **never** a conflict: the same key may be both
+    registered and suggested (no report); resolution favors the user side.
+  - Post-load report (review fold): the loader's `whileLoading` gains a
+    tail-word parameter so the suggest variant reads exactly
+    `imp: extension X could not suggest tool color for "web_search" —
+    suggestions only work while the factory runs` (register keeps
+    `registration only works while the factory runs` byte-for-byte); the
+    name/count shaping (`for "name"` / `for N names`) is reused.
+- **Resolution order** (`registry.toolColorFor`; the render lookup and
+  everything downstream is unchanged):
+  1. user exact name → 2. user `*` → 3. suggested exact name →
+  4. suggested `*` → 5. `undefined` (bold-only).
+  Layer beats specificity (owner-approved): any user registration outranks
+  any suggestion, including the user `*` over an author's exact
+  suggestion. Documented tradeoff: a user cannot combine "author
+  defaults" with a global wildcard — the wildcard claims unclaimed *and*
+  suggested tools. Enforcing a user color for a suggested tool and
+  silencing a suggestion (`registerToolColor("web_search", "none")`) are
+  both always possible.
+  Rejected alternative: specificity-first (author exact over user `*`) —
+  rejected because installing an extension would silently punch holes in
+  an existing user theme; "the user layer is entirely above the author
+  layer" is the simpler contract. `"none"` and `"*"` are legal in both
+  tiers and participate in the order (a suggested exact `none` beats a
+  suggested wildcard color).
+- **Storage**: `OpenSection.suggestedColors: { name; color: ToolColor }[]`
+  (both section literals get the empty array), committed
+  `suggestedToolColors` Map + `suggestedColorOwners` (mirroring the user
+  tier); existing user-tier storage and `colorOwners` untouched.
+  `discardExtension` drops both tiers (same open section).
+- **Summary/banner**: `ExtensionSummary.suggestedColorCount`; the banner
+  appends `N suggested color(s)` after the existing counts — web-search
+  reads `— 2 tools, 2 suggested colors`; a suggestions-only extension
+  reads `— 2 suggested colors`; both zero keeps every pre-existing byte
+  (the colors-only theme now reads `— 8 colors`).
+- **Examples**:
+  - `examples/extensions/web-search/index.mjs` gains
+    `api.suggestToolColor(["web_search", "url_read"], "#e6dcc3")` — the
+    author default, overridable by any user registration.
+  - `examples/extensions/tool-colors.mjs` drops the two web lines (those
+    tools' look now belongs to web-search); the theme keeps the owner's
+    built-in palette: 7 × `#d97757` + `task` brightCyan = 8 user
+    registrations. The header comment teaches the two tiers.
+- **Compat**: with no suggestions anywhere, lookup is byte-identical to
+  Amendment 2; no existing theme or extension changes behavior.
+- **Re-pin inventory** (design round-1 review folded — the original list
+  was incomplete):
+  - `test/extensions-loader.test.ts:455-474` tool-colors smoke → eight
+    lookups, `web_search`/`url_read` now `undefined` (that file alone no
+    longer colors them), `colorCount === 8`, banner `— 8 colors`, title
+    wording; plus a new post-load suggest pin mirroring
+    `:435-450`;
+  - `test/extensions-contrib.test.ts:221` web-search banner `— 2 tools` →
+    `— 2 tools, 2 suggested colors`, plus a `toolColorFor("web_search")
+    === "#e6dcc3"` assertion via the suggestion;
+  - **web-search factory stubs — all three** (the factory now calls
+    `api.suggestToolColor`, a missing member is a TypeError inside the
+    example and can kill whole files): `test/tool-display-refinement.test.ts:262/295`,
+    `test/web-search.test.ts:54` (would kill every case in the file),
+    `test/web-search-presentation.test.ts:223`;
+  - docs, enumerated: `src/extensions/types.ts:130` "eleven members" →
+    twelve; `types.ts:147-159` TSDoc duplicate sentence gains the
+    cross-tier qualifier ("within its tier") + a `suggestToolColor`
+    sibling; `README.md:594` same qualifier, `README.md:598` reworded (the
+    web-search beige now comes from the extension's own suggestion);
+    `CHANGELOG.md:24` `— 10 colors` → `— 8 colors` (plus the suggestion
+    story); `docs/m4-extensions-design.md`; the two D1/D2 supersede
+    pointers above; and the stale pre-A1 comment at
+    `registry.ts:400-402` ("layers defaults on top of this") is rewritten
+    while touching `toolColorFor`.
+- **Tests (red-first)**:
+  - registry — a lone suggestion lands; full resolution matrix (user
+    exact > user `*` > suggested exact > suggested `*`); same key in both
+    tiers **in both registration orders** (register→suggest and
+    suggest→register; no report, user side wins); in-tier duplicate pin
+    (`already suggested by X`); validation pins ×2 with the suggest
+    prefix; per-call atomicity; hex canonicalized in the suggested tier;
+    a thrown factory discards suggestions too (mirror of the existing
+    discard path); report precedence pinned precisely: `names` of a
+    non-string/non-array type is rejected first (`registry.ts:361-365`),
+    then a bad color (`:367`) before any entry-name check (`:374`) — the
+    pin uses an entry-level bad name + bad color to lock the
+    color-before-entry order;
+  - loader — banner pins (tools + suggestions; suggestions-only;
+    singular `1 suggested color`); the post-load suggest report pin;
+  - repl-tui — an extension file calling `suggestToolColor` paints the
+    wire bytes; a user registration for the same name overrides it;
+  - contrib — the real web-search load asserts the suggestion + banner.
+  Existing 16-token / A2 pins and confirm-preview stay untouched.

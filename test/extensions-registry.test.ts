@@ -480,6 +480,95 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 		expect(registry.toolColorFor("task")).toBe("none"); // explicit opt-out wins
 	});
 
+	it("suggestions land below user registrations; the full order is user exact > user * > suggested exact > suggested * (A3)", () => {
+		const registry = new ExtensionRegistry();
+		const themeSummary = loadOne(registry, "theme", () => registry.registerToolColor("bash", "green"));
+		const searchSummary = loadOne(registry, "search", () => {
+			registry.suggestToolColor("gated", "#E6DCC3"); // absolute tokens work here too, canonicalized
+			registry.suggestToolColor("*", "yellow");
+		});
+		expect(registry.toolColorFor("bash")).toBe("green"); // user exact
+		expect(registry.toolColorFor("gated")).toBe("#e6dcc3"); // suggested exact beats suggested *
+		expect(registry.toolColorFor("other")).toBe("yellow"); // suggested *
+		expect(themeSummary?.colorCount).toBe(1);
+		expect(themeSummary?.suggestedColorCount).toBe(0);
+		expect(searchSummary?.suggestedColorCount).toBe(2);
+	});
+
+	it("layer beats specificity: a user wildcard outranks an author's exact suggestion (A3)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "theme", () => registry.registerToolColor("*", "blue"));
+		loadOne(registry, "search", () => {
+			registry.suggestToolColor("gated", "magenta");
+			registry.suggestToolColor("bash", "red");
+		});
+		loadOne(registry, "theme2", () => registry.registerToolColor("bash", "green"));
+		expect(lines).toEqual([]);
+		expect(registry.toolColorFor("gated")).toBe("blue"); // user * beats the exact suggestion
+		expect(registry.toolColorFor("bash")).toBe("green"); // user exact beats user * and the suggestion
+		expect(registry.toolColorFor("other")).toBe("blue");
+	});
+
+	it("the same key may be registered and suggested in either order — cross-tier is not a conflict (A3)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "search", () => registry.suggestToolColor("web_search", "#e6dcc3"));
+		loadOne(registry, "theme", () => registry.registerToolColor("web_search", "red")); // suggest → register
+		loadOne(registry, "theme2", () => registry.registerToolColor("url_read", "none"));
+		loadOne(registry, "search2", () => registry.suggestToolColor("url_read", "#e6dcc3")); // register → suggest
+		expect(lines).toEqual([]);
+		expect(registry.toolColorFor("web_search")).toBe("red");
+		expect(registry.toolColorFor("url_read")).toBe("none"); // user silence wins
+	});
+
+	it("suggestions conflict only within their tier — first wins, reported as already suggested (A3)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "alpha", () => registry.suggestToolColor("bash", "red"));
+		loadOne(registry, "beta", () => {
+			registry.suggestToolColor("bash", "blue");
+			registry.suggestToolColor("*", "white");
+		});
+		loadOne(registry, "gamma", () => registry.suggestToolColor("*", "black"));
+		expect(lines).toEqual([
+			'imp: extension beta could not suggest tool color for "bash" — already suggested by alpha',
+			'imp: extension gamma could not suggest tool color for "*" — already suggested by beta',
+		]);
+		expect(registry.toolColorFor("bash")).toBe("red");
+		expect(registry.toolColorFor("other")).toBe("white");
+	});
+
+	it("suggestion validation mirrors the user tier with suggest wording (all-or-nothing) (A3)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "clumsy", () => {
+			registry.suggestToolColor("bash", "orange" as never);
+			registry.suggestToolColor("Bash", "red");
+			registry.suggestToolColor(["Bash"], "orange" as never); // color checked before entry names
+			registry.suggestToolColor(42 as never, "red");
+			registry.suggestToolColor("ok", "cyan"); // the one good call stands
+		});
+		expect(lines).toEqual([
+			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			'imp: extension clumsy could not suggest tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
+			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			"imp: extension clumsy could not suggest tool color — expected a name or an array of names, got number",
+		]);
+		expect(registry.toolColorFor("bash")).toBeUndefined(); // rejected calls left nothing behind
+		expect(registry.toolColorFor("ok")).toBe("cyan");
+	});
+
+	it("a discarded section rolls suggestions back atomically; the key stays free (A3)", () => {
+		const registry = new ExtensionRegistry();
+		registry.beginExtension("doomed", "cli");
+		registry.suggestToolColor("bash", "yellow");
+		registry.discardExtension();
+		expect(registry.toolColorFor("bash")).toBeUndefined();
+		loadOne(registry, "next", () => registry.suggestToolColor("bash", "cyan"));
+		expect(registry.toolColorFor("bash")).toBe("cyan"); // no owner leak
+	});
+
 	it("specificity is per key: a later exact registration beats an earlier wildcard silently; the same key conflicts loudly, first wins", () => {
 		const lines: string[] = [];
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });

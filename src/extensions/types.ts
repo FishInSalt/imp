@@ -127,7 +127,7 @@ export type ClassifyHandler = (
 /**
  * The extension api: three read-only facts, four registration methods, one
  * subscriber, one status setter, one ask-the-human method, one ask-the-model
- * method — eleven members. Anything an extension cannot do with this, it cannot
+ * method — twelve members. Anything an extension cannot do with this, it cannot
  * do.
  */
 export interface ExtensionApi {
@@ -154,9 +154,22 @@ export interface ExtensionApi {
 	 *  tokens deliberately do not follow the terminal theme. Load-gated like
 	 *  the other registrations —
 	 *  valid only while the factory runs — validated, never throws; exact
-	 *  names beat `"*"` at render lookup, duplicate keys keep the first
-	 *  registration (reported). Styling a name that never loads is inert. */
+	 *  names beat `"*"` at render lookup; duplicate keys keep the first
+	 *  registration within the tier (reported) — cross-tier duplicates are
+	 *  legal, see `suggestToolColor`. Styling a name that never loads is
+	 *  inert. */
 	registerToolColor(names: string | readonly string[], color: ToolColor): void;
+
+	/** Suggest a default tool-name color for tools this extension owns
+	 *  (#tool-name-colors A3). Same signature, validation and never-throw
+	 *  contract as `registerToolColor`, one tier weaker. Any user
+	 *  registration (exact or `"*"`) beats any suggestion — resolution is
+	 *  user exact > user `"*"` > suggested exact > suggested `"*"`. Use it
+	 *  in tool-providing extensions: the tool's author owns its default
+	 *  look, the user's theme still has the final say. Cross-tier is not a
+	 *  conflict (the same key may be registered and suggested); suggestions
+	 *  conflict only within their tier (first wins, reported). */
+	suggestToolColor(names: string | readonly string[], color: ToolColor): void;
 
 	/** Subscribe to a loop/turn event. "tool_call" handlers may block (M4c). */
 	on(event: "tool_call", handler: ToolCallHandler): void;
@@ -307,9 +320,11 @@ export interface ExtensionSummary {
 	contextCount: number;
 	/** Total on() subscriptions (any event). */
 	hookCount: number;
-	/** #tool-name-colors: total tool-name color registrations (names, not
-	 *  calls — the `*` slot counts as one name). */
+	/** #tool-name-colors: total user-tier tool-name color registrations
+	 *  (names, not calls — the `*` slot counts as one name). */
 	colorCount: number;
+	/** #tool-name-colors A3: total author-tier suggestions (same counting). */
+	suggestedColorCount: number;
 	/** SA-06: canonical entry-module path + content hash, when capturable
 	 *  (absent = the file could not be hashed — omitted, never guessed). */
 	sourcePath?: string;

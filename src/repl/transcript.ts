@@ -1,7 +1,7 @@
 import type { ThinkingSection, ThinkingSink } from "../thinking-sink.js";
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../tui.js";
 import { ToolBlockFold } from "./components/tool-block.js";
-import type { ToolColorName } from "./tool-colors.js";
+import type { ToolColor } from "./tool-colors.js";
 import { createToolSink, type ToolBlock, type ToolPresentationSink } from "./tool-presentation.js";
 
 const USER_BLOCK_BG = "\x1b[48;5;237m";
@@ -88,7 +88,7 @@ export class TranscriptSink implements Component {
 	 *  defaults) and never
 	 *  re-bound or cleared: registrations are load-gated, so the value is
 	 *  final before any fold exists. */
-	toolColorResolver: ((name: string) => ToolColorName | undefined) | null = null;
+	toolColorResolver: ((name: string) => ToolColor | undefined) | null = null;
 	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
 	 *  tests (production passes nothing — the sink defaults to Date.now). */
 	readonly toolSink: ToolPresentationSink;

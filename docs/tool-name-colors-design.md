@@ -2,8 +2,10 @@
 
 Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
 defaults, palette to the example theme) implemented and merged (merge
-b4db87b) — design review 1 round NEEDS-FIXES → CONFIRMED, implementation
-review APPROVE WITH CORRECTIONS → CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
+b4db87b); Amendment 2 (absolute color tokens `ansi256:N` / `#rrggbb`,
+owner-approved) under review on `feat/tool-name-colors-a2`. Design review
+closed after 3 rounds; implementation review APPROVE WITH CORRECTIONS →
+CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (the P2 was a real prototype-chain lookup bug for names like
 `constructor` — fixed at the time via an own-property `defaultToolColor`
@@ -122,10 +124,12 @@ export const DEFAULT_TOOL_COLORS: Record<string, ToolColorName> = {
   row is the longest, and a unique hue keeps it recognizable.
 - Unknown tools (MCP-bridged, extension-registered, future built-ins)
   render **bold-only**, i.e. today's bytes — the host does not guess.
-- Standard-16 tokens, not 256-color absolutes, on purpose: the hues follow
-  the user's terminal theme, which is itself part of per-user aesthetics.
+- Standard-16 tokens as the default, on purpose: the hues follow the
+  user's terminal theme, which is itself part of per-user aesthetics.
   Whites/monochrome terminals degrade gracefully (hue collapses, layout
-  and semantics don't).
+  and semantics don't). *Superseded in part by Amendment 2:* absolute
+  `ansi256:N` / `#rrggbb` tokens exist for users who need exact colors;
+  named tokens remain the theme-relative default.
 - `toolColorSgr(token)`: the closed token → SGR map (30-37, 90-97);
   `"none"` → `""`. This is the only place a token becomes bytes.
 
@@ -300,7 +304,9 @@ colored-frame tests fail on the uncolored frames.
 Result-row (`⎿`) coloring, closing-slot coloring, activity/footer rows,
 selector/tree rows, print/replay/legacy rendering, raw SGR strings,
 bold/italic/underline knobs, per-argument or per-run dynamic styles,
-256-color absolutes, theming of non-tool UI.
+256-color absolutes *as defaults* (Amendment 2 added them as opt-in
+tokens; the shipped behavior still uses named, theme-relative colors),
+theming of non-tool UI.
 
 ## Amendment 1 — no shipped defaults; the palette moves to an example theme (owner directive, 2026-10-02)
 
@@ -363,3 +369,90 @@ owner's preference theme in `examples/extensions/tool-colors.mjs`.
 
 Implementation on `feat/tool-name-colors-a1`; short adversarial review
 round before implementation, per the working agreements.
+
+## Amendment 2 — absolute color tokens: `ansi256:N` and `#rrggbb` (owner-approved, 2026-10-02)
+
+Context: the owner wants a "dark orange like Claude Code's brand color" for
+the built-in tools (Claude's accent is the truecolor hex `#d97757` — it is
+not an ANSI color; the 16 standard slots have no orange) and a warm beige for
+the two web-search tools. Neither is expressible in the current token set.
+Owner-approved direction: **keep the 16 named tokens, add absolute-color
+tokens** — additive, default behavior unchanged, zero migration for existing
+themes.
+
+- **Grammar** (new accepted values, alongside the 16 names + `none`),
+  anchored full matches, no trimming:
+  - `ansi256:N` — `^ansi256:(0|[1-9][0-9]{0,2})$` plus a value ≤ 255 check
+    (canonical: `ansi256:0`..`ansi256:255`; `00`, `+8`, ` 8`, `0x8`, `8e0`
+    all rejected). Renders `ESC[38;5;Nm`.
+  - `#rrggbb` — `^#[0-9a-fA-F]{6}$`; hex case is **accepted** and
+    `registerToolColor` stores the lowercased form after the check
+    (`canonicalToolColor`; `isToolColor` itself only predicates). No
+    `#rgb`/`rgb()` shorthand. Renders `ESC[38;2;R;G;Bm`.
+  - Prefix `ansi256:` is lowercase-only (`ANSI256:5` → unknown color).
+- **`toolColorSgr(token: ToolColor)` contract**: named tokens keep the exact
+  Map lookup (bytes unchanged); absolute tokens are re-validated (via the
+  absolute half of `isToolColor`) before parsing, and the hex parse is
+  case-insensitive regardless of stored form (defense in depth for callers
+  that bypass validation, e.g. unit tests) — `#D97757` and `#d97757` render
+  identical bytes (`ESC[38;2;217;119;87m`). Anything out of contract still
+  fails closed to `""` (bold-only), pinned.
+- **Unchanged**: validation never-throws; per-key first-wins conflicts;
+  `"*"` wildcard; `"none"`; per-name storage; exact-over-wildcard; the
+  loader's factory-window gate; `ExtensionSummary.colorCount`.
+- **Documented pitfall**: `ansi256:0..15` *usually* alias the theme's first
+  16 slots (identical or near-identical bytes, emulator-dependent — aliasing
+  is common, not guaranteed); indices 16–255 are the standard fixed
+  cube/grays (a few themes remap those too). "Exact orange" means
+  `ansi256:208` or `#d97757`, never `ansi256:3`.
+- **Accepted tradeoffs** (owner's point of the request): absolute tokens do
+  not follow the terminal theme; truecolor hex additionally depends on
+  terminal support (256 is the portable choice; named tokens remain the
+  theme-relative default).
+- **Types**: `ToolColor = ToolColorName | \`ansi256:${number}\` | \`#${string}\``
+  — template forms are DX-only (verified with tsc: `ansi256:007`, `-1`,
+  `1.5`, `1e3`, `#gggggg`, `#` all satisfy the template types);
+  `isToolColor` gates every boundary, no casts. `isToolColorName` is kept (the named-only check; still imported by
+  the token-set test). Widened signatures (verified complete):
+  `registry.ts:8/83/149/366/395/401`, `types.ts:15/156`,
+  `tool-block.ts:3/141/195`, `transcript.ts:4/91`, `shell.ts:36/77`,
+  `repl.ts:48/1673-74/1690`, `tool-colors.ts:33-76`; `loader.ts:227` is
+  inferred. No wiring changes. `test/repl-tui.test.ts:214`'s inline
+  annotation widens too.
+- **Report line** (exact interpolation; `TOOL_COLOR_NAMES.join(" ")`
+  already ends in `none`): `unknown color (expected one of:
+  ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got
+  "${firstLine(String(color), 160)}")` — i.e. for the pinned test input:
+  `unknown color (expected one of: black red green yellow blue magenta cyan
+  white gray brightRed brightGreen brightYellow brightBlue brightMagenta
+  brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got
+  "orange")`. The 160-char bound is kept. Two
+  existing pins update: `test/extensions-registry.test.ts:498` and `:501`.
+  `TOOL_COLOR_NAMES` stays 17 entries (its own pin at
+  `test/tool-colors.test.ts:11-27` is untouched).
+- **The owner's theme** (`examples/extensions/tool-colors.mjs`): task →
+  `brightCyan`; bash/read/edit/write/grep/find/ls → `#d97757`;
+  web_search/url_read → `#e6dcc3`. Ten names total. Required re-pins:
+  `test/repl-tui.test.ts:3444` (`\u001b[1m\u001b[95mtask` →
+  `\u001b[1m\u001b[96mtask` — the task e2e now loads the brightCyan
+  theme), `test/extensions-loader.test.ts:456` title ("eight registrations"
+  → ten), the smoke asserts all ten lookups plus banner `— 10 colors`, and
+  the example file's own comments.
+- **Docs deliverables** (all asserting the 16-token closure today):
+  `README.md:588-597`, `CHANGELOG.md:15`, `docs/m4-extensions-design.md:967-970`,
+  `src/extensions/types.ts:147-153` TSDoc, the example comments, and this
+  doc's D3 (:127) / D10 (:305) get supersede notes pointing here.
+- **Tests (red-first)**:
+  - unit — boundary validation (`ansi256:0`/`255` accepted; `256`, `-1`,
+    `007`, `ansi256:`, `+8`, `ANSI256:5`, `#rgb`, `#gggggg`, five-digit hex
+    rejected; `#D97757` accepted and stored lowercase); SGR bytes for both
+    forms (`#d97757` and `#D97757` → `ESC[38;2;217;119;87m`, `ansi256:0` →
+    `ESC[38;5;0m`, `ansi256:255` → `ESC[38;5;255m`), fail-closed junk;
+  - registry — new tokens round-trip (exact and wildcard), `"none"`
+    overrides an absolute token, message pin ×2 updated;
+  - repl-tui e2e — an extension registering `#d97757` and `ansi256:173`
+    paints the exact wire bytes; the example-file smoke re-pinned to the
+    owner's palette (task brightCyan, built-ins hex orange, web-search
+    beige);
+  - confirm-preview — absolute token renders byte-exactly.
+  Existing 16-token tests and all other pins are untouched.

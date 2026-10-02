@@ -1,6 +1,6 @@
 import { formatToolElapsed } from "../../format.js";
 import { type Component, truncateToWidth, visibleWidth } from "../../tui.js";
-import { type ToolColorName, toolColorSgr } from "../tool-colors.js";
+import { type ToolColor, toolColorSgr } from "../tool-colors.js";
 import { type RawSection, sanitizeDisplay, type ToolBlock } from "../tool-presentation.js";
 
 const RESET = "\x1b[0m";
@@ -138,7 +138,7 @@ export function renderCommandHeader(
 	preview: unknown,
 	/** #tool-name-colors: the host's resolver — same contract and defaults as
 	 *  the fold's `nameColor` (undefined / `"none"` stay legacy). */
-	colorFor?: (name: string) => ToolColorName | undefined,
+	colorFor?: (name: string) => ToolColor | undefined,
 ): string {
 	const parts = splitPreview(preview);
 	if (parts === undefined) return "";
@@ -192,7 +192,7 @@ export class ToolBlockFold implements Component {
 		public block: ToolBlock,
 		/** #tool-name-colors: the resolved token for the call's name span;
 		 *  undefined / `"none"` keep the legacy bold-only bytes. */
-		private readonly nameColor: ToolColorName | undefined = undefined,
+		private readonly nameColor: ToolColor | undefined = undefined,
 	) {}
 	/** The name-span style: BOLD, plus the token's SGR when one applies. */
 	private nameStyle(): string {

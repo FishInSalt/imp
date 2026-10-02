@@ -464,6 +464,22 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 		expect(registry.toolColorFor("task")).not.toBe("blue");
 	});
 
+	it("stores absolute tokens; hex normalizes to lowercase; none overrides them (A2)", () => {
+		const lines: string[] = [];
+		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
+		loadOne(registry, "hues", () => {
+			registry.registerToolColor("bash", "#D97757");
+			registry.registerToolColor("gated", "ansi256:173");
+			registry.registerToolColor("*", "#E6DCC3");
+			registry.registerToolColor("task", "none");
+		});
+		expect(lines).toEqual([]);
+		expect(registry.toolColorFor("bash")).toBe("#d97757"); // stored lowercased
+		expect(registry.toolColorFor("gated")).toBe("ansi256:173"); // exact beats the wildcard
+		expect(registry.toolColorFor("other")).toBe("#e6dcc3");
+		expect(registry.toolColorFor("task")).toBe("none"); // explicit opt-out wins
+	});
+
 	it("specificity is per key: a later exact registration beats an earlier wildcard silently; the same key conflicts loudly, first wins", () => {
 		const lines: string[] = [];
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
@@ -495,10 +511,10 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 			registry.registerToolColor(["ok", "ok2"], "red"); // the one good call stands
 		});
 		expect(lines).toEqual([
-			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, got "orange")',
+			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
 			'imp: extension clumsy could not register tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
 			'imp: extension clumsy could not register tool color for "42" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "42")',
-			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, got "orange")',
+			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
 			"imp: extension clumsy could not register tool color — expected a name or an array of names, got number",
 		]);
 		// the failed call left nothing behind — no partial ["bash"] from the color rejection

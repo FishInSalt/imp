@@ -101,6 +101,9 @@ describe("#tool-name-colors: the preview name follows the injected resolver", ()
 		expect(renderCommandHeader(preview(), () => "none")).toContain("\x1b[1mbash\x1b[0m");
 		expect(renderCommandHeader(preview(), () => "none")).not.toContain("\x1b[33m");
 		// the warn span is untouched by the name color
+		expect(renderCommandHeader(preview(), () => "#d97757")).toContain(
+			"\x1b[1m\x1b[38;2;217;119;87mbash\x1b[0m",
+		);
 		const warn = renderCommandHeader(preview({ warnSpans: [[0, 6]] }), () => "yellow");
 		expect(warn).toContain("\x1b[1;31mrm -rf\x1b[0m");
 		expect(warn).toContain("\x1b[1m\x1b[33mbash\x1b[0m");

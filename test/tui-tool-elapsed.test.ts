@@ -100,10 +100,10 @@ describe("call-row duration suffix (#tui-tool-elapsed)", () => {
 		]);
 	});
 
-	it("closes the first row of a multi-row command and leaves continuations", () => {
+	it("closes the last row of a multi-row command (#call-closing-status)", () => {
 		expect(
 			plain(input("bash", { command: "echo first\necho last" }, bashPresentation, 2300).render(40)),
-		).toEqual(["● bash  echo first ✓ 2.3s", "    echo last"]);
+		).toEqual(["● bash  echo first", "    echo last ✓ 2.3s"]);
 	});
 
 	it("uses the minute form for long calls", () => {

@@ -66,7 +66,7 @@ Live serial event order and saved assistant-block/result-message order are not a
 
 ## 2. Identity-first, bounded activity
 
-Keep the activity region separate from persistent input folds. It reports pending status, not authoritative tool success. (Amended for the running-task overview by `docs/task-inline-live-rows-design.md` §4.1 and for top-level tool live rows by `docs/tool-inline-live-rows-design.md` §4.1: live state now renders inside each call's own input fold. The rest of this section stands.) Until top-level end arrives, use `pending` for task rows rather than implying a child is still executing. Tool counts mean observed child tool starts, not successful tools or currently active tools. Do not infer failure, completion, or remaining work from child text.
+Keep the activity region separate from persistent input folds. It reports pending status, not authoritative tool success. (Amended for the running-task overview by `docs/task-inline-live-rows-design.md` §4.1 and for top-level tool live rows by `docs/tool-inline-live-rows-design.md` §4.1: live state now renders inside each call's own input fold. For non-task tools the timer closes the call info's last row in the same slot the completion marker uses — `docs/call-closing-status-design.md`. The rest of this section stands.) Until top-level end arrives, use `pending` for task rows rather than implying a child is still executing. Tool counts mean observed child tool starts, not successful tools or currently active tools. Do not infer failure, completion, or remaining work from child text.
 
 Project each task row into three independent lines, rather than one wrap-prone concatenation:
 

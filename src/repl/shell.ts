@@ -233,8 +233,13 @@ export class TuiShell implements LineInput {
 	 *  at fold-creation time, and diffed against the next pass so identical
 	 *  rows never invalidate the fold cache. */
 	private callLiveRows = new Map<string, readonly string[]>();
+	/** #call-closing-status (D3): the running timer text per non-task call
+	 *  (`└─ running Ns`), rendered in the call fold's closing slot. */
+	private callSuffixes = new Map<string, string>();
 	/** Ownership guard for the shared sink's resolver (mirrors boundOnUpdate). */
 	private boundLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
+	/** #call-closing-status (D3): ownership guard for the suffix resolver. */
+	private boundSuffixResolver: ((key: string) => string | null) | null = null;
 	/** Buffered setQueue text — pushes may arrive before start() and must not
 	 *  be dropped (same contract as the footer). */
 	private queueText = "";
@@ -301,6 +306,9 @@ export class TuiShell implements LineInput {
 		// rows still pulls them.
 		this.boundLiveRowsResolver = (key) => this.callLiveRows.get(key) ?? null;
 		this.options.transcript.callLiveRowsResolver = this.boundLiveRowsResolver;
+		// #call-closing-status (D3): same late-fold pull for the running timer.
+		this.boundSuffixResolver = (key) => this.callSuffixes.get(key) ?? null;
+		this.options.transcript.callSuffixResolver = this.boundSuffixResolver;
 
 		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
@@ -666,6 +674,8 @@ export class TuiShell implements LineInput {
 			this.taskOrdinals.clear();
 			for (const key of this.callLiveRows.keys()) this.options.transcript.setCallLiveRows(key, null);
 			this.callLiveRows.clear();
+			for (const key of this.callSuffixes.keys()) this.options.transcript.setCallSuffix(key, null);
+			this.callSuffixes.clear();
 			this.tui?.requestRender();
 			return;
 		}
@@ -697,14 +707,16 @@ export class TuiShell implements LineInput {
 		// are tool_call ids, agent keys are task call ids or sourceId UUIDs (the
 		// key spaces are disjoint per message — design §5.2).
 		const nextLiveRows = new Map<string, readonly string[]>();
+		// #call-closing-status (D3): a running non-task tool carries its timer in
+		// the call fold's closing slot (where the completion suffix will land),
+		// not as a live row.
+		const nextSuffixes = new Map<string, string>();
 		// #confirm-prompt (Phase 3 D10) + #tool-inline-live-rows: while a picker
 		// is open no tool row is painted anywhere. tool_start precedes the gate,
 		// so a `running` row would claim execution that is not happening. Task
 		// rows (genuine progress) stay, exactly as D10 established.
 		if (this.selector === null) {
-			for (const tool of this.activity.tools) {
-				nextLiveRows.set(tool.id, [runningRow(tool.startedAtMs)]);
-			}
+			for (const tool of this.activity.tools) nextSuffixes.set(tool.id, runningRow(tool.startedAtMs));
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer
 		// sources may share a parent — aggregate their row groups so the fold keeps
@@ -751,6 +763,12 @@ export class TuiShell implements LineInput {
 		for (const key of this.callLiveRows.keys())
 			if (!nextLiveRows.has(key)) this.options.transcript.setCallLiveRows(key, null);
 		this.callLiveRows = nextLiveRows;
+		for (const [key, text] of nextSuffixes) {
+			if (this.callSuffixes.get(key) !== text) this.options.transcript.setCallSuffix(key, text);
+		}
+		for (const key of this.callSuffixes.keys())
+			if (!nextSuffixes.has(key)) this.options.transcript.setCallSuffix(key, null);
+		this.callSuffixes = nextSuffixes;
 
 		this.activityRows = active;
 		this.tui?.requestRender();
@@ -1218,6 +1236,9 @@ export class TuiShell implements LineInput {
 		}
 		if (this.options.transcript.callLiveRowsResolver === this.boundLiveRowsResolver) {
 			this.options.transcript.callLiveRowsResolver = null;
+		}
+		if (this.options.transcript.callSuffixResolver === this.boundSuffixResolver) {
+			this.options.transcript.callSuffixResolver = null;
 		}
 		this.terminal?.write("\x1b]2;\x07"); // hand the window its own title back
 		this.terminal = null;

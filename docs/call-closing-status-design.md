@@ -3,7 +3,9 @@
 Status: **implemented and merged (merge 4c2e9ea); design review closed
 (round 3: CONFIRMED WITH NOTES, notes folded in rev 4) and implementation
 review closed (APPROVE WITH CORRECTIONS, corrections folded; confirmation
-round CONFIRMED)**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
+round CONFIRMED). Amendment 1 (owner-directed, 2026-10-02): running text
+simplified to `Ns` and the task timer joins the closing slot — short design
+review pending; implementation on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 
@@ -320,8 +322,10 @@ CHANGELOG.
 
 Owner (defaults adopted in this draft; veto any time):
 
-- O1: task running block — default: keep, unify only the completion slot.
-- O2: running text form — default: keep `└─ running Ns` verbatim inline.
+- O1: task running block — **resolved by Amendment 1 (A1.2): the task timer
+  joins the closing slot; the rest of the block stands.**
+- O2: running text form — **resolved by Amendment 1 (A1.1): the bare
+  ` <seconds>s`, no `└─ running` prefix.**
 
 Reviewer (round 2):
 
@@ -334,6 +338,24 @@ Reviewer (round 2):
   completeness.
 
 ## Review log
+
+- Amendment 1 (owner-directed, 2026-10-02, first manual acceptance of the
+  merged batch): two corrections. **A1.1** — the running text is the bare
+  ` <seconds>s` (dim; floored; `9999+` cap; `0s` while the first second is
+  unfinished) instead of ` └─ running <seconds>s`; the position, dim styling
+  and the ticking number are the liveness signal, and `└─ running` read as
+  redundant inline chrome. **A1.2** — the task call's timer joins the
+  closing slot too (same ` <seconds>s` form): the `└─ pending #N <agent>`
+  status row drops its seconds, the prompt and progress rows are unchanged;
+  while running `● task  <summary…> 12s`, after settle
+  `● task  <summary…> ✓ 12.3s` — an in-place swap like every other tool.
+  Time base: the earliest live entry for the call in the activity snapshot
+  (the provisional parent row before the first source event, the earliest
+  source afterwards — the pending row used the same per-entry bases). The
+  task suffix is exempt from D10 like the task rows; non-task suffixes keep
+  the suppression. Supersedes D3's ` └─ running Ns` form and D7/O1's
+  task-seconds default; the rule-doc amendments and CHANGELOG get the new
+  form. Short independent adversarial review pending.
 
 - Round 1 (independent adversarial, fresh context, 2026-10-02; reviewed the
   uncommitted draft): **NEEDS-FIXES** — P1: trailing-LF blank row breaks

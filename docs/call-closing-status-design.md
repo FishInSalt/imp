@@ -5,7 +5,8 @@ Status: **implemented and merged (merge 4c2e9ea); design review closed
 review closed (APPROVE WITH CORRECTIONS, corrections folded; confirmation
 round CONFIRMED). Amendment 1 (owner-directed, 2026-10-02): running text
 simplified to `Ns` and the task timer joins the closing slot — short design
-review pending; implementation on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
+review round 1 folded (NEEDS-FIXES: time-base inheritance, D5 numbers);
+implementation on `feat/call-closing-status-a1`.** Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
 
@@ -171,10 +172,12 @@ continuation rows. Metadata rows and omission notices are not info.
 
 ### D3 — Running text and channel
 
-Form: ` └─ running Ns` — the existing `#tool-inline-live-rows` syntax with
-one leading space and DIM, appended exactly where the completion suffix
-will land. Second-level semantics unchanged: `└─ running` at 0s,
-`└─ running Ns` for N ≥ 1 (floored, `9999+` cap). The text is supplied per
+Form (Amendment 1): ` <seconds>s` — one leading space and DIM, appended
+exactly where the completion suffix will land. Seconds are floored
+(`activityCount`, `9999+` cap); `0s` while the first second is unfinished.
+(Original form ` └─ running Ns` — with `└─ running` at 0s — is superseded by
+Amendment 1; the old text remains documented by the rule-doc chain.)
+The text is supplied per
 tick by `renderActivity` through a suffix channel (e.g.
 `transcript.setCallSuffix(id, text|null)` → `ToolBlockFold.setRunningSuffix`)
 instead of the live-row channel for non-task tools. The channel must carry
@@ -193,9 +196,11 @@ slot. Sub-second calls: `└─ running` → bare ` ✓`. Failed calls: ` ✗ [X
 
 ### D5 — Width reserve, jitter, floors (round-1 corrected)
 
-- Widths (verified): `└─ running` 11 columns; ` └─ running Ns` 14-18;
-  completion ` ✓` 2, ` ✓ X.Ys` 7, minute form 8, hour form 9. The largest
-  jump within the running text is 0s→1s (11→14).
+- Widths (Amendment 1 form; verified): running ` 0s`..` 9999+s` 3-7
+  columns; completion ` ✓` 2, ` ✓ X.Ys` 7, minute form 8, hour form 9. The
+  largest jump within the running text is 9s→10s (1 column); 0s→1s does
+  not change width. (The pre-Amendment-1 running widths — 11 and 14-18
+  columns with the 0s→1s 11→14 jump — are superseded.)
 - Default option (a): exact per-render reserve. The tail re-wraps when the
   text width changes — at digit-count changes (9s→10s, 99s→100s) and at
   the swap (running width vs completion width). Accepted; the target row
@@ -205,9 +210,9 @@ slot. Sub-second calls: `└─ running` → bare ` ✓`. Failed calls: ` ✗ [X
   running width vs the 2-column bare sub-second marker), and dropping it
   at settle re-wraps — which is what (b) was meant to prevent.
 - One shared floor for both forms: `budget - s >= 8` (s = current text
-  width). Consequence to pin: with the wide running text the slot
-  disappears below ~26 columns of last-row budget while the completion
-  marker may still fit.
+  width). Consequence to pin: the running slot disappears below
+  `budget = s + 8` (11-15 columns of last-row budget depending on digits,
+  Amendment 1 form); the completion marker's own boundary (≥15) stands.
 - Accepted and pinned: at digit changes and at the swap the omission
   notice TEXT and count may change; at narrow widths the 14→18-column
   jump shrinks the per-row content budget by up to 4 columns and can move
@@ -284,8 +289,9 @@ New pins:
   running text included;
 - running text in the slot; precedence pin (`elapsedMs` present + running
   text set → marker only; `error` + running text → nothing);
-- omission floor pins for both forms incl. the ~26-column running
-  disappearance; notice/`count` flip pins at digit changes;
+- omission floor pins for both forms incl. the running `budget = s + 8`
+  boundary (11/15 columns, Amendment 1 form); notice/`count` flip pins at
+  digit changes;
 - D8 pins: target-row split under the cap (slot on the last visible
   chunk), `summaryVisible` parity across all re-laid chunks, multi-line +
   `commandExcerpt`;
@@ -349,13 +355,32 @@ Reviewer (round 2):
   status row drops its seconds, the prompt and progress rows are unchanged;
   while running `● task  <summary…> 12s`, after settle
   `● task  <summary…> ✓ 12.3s` — an in-place swap like every other tool.
-  Time base: the earliest live entry for the call in the activity snapshot
-  (the provisional parent row before the first source event, the earliest
-  source afterwards — the pending row used the same per-entry bases). The
-  task suffix is exempt from D10 like the task rows; non-task suffixes keep
-  the suppression. Supersedes D3's ` └─ running Ns` form and D7/O1's
-  task-seconds default; the rule-doc amendments and CHANGELOG get the new
-  form. Short independent adversarial review pending.
+  Time base: the task call's own start as carried by the activity snapshot —
+  the provisional parent row's `startedAtMs`, inherited by the source row
+  when it materializes (a one-line `repl.ts` fix at the source-row
+  construction; without it the base would reset to the first child event
+  and the running number would jump at settle, since the completion
+  `elapsedMs` is measured from `tool_start`). The pending row used the same
+  base. The task suffix is pushed only for `taskToolId !== ""` (the
+  sourceId-only defensive region path has no fold; a push would be a silent
+  no-op). The task suffix is exempt from D10 like the task rows; non-task
+  suffixes keep the suppression. Supersedes D3's ` └─ running Ns` form and
+  D7/O1's task-seconds default; the rule-doc amendments and CHANGELOG get
+  the new form.
+
+- Amendment 1, round 1 (independent adversarial, 2026-10-02):
+  **NEEDS-FIXES** — P2: the time base reset at the first source event
+  (source rows got a fresh `Date.now()`; fixed by inheriting the parent's
+  `startedAtMs`, now specified above) and D5's form-dependent widths/pins
+  were stale under the new form. P3: the pin/doc update inventory was
+  named only in general; the enumeration is folded into the implementation
+  batch (test/call-closing-status.test.ts running fixtures; test/repl-fold
+  :619-623; test/repl-tui :2750/:2872/:2914/:3272/:4592/:4621/:4972-4973/
+  :4995/:5018/:5022/:5040 ('no 0s form')/:5048 and :5075 (task seconds →
+  slot); test/task-live-display:180/185 fixtures; docs/tui-tool-elapsed
+  Amendment 4; docs/tool-inline-live-rows :59/:125/:149/:165-166/:187/
+  :330/:515; docs/task-live-display :73; CHANGELOG :135/:148; and this
+  document's D3/D5/§5 body, updated in place). All folded in this revision.
 
 - Round 1 (independent adversarial, fresh context, 2026-10-02; reviewed the
   uncommitted draft): **NEEDS-FIXES** — P1: trailing-LF blank row breaks

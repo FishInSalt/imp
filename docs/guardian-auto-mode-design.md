@@ -1854,10 +1854,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 ## 17. Detector `<<` structure & breaker counting — track C (draft for independent review — 2026-10-03)
 
-> Status: **rev 4 — design review closed (R1→rev 1; R2→rev 2;
-> R3→rev 3; R4 CONFIRMED WITH NOTES → P3 wording folded); awaiting
-> R5 micro-verification for closure.** Every revision round changed
-> this section only.
+> Status: **rev 4 — design review closed (R1 NEEDS REVISION → rev 1;
+> R2 → rev 2; R3 → rev 3; R4 CONFIRMED WITH NOTES → rev 4; R5
+> CONFIRMED).** Every revision round changed this section only.
+> Implementation not started.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design
@@ -2234,6 +2234,11 @@ formula (pin 84).
   command + dedicated mutation, the pin 79 node clause, two §17.3-A
   phrasings — folded in rev 4; R5 micro-verification requested for
   closure.
+- R5 (same reviewer, verification of rev 4): **CONFIRMED** — all four
+  P3 folds verified (pin 78-iii named command + dedicated mutation red;
+  pin 79 node clause now a discriminating pin, red under the
+  shell-set-addition mutation; the §17.3-A phrasings; the review-log
+  corrections); no new contradictions. **Design review closed.**
 
 ### 17.9 Amendments to earlier sections (folded)
 

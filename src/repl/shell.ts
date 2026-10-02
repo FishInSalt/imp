@@ -33,7 +33,7 @@ import type {
 	TreeSelectRequest,
 } from "./line-input.js";
 import { LoginDialog, type LoginDialogOptions } from "./login-dialog.js";
-import type { ToolColorName } from "./tool-colors.js";
+import type { ToolColor } from "./tool-colors.js";
 import { sanitizeDisplay } from "./tool-presentation.js";
 import type { TranscriptSink } from "./transcript.js";
 
@@ -74,7 +74,7 @@ export interface TuiShellOptions extends LineInputEvents {
 	/** #tool-name-colors: the composed name-color resolver (extensions, then
 	 *  defaults), set once by repl.ts at construction; used for the confirm
 	 *  preview's call-header idiom. Absent keeps the legacy bytes. */
-	toolColorResolver?: (name: string) => ToolColorName | undefined;
+	toolColorResolver?: (name: string) => ToolColor | undefined;
 	/** M13 batch 2: Ctrl+V image paste. Reads the system clipboard, writes
 	 *  a tmp file, inserts the path at the cursor. Injected in tests. */
 	pasteImage?: () => Promise<ClipboardImage | null>;

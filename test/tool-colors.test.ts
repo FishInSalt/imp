@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	composeToolColorResolver,
+	isToolColor,
 	isToolColorName,
 	TOOL_COLOR_NAMES,
 	toolColorSgr,
@@ -52,6 +53,45 @@ describe("#tool-name-colors — tokens and SGR map (design D1/D3, Amendment 1)",
 	it("an out-of-contract token fails closed to no bytes", () => {
 		expect(toolColorSgr("constructor" as never)).toBe("");
 		expect(toolColorSgr("orange" as never)).toBe("");
+	});
+
+	it("accepts absolute tokens: ansi256:0-255 canonical, #rrggbb any case (A2)", () => {
+		expect(isToolColor("none")).toBe(true);
+		expect(isToolColor("cyan")).toBe(true);
+		for (const ok of ["ansi256:0", "ansi256:173", "ansi256:255", "#d97757", "#D97757"])
+			expect(isToolColor(ok)).toBe(true);
+		for (const bad of [
+			"ansi256:",
+			"ansi256:00",
+			"ansi256:007",
+			"ansi256:256",
+			"ansi256:-1",
+			"ansi256:+8",
+			"ansi256: 8",
+			"ansi256:0x8",
+			"ansi256:8e0",
+			"ANSI256:5",
+			"#rgb",
+			"#gggggg",
+			"#12345",
+			"#1234567",
+			"#d97757 ",
+			"orange",
+			42,
+			null,
+		])
+			expect(isToolColor(bad)).toBe(false);
+		for (const name of TOOL_COLOR_NAMES) expect(isToolColor(name)).toBe(true);
+	});
+
+	it("renders absolute tokens: hex case-insensitively, ansi256 bounds, junk fails closed (A2)", () => {
+		expect(toolColorSgr("#d97757")).toBe("\u001b[38;2;217;119;87m");
+		expect(toolColorSgr("#D97757")).toBe("\u001b[38;2;217;119;87m");
+		expect(toolColorSgr("ansi256:0")).toBe("\u001b[38;5;0m");
+		expect(toolColorSgr("ansi256:255")).toBe("\u001b[38;5;255m");
+		expect(toolColorSgr("ansi256:256" as never)).toBe("");
+		expect(toolColorSgr("#gggggg" as never)).toBe("");
+		expect(toolColorSgr("ANSI256:5" as never)).toBe("");
 	});
 });
 

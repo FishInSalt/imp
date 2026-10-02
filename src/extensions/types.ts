@@ -12,7 +12,7 @@ import type { ToolCallDecision } from "../core/loop.js";
 import type { AssistantMessage, Usage } from "../core/messages.js";
 import type { Tool } from "../core/tools/types.js";
 import type { SlashCommand } from "../repl/commands.js";
-import type { ToolColorName } from "../repl/tool-colors.js";
+import type { ToolColor } from "../repl/tool-colors.js";
 
 export type {
 	Tool,
@@ -147,13 +147,16 @@ export interface ExtensionApi {
 	/** Register tool-name colors for the TUI call header (#tool-name-colors).
 	 *  `names` is one tool name, several, or the literal `"*"` (fallback for
 	 *  every tool without an exact registration); `color` is one of the 16
-	 *  standard-16 tokens or `"none"` (leave the name bold-only, overriding
-	 *  another registration for the same name). Load-gated like the other
-	 *  registrations —
+	 *  standard-16 tokens, `"none"` (leave the name bold-only, overriding
+	 *  another registration for the same name), or an absolute token —
+	 *  `ansi256:N` (0-255, fixed 256-palette index) or `#rrggbb` (truecolor;
+	 *  hex stored lowercased). Named tokens stay theme-relative; absolute
+	 *  tokens deliberately do not follow the terminal theme. Load-gated like
+	 *  the other registrations —
 	 *  valid only while the factory runs — validated, never throws; exact
 	 *  names beat `"*"` at render lookup, duplicate keys keep the first
 	 *  registration (reported). Styling a name that never loads is inert. */
-	registerToolColor(names: string | readonly string[], color: ToolColorName): void;
+	registerToolColor(names: string | readonly string[], color: ToolColor): void;
 
 	/** Subscribe to a loop/turn event. "tool_call" handlers may block (M4c). */
 	on(event: "tool_call", handler: ToolCallHandler): void;

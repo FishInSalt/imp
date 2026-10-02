@@ -211,7 +211,7 @@ function makeShell(options?: {
 	onDequeue?: () => void;
 	autocomplete?: AutocompleteOptions;
 	historyPath?: string;
-	toolColorResolver?: (name: string) => import("../src/repl/tool-colors.js").ToolColorName | undefined;
+	toolColorResolver?: (name: string) => import("../src/repl/tool-colors.js").ToolColor | undefined;
 	pasteImage?: () => Promise<import("../src/repl/clipboard-image.js").ClipboardImage | null>;
 	pasteText?: () => Promise<string | null>;
 }) {
@@ -3368,7 +3368,7 @@ describe("runRepl with shell:tui", () => {
 		// the exact legacy header bytes — no hue anywhere on the name span
 		expect(raw).toContain("\u001b[2m●\u001b[0m \u001b[1mbash\u001b[0m  echo painted");
 		expect(raw).not.toContain("\u001b[1m\u001b[33mbash");
-		expect(raw).not.toContain("\u001b[1m\u001b[95mtask");
+		expect(raw).not.toContain("\u001b[1m\u001b[96mtask");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -3413,6 +3413,40 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("absolute tokens paint exact wire bytes (#tool-name-colors A2)", async () => {
+		const tool = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo hexed" } }],
+					"tool_use",
+				),
+				assistant([{ type: "toolCall", id: "t2", name: "gated", arguments: { message: "idx" } }], "tool_use"),
+				() => tool.promise.then(() => reply("absolute")),
+			],
+			{
+				tools: [gatedTool(tool, "gated")],
+				extensionFiles: {
+					"hue.mjs": `export default function (api) {
+	api.registerToolColor("bash", "#d97757");
+	api.registerToolColor("gated", "ansi256:173");
+}
+`,
+				},
+			},
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[38;5;173mgated"), 8000);
+		const raw = env.terminal.writes.join("");
+		expect(raw).toContain("\u001b[1m\u001b[38;2;217;119;87mbash"); // truecolor hex on the wire
+		expect(raw).toContain("\u001b[1m\u001b[38;5;173mgated"); // 256-index on the wire
+		tool.resolve();
+		await waitUntil(() => stripAnsi(env.terminal.writes.join("")).includes("absolute"), 8000);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("the task call takes its hue from the shipped example theme (#tool-name-colors A1)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
 		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
@@ -3441,7 +3475,7 @@ describe("runRepl with shell:tui", () => {
 		);
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[95mtask"), 8000);
+		await waitUntil(() => env.terminal.writes.join("").includes("\u001b[1m\u001b[96mtask"), 8000);
 		tool.resolve();
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
 		env.terminal.data("/exit\r");

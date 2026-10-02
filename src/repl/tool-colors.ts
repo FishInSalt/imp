@@ -39,6 +39,35 @@ export function isToolColorName(value: unknown): value is ToolColorName {
 	return typeof value === "string" && TOOL_COLOR_SET.has(value);
 }
 
+/** #tool-name-colors A2: absolute-color tokens — a 256-palette index or a
+ *  truecolor hex. The template forms are DX-only (they also admit
+ *  `ansi256:007`, `-1`, `1.5`, `1e3`, `#gggggg`, `#`); `isToolColor` is the
+ *  runtime authority. */
+export type ToolColorAbsolute = `ansi256:${number}` | `#${string}`;
+export type ToolColor = ToolColorName | ToolColorAbsolute;
+
+const ANSI256_PATTERN = /^ansi256:(0|[1-9][0-9]{0,2})$/;
+const HEX_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+function isToolColorAbsolute(value: unknown): value is ToolColorAbsolute {
+	if (typeof value !== "string") return false;
+	const match = ANSI256_PATTERN.exec(value);
+	if (match !== null) return Number(match[1]) <= 255;
+	return HEX_PATTERN.test(value);
+}
+
+/** Full-set membership: the 16 names + `none` + absolute tokens. Every
+ *  boundary (registry validation, SGR mapping) gates on this. */
+export function isToolColor(value: unknown): value is ToolColor {
+	return isToolColorName(value) || isToolColorAbsolute(value);
+}
+
+/** Canonical stored form: hex lowercased, everything else verbatim (A2) —
+ *  called by `registerToolColor` after the `isToolColor` check. */
+export function canonicalToolColor(color: ToolColor): ToolColor {
+	return color.startsWith("#") ? (color.toLowerCase() as ToolColor) : color;
+}
+
 const TOOL_COLOR_SGR = new Map<string, string>([
 	["black", "\u001b[30m"],
 	["red", "\u001b[31m"],
@@ -60,10 +89,25 @@ const TOOL_COLOR_SGR = new Map<string, string>([
 ]);
 
 /** Token → SGR bytes; `none` maps to the empty string (bold-only name).
- *  Keyed through a Map so an out-of-contract token (a buggy resolver) fails
- *  closed to bold-only — never `Object.prototype` members or `undefined`. */
-export function toolColorSgr(token: ToolColorName): string {
-	return TOOL_COLOR_SGR.get(token) ?? "";
+ *  Named tokens keep the exact Map bytes; absolute tokens are re-validated
+ *  before parsing (hex case-insensitively, regardless of stored form), and
+ *  anything out of contract fails closed to `""` — never `Object.prototype`
+ *  members or `undefined` (A2). */
+export function toolColorSgr(token: ToolColor): string {
+	const named = TOOL_COLOR_SGR.get(token);
+	if (named !== undefined) return named;
+	const match = ANSI256_PATTERN.exec(token);
+	if (match !== null) {
+		const index = Number(match[1]);
+		return index <= 255 ? `\u001b[38;5;${index}m` : "";
+	}
+	if (HEX_PATTERN.test(token)) {
+		const r = Number.parseInt(token.slice(1, 3), 16);
+		const g = Number.parseInt(token.slice(3, 5), 16);
+		const b = Number.parseInt(token.slice(5, 7), 16);
+		return `\u001b[38;2;${r};${g};${b}m`;
+	}
+	return "";
 }
 
 /** The composed resolver (design D2/D5; Amendment 1): extension
@@ -72,7 +116,7 @@ export function toolColorSgr(token: ToolColorName): string {
  *  structurally typed; repl.ts passes the ExtensionRegistry, unit hosts
  *  may pass any map-shaped stub. */
 export function composeToolColorResolver(registry?: {
-	toolColorFor(name: string): ToolColorName | undefined;
-}): (name: string) => ToolColorName | undefined {
+	toolColorFor(name: string): ToolColor | undefined;
+}): (name: string) => ToolColor | undefined {
 	return (name) => registry?.toolColorFor(name);
 }

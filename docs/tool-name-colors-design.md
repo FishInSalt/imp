@@ -124,10 +124,12 @@ export const DEFAULT_TOOL_COLORS: Record<string, ToolColorName> = {
   row is the longest, and a unique hue keeps it recognizable.
 - Unknown tools (MCP-bridged, extension-registered, future built-ins)
   render **bold-only**, i.e. today's bytes — the host does not guess.
-- Standard-16 tokens, not 256-color absolutes, on purpose: the hues follow
-  the user's terminal theme, which is itself part of per-user aesthetics.
+- Standard-16 tokens as the default, on purpose: the hues follow the
+  user's terminal theme, which is itself part of per-user aesthetics.
   Whites/monochrome terminals degrade gracefully (hue collapses, layout
-  and semantics don't).
+  and semantics don't). *Superseded in part by Amendment 2:* absolute
+  `ansi256:N` / `#rrggbb` tokens exist for users who need exact colors;
+  named tokens remain the theme-relative default.
 - `toolColorSgr(token)`: the closed token → SGR map (30-37, 90-97);
   `"none"` → `""`. This is the only place a token becomes bytes.
 
@@ -302,7 +304,9 @@ colored-frame tests fail on the uncolored frames.
 Result-row (`⎿`) coloring, closing-slot coloring, activity/footer rows,
 selector/tree rows, print/replay/legacy rendering, raw SGR strings,
 bold/italic/underline knobs, per-argument or per-run dynamic styles,
-256-color absolutes, theming of non-tool UI.
+256-color absolutes *as defaults* (Amendment 2 added them as opt-in
+tokens; the shipped behavior still uses named, theme-relative colors),
+theming of non-tool UI.
 
 ## Amendment 1 — no shipped defaults; the palette moves to an example theme (owner directive, 2026-10-02)
 

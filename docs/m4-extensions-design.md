@@ -967,8 +967,9 @@ One new member joins `ExtensionApi` (the "ten members" note in
 `src/extensions/types.ts` now reads eleven): `registerToolColor(names,
 color)` — a load-gated registration (factory-window only, like
 `registerTool` / `registerCommand` / `registerContext`) that maps tool names
-(or the literal `"*"`) to one of the 16 standard-16 color tokens or
-`"none"`. It colors the tool-name span of TUI call headers only. The
+(or the literal `"*"`) to one of the 16 standard-16 color tokens,
+`"none"`, or an absolute token (`ansi256:N` / `#rrggbb`; Amendment 2).
+It colors the tool-name span of TUI call headers only. The
 normative semantics — token set, validation messages, first-wins conflicts,
 exact-over-wildcard resolution, rendering points, the test plan — live in
 `docs/tool-name-colors-design.md` (review closed, 3 rounds + Amendment 1:

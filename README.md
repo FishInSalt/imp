@@ -174,14 +174,15 @@ shared conversation and session:
 imp            # interactive REPL (streaming, one-line tool status)
 ```
 
-- Tool calls render as one-line transcript rows: while a call runs its status
-  sits in the activity region (`running 3s`); once it finishes, the row carries
-  a green `✓` (red `✗` on failure) plus a dim wall time when the call took
-  ≥1s — `● bash  npm test ✓ 2.3s` — with a `⎿` preview of the result beneath
-  it. **Ctrl+O** expands every fold (press it again to collapse them all);
-  **Alt+O** swaps structured calls to their raw arguments. Interrupted calls
-  and replayed history carry no marker. Concurrent `task` calls each keep
-  their own entry and update as they settle (see Subagents).
+- Tool calls render as one-line transcript rows: while a call runs, its live
+  state sits directly under its own call line — `└─ running 3s`, gone once
+  the call settles; the finished row carries a green `✓` (red `✗` on
+  failure) plus a dim wall time when the call took ≥1s — `● bash  npm test
+  ✓ 2.3s` — with a `⎿` preview of the result beneath it. **Ctrl+O** expands
+  every fold (press it again to collapse them all); **Alt+O** swaps
+  structured calls to their raw arguments. Interrupted calls and replayed
+  history carry no marker. Concurrent `task` calls each keep their own entry
+  and update as they settle (see Subagents).
 - Plain lines are sent to the model. Lines typed while imp is working are
   queued — each queued row shows its route: `steer:` lines (plain Enter)
   inject into the running turn before the next model call (default mode

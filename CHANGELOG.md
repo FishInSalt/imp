@@ -131,6 +131,19 @@ All notable changes to imp are documented here. The format follows
   - the anthropic "No API key found" error now also teaches
     `/login anthropic`.
 
+- **Tool live view under its own call line (#tool-inline-live-rows).** A
+  running top-level tool call's live state (`└─ running 3s`) now renders in
+  the transcript, directly under that call's own `● …` row, instead of in the
+  bottom activity region — the command no longer appears twice while a call
+  runs. The activity region keeps only turn-level rows (`⠋ working…`,
+  `compacting context…`) and the existing picker suppression (no `running`
+  claim while a gate is pending). A provider-synthesized tool_call id reused
+  within one run can no longer paint a running row onto the previous call's
+  settled entry. Display-only: the settled transcript, print mode, the legacy
+  shell, history, sessions, extensions, and replay are unchanged. Known
+  tradeoff (accepted, same as `task`): a long-running call's live row scrolls
+  with its header.
+
 ### Fixed
 
 - **A tool's result stays under its own call (#tool-result-follows-call).** A

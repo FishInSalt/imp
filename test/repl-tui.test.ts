@@ -21,7 +21,6 @@ import { SectionRule } from "../src/repl/components/section-rule.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { replaySession } from "../src/repl/replay.js";
 import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
-import * as toolPresentation from "../src/repl/tool-presentation.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import {
@@ -2733,6 +2732,26 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
+	it("replaying a stored tool call creates folds but never live rows (#tool-inline-live-rows)", async () => {
+		const env = await startTuiRepl([reply("ok")], {
+			seed: [
+				assistant(
+					[{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo saved" } }],
+					"tool_use",
+				),
+				{
+					role: "toolResult",
+					results: [{ toolCallId: "b1", toolName: "bash", content: "saved output", isError: false }],
+				},
+			],
+		});
+		await settle();
+		expect(env.transcript.toolFolds.some((fold) => fold.block.name === "bash")).toBe(true);
+		expect(stripAnsi(env.terminal.frameSince(0))).not.toContain("└─ running");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
 	it("cancels emitted calls in place and rejects abandoned run events after clear and id reuse", async () => {
 		const env = await startTuiRepl([reply("next epoch")]);
 		const original = env.runner.runTurn.bind(env.runner);
@@ -2834,7 +2853,7 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
-	it("a pending tool paints a live row; the ✓/⎿ completion stays in the transcript", async () => {
+	it("a running tool's live row sits in its own fold; the ✓/⎿ completion follows", async () => {
 		const g = gate();
 		const env = await startTuiRepl(
 			[
@@ -2849,8 +2868,8 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		env.terminal.data("go\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("gated"));
-		const pending = env.terminal.frameSince(0);
-		expect(pending).toContain("gated"); // the live activity row
+		const pending = stripAnsi(env.terminal.frameSince(0));
+		expect(pending).toContain("└─ running"); // #tool-inline-live-rows: the fold live row
 		expect(pending).toContain("●"); // immediate inspectable input fold
 		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input"]);
 		const mark = env.terminal.writes.length;
@@ -2860,15 +2879,85 @@ describe("runRepl with shell:tui", () => {
 			env.transcript.toolFolds.some((f) => f.block.name === "gated" && f.block.kind === "output"),
 		);
 		await settle();
-		// the pending row is gone — spinner+name only ever appeared in the
-		// activity region (the completion line uses ●, not a spinner frame)
-		expect(env.terminal.frameSince(mark)).not.toMatch(
-			/[\u280b\u2819\u28b9\u28b8\u287c\u2834\u2826\u2867\u2807\u283f] gated/,
-		);
+		// one-frame handoff: the live row is gone and the call row carries ✓
+		const after = stripAnsi(env.terminal.frameSince(mark));
+		expect(after).not.toContain("running");
+		expect(after).toContain("✓");
 		const stream = env.transcript.completedLines().join("\n");
 		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
 		expect(stream).not.toContain("⎿"); // M11: folded — the preview moved to the fold title
 		expect(env.terminal.frameSince(0)).toContain("⎿"); // the fold itself
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("aborting a running tool clears its live row (real run)", async () => {
+		const g = gate();
+		const slow: Tool = {
+			name: "slow",
+			description: "resolves on the gate or abort",
+			parameters: Type.Object({}),
+			async execute(_args, signal) {
+				await new Promise<void>((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+					void g.promise.then(() => resolve());
+				});
+				return { output: "done-after-abort" };
+			},
+		};
+		const env = await startTuiRepl(
+			[assistant([{ type: "toolCall", id: "s1", name: "slow", arguments: {} }], "tool_use"), reply("after")],
+			{ tools: [slow] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("└─ running"));
+		const mark = env.terminal.writes.length;
+		env.terminal.data("\x1b"); // Esc aborts the turn; the tool resolves on the signal
+		// positive control: the post-abort fold paints (the result can never be skipped silently)
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(mark)).includes("done-after-abort"), 8000);
+		await settle(30);
+		expect(stripAnsi(env.terminal.frameSince(mark))).not.toContain("running");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("a reused tool_call id within one run never paints a live row (e2e, #tool-inline-live-rows)", async () => {
+		const first = gate();
+		const second = gate();
+		let calls = 0;
+		const held: Tool = {
+			name: "held",
+			description: "held",
+			parameters: Type.Object({ n: Type.Number() }),
+			async execute() {
+				calls++;
+				if (calls === 1) await first.promise;
+				else await second.promise;
+				return { output: `out${calls}` };
+			},
+		};
+		const env = await startTuiRepl(
+			[
+				assistant([{ type: "toolCall", id: "dup", name: "held", arguments: { n: 1 } }], "tool_use"),
+				assistant([{ type: "toolCall", id: "dup", name: "held", arguments: { n: 2 } }], "tool_use"),
+				reply("done"),
+			],
+			{ tools: [held] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => calls === 1);
+		first.resolve();
+		await waitUntil(() => calls === 2);
+		await settle(400); // several 120ms ticks: a leaked row would repaint
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
+		second.resolve();
+		await waitUntil(() => env.terminal.frameSince(0).includes("done"));
+		// The suppressed duplicate renders no fold of its own (pre-existing sink
+		// suppression; this batch only ensures it cannot paint live rows).
+		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -4483,6 +4572,9 @@ describe("D10 — no live tool rows while a picker is open", () => {
 	function runningShell() {
 		const env = makeShell();
 		env.shell.start();
+		// #tool-inline-live-rows: the live row addresses the call's own fold, so
+		// create it — otherwise the synthetic snapshot renders no row at all.
+		env.transcript.toolSink.start("t1", "bash", { command: "echo hi" });
 		return env;
 	}
 	const activity = (): Parameters<TuiShell["setActivity"]>[0] => ({
@@ -4491,57 +4583,58 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		agents: [],
 	});
 
-	it("the frame with a confirm picker open holds no running text and no tool row; the spinner stays", async () => {
+	it("the frame with a confirm picker open holds no running text; the spinner stays and the call header remains", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
 		await settle(150);
 		const before = terminal.frameSince(0);
-		expect(before).toContain("running"); // the tool row really rendered pre-picker
-		expect(before).toContain("echo hi");
+		expect(before).toContain("└─ running"); // the fold live row really rendered pre-picker
+		expect(before).toContain("echo hi"); // the call header (the row itself carries no label)
 		shell.forceRender();
 		await settle();
 		const mark = terminal.writes.length;
 		const chosen = shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
 		await settle(150);
+		shell.forceRender(); // full repaint: prove the header stays and the row is gone
+		await settle();
 		const frame = terminal.frameSince(mark);
 		expect(frame).toContain("approve?"); // the picker itself is up
-		expect(frame).not.toContain("running"); // D10: no false tool row
-		expect(frame).not.toContain("echo hi"); // its label went with the row
+		expect(frame).not.toContain("running"); // D10: no false running claim (the fold row was pulled)
+		expect(frame).toContain("echo hi"); // the call header stays inspectable
 		expect(frame).toContain("working…"); // the turn-level spinner is untouched
 		terminal.data("\r"); // pick Yes
 		await expect(chosen).resolves.toBe(0);
 		await settle(150);
 		const after = terminal.frameSince(mark);
-		expect(after).toContain("running"); // rows come back on pick
-		expect(after).toContain("echo hi");
+		expect(after).toContain("running"); // the row comes back on pick
 		shell.close();
 	});
 
-	it("#confirm-prompt (Phase 3 D10): the picker's repaint alone clears the rows — <20ms, before the 120ms ticker", async () => {
+	it("#confirm-prompt (Phase 3 D10): the picker's repaint alone clears the live row — <20ms, before the 120ms ticker", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
-		// Let the tool row paint ONCE, then act well inside one 120ms tick so the
+		// Let the live row paint ONCE, then act well inside one 120ms tick so the
 		// ticker cannot mask a missing repaint in setSelector (the recorded bug).
 		await settle(20);
-		expect(terminal.frameSince(0)).toContain("echo hi");
+		expect(terminal.frameSince(0)).toContain("└─ running");
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(20); // < the 120ms ticker: only setSelector's own repaint can act
 		// Frames are differential — force one full repaint of the CURRENT container
-		// tree (no activity rebuild), still inside the ticker window. If setSelector
-		// did not rebuild the region, the stale tool row is still a child and paints.
+		// tree, still inside the ticker window. If setSelector did not clear the
+		// fold's live row, the stale row still renders and this repaint shows it.
 		const mark = terminal.writes.length;
 		shell.forceRender();
 		await settle(20);
 		const frame = terminal.frameSince(mark);
 		expect(frame).toContain("approve?"); // the picker mounted
-		expect(frame).not.toContain("running"); // D10 pulled the tool rows at once
-		expect(frame).not.toContain("echo hi");
+		expect(frame).not.toContain("running"); // D10 pulled the row at once
+		expect(frame).toContain("echo hi"); // the call header itself stays inspectable
 		shell.close();
 	});
 
-	it("Esc restores the tool rows", async () => {
+	it("Esc restores the live row", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
@@ -4549,14 +4642,14 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const mark = terminal.writes.length;
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(150);
-		expect(terminal.frameSince(mark)).not.toContain("echo hi");
+		expect(terminal.frameSince(mark)).not.toContain("running");
 		terminal.data("\x1b"); // Esc cancels
 		await settle(150);
-		expect(terminal.frameSince(mark)).toContain("echo hi");
+		expect(terminal.frameSince(mark)).toContain("running");
 		shell.close();
 	});
 
-	it("Ctrl+C restores the tool rows", async () => {
+	it("Ctrl+C restores the live row", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
@@ -4564,10 +4657,31 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const mark = terminal.writes.length;
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(150);
-		expect(terminal.frameSince(mark)).not.toContain("echo hi");
+		expect(terminal.frameSince(mark)).not.toContain("running");
 		terminal.data("\x03"); // Ctrl+C aborts
 		await settle(150);
-		expect(terminal.frameSince(mark)).toContain("echo hi");
+		expect(terminal.frameSince(mark)).toContain("running");
+		shell.close();
+	});
+
+	it("a denied gate answers the picker and leaves no running row (same-chain clear)", async () => {
+		const { terminal, shell } = runningShell();
+		await settle(0);
+		shell.setActivity(activity());
+		const denied = shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
+		await settle(150); // picker open: the row is suppressed
+		const mark = terminal.writes.length;
+		terminal.data("2"); // quick-pick: No (denied)
+		// The production chain: the picker's close repaints (the row would reappear)
+		// and the blocked tool_end lands in the same event chain, before any 16ms
+		// paint — the final state may never carry a running row.
+		shell.setActivity({ phase: "working", tools: [], agents: [] });
+		await expect(denied).resolves.toBe(1); // the denial really answered the picker
+		shell.forceRender(); // full repaint of the final state (a leaked row would show)
+		await settle(30);
+		const frame = stripAnsi(terminal.frameSince(mark));
+		expect(frame).not.toContain("running");
+		expect(frame).not.toContain("approve?"); // the picker is gone too
 		shell.close();
 	});
 
@@ -4785,30 +4899,6 @@ describe("TuiShell activity region (M10 B)", () => {
 		expect(terminal.frameSince(mark)).not.toContain("compacting context…");
 	});
 
-	it("elapsed ticks reuse active payload previews and idle clears them", async () => {
-		const { shell } = makeShell();
-		const scan = vi.spyOn(toolPresentation, "sanitizeDisplay");
-		const label = "payload".repeat(10000);
-		const snapshot = {
-			phase: "working" as const,
-			tools: [{ id: "cached", name: "bash", label, startedAtMs: Date.now() }],
-			agents: [],
-		};
-		try {
-			shell.start();
-			shell.setActivity(snapshot);
-			await settle(300);
-			expect(scan.mock.calls.filter(([text]) => text === `bash ${label}`)).toHaveLength(1);
-			shell.setActivity({ phase: "idle", tools: [], agents: [] });
-			shell.setActivity(snapshot);
-			await settle(30);
-			expect(scan.mock.calls.filter(([text]) => text === `bash ${label}`)).toHaveLength(2);
-		} finally {
-			shell.close();
-			scan.mockRestore();
-		}
-	});
-
 	it("task snapshots retain ordinal epochs in the fold-backed live rows", async () => {
 		const { shell, terminal, transcript } = makeShell();
 		shell.start();
@@ -4849,10 +4939,13 @@ describe("TuiShell activity region (M10 B)", () => {
 		shell.close();
 	});
 
-	it("working rows render pending tools and subagent tree lines", async () => {
+	it("working rows render the tool live row under its own header and subagent tree lines", async () => {
 		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
+		// #tool-inline-live-rows: both call types need their fold — live rows
+		// address the call's own transcript entry.
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
 		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore the tree" });
 		shell.setActivity({
 			phase: "working",
@@ -4870,11 +4963,88 @@ describe("TuiShell activity region (M10 B)", () => {
 			],
 		});
 		await settle(30);
-		const frame = terminal.frameSince(0);
-		expect(frame).toContain("bash echo hi");
-		expect(frame).toContain("pending #1 scout");
-		expect(frame).toContain("explore the tree");
-		expect(frame).toContain("3 tool starts · last: bash echo deep");
+		const lines = stripAnsi(terminal.frameSince(0))
+			.split("\n")
+			.map((line) => line.trimEnd());
+		const header = lines.findIndex((line) => line.includes("● bash") && line.includes("echo hi"));
+		expect(header).toBeGreaterThanOrEqual(0);
+		expect(lines[header + 1]).toContain("└─ running"); // its own live row, directly under the header
+		expect(lines[header + 1]).not.toContain("echo hi"); // no label repeat
+		const taskHeader = lines.findIndex((line) => line.includes("● task"));
+		expect(taskHeader).toBeGreaterThanOrEqual(0);
+		expect(lines[taskHeader + 1]).toContain("pending #1 scout");
+		expect(stripAnsi(terminal.frameSince(0))).toContain("explore the tree");
+		expect(stripAnsi(terminal.frameSince(0))).toContain("3 tool starts · last: bash echo deep");
+		shell.close();
+	});
+
+	it("fold-backed tool rows tick their elapsed seconds", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() - 4000 }],
+			agents: [],
+		});
+		// Parse the rendered seconds rather than an exact string: the assertion must
+		// hold whether the ticker fires on time or late under load.
+		const latestSeconds = (text: string): number => {
+			const matches = [...text.matchAll(/└─ running (\d+)s/g)];
+			return Number(matches.at(-1)?.[1]);
+		};
+		await settle(30);
+		const before = latestSeconds(stripAnsi(terminal.frameSince(0)));
+		expect(before).toBeGreaterThanOrEqual(4);
+		const mark = terminal.writes.length;
+		await settle(1300);
+		expect(latestSeconds(stripAnsi(terminal.frameSince(mark)))).toBeGreaterThan(before);
+		shell.close();
+	});
+
+	it("idle clears the tool's live row (the clearActivity push path)", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+			agents: [],
+		});
+		await settle(30);
+		expect(stripAnsi(terminal.frameSince(0))).toContain("└─ running");
+		const mark = terminal.writes.length;
+		shell.setActivity({ phase: "idle", tools: [], agents: [] });
+		await settle(30);
+		expect(stripAnsi(terminal.frameSince(mark))).not.toContain("└─ running");
+		shell.close();
+	});
+
+	it("tool live row shape: zero seconds omitted, count capped", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+			agents: [],
+		});
+		await settle(30);
+		const zero = stripAnsi(terminal.frameSince(0))
+			.split("\n")
+			.find((line) => line.includes("running"));
+		expect(zero?.trim()).toBe("└─ running"); // no `0s` form
+		const mark = terminal.writes.length;
+		shell.setActivity({
+			phase: "working",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() - 10_000_000 }],
+			agents: [],
+		});
+		await settle(30);
+		expect(stripAnsi(terminal.frameSince(mark))).toContain("└─ running 9999+s");
 		shell.close();
 	});
 
@@ -4968,7 +5138,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		await settle(0);
 		first.close();
 		await first.whenSettled();
-		expect(transcript.taskLiveRowsResolver).not.toBeNull(); // the guard kept the successor's
+		expect(transcript.callLiveRowsResolver).not.toBeNull(); // the guard kept the successor's
 		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
 		second.setActivity({
 			phase: "working",
@@ -4999,11 +5169,9 @@ describe("M10 review regressions (wave 1 + B)", () => {
 		await settle(0);
 		transcript.feed("ORDER-TRANSCRIPT\n");
 		shell.addFold("ORDER-FOLD", ["+ a", "- b"]);
-		shell.setActivity({
-			phase: "working",
-			tools: [{ id: "t1", name: "bash", label: "ORDER-TOOL", startedAtMs: Date.now() }],
-			agents: [],
-		});
+		// #tool-inline-live-rows: tool rows moved into the transcript folds, so
+		// the region's position is probed with the turn-level spinner row.
+		shell.setActivity({ phase: "thinking", tools: [], agents: [] });
 		const asked = shell.ask("ORDER-ASK");
 		let mark = terminal.writes.length;
 		shell.forceRender();
@@ -5011,7 +5179,7 @@ describe("M10 review regressions (wave 1 + B)", () => {
 		const frameA = terminal.frameSince(mark);
 		const t = frameA.indexOf("ORDER-TRANSCRIPT");
 		const f = frameA.indexOf("ORDER-FOLD");
-		const a = frameA.indexOf("ORDER-TOOL");
+		const a = frameA.indexOf("working…");
 		const k = frameA.indexOf("ORDER-ASK");
 		expect([t, f, a, k].every((i) => i >= 0)).toBe(true);
 		expect(t).toBeLessThan(f);

@@ -57,10 +57,11 @@ export class TranscriptSink implements Component {
 	}
 	readonly toolFolds: ToolBlockFold[] = [];
 	private inputFolds = new WeakMap<ToolBlock, ToolBlockFold>();
-	/** #task-inline-live-rows (B1): the input fold for a tool_call id, so the
-	 *  owning shell can address a running task's live rows. Cleared in clear();
-	 *  "latest writer wins" is safe because the shell only addresses currently
-	 *  running tasks (tool_call ids are not unique across assistant messages). */
+	/** #task-inline-live-rows (B1) / #tool-inline-live-rows: the input fold for
+	 *  a tool_call id, so the owning shell can address a running call's live
+	 *  rows (task or tool). Cleared in clear(); "latest writer wins" is safe
+	 *  because the shell only addresses currently running calls (tool_call ids
+	 *  are not unique across assistant messages). */
 	private inputFoldById = new Map<string, ToolBlockFold>();
 	/** #tool-result-follows-call: the transcript entry holding a tool_call id's
 	 *  input fold, so that call's result block can be spliced directly after it
@@ -68,14 +69,14 @@ export class TranscriptSink implements Component {
 	 *  emit every start before any end). Cleared in clear(): a stale anchor would
 	 *  splice at position 0. */
 	private inputEntryById = new Map<string, Entry>();
-	/** #task-inline-live-rows (B1): pulled by the append callback when a task's
-	 *  fold is created after the shell already published its rows
-	 *  (trackActivity precedes renderer.event). A PUBLIC field mirroring
-	 *  `onUpdate`: the owning shell installs it in start() and unbinds it behind
-	 *  an ownership guard in stopTerminal(), because the same sink is handed
-	 *  from the one-shot trust-ask shell to the real REPL shell. Must be a pure
-	 *  read — it runs inside the append closure. */
-	taskLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
+	/** #task-inline-live-rows (B1) / #tool-inline-live-rows: pulled by the
+	 *  append callback when a call's fold is created after the shell already
+	 *  published its rows (trackActivity precedes renderer.event). A PUBLIC
+	 *  field mirroring `onUpdate`: the owning shell installs it in start() and
+	 *  unbinds it behind an ownership guard in stopTerminal(), because the same
+	 *  sink is handed from the one-shot trust-ask shell to the real REPL shell.
+	 *  Must be a pure read — it runs inside the append closure. */
+	callLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
 	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
 	 *  tests (production passes nothing — the sink defaults to Date.now). */
 	readonly toolSink: ToolPresentationSink;
@@ -103,9 +104,10 @@ export class TranscriptSink implements Component {
 				const displaced = this.inputFoldById.get(block.id);
 				if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
 				this.inputFoldById.set(block.id, fold);
-				// #task-inline-live-rows (B1): pull the rows the shell published
-				// before this fold existed, so the first paint is complete.
-				const rows = this.taskLiveRowsResolver?.(block.id) ?? null;
+				// #task-inline-live-rows (B1) / #tool-inline-live-rows: pull the
+				// rows the shell published before this fold existed, so the first
+				// paint is complete.
+				const rows = this.callLiveRowsResolver?.(block.id) ?? null;
 				if (rows !== null) fold.setLiveRows(rows);
 				this.inputEntryById.set(block.id, this.appendEntry(fold));
 			},
@@ -118,6 +120,7 @@ export class TranscriptSink implements Component {
 				this.onUpdate?.();
 			},
 			options.clock,
+			(id) => this.onTerminalDuplicate(id),
 		);
 	}
 
@@ -163,13 +166,27 @@ export class TranscriptSink implements Component {
 		return true;
 	}
 
-	/** #task-inline-live-rows (B1): publish a running task's live rows to its
-	 *  input fold. A no-op when the fold is not yet known — the shell's resolver
-	 *  covers that case at fold-creation time. */
-	setTaskLiveRows(key: string, rows: readonly string[] | null): void {
+	/** #task-inline-live-rows (B1) / #tool-inline-live-rows: publish a running
+	 *  call's live rows to its input fold. A no-op when the fold is not yet
+	 *  known — the shell's resolver covers that case at fold-creation time. */
+	setCallLiveRows(key: string, rows: readonly string[] | null): void {
 		const fold = this.inputFoldById.get(key);
 		if (fold === undefined) return;
 		if (fold.setLiveRows(rows)) this.onUpdate?.();
+	}
+
+	/** #tool-inline-live-rows: a start for an id whose previous lifecycle is
+	 *  still terminal is suppressed by the sink (no new fold, no result; the
+	 *  provider-synthesized `call_${index}` reuse within one run). The shell may
+	 *  already have pushed live rows for that id onto the superseded fold
+	 *  (trackActivity precedes renderer.event); clear them and stop addressing
+	 *  the fold. The mapping re-registers when a new fold for the id is created
+	 *  after finalize()/clear(). */
+	private onTerminalDuplicate(id: string): void {
+		const fold = this.inputFoldById.get(id);
+		if (fold === undefined) return;
+		this.inputFoldById.delete(id);
+		if (fold.setLiveRows(null)) this.onUpdate?.();
 	}
 
 	feedUser(text: string): void {

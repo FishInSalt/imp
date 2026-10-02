@@ -228,10 +228,11 @@ export class TuiShell implements LineInput {
 	/** Cache only active rows, never historical payloads. */
 	private activityRows = new Map<string, ToolActivity>();
 	private taskOrdinals = new Map<string, { ordinal: number; sources: Map<string, number> }>();
-	/** #task-inline-live-rows (B1): current live rows per task key. Read by the
-	 *  resolver at fold-creation time, and diffed against the next pass so
-	 *  identical rows never invalidate the fold cache. */
-	private taskLiveRows = new Map<string, readonly string[]>();
+	/** #task-inline-live-rows (B1) / #tool-inline-live-rows: current live rows
+	 *  per call key (tool_call id, or a task parent key). Read by the resolver
+	 *  at fold-creation time, and diffed against the next pass so identical
+	 *  rows never invalidate the fold cache. */
+	private callLiveRows = new Map<string, readonly string[]>();
 	/** Ownership guard for the shared sink's resolver (mirrors boundOnUpdate). */
 	private boundLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
 	/** Buffered setQueue text — pushes may arrive before start() and must not
@@ -295,10 +296,11 @@ export class TuiShell implements LineInput {
 		this.tui = tui;
 		this.boundOnUpdate = () => tui.requestRender();
 		this.options.transcript.onUpdate = this.boundOnUpdate;
-		// #task-inline-live-rows (B1): set BEFORE any fold is created, so a task
-		// fold created after the shell published its rows still pulls them.
-		this.boundLiveRowsResolver = (key) => this.taskLiveRows.get(key) ?? null;
-		this.options.transcript.taskLiveRowsResolver = this.boundLiveRowsResolver;
+		// #task-inline-live-rows (B1) / #tool-inline-live-rows: set BEFORE any
+		// fold is created, so a call fold created after the shell published its
+		// rows still pulls them.
+		this.boundLiveRowsResolver = (key) => this.callLiveRows.get(key) ?? null;
+		this.options.transcript.callLiveRowsResolver = this.boundLiveRowsResolver;
 
 		const placeholder = new Text("", 0, 0); // empty Text renders zero rows
 		this.placeholder = placeholder;
@@ -662,16 +664,19 @@ export class TuiShell implements LineInput {
 		if (this.activity.phase === "idle") {
 			this.activityRows.clear();
 			this.taskOrdinals.clear();
-			for (const key of this.taskLiveRows.keys()) this.options.transcript.setTaskLiveRows(key, null);
-			this.taskLiveRows.clear();
+			for (const key of this.callLiveRows.keys()) this.options.transcript.setCallLiveRows(key, null);
+			this.callLiveRows.clear();
 			this.tui?.requestRender();
 			return;
 		}
 		const now = Date.now();
 		const frame = SPINNER_FRAMES[this.activityFrame] ?? "⠋";
-		const elapsed = (startedAtMs: number): string => {
+		// #tool-inline-live-rows (§5.1): zero omitted; the count is floored and
+		// capped at `9999+` by activityCount (the task rows' always-`0s` form is
+		// intentionally not copied).
+		const runningRow = (startedAtMs: number): string => {
 			const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1000));
-			return seconds === 0 ? "" : ` ${seconds}s`;
+			return seconds === 0 ? "└─ running" : `└─ running ${activityCount(seconds)}s`;
 		};
 		// The live status row. Label "working…" (pi's WorkingStatusIndicator
 		// wording): the model is active — streaming, thinking, or between
@@ -688,31 +693,22 @@ export class TuiShell implements LineInput {
 			this.activityContainer.addChild(new Text(dim(`${frame} ${label}`, true), 0, 0));
 		}
 		const active = new Map<string, ToolActivity>();
-		const add = (id: string, status: string, label: string): void => {
-			const row = this.activityRows.get(id) ?? new ToolActivity(status, label);
-			row.update(status, label);
-			active.set(id, row);
-			this.activityContainer.addChild(row);
-		};
-		// #confirm-prompt (Phase 3 D10): while a picker is open no tool row is
-		// painted. Phase 1 runs tool_start → gate serially BEFORE Phase 2 executes
-		// the approved subset, so these rows would claim `running Ns` although
-		// nothing is executing. The turn-level spinner above and the transcript-
-		// side task live rows below are genuine progress and stay.
+		// #tool-inline-live-rows: one map for every call's live rows; tool keys
+		// are tool_call ids, agent keys are task call ids or sourceId UUIDs (the
+		// key spaces are disjoint per message — design §5.2).
+		const nextLiveRows = new Map<string, readonly string[]>();
+		// #confirm-prompt (Phase 3 D10) + #tool-inline-live-rows: while a picker
+		// is open no tool row is painted anywhere. tool_start precedes the gate,
+		// so a `running` row would claim execution that is not happening. Task
+		// rows (genuine progress) stay, exactly as D10 established.
 		if (this.selector === null) {
 			for (const tool of this.activity.tools) {
-				const label = tool.label === "" ? "" : ` ${tool.label}`;
-				add(
-					`tool:${tool.id}:${tool.startedAtMs}`,
-					`${frame} running${elapsed(tool.startedAtMs)}`,
-					`${tool.name}${label}`,
-				);
+				nextLiveRows.set(tool.id, [runningRow(tool.startedAtMs)]);
 			}
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer
 		// sources may share a parent — aggregate their row groups so the fold keeps
 		// every source (the old region rendered one row group per source).
-		const nextTaskLiveRows = new Map<string, readonly string[]>();
 		for (const agent of this.activity.agents) {
 			const parentKey = agent.taskToolId || agent.sourceId || "";
 			let identity = this.taskOrdinals.get(parentKey);
@@ -735,8 +731,8 @@ export class TuiShell implements LineInput {
 			];
 			if (agent.taskToolId !== "") {
 				// The overview renders in the task's own transcript fold, not this region.
-				const existing = nextTaskLiveRows.get(parentKey);
-				nextTaskLiveRows.set(parentKey, existing === undefined ? taskRows : [...existing, ...taskRows]);
+				const existing = nextLiveRows.get(parentKey);
+				nextLiveRows.set(parentKey, existing === undefined ? taskRows : [...existing, ...taskRows]);
 			} else {
 				// Defensive: a source row with no parent fold keeps the region row.
 				const id = `agent:${agent.sourceId ?? agent.taskToolId}:${agent.startedAtMs}`;
@@ -747,14 +743,14 @@ export class TuiShell implements LineInput {
 			}
 		}
 		// Push only what changed; clear the keys that left the snapshot.
-		for (const [key, rows] of nextTaskLiveRows) {
-			const previous = this.taskLiveRows.get(key);
+		for (const [key, rows] of nextLiveRows) {
+			const previous = this.callLiveRows.get(key);
 			if (previous === undefined || !rowsEqual(previous, rows))
-				this.options.transcript.setTaskLiveRows(key, rows);
+				this.options.transcript.setCallLiveRows(key, rows);
 		}
-		for (const key of this.taskLiveRows.keys())
-			if (!nextTaskLiveRows.has(key)) this.options.transcript.setTaskLiveRows(key, null);
-		this.taskLiveRows = nextTaskLiveRows;
+		for (const key of this.callLiveRows.keys())
+			if (!nextLiveRows.has(key)) this.options.transcript.setCallLiveRows(key, null);
+		this.callLiveRows = nextLiveRows;
 
 		this.activityRows = active;
 		this.tui?.requestRender();
@@ -1220,8 +1216,8 @@ export class TuiShell implements LineInput {
 		if (this.options.transcript.onUpdate === this.boundOnUpdate) {
 			this.options.transcript.onUpdate = null;
 		}
-		if (this.options.transcript.taskLiveRowsResolver === this.boundLiveRowsResolver) {
-			this.options.transcript.taskLiveRowsResolver = null;
+		if (this.options.transcript.callLiveRowsResolver === this.boundLiveRowsResolver) {
+			this.options.transcript.callLiveRowsResolver = null;
 		}
 		this.terminal?.write("\x1b]2;\x07"); // hand the window its own title back
 		this.terminal = null;

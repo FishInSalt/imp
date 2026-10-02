@@ -344,11 +344,12 @@ owner's preference theme in `examples/extensions/tool-colors.mjs`.
     their pins.
 - **Removal inventory (complete — the implementation commit updates each
   in place):** this doc's owner decision 3 (:15), D2 composition
-  (:99-102), D5 provenance (:164-166), D7 unit/e2e entries (:199,
+  (:96-102), D5 provenance (:164-166), D7 unit/e2e entries (:199,
   :231-232), D8 README deliverable (:269); source wording
   `src/extensions/types.ts:151` ("overriding a default palette entry"),
   `src/repl/transcript.ts:87`, `src/repl/repl.ts:1667-1668`,
-  `src/repl/tool-colors.ts:2/9`; README :590/:592-597; CHANGELOG :11-21;
+  `src/repl/tool-colors.ts:2/9`; the example's own comments
+  (`examples/extensions/tool-colors.mjs:3-6`); README :590/:592-597; CHANGELOG :11-21;
   `docs/m4-extensions-design.md` Amendment A. `PROJECT_PLAN.md:744` is the
   merged batch's history and is **not** rewritten — this amendment lands its
   own ledger bullet (same precedent as #call-closing-status A1). No

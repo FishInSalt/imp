@@ -2,8 +2,10 @@
 
 Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
 defaults, palette to the example theme) implemented and merged (merge
-b4db87b) — design review 1 round NEEDS-FIXES → CONFIRMED, implementation
-review APPROVE WITH CORRECTIONS → CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
+b4db87b); Amendment 2 (absolute color tokens `ansi256:N` / `#rrggbb`,
+owner-approved) under review on `feat/tool-name-colors-a2`. Design review
+closed after 3 rounds; implementation review APPROVE WITH CORRECTIONS →
+CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (the P2 was a real prototype-chain lookup bug for names like
 `constructor` — fixed at the time via an own-property `defaultToolColor`
@@ -363,3 +365,53 @@ owner's preference theme in `examples/extensions/tool-colors.mjs`.
 
 Implementation on `feat/tool-name-colors-a1`; short adversarial review
 round before implementation, per the working agreements.
+
+## Amendment 2 — absolute color tokens: `ansi256:N` and `#rrggbb` (owner-approved, 2026-10-02)
+
+Context: the owner wants a "dark orange like Claude Code's brand color" for
+the built-in tools (Claude's accent is the truecolor hex `#d97757` — it is
+not an ANSI color; the 16 standard slots have no orange) and a warm beige for
+the two web-search tools. Neither is expressible in the current token set.
+Owner-approved direction: **keep the 16 named tokens, add absolute-color
+tokens** — additive, default behavior unchanged, zero migration for existing
+themes.
+
+- **Grammar** (new accepted values, alongside the 16 names + `none`):
+  - `ansi256:N` — decimal integer 0–255, canonical spelling (no leading
+    zeros except `0` itself). Renders `ESC[38;5;Nm`.
+  - `#rrggbb` — exactly six hex digits, case-insensitive, no `#rgb`/`rgb()`
+    shorthand. Renders `ESC[38;2;R;G;Bm` with the parsed bytes.
+  - Prefix `ansi256:` is lowercase-only; hex case is accepted both ways and
+    needs no normalization (rendering parses digits).
+- **Unchanged**: validation never-throws; per-key first-wins conflicts;
+  `"*"` wildcard; `"none"`; per-name storage; exact-over-wildcard; the
+  loader's factory-window gate; `ExtensionSummary.colorCount`.
+- **Documented pitfall**: `ansi256:0..15` are the theme's first 16 slots —
+  they shift with the terminal theme exactly like the named tokens; indices
+  16–255 are the standard fixed cube/grays (a few themes remap those too).
+  "Exact orange" means `ansi256:208` or `#d97757`, never `ansi256:3`.
+- **Accepted tradeoff** (owner's point of the request): absolute tokens do
+  not follow the terminal theme. Named tokens remain theme-relative; users
+  choose per color.
+- **Types**: `ToolColor = ToolColorName | \`ansi256:${number}\` | \`#${string}\``
+  (template forms for DX; runtime validation is the authority via a new
+  `isToolColor`). Widened signatures: registry storage/`toolColorFor`, the
+  API's `registerToolColor(color: ToolColor)`, `toolColorSgr`,
+  `ToolBlockFold.nameColor`, `renderCommandHeader`'s `colorFor`,
+  `transcript.toolColorResolver`, `TuiShellOptions.toolColorResolver`,
+  `composeToolColorResolver`. No wiring changes.
+- **Report line** grows: `… unknown color (expected one of: <16 names>
+  none, ansi256:N (0-255), or #rrggbb, got "<value>")` — the existing pin
+  in `test/extensions-registry.test.ts` is updated in the same commit.
+- **The owner's theme** (`examples/extensions/tool-colors.mjs`): task →
+  `brightCyan` (named, still theme-relative); bash/read/edit/write/grep/
+  find/ls → `#d97757`; web_search/url_read → `#e6dcc3`. Ten names total —
+  the loader smoke asserts every lookup plus the banner `— 10 colors`.
+- **Tests (red-first)**: unit — boundary validation (`ansi256:0`/`255`
+  accepted; `256`, `-1`, `007`, `ansi256:`, `#D97757` accepted-case vs
+  `#rgb`, `#gggggg`, five-digit rejected), SGR bytes for both forms
+  (`#d97757` → `ESC[38;2;217;119;87m`, `ansi256:173` → `ESC[38;5;173m`),
+  fail-closed junk; registry — new tokens round-trip, message pin updated;
+  repl-tui e2e — an extension registering a hex and an ansi256 color, the
+  exact SGR bytes on the wire; the example-file smoke re-pinned to the
+  owner's palette. Existing 16-token tests and pins are untouched.

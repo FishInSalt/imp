@@ -8,7 +8,8 @@
 
 /** The 16 standard-16 color tokens (theme-relative on purpose — the hues
  *  follow the user's terminal theme) plus `none`: an explicit opt-out that
- *  overrides a default palette entry and renders the name bold-only. */
+ *  overrides another registration for the same name and renders the name
+ *  bold-only. */
 export const TOOL_COLOR_NAMES = [
 	"black",
 	"red",

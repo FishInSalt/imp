@@ -5,8 +5,9 @@ defaults, palette to the example theme) reviewed (1 round NEEDS-FIXES →
 CONFIRMED) and implemented on `feat/tool-name-colors-a1`. Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (the P2 was a real prototype-chain lookup bug for names like
-`constructor` — fixed via an own-property `defaultToolColor` lookup and a
-fail-closed SGR Map). Owner decisions 2026-10-02:
+`constructor` — fixed at the time via an own-property `defaultToolColor`
+lookup and a fail-closed SGR Map; A1 later deleted that lookup with the
+defaults). Owner decisions 2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").
@@ -43,8 +44,8 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
 - `ToolColorName` is a closed union of 16 standard-16 tokens — `black red
   green yellow blue magenta cyan white gray brightRed brightGreen
   brightYellow brightBlue brightMagenta brightCyan brightWhite` — plus
-  `"none"` (explicit opt-out: the name renders bold-only, overriding the
-  default palette entry, §D2).
+  `"none"` (explicit opt-out: the name renders bold-only, overriding
+  another registration for the same name, §D2).
 - `names` is one name or an array; each entry must match `NAME_PATTERN`
   (`core/constants.ts` :50) or be the literal `"*"` (wildcard, §D2). The
   registered name does **not** need to exist as a tool — a theme may style
@@ -232,7 +233,7 @@ is `preparedInputBlock`-level and has no fold rendering):
   `task` call bright magenta;
 - a temp extension registering `bash → brightCyan` / `gated → brightCyan`;
 - `"*" → "blue"` colors an otherwise-uncolored tool (e.g. `gated`);
-- `"none"` on a defaulted tool strips the hue (bold-only);
+- `"none"` strips a hue another registration had set (bold-only);
 - confirm preview shows the colored name.
 **Affected existing tests — surveyed, expected count 0.** The textual
 escape pattern `\x1b[` (five spelled characters) appears 62 times in

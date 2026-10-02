@@ -1,8 +1,8 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
 Status: implemented and merged (merge 70821d4); Amendment 1 (no shipped
-defaults, palette to the example theme) merged (merge pending below in the
-ledger) — design review 1 round NEEDS-FIXES → CONFIRMED, implementation
+defaults, palette to the example theme) implemented and merged (merge
+b4db87b) — design review 1 round NEEDS-FIXES → CONFIRMED, implementation
 review APPROVE WITH CORRECTIONS → CONFIRMED (stale-wording P3s fixed). Design review closed after 3 rounds (NEEDS-FIXES
 → NEEDS-FIXES → CONFIRMED); implementation review APPROVE WITH CORRECTIONS →
 CONFIRMED (the P2 was a real prototype-chain lookup bug for names like

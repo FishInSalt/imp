@@ -963,9 +963,10 @@ contract (§7.2).
 
 ## Amendment A — `registerToolColor` (#tool-name-colors, 2026-10-02)
 
-One new member joins `ExtensionApi` (the "ten members" note in
-`src/extensions/types.ts` now reads eleven): `registerToolColor(names,
-color)` — a load-gated registration (factory-window only, like
+Two new members join `ExtensionApi` (the "ten members" note in
+`src/extensions/types.ts` now reads twelve): `registerToolColor(names,
+color)` in Amendment A, and its weak sibling `suggestToolColor` in
+Amendment 3 — a load-gated registration (factory-window only, like
 `registerTool` / `registerCommand` / `registerContext`) that maps tool names
 (or the literal `"*"`) to one of the 16 standard-16 color tokens,
 `"none"`, or an absolute token (`ansi256:N` / `#rrggbb`; Amendment 2).

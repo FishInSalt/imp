@@ -1,6 +1,6 @@
 # Call closing status: design for independent review
 
-Status: **rev 2 — round-1 findings folded; round-2 targeted verification
+Status: **rev 3 — round-2 findings folded; round-3 targeted confirmation
 pending**. Baseline: `f7a0a3a` (`main`). This document changes no runtime
 behavior. Work happens on branch `feat/call-closing-status`; merge to main
 only via `--no-ff`.
@@ -157,7 +157,10 @@ continuation rows. Metadata rows and omission notices are not info.
   (`visibleWidth(prefix) >= w` with body/path rows below the header) —
   keep today's first-row placement (I4 rules) unchanged. Converting
   `add()` rows to slot-aware layout would need cap/accounting machinery
-  `add()` does not have; scoped out of this batch and pinned as-is.
+  `add()` does not have; scoped out of this batch and pinned as-is. The
+  running text uses the same header-row slot in these layouts (it is not
+  suppressed there); both narrow shapes — `addHeader` + body, `addHeader`
+  + `add(pathText)` — are pinned.
 
 ### D3 — Running text and channel
 
@@ -191,14 +194,17 @@ slot. Sub-second calls: `└─ running` → bare ` ✓`. Failed calls: ` ✗ [X
   the swap (running width vs completion width). Accepted; the target row
   is re-rendered each tick anyway.
 - Option (b) (fixed max reserve) is rejected as stated: keeping the max
-  reserve through settle wastes up to ~11 columns after the swap, and
-  dropping it at settle re-wraps — which is what (b) was meant to prevent.
+  reserve through settle wastes up to 16 columns after the swap (18-column
+  running width vs the 2-column bare sub-second marker), and dropping it
+  at settle re-wraps — which is what (b) was meant to prevent.
 - One shared floor for both forms: `budget - s >= 8` (s = current text
   width). Consequence to pin: with the wide running text the slot
   disappears below ~26 columns of last-row budget while the completion
   marker may still fit.
-- Accepted and pinned: omission/`count` flips at digit changes and at the
-  swap (the cap interaction can move the omission notice by one row).
+- Accepted and pinned: at digit changes and at the swap the omission
+  notice TEXT and count may change; at narrow widths the 14→18-column
+  jump shrinks the per-row content budget by up to 4 columns and can move
+  the omitted row count materially (pin a narrow-width case).
 - The slot never wraps to its own row; it is omitted instead.
 
 ### D6 — Coverage and edges (round-1 corrected)
@@ -226,25 +232,35 @@ Task running block: unchanged (O1 default). Amended deliverables:
 - `docs/task-live-display-design.md` §2 parenthetical: point at this doc.
 - `README.md` / `CHANGELOG.md` / `PROJECT_PLAN.md` ledger at merge.
 
-### D8 — Inline-path mechanism (O7, round-1 corrected)
+### D8 — Inline-path mechanism (O7, round-1/2 corrected)
 
-"Reserve on the last row" cannot be computed by a simple pre-pass: reserving
-width on the last chunk can split it, and the split interacts with the
-3-row cap. Mechanism to implement and pin:
+"Reserve on the last row" cannot be computed by a streaming one-row buffer:
+the row that must carry the slot is the last VISIBLE row — which, for a
+cap-cut info, is the row at `limit-1`, already flushed by today's emitter —
+and reserving width on the target can split it, changing the visible count.
+The inline path is bounded (bash excerpt 160 chars literal-LF, task ~120;
+the collapsed cap shows at most 3 rows), so the mechanism is a complete plan
+plus a single re-lay; the shared streaming emitter used by result/diff
+blocks is untouched. Steps to implement and pin:
 
-1. Stream info rows as today, but hold the FINAL candidate row in a one-row
-   buffer (text, style, prefix, spans) instead of flushing it immediately.
-2. When info emission completes (tail loop included) and the cap outcome is
-   known, lay out the buffered text with `budget - suffixW`; if it splits,
-   its chunks participate in the count/cap accounting as normal rows, and
-   the slot attaches to the last emitted chunk.
-3. If the cap cut falls before that final chunk, the slot closes the last
-   visible chunk instead (consistent with D2).
-4. `summaryVisible`/`consumed` accounting mirrors the reduced budget on the
-   slot-bearing chunk (the N-B parity rule, extended from first to last).
-5. Bounded: the inline info is bounded by the excerpt caps (bash 160 chars
-   literal-LF, task ~120) and the collapsed 3-row cap; expanded modes have
-   no inline body.
+1. Build the inline info's row plan completely — every row the current
+   emitter would lay out, uncapped, in emission order (`body[0]` chunks,
+   tail-loop continuation rows); metadata rows are excluded and keep their
+   current position.
+2. Target = the last non-empty row among the first `limit` planned rows
+   (trailing-LF empty rows are skipped; rows after the target — e.g. empty
+   trailing rows — stay in the plan and render below the slot). If no
+   non-empty row exists among them, the target is the last of those rows.
+3. Re-lay ONLY the target row with its wrap budget reduced by `suffixW`
+   (I3's single-row reduction, retargeted); its chunks replace it in the
+   plan in order. If the extra chunks push the plan past the cap, the slot
+   attaches to the last chunk that remains visible and the omission
+   decision follows the new count (D5's accepted flip).
+4. `summaryVisible`/`consumed` accounting uses the reduced budget for
+   EVERY chunk of the re-laid target row, not only the slot-bearing one
+   (the N-B parity rule, extended from first to last).
+5. Below the D5 floor the slot is omitted and the target row reverts to
+   the full budget; the slot never wraps to its own row.
 
 ## 5. Test plan (red-first, sketch)
 
@@ -255,27 +271,30 @@ New pins:
   command; long task summary); trailing-LF command skips the blank row;
 - cap-truncated info: slot on the last visible row, before `… more`;
 - raw-only collapsed multi-row follows the inline rule;
-- E1 pins: expanded path continuation, narrow fallback — first-row
-  placement unchanged;
+- E1 pins: expanded path continuation; both narrow shapes (`addHeader` +
+  body; `addHeader` + `add(pathText)`) — first-row/header placement,
+  running text included;
 - running text in the slot; precedence pin (`elapsedMs` present + running
   text set → marker only; `error` + running text → nothing);
 - omission floor pins for both forms incl. the ~26-column running
   disappearance; notice/`count` flip pins at digit changes;
-- D8 pins: buffered final row split, `summaryVisible` parity multi-line +
+- D8 pins: target-row split under the cap (slot on the last visible
+  chunk), `summaryVisible` parity across all re-laid chunks, multi-line +
   `commandExcerpt`;
 - channel lifecycle counterparts (resolver pull, displaced fold,
   terminal-duplicate, `stopTerminal` guard, D10, idle clear);
 - I1 sweep (`visibleWidth(row) <= w`) across all new paths.
 
-Re-derived pins (round-1 inventory; re-verify anchors at implementation):
-`test/tui-tool-elapsed.test.ts:103` (first-row multi-row), `:115` (floor),
-`:184`, `:190` (raw-only inline), `:214` (omission parity), `:281-290`
-(orphan/replay/duplicate no-update); `test/repl-tui.test.ts:4942`, `:4971`
-(running row under header), `:4981`, `:5006`, `:5025`, `:5039`
-(`└─ running` trim pins), `:2856`, `:2894`, `:2925`, `:5105-5130`
-(resolver guard); `test/repl-fold.test.ts:617`;
-`test/task-live-display.test.ts:182` (task rows unchanged), `:267-281`
-(duplicate clear).
+Re-derived pins (round-1 inventory, round-2 anchor drifts corrected;
+re-verify anchors at implementation): `test/tui-tool-elapsed.test.ts:103`
+(first-row multi-row), `:115` (floor), `:184`, `:190` (raw-only inline),
+`:214` (omission parity), `:281-290` (orphan/replay/duplicate no-update);
+`test/repl-tui.test.ts:4942`, `:4971` (running row under header), `:4981`,
+`:5006`, `:5025`, `:5039` (`└─ running` trim pins), `:2856`, `:2894`,
+`:2925`, `:5119` (resolver guard, assertion `:5141`); possibly unchanged
+but to re-check: `:4571-4700` (D10 block), `:5086` (task-only);
+`test/repl-fold.test.ts:617`; `test/task-live-display.test.ts:178` (task
+rows unchanged), `:240`, `:267-281` (duplicate clear).
 
 Integration (`repl-tui`): running→done swap in place at a pinned clock
 (same row before/after); multi-line command renders all lines then the slot
@@ -322,3 +341,14 @@ Reviewer (round 2):
   arithmetic off (14-18, not 15-19; minute/hour forms), several anchors
   imprecise. All folded in rev 2 (E1 exception, raw-only fix, D8 mechanism,
   corrected claims, concrete pins inventory).
+
+- Round 2 (same reviewer, targeted, 2026-10-02): **NEEDS-FIXES** — P1:
+  D8's one-row buffer held only the final row; the trailing-LF case and the
+  cap-boundary case (the row at `limit-1`, flushed mid-stream by today's
+  emitter) were not covered. P3: D5 flip wording understated (narrow-width
+  notice/count changes); option-(b) waste is 16 columns, not 11; §5 anchor
+  drifts (`repl-tui:5119`/`:5141`, `task-live-display:178`; D10/task-only
+  anchors missing); E1 pins should name both narrow shapes and the running
+  text's target there. All folded in rev 3: D8 replaced the streaming
+  buffer with a bounded plan/re-lay (complete plan, single re-lay, parity
+  widened to every re-laid chunk).

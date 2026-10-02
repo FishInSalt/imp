@@ -233,8 +233,9 @@ export class TuiShell implements LineInput {
 	 *  at fold-creation time, and diffed against the next pass so identical
 	 *  rows never invalidate the fold cache. */
 	private callLiveRows = new Map<string, readonly string[]>();
-	/** #call-closing-status (D3): the running timer text per non-task call
-	 *  (`└─ running Ns`), rendered in the call fold's closing slot. */
+	/** #call-closing-status (D3, Amendment 1): the running timer text per
+	 *  call (`Ns`, a bare ticking count), rendered in the call fold's closing
+	 *  slot. */
 	private callSuffixes = new Map<string, string>();
 	/** Ownership guard for the shared sink's resolver (mirrors boundOnUpdate). */
 	private boundLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
@@ -681,13 +682,11 @@ export class TuiShell implements LineInput {
 		}
 		const now = Date.now();
 		const frame = SPINNER_FRAMES[this.activityFrame] ?? "⠋";
-		// #tool-inline-live-rows (§5.1): zero omitted; the count is floored and
-		// capped at `9999+` by activityCount (the task rows' always-`0s` form is
-		// intentionally not copied).
-		const runningRow = (startedAtMs: number): string => {
-			const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1000));
-			return seconds === 0 ? "└─ running" : `└─ running ${activityCount(seconds)}s`;
-		};
+		// #call-closing-status Amendment 1 (A1.1): the running slot text is the
+		// bare `Ns` — no `└─ running` chrome; `0s` while the first second is
+		// unfinished; the count is floored and capped at `9999+` by activityCount.
+		const runningText = (startedAtMs: number): string =>
+			`${activityCount(Math.max(0, Math.floor((now - startedAtMs) / 1000)))}s`;
 		// The live status row. Label "working…" (pi's WorkingStatusIndicator
 		// wording): the model is active — streaming, thinking, or between
 		// tools — not literally only thinking. The phase value itself keeps
@@ -707,22 +706,31 @@ export class TuiShell implements LineInput {
 		// are tool_call ids, agent keys are task call ids or sourceId UUIDs (the
 		// key spaces are disjoint per message — design §5.2).
 		const nextLiveRows = new Map<string, readonly string[]>();
-		// #call-closing-status (D3): a running non-task tool carries its timer in
-		// the call fold's closing slot (where the completion suffix will land),
-		// not as a live row.
+		// #call-closing-status (D3): a running call (tool or task) carries its
+		// timer in the fold's closing slot (where the completion suffix will
+		// land), not as a live row.
 		const nextSuffixes = new Map<string, string>();
+		// #call-closing-status A1.2: the task call's timer base — the call's own
+		// start, inherited by source rows (repl.ts), so it never resets when the
+		// provisional parent row is replaced.
+		const taskStarts = new Map<string, number>();
 		// #confirm-prompt (Phase 3 D10) + #tool-inline-live-rows: while a picker
 		// is open no tool row is painted anywhere. tool_start precedes the gate,
-		// so a `running` row would claim execution that is not happening. Task
-		// rows (genuine progress) stay, exactly as D10 established.
+		// so a `running` claim would be false. Task rows and the task suffix
+		// (genuine progress) stay, exactly as D10 established.
 		if (this.selector === null) {
-			for (const tool of this.activity.tools) nextSuffixes.set(tool.id, runningRow(tool.startedAtMs));
+			for (const tool of this.activity.tools) nextSuffixes.set(tool.id, runningText(tool.startedAtMs));
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer
 		// sources may share a parent — aggregate their row groups so the fold keeps
 		// every source (the old region rendered one row group per source).
 		for (const agent of this.activity.agents) {
 			const parentKey = agent.taskToolId || agent.sourceId || "";
+			if (agent.taskToolId !== "") {
+				const previous = taskStarts.get(parentKey);
+				if (previous === undefined || agent.startedAtMs < previous)
+					taskStarts.set(parentKey, agent.startedAtMs);
+			}
 			let identity = this.taskOrdinals.get(parentKey);
 			if (!identity) {
 				identity = { ordinal: this.taskOrdinals.size + 1, sources: new Map() };
@@ -733,7 +741,7 @@ export class TuiShell implements LineInput {
 			const source = agent.sourceId ? identity.sources.get(agent.sourceId) : undefined;
 			const discriminator = `#${identity.ordinal}${source ? `.${source}` : ""}`;
 			const taskRows = [
-				`└─ pending ${discriminator} ${activityText(agent.agent)} ${activityCount((now - agent.startedAtMs) / 1000)}s`,
+				`└─ pending ${discriminator} ${activityText(agent.agent)}`,
 				activityText(agent.task),
 				...(agent.toolCount > 0 || agent.lastTool !== null
 					? [
@@ -754,6 +762,11 @@ export class TuiShell implements LineInput {
 				this.activityContainer.addChild(row);
 			}
 		}
+		// #call-closing-status A1.2: the task timer rides the same closing slot
+		// (exempt from D10 like the task rows). Pushed only for parent folds
+		// (`taskToolId !== ""`); the defensive sourceId-only region path has no
+		// fold, where a suffix push would be a silent no-op.
+		for (const [key, startedAtMs] of taskStarts) nextSuffixes.set(key, runningText(startedAtMs));
 		// Push only what changed; clear the keys that left the snapshot.
 		for (const [key, rows] of nextLiveRows) {
 			const previous = this.callLiveRows.get(key);

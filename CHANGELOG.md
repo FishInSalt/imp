@@ -142,13 +142,17 @@ All notable changes to imp are documented here. The format follows
   settled entry. Display-only: the settled transcript, print mode, the legacy
   shell, history, sessions, extensions, and replay are unchanged. Known
   tradeoff (accepted, same as `task`): a long-running call's live row scrolls
-  with its header.
+  with its header. Superseded before release by #call-closing-status
+  (below): the timer now closes the call's info row — `task` calls included —
+  and reads as a bare `Ns`.
 
 - **Call closing status: one slot for the running timer and the completion
-  marker (#call-closing-status).** A running call's timer (`└─ running Ns`)
-  now renders at the end of the call info — closing the last row of wrapped
-  commands, multi-line commands, and long `task` prompts — and turns into the
-  completion marker (`✓`/`✗`, plus the time when ≥1s) in that same place
+  marker (#call-closing-status).** A running call's timer (a bare dim `Ns`)
+  — including a `task` call's, whose `└─ pending` row no longer carries
+  seconds — now renders at the end of the call info, closing the last row of
+  wrapped commands, multi-line commands, and long `task` prompts, and turns
+  into the completion marker (`✓`/`✗`, plus the time when ≥1s) in that same
+  place
   when the call settles; the
   separate non-task live row is gone, so a multi-line command is no longer
   split by a status row and the marker no longer cuts words. Interrupted

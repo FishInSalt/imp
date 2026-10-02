@@ -522,7 +522,7 @@ export class ToolBlockFold implements Component {
 			// (design D1/D5): the call's closing slot carries the completion suffix —
 			// a marker, green ✓ or red ✗ when the result failed, unconditional for
 			// measured calls, plus a dim time when the call took ≥1s — or, while the
-			// call still runs, the shell's `└─ running Ns` timer text. The completion
+			// call still runs, the shell's `Ns` timer text (Amendment 1). The completion
 			// wins over the timer; an interrupted block carries neither. The slot
 			// closes the call info's last visible non-empty row (D2/D8); `slotWidth`
 			// measures the plain form and is reserved from that row's budget before

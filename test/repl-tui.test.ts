@@ -11,6 +11,7 @@ import type { SessionStore } from "../src/core/session/store.js";
 import { buildSkillCommands, expandSkillBlock, loadSkills } from "../src/core/skills.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
+import { taskPresentation } from "../src/core/tools/presentation.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
 import { loadApiKey } from "../src/provider/auth-store.js";
@@ -2747,7 +2748,7 @@ describe("runRepl with shell:tui", () => {
 		});
 		await settle();
 		expect(env.transcript.toolFolds.some((fold) => fold.block.name === "bash")).toBe(true);
-		expect(stripAnsi(env.terminal.frameSince(0))).not.toContain("└─ running");
+		expect(stripAnsi(env.terminal.frameSince(0))).not.toMatch(/echo saved \d+s/);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2869,7 +2870,7 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("go\r");
 		await waitUntil(() => env.terminal.frameSince(0).includes("gated"));
 		const pending = stripAnsi(env.terminal.frameSince(0));
-		expect(pending).toContain("└─ running"); // #tool-inline-live-rows: the fold live row
+		expect(pending).toMatch(/(?<![.\dm])\d+s/); // #call-closing-status: the fold's closing slot
 		expect(pending).toContain("●"); // immediate inspectable input fold
 		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input"]);
 		const mark = env.terminal.writes.length;
@@ -2881,7 +2882,7 @@ describe("runRepl with shell:tui", () => {
 		await settle();
 		// one-frame handoff: the live row is gone and the call row carries ✓
 		const after = stripAnsi(env.terminal.frameSince(mark));
-		expect(after).not.toContain("running");
+		expect(after).not.toMatch(/(?<![.\dm])\d+s/);
 		expect(after).toContain("✓");
 		const stream = env.transcript.completedLines().join("\n");
 		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
@@ -2911,13 +2912,13 @@ describe("runRepl with shell:tui", () => {
 		);
 		await settle();
 		env.terminal.data("go\r");
-		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("└─ running"));
+		await waitUntil(() => /\b\d+s\b/.test(stripAnsi(env.terminal.frameSince(0))));
 		const mark = env.terminal.writes.length;
 		env.terminal.data("\x1b"); // Esc aborts the turn; the tool resolves on the signal
 		// positive control: the post-abort fold paints (the result can never be skipped silently)
 		await waitUntil(() => stripAnsi(env.terminal.frameSince(mark)).includes("done-after-abort"), 8000);
 		await settle(30);
-		expect(stripAnsi(env.terminal.frameSince(mark))).not.toContain("running");
+		expect(stripAnsi(env.terminal.frameSince(mark))).not.toMatch(/(?<![.\dm])\d+s/);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -2950,14 +2951,14 @@ describe("runRepl with shell:tui", () => {
 		await waitUntil(() => calls === 1);
 		first.resolve();
 		await waitUntil(() => calls === 2);
-		await settle(400); // several 120ms ticks: a leaked row would repaint
-		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
+		await settle(400); // several 120ms ticks: a leaked slot would repaint
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toMatch(/(?<![.\dm])\d+s/);
 		second.resolve();
 		await waitUntil(() => env.terminal.frameSince(0).includes("done"));
 		// The suppressed duplicate renders no fold of its own (pre-existing sink
 		// suppression; this batch only ensures it cannot paint live rows).
 		expect(env.transcript.toolFolds.map((f) => f.block.kind)).toEqual(["input", "output"]);
-		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toContain("running");
+		expect(stripAnsi(env.transcript.render(80).join("\n"))).not.toMatch(/(?<![.\dm])\d+s/);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -3269,10 +3270,67 @@ describe("runRepl with shell:tui", () => {
 		childHold.resolve();
 		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
 		await settle();
-		expect(env.terminal.frameSince(mark)).not.toContain("└─ running"); // row left with the task call
+		expect(env.terminal.frameSince(mark)).not.toContain("pending #"); // the live block left with the task call
 		// M11: the task result folds — the report is the fold body/title now
 		expect(env.terminal.frameSince(0)).toContain("⎿");
 		expect(env.terminal.frameSince(0)).toContain("scout done");
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("the task slot timer never resets when the provisional row is replaced (#call-closing-status A1.2)", async () => {
+		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await writeFile(
+			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
+			"utf-8",
+		);
+		// The child's first response is HELD so the provisional `task:` row ages
+		// untouched; the held child tool then keeps the swapped-in source row on
+		// screen while the slot is read.
+		const first = gate();
+		const tool = gate();
+		const env = await startTuiRepl(
+			[
+				assistant(
+					[
+						{
+							type: "toolCall",
+							id: "t1",
+							name: "task",
+							arguments: { prompt: "explore the tree", agent: "scout" },
+						},
+					],
+					"tool_use",
+				),
+				() =>
+					first.promise.then(() =>
+						assistant(
+							[{ type: "toolCall", id: "c1", name: "gated", arguments: { message: "slow" } }],
+							"tool_use",
+						),
+					),
+				() => tool.promise.then(() => reply("scout done")),
+				reply("all done"),
+			],
+			{ agentsHomeDir: agentsHome, tools: [gatedTool(tool)] },
+		);
+		await settle();
+		env.terminal.data("go\r");
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("● task"), 8000);
+		await settle(1300); // the call's own start ages past one second
+		first.resolve(); // the child's first event materializes the source row
+		await waitUntil(() => stripAnsi(env.terminal.frameSince(0)).includes("pending #1.1"), 8000);
+		await settle(30);
+		// The newest slot reading must still measure the CALL's age (>= 1s); a
+		// base reset at the swap would paint `0s` here.
+		const latest = [
+			...stripAnsi(env.terminal.frameSince(0)).matchAll(/● task {2}scout · explore the tree (\d+)s/g),
+		];
+		expect(Number(latest.at(-1)?.[1])).toBeGreaterThanOrEqual(1);
+		tool.resolve();
+		await waitUntil(() => env.transcript.completedLines().join("\n").includes("all done"), 8000);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
@@ -4589,7 +4647,7 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		shell.setActivity(activity());
 		await settle(150);
 		const before = terminal.frameSince(0);
-		expect(before).toContain("└─ running"); // the fold live row really rendered pre-picker
+		expect(before).toMatch(/echo hi \d+s/); // the fold's closing slot really rendered pre-picker
 		expect(before).toContain("echo hi"); // the call header (the row itself carries no label)
 		shell.forceRender();
 		await settle();
@@ -4600,14 +4658,14 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		await settle();
 		const frame = terminal.frameSince(mark);
 		expect(frame).toContain("approve?"); // the picker itself is up
-		expect(frame).not.toContain("running"); // D10: no false running claim (the fold row was pulled)
+		expect(frame).not.toMatch(/echo hi \d+s/); // D10: no false running claim (the slot was pulled)
 		expect(frame).toContain("echo hi"); // the call header stays inspectable
 		expect(frame).toContain("working…"); // the turn-level spinner is untouched
 		terminal.data("\r"); // pick Yes
 		await expect(chosen).resolves.toBe(0);
 		await settle(150);
 		const after = terminal.frameSince(mark);
-		expect(after).toContain("running"); // the row comes back on pick
+		expect(after).toMatch(/echo hi \d+s/); // the slot comes back on pick
 		shell.close();
 	});
 
@@ -4618,7 +4676,7 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		// Let the live row paint ONCE, then act well inside one 120ms tick so the
 		// ticker cannot mask a missing repaint in setSelector (the recorded bug).
 		await settle(20);
-		expect(terminal.frameSince(0)).toContain("└─ running");
+		expect(terminal.frameSince(0)).toMatch(/echo hi \d+s/);
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(20); // < the 120ms ticker: only setSelector's own repaint can act
 		// Frames are differential — force one full repaint of the CURRENT container
@@ -4629,12 +4687,51 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		await settle(20);
 		const frame = terminal.frameSince(mark);
 		expect(frame).toContain("approve?"); // the picker mounted
-		expect(frame).not.toContain("running"); // D10 pulled the row at once
+		expect(frame).not.toMatch(/echo hi \d+s/); // D10 pulled the slot at once
 		expect(frame).toContain("echo hi"); // the call header itself stays inspectable
 		shell.close();
 	});
 
-	it("Esc restores the live row", async () => {
+	it("a picker keeps the task timer ticking while the tool slot is suppressed (#call-closing-status A1.2)", async () => {
+		const { terminal, shell, transcript } = makeShell();
+		shell.start();
+		await settle(0);
+		transcript.toolSink.setResolver((name) => (name === "task" ? taskPresentation : undefined));
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
+		shell.setActivity({
+			phase: "thinking",
+			tools: [{ id: "t1", name: "bash", label: "echo hi", startedAtMs: Date.now() }],
+			agents: [
+				{
+					agent: "scout",
+					task: "explore",
+					taskToolId: "t9",
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+				},
+			],
+		});
+		await settle(150);
+		const before = stripAnsi(terminal.frameSince(0));
+		expect(before).toMatch(/echo hi \d+s/); // the tool slot while no picker
+		expect(before).toMatch(/● task {2}scout · explore \d+s/); // the task slot
+		shell.forceRender();
+		await settle();
+		const mark = terminal.writes.length;
+		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
+		await settle(150);
+		shell.forceRender(); // full repaint: both rows' current state must be visible
+		await settle();
+		const frame = stripAnsi(terminal.frameSince(mark));
+		expect(frame).not.toMatch(/echo hi \d+s/); // the tool slot is suppressed (D10)
+		expect(frame).toMatch(/● task {2}scout · explore \d+s/); // the task slot is exempt (A1.2)
+		shell.close();
+	});
+
+	it("Esc restores the running timer", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
@@ -4642,14 +4739,14 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const mark = terminal.writes.length;
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(150);
-		expect(terminal.frameSince(mark)).not.toContain("running");
+		expect(terminal.frameSince(mark)).not.toMatch(/echo hi \d+s/);
 		terminal.data("\x1b"); // Esc cancels
 		await settle(150);
-		expect(terminal.frameSince(mark)).toContain("running");
+		expect(terminal.frameSince(mark)).toMatch(/echo hi \d+s/);
 		shell.close();
 	});
 
-	it("Ctrl+C restores the live row", async () => {
+	it("Ctrl+C restores the running timer", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
@@ -4657,14 +4754,14 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		const mark = terminal.writes.length;
 		void shell.select({ title: "approve?", items: [{ label: "Yes" }] });
 		await settle(150);
-		expect(terminal.frameSince(mark)).not.toContain("running");
+		expect(terminal.frameSince(mark)).not.toMatch(/echo hi \d+s/);
 		terminal.data("\x03"); // Ctrl+C aborts
 		await settle(150);
-		expect(terminal.frameSince(mark)).toContain("running");
+		expect(terminal.frameSince(mark)).toMatch(/echo hi \d+s/);
 		shell.close();
 	});
 
-	it("a denied gate answers the picker and leaves no running row (same-chain clear)", async () => {
+	it("a denied gate answers the picker and leaves no running timer (same-chain clear)", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
@@ -4680,7 +4777,7 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		shell.forceRender(); // full repaint of the final state (a leaked row would show)
 		await settle(30);
 		const frame = stripAnsi(terminal.frameSince(mark));
-		expect(frame).not.toContain("running");
+		expect(frame).not.toMatch(/echo hi \d+s/);
 		expect(frame).not.toContain("approve?"); // the picker is gone too
 		shell.close();
 	});
@@ -4969,8 +5066,8 @@ describe("TuiShell activity region (M10 B)", () => {
 		const header = lines.findIndex((line) => line.includes("● bash") && line.includes("echo hi"));
 		expect(header).toBeGreaterThanOrEqual(0);
 		// #call-closing-status: the timer closes the call info row itself.
-		expect(lines[header]).toContain("└─ running");
-		expect(lines[header + 1] ?? "").not.toContain("└─ running"); // no separate live row
+		expect(lines[header]).toMatch(/echo hi \d+s/);
+		expect(lines.filter((line) => /echo hi \d+s/.test(line))).toHaveLength(1); // inline, never duplicated
 		const taskHeader = lines.findIndex((line) => line.includes("● task"));
 		expect(taskHeader).toBeGreaterThanOrEqual(0);
 		expect(lines[taskHeader + 1]).toContain("pending #1 scout");
@@ -4992,7 +5089,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		// Parse the rendered seconds rather than an exact string: the assertion must
 		// hold whether the ticker fires on time or late under load.
 		const latestSeconds = (text: string): number => {
-			const matches = [...text.matchAll(/└─ running (\d+)s/g)];
+			const matches = [...text.matchAll(/echo hi (\d+)s/g)];
 			return Number(matches.at(-1)?.[1]);
 		};
 		await settle(30);
@@ -5015,15 +5112,15 @@ describe("TuiShell activity region (M10 B)", () => {
 			agents: [],
 		});
 		await settle(30);
-		expect(stripAnsi(terminal.frameSince(0))).toContain("└─ running");
+		expect(stripAnsi(terminal.frameSince(0))).toMatch(/echo hi \d+s/);
 		const mark = terminal.writes.length;
 		shell.setActivity({ phase: "idle", tools: [], agents: [] });
 		await settle(30);
-		expect(stripAnsi(terminal.frameSince(mark))).not.toContain("└─ running");
+		expect(stripAnsi(terminal.frameSince(mark))).not.toMatch(/echo hi \d+s/);
 		shell.close();
 	});
 
-	it("call closing slot shape: zero seconds omitted, count capped", async () => {
+	it("call closing slot shape: zero seconds as `0s`, count capped", async () => {
 		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
@@ -5036,8 +5133,8 @@ describe("TuiShell activity region (M10 B)", () => {
 		await settle(30);
 		const zero = stripAnsi(terminal.frameSince(0))
 			.split("\n")
-			.find((line) => line.includes("running"));
-		expect(zero?.trim()).toBe("● bash  echo hi └─ running"); // inline slot, no `0s` form
+			.find((line) => /echo hi \d+s/.test(line));
+		expect(zero?.trim()).toBe("● bash  echo hi 0s"); // #call-closing-status A1.1: `0s` is shown
 		const mark = terminal.writes.length;
 		shell.setActivity({
 			phase: "working",
@@ -5045,14 +5142,15 @@ describe("TuiShell activity region (M10 B)", () => {
 			agents: [],
 		});
 		await settle(30);
-		expect(stripAnsi(terminal.frameSince(mark))).toContain("└─ running 9999+s");
+		expect(stripAnsi(terminal.frameSince(mark))).toContain("9999+s");
 		shell.close();
 	});
 
-	it("fold-backed task rows tick their elapsed seconds", async () => {
+	it("the task timer ticks in the call's closing slot (#call-closing-status A1.2)", async () => {
 		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
+		transcript.toolSink.setResolver((name) => (name === "task" ? taskPresentation : undefined));
 		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
 		shell.setActivity({
 			phase: "working",
@@ -5069,13 +5167,16 @@ describe("TuiShell activity region (M10 B)", () => {
 				},
 			],
 		});
-		// Parse the rendered seconds rather than an exact string: the assertion must
-		// hold whether the ticker fires on time or late under load.
+		// #call-closing-status A1.2: the task timer rides the call's closing slot,
+		// not the `pending` row; parse the rendered seconds (ticker timing under
+		// load is not exact).
 		const latestSeconds = (text: string): number => {
-			const matches = [...text.matchAll(/pending #1 scout (\d+)s/g)];
+			const matches = [...text.matchAll(/● task {2}scout · explore (\d+)s/g)];
 			return Number(matches.at(-1)?.[1]);
 		};
 		await settle(30);
+		expect(stripAnsi(terminal.frameSince(0))).toContain("pending #1 scout");
+		expect(stripAnsi(terminal.frameSince(0))).not.toMatch(/pending #1 scout \d+s/); // seconds moved off the row
 		const before = latestSeconds(stripAnsi(terminal.frameSince(0)));
 		expect(before).toBeGreaterThanOrEqual(4);
 		const mark = terminal.writes.length;

@@ -1,6 +1,6 @@
 # #tool-name-colors — tool-name color differentiation via extensions
 
-Status: draft (design review pending). Owner decisions 2026-10-02:
+Status: rev2 (round-1 NEEDS-FIXES folded; re-review pending). Owner decisions 2026-10-02:
 
 1. Mechanism is **route B** — a new extension capability, so themes are
    per-user installable modules (owner: "以后可能不同用户有不同审美").
@@ -48,15 +48,21 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
   attempts (`registration only works while the factory runs`), same as
   `registerTool` / `registerCommand` / `registerContext`. No runtime
   mutation ⇒ no re-render plumbing, no lifecycle (§D5).
-- Validation never throws (registry culture, `registerTool` :229-232):
-  a malformed `color`, an empty/invalid name entry, or a conflict (§D2)
-  produces one report line and is skipped; a thrown factory still discards
-  the whole section atomically (`discardExtension`).
-- Report message shapes (bounded quotes, `firstLine` cap 160 like the
-  existing messages):
-  - `imp: extension X could not register tool color "<value>" — unknown color (expected one of: <16 + none>)`
-  - `imp: extension X could not register tool color for "<name>" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*"`
-  - `imp: extension X could not register tool color for "<name>" — already set by Y`
+- Validation never throws (registry culture, `registerTool` :229-232),
+  and is **total** — every malformed shape has a defined path and one
+  report line, values quoted bounded (`firstLine(String(v), 160)`, the
+  existing `(got "…")` idiom):
+  - `names` is neither a string nor an array →
+    `imp: extension X could not register tool color — expected a name or an array of names, got <type>`;
+  - an invalid entry (non-string, empty, bad pattern) →
+    `imp: extension X could not register tool color for "<name>" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "<value>")`;
+  - `color` not a member of the closed set →
+    `imp: extension X could not register tool color — unknown color (expected one of: <16 + none>, got "<value>")`;
+  - a conflict (§D2) →
+    `imp: extension X could not register tool color for "<name>" — already set by Y`.
+  A thrown factory still discards the whole section atomically
+  (`discardExtension`). A valid entry inside an otherwise malformed call
+  is not partially applied: one call registers all of its names or none.
 
 ## D2 — Registry storage, conflicts, resolution
 
@@ -70,6 +76,15 @@ registerToolColor(names: string | readonly string[], color: ToolColorName): void
   slot has its own conflicting owner).
 - Resolution `registry.toolColorFor(name)`:
   `exact map` → `"*" map` → `undefined`.
+- **Specificity across keys, load order only within a key** (normative):
+  an exact registration always beats a wildcard one regardless of which
+  extension loaded first — extension A (`"*" → blue`) plus extension B
+  (`"bash" → green`) resolves `bash` to green, and that is *not* a
+  conflict (no report line). Load order (alphabetical, `loader.ts` :142)
+  arbitrates only two registrations of the *same* key. Corollary: a later
+  exact `"none"` silently disables an earlier wildcard color for that
+  name — by specificity, not as an error. A two-section registry test
+  pins this (§D7).
 - Composed resolver (built once in `repl.ts`):
   `extension exact` ?? `extension "*"` ?? `built-in default` ?? `none`.
   The wildcard **overrides the built-in defaults** — `register("*",
@@ -107,12 +122,21 @@ export const DEFAULT_TOOL_COLORS: Record<string, ToolColorName> = {
 
 ## D4 — Rendering points (two, both name-span only)
 
-1. **Call header in the fold** (`tool-block.ts` :517-519): the name span
+1. **Call header in the fold** (`tool-block.ts` :515-519): the name span
    (`title === name`, or the interrupted variant where the name stays and
    ` · interrupted (no result)` carries RED) becomes
    `BOLD + toolColorSgr(token)`; `undefined`/`"none"` keeps plain `BOLD` —
    byte-identical to today. The dim `●`, the arguments, the closing slot
    (✓ / ✗ / `Ns`), the `⎿` rows: untouched.
+
+   Invariant recorded for the reviewer: every input-block producer sets
+   `title = sanitizeDisplay(name)` (`tool-presentation.ts` :330), the
+   interrupted suffix (:730) is the only title mutation, and
+   `ToolPresentationHooks` (`core/tools/types.ts` :58-62) cannot change
+   the title — so the guard never silently drops the color for a custom
+   presentation today. A future producer that rewrites `title` would
+   disable the color for its blocks; that is the acceptance of the guard,
+   not an accident.
 2. **Confirm preview** (`renderCommandHeader`, `tool-block.ts` :136-152):
    same span treatment for the preview's name. Signature gains an optional
    resolver: `renderCommandHeader(preview, colorFor?)`; the caller
@@ -130,19 +154,26 @@ Differential rendering is stable: the style string is a session constant
 - `transcript.ts`: new public field
   `toolColorResolver: ((name: string) => ToolColorName | undefined) | null`
   (same public-field pattern as `callSuffixResolver` :80-83, but **not**
-  shell-bound and not cleared on close — it is set once by `repl.ts` from
-  the registry + defaults and never changes: registrations happen before
-  the REPL exists, so a late-created fold pulling it at construction sees
-  the final value). The fold factory (:91) passes
+  shell-bound and not cleared on close — it is set once by `repl.ts`
+  from the registry + defaults and never changes: registrations happen
+  before the REPL exists, so a late-created fold pulling it at
+  construction sees the final value). Assigning at the existing :1622
+  site is sound: `runRepl` assigns unconditionally on every invocation,
+  and the trust-ask shell (`trust-ask.ts` :43) renders neither folds nor
+  previews. The fold factory (:91) passes
   `block.kind === "input" ? this.toolColorResolver?.(block.name) : undefined`
   into the extended constructor `new ToolBlockFold(block, nameColor?)`.
-- `shell.ts`: public field `toolColorResolver: ((name) => ToolColorName |
-  undefined) | null = null`, assigned by `repl.ts` before `start()`; used
-  only at :933 for the preview. Nullable, no ownership guard: nothing else
-  writes it, and there is no lifecycle.
+- `shell.ts`: **`TuiShellOptions` gains an optional
+  `toolColorResolver`** — the shell is constructed inline in a ternary at
+  `repl.ts:1669` (typed `LineInput`), so a post-construction assignment at
+  :1622 is not available; the resolver rides the options object there,
+  `start()` follows at :1715. The shell stores it and uses it only at
+  :933 for the preview. Optional and immutable: nothing else writes it,
+  and there is no lifecycle.
 - `repl.ts`: builds the composed resolver next to the existing
-  `toolSink.setResolver` wiring (:1622) — `options.extensions` is in scope
-  there — and assigns it to both consumers.
+  `toolSink.setResolver` wiring (:1622) — `options.extensions` is in
+  scope there — assigns it to the transcript, and passes it in the
+  `TuiShell` options at :1669.
 - `ToolBlockFold` gains an optional second constructor parameter. All
   existing call sites and byte-level fold tests stay valid (unset =
   legacy bytes); only tests exercising the new resolver change.
@@ -176,7 +207,9 @@ New `test/tool-colors.test.ts` (unit):
 `test/extensions-loader.test.ts`: post-load `registerToolColor` reported
 by `whileLoading`; a factory calling it normally stores via the API.
 
-`test/builtin-tool-presentation.test.ts` (fold-level, byte-precise):
+`test/tui-tool-elapsed.test.ts` / `test/tool-display-colors.test.ts`
+(direct-`ToolBlockFold` byte pins — `builtin-tool-presentation.test.ts`
+is `preparedInputBlock`-level and has no fold rendering):
 - with a token → the name span carries `BOLD + SGR`, **plain text
   unchanged** (strip comparison); without a token → legacy bytes exactly;
 - interrupted row: name span colored, ` · interrupted (no result)` stays
@@ -192,16 +225,24 @@ by `whileLoading`; a factory calling it normally stores via the API.
 - `"*" → "blue"` colors an otherwise-uncolored tool (e.g. `gated`);
 - `"none"` on a defaulted tool strips the hue (bold-only);
 - confirm preview shows the colored name.
-- All *existing* raw-frame byte pins that assert call headers through the
-  real wiring must be updated in the same commit — the default palette
-  changes those bytes on purpose. Assertions that strip ANSI stay
-  semantically valid; enumerated with red evidence at implementation time
-  (the affected-pin count is a deliverable, not a guess).
+**Affected existing tests — surveyed, expected count 0.** The e2e
+helpers strip ANSI (`repl-tui.test.ts` :126-135 wraps every write), and
+`grep -c $'\x1b\['` over `test/repl-tui.test.ts` and
+`test/extensions-repl.test.ts` is 0 — no raw-frame byte pin exists there.
+The remaining byte pins are out of the color path: `render.test.ts` :59-94
+(legacy one-line renderer, §D6-untouched), `tool-display-colors.test.ts`
+:38 and `tui-tool-elapsed.test.ts` :56-63 (direct folds, resolver unset),
+`confirm-preview.test.ts` :20-26 (unit, optional argument). The
+implementation re-runs this survey and keeps the count at 0; every new
+assertion lives in the new tests above. New e2e runs go through `runRepl`
+(`repl-tui.test.ts` harness) so the real wiring is exercised.
 
-Red evidence plan: run the new suite against the pre-change tree — unit
-and registry tests fail at the missing API (`registerToolColor` undefined);
-fold/e2e tests fail on the colored bytes (or the resolver being absent),
-not compile errors (vitest strips types; runtime shapes only).
+Red evidence plan: the new unit file importing the not-yet-existing
+`src/repl/tool-colors.ts` fails at transform (module resolution) on the
+pre-change tree; the registry tests fail at runtime (`registerToolColor`
+is `undefined` — vitest strips types, so this is a TypeError, not a
+compile error); the fold byte tests fail by missing bytes; the e2e
+colored-frame tests fail on the uncolored frames.
 
 ## D8 — Docs & examples deliverables
 
@@ -215,14 +256,17 @@ not compile errors (vitest strips types; runtime shapes only).
 - `docs/m4-extensions-design.md`: an amendment note — one new
   load-gated registration (`registerToolColor`), normative semantics in
   this document.
+- `src/extensions/types.ts`: the `ExtensionApi` TSDoc's “ten members”
+  note becomes eleven, and `registerToolColor` gets the load-gating
+  comment (factory-window only, like the other registrations).
 
 ## D9 — Risks / accepted tradeoffs
 
 - Hue rendering depends on the terminal theme (accepted; see §D3).
-- Two extensions styling the same key: load order decides (alphabetical,
-  `loader.ts` :142) — deterministic, reported, and consistent with every
-  other registration kind. No project-over-global precedence here either,
-  same as today.
+- Two extensions styling the same key: first registration wins (report
+  line); across different keys, specificity decides — exact beats
+  wildcard regardless of load order (§D2), which is deterministic,
+  tested, and documented rather than silent.
 - Defaults change production bytes of call headers — every downstream
   byte-level expectation must be updated consciously (§D7); no visual
   width change.

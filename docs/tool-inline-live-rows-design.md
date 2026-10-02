@@ -500,3 +500,13 @@ parentheticals pointed at this document.
   duplicate variant are covered by the shared-path pins
   (`test/task-live-display.test.ts:209-213` and the transcript-level hook
   tests); no separate duplicates added. Full suite after corrections: 2660.
+- **Implementation confirmation (same reviewer, 2026-10-02):** findings 1/2/4/5
+  closed (row-shape and hook mutations redden); the real-run abort pin verified
+  non-vacuous; the denied pin was found non-discriminating and was strengthened
+  (its picker now answers and asserts, and the final state is force-rendered),
+  and the red lint gate the reviewer caught (a formatter error the earlier
+  `tail`-truncated local check missed) was fixed. Waivers recorded: §7's width
+  sweep and the task-path / displaced-clear duplicate variants are covered by
+  shared-path pins (`test/task-live-display.test.ts:209-213`, the
+  transcript-level hook tests, `test/repl-tui.test.ts:4968`). Final gates:
+  suite 2660, lint 0, typecheck 0, build 0.

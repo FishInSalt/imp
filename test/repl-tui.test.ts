@@ -2906,10 +2906,7 @@ describe("runRepl with shell:tui", () => {
 			},
 		};
 		const env = await startTuiRepl(
-			[
-				assistant([{ type: "toolCall", id: "s1", name: "slow", arguments: {} }], "tool_use"),
-				reply("after"),
-			],
+			[assistant([{ type: "toolCall", id: "s1", name: "slow", arguments: {} }], "tool_use"), reply("after")],
 			{ tools: [slow] },
 		);
 		await settle();
@@ -4667,20 +4664,24 @@ describe("D10 — no live tool rows while a picker is open", () => {
 		shell.close();
 	});
 
-	it("a denied gate leaves no running row (suppress → close → clear, one chain)", async () => {
+	it("a denied gate answers the picker and leaves no running row (same-chain clear)", async () => {
 		const { terminal, shell } = runningShell();
 		await settle(0);
 		shell.setActivity(activity());
-		void shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
+		const denied = shell.select({ title: "approve?", items: [{ label: "Yes" }, { label: "No" }] });
 		await settle(150); // picker open: the row is suppressed
 		const mark = terminal.writes.length;
 		terminal.data("2"); // quick-pick: No (denied)
 		// The production chain: the picker's close repaints (the row would reappear)
 		// and the blocked tool_end lands in the same event chain, before any 16ms
-		// paint — no frame may ever carry a running row.
+		// paint — the final state may never carry a running row.
 		shell.setActivity({ phase: "working", tools: [], agents: [] });
+		await expect(denied).resolves.toBe(1); // the denial really answered the picker
+		shell.forceRender(); // full repaint of the final state (a leaked row would show)
 		await settle(30);
-		expect(stripAnsi(terminal.frameSince(mark))).not.toContain("running");
+		const frame = stripAnsi(terminal.frameSince(mark));
+		expect(frame).not.toContain("running");
+		expect(frame).not.toContain("approve?"); // the picker is gone too
 		shell.close();
 	});
 

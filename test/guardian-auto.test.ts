@@ -477,11 +477,19 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(writeRequest.prompt).toContain(
 			"CALL (call facts: host event + extension constants; the fenced payload is verbatim — the action under review):",
 		);
-		// the child fact form (D35: `true (agent: <name>)`)
+		// the child fact form (D35: `true (agent: <name>)`) — both builders pinned
 		h.classifyImpl.fn = async () => verdict("allow", "ok");
 		await h.gate(writeCall("/outside/kid.txt", "x", { subagent: true, agent: "explorer" }));
 		const kidRequest = h.classify.mock.calls[2]?.[0] as ClassifyRequest;
 		expect(kidRequest.prompt).toContain("subagent: true (agent: explorer)");
+		await h.gate({
+			args: { command: "rm -rf /tmp/kid" },
+			cwd: "/proj",
+			subagent: true,
+			agent: "explorer",
+		});
+		const kidBashRequest = h.classify.mock.calls[3]?.[0] as ClassifyRequest;
+		expect(kidBashRequest.prompt).toContain("subagent: true (agent: explorer)");
 	});
 
 	it("45: §16/D37 — every reason-bearing audit line carries the basis segment", async () => {

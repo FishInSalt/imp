@@ -1457,12 +1457,12 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
 
 ## 16. Classifier context mechanism — track B (draft for independent review — 2026-10-02)
 
-> Status: **rev 2.2 — design review closed (R1→rev 1; R2→rev 1.1;
+> Status: **rev 2.3 — design review closed (R1→rev 1; R2→rev 1.1;
 > R3→rev 1.2; R4 CONFIRMED); IMPLEMENTED at f4862e2; implementation
 > review R5 APPROVE WITH CORRECTIONS → folds (rev 2.1); R6 CONFIRMED
-> WITH NOTES → 6 precision notes folded (rev 2.2). The `basis`/D30
-> conflict was resolved by owner decision (option (b), D37). Awaiting R7
-> micro-verification.**
+> WITH NOTES → folds (rev 2.2); R7 CONFIRMED WITH NOTES → single-site
+> bash child pin folded (rev 2.3). The `basis`/D30 conflict was resolved
+> by owner decision (option (b), D37). Awaiting R8 micro-verification.**
 > Scope: **track B** of the 2026-10-02 triage — the classifier's *input
 > mechanism*: what evidence the seam sees, how it is sourced, framed and
 > bounded. It changes the classify request layout, adds host-side
@@ -1840,4 +1840,12 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   lead-in and the `subagent: true (agent: …)` form pinned; the resume-
   and tree-site decision clears pinned individually; pin 63 tightened to
   the exact-length form (catches both over- and under-use); the R5 log
-  coverage sentence corrected. R7 (micro-verification) pending.
+  coverage sentence corrected.
+- **R7 (same reviewer, micro-verification of rev 2.2): CONFIRMED WITH
+  NOTES** — all six R6 notes verified folded; the seven previously
+  surviving mutations all caught (bash-site basis, resume/tree decision
+  clears, runRepl binding, WO cap lower bound, write lead-in, subagent
+  form); the exact-4096 invariant verified across digit boundaries and
+  large inputs. One remaining single-site gap: the bash builder's
+  `subagent:` line was unpinned (its write twin was) — folded in rev
+  2.3. R8 (micro-verification) pending.

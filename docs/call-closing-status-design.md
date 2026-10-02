@@ -313,7 +313,7 @@ re-verify anchors at implementation): `test/tui-tool-elapsed.test.ts:103`
 `:2925`, `:5119` (resolver guard, assertion `:5141`); possibly unchanged
 but to re-check: `:4571-4700` (D10 block), `:5086` (task-only);
 `test/repl-fold.test.ts:617`; `test/task-live-display.test.ts:178` (task
-rows unchanged), `:240`, `:267-281` (duplicate clear).
+pending row drops seconds), `:240`, `:267-281` (duplicate clear).
 
 Integration (`repl-tui`): running→done swap in place at a pinned clock
 (same row before/after); multi-line command renders all lines then the slot

@@ -192,7 +192,7 @@ running suffix (O1 default).
 On settle, the sink's end-time update sets `elapsedMs`/`failed` (unchanged
 mechanism); the shell drops the tool from the activity snapshot and clears
 the running text. D1's precedence renders the completion suffix in the same
-slot. Sub-second calls: `└─ running` → bare ` ✓`. Failed calls: ` ✗ [X.Ys]`.
+slot. Sub-second calls: ` 0s` → bare ` ✓`. Failed calls: ` ✗ [X.Ys]`.
 
 ### D5 — Width reserve, jitter, floors (round-1 corrected)
 
@@ -206,17 +206,19 @@ slot. Sub-second calls: `└─ running` → bare ` ✓`. Failed calls: ` ✗ [X
   the swap (running width vs completion width). Accepted; the target row
   is re-rendered each tick anyway.
 - Option (b) (fixed max reserve) is rejected as stated: keeping the max
-  reserve through settle wastes up to 16 columns after the swap (18-column
-  running width vs the 2-column bare sub-second marker), and dropping it
-  at settle re-wraps — which is what (b) was meant to prevent.
+  reserve through settle wastes up to 5 columns after the swap (7-column
+  running max vs the 2-column bare sub-second marker, Amendment 1 form),
+  and dropping it at settle re-wraps — which is what (b) was meant to
+  prevent.
 - One shared floor for both forms: `budget - s >= 8` (s = current text
   width). Consequence to pin: the running slot disappears below
   `budget = s + 8` (11-15 columns of last-row budget depending on digits,
-  Amendment 1 form); the completion marker's own boundary (≥15) stands.
+  Amendment 1 form); the completion marker's own boundaries stand
+  (bare ` ✓` ≥10, ` ✓ X.Ys` ≥15, minute form ≥16, hour form ≥17).
 - Accepted and pinned: at digit changes and at the swap the omission
-  notice TEXT and count may change; at narrow widths the 14→18-column
-  jump shrinks the per-row content budget by up to 4 columns and can move
-  the omitted row count materially (pin a narrow-width case).
+  notice TEXT and count may change; the largest running-width change is
+  1 column (9s→10s), which at narrow widths can still move the omitted
+  row count (pin a narrow-width case).
 - The slot never wraps to its own row; it is omitted instead.
 
 ### D6 — Coverage and edges (round-1 corrected)
@@ -380,7 +382,14 @@ Reviewer (round 2):
   slot); test/task-live-display:180/185 fixtures; docs/tui-tool-elapsed
   Amendment 4; docs/tool-inline-live-rows :59/:125/:149/:165-166/:187/
   :330/:515; docs/task-live-display :73; CHANGELOG :135/:148; and this
-  document's D3/D5/§5 body, updated in place). All folded in this revision.
+  document's D3/D5/§5 body, updated in place; historical review-log entries
+  that record the old form stay as written). All folded in this revision.
+
+- Amendment 1, round 2 (same reviewer, targeted, 2026-10-02):
+  **NEEDS-FIXES** — four stale form-dependent numbers (D4's sub-second
+  line, D5's option-(b) waste, the floor bullet's parenthetical, the flip
+  bullet's 14→18 jump) — all corrected in place; confirmation pending the
+  reviewer's re-check of those lines only.
 
 - Round 1 (independent adversarial, fresh context, 2026-10-02; reviewed the
   uncommitted draft): **NEEDS-FIXES** — P1: trailing-LF blank row breaks

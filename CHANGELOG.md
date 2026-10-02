@@ -153,8 +153,9 @@ All notable changes to imp are documented here. The format follows
   separate non-task live row is gone, so a multi-line command is no longer
   split by a status row and the marker no longer cuts words. Interrupted
   calls and rows below the 8-column slot floor render no status. Display-only:
-  the settled transcript bytes for single-row calls, print mode, the legacy
-  shell, history, sessions, extensions, and replay are unchanged.
+  a call that settles on a single un-split row renders byte-identical to
+  before; print mode, the legacy shell, history, sessions, extensions, and
+  replay are unchanged.
 
 ### Fixed
 

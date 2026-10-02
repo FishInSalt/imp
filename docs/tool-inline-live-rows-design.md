@@ -517,5 +517,5 @@ parentheticals pointed at this document.
   suffix closes with (`docs/call-closing-status-design.md`). §5.1's row shape
   and the non-task half of §5.2's routing are superseded; the task rows
   (§5.2) and all lifecycle rules (resolver pull, displaced-fold clear,
-  terminal-duplicate clear, D10 suppression, idle clear) stand and are
-  carried by the suffix channel.
+  terminal-duplicate clear, D10 suppression, idle clear) stand — the suffix
+  channel carries the same lifecycle machinery for the timer text.

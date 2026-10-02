@@ -45,9 +45,32 @@ describe("call closing slot (#call-closing-status, design D2/D8)", () => {
 	});
 
 	it("skips a trailing empty row when targeting the slot", () => {
-		const rows = plain(input("bash", { command: "echo a\n" }, bashPresentation, 2300).render(40));
-		expect(rows[0]).toBe("● bash  echo a ✓ 2.3s");
-		expect(rows.slice(1).every((row) => row.trim() === "")).toBe(true);
+		const rows = plain(input("bash", { command: "l1\nl2\n" }, bashPresentation, 2300).render(40));
+		expect(rows).toEqual(["● bash  l1", "    l2 ✓ 2.3s", "    "]);
+	});
+
+	it("closes the last visible chunk when the re-lay pushes chunks past the cap", () => {
+		const rows = plain(input("bash", { command: "z".repeat(50) }, bashPresentation, 2300).render(20));
+		expect(rows).toEqual([
+			"● bash  zzzzzzzzzzzz",
+			"    zzzzzzzzzzzzzzzz",
+			"    zzzzzzzzz ✓ 2.3s",
+			"    … more · Ctrl+O",
+		]);
+	});
+
+	it("re-lays the tail when the running text width changes (accepted reflow, D5)", () => {
+		const fold = input("bash", { command: "x".repeat(28) }, bashPresentation);
+		fold.setRunningSuffix("└─ running 9s");
+		expect(plain(fold.render(40))).toEqual(["● bash  xxxxxxxxxxxxxxxxxx", "    xxxxxxxxxx └─ running 9s"]);
+		fold.setRunningSuffix("└─ running 10s");
+		expect(plain(fold.render(40))).toEqual(["● bash  xxxxxxxxxxxxxxxxx", "    xxxxxxxxxxx └─ running 10s"]);
+	});
+
+	it("keeps the inline rule under raw-only (multi-line)", () => {
+		const fold = input("bash", { command: "echo first\necho last" }, bashPresentation, 2300);
+		fold.setRawArguments(true);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo first", "    echo last ✓ 2.3s"]);
 	});
 
 	it("re-lays a single row that only fits with the full budget", () => {
@@ -80,7 +103,7 @@ describe("call closing slot (#call-closing-status, design D2/D8)", () => {
 		);
 		const slot = rows.findIndex((row) => row.includes("✓ 12.3s"));
 		expect(slot).toBeGreaterThan(0); // never pinned to the first row
-		expect(rows[slot]).toMatch(/ ✓ 12\.3s$/);
+		expect(rows[slot]).toBe("    sponsibilities in detail ✓ 12.3s"); // the last summary row
 	});
 });
 
@@ -159,6 +182,19 @@ describe("running-suffix channel (#call-closing-status, design D3)", () => {
 		transcript.callSuffixResolver = (key) => (key === "t1" ? "└─ running 2s" : null);
 		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
 		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("└─ running 2s");
+	});
+
+	it("a re-registered fold receives the suffix; the displaced fold keeps none", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("t1", "bash", { command: "echo one" });
+		transcript.setCallSuffix("t1", "└─ running 1s");
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("echo one └─ running 1s");
+		transcript.toolSink.finalize();
+		transcript.toolSink.start("t1", "bash", { command: "echo two" }); // re-registers the id
+		transcript.setCallSuffix("t1", "└─ running 2s");
+		const text = sanitizeDisplay(transcript.render(80).join("\n"));
+		expect(text).toContain("echo two └─ running 2s");
+		expect(text).not.toContain("running 1s");
 	});
 
 	it("a suppressed duplicate start drops the id so later pushes no-op until a new lifecycle", () => {

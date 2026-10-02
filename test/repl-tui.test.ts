@@ -5037,7 +5037,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		const zero = stripAnsi(terminal.frameSince(0))
 			.split("\n")
 			.find((line) => line.includes("running"));
-		expect(zero?.trimEnd().endsWith("└─ running")).toBe(true); // no `0s` form
+		expect(zero?.trim()).toBe("● bash  echo hi └─ running"); // inline slot, no `0s` form
 		const mark = terminal.writes.length;
 		shell.setActivity({
 			phase: "working",
@@ -5140,6 +5140,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		first.close();
 		await first.whenSettled();
 		expect(transcript.callLiveRowsResolver).not.toBeNull(); // the guard kept the successor's
+		expect(transcript.callSuffixResolver).not.toBeNull(); // and its closing-slot resolver
 		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore" });
 		second.setActivity({
 			phase: "working",

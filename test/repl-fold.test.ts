@@ -614,14 +614,14 @@ describe("TranscriptSink tool result placement (#tool-result-follows-call)", () 
 		expect(at(text, "PROMPT-T")).toBeLessThan(at(text, "DONE-T"));
 	});
 
-	it("a running tool's live row sits under its own header, above its result (#tool-inline-live-rows)", () => {
+	it("a running tool's timer closes its call info, above its result (#call-closing-status)", () => {
 		const transcript = new TranscriptSink();
-		transcript.callLiveRowsResolver = (key) => (key === "t" ? ["└─ running 3s"] : null);
+		transcript.callSuffixResolver = (key) => (key === "t" ? "└─ running 3s" : null);
 		transcript.toolSink.start("t", "bash", { command: "echo hi" });
 		const text0 = rows(transcript);
-		expect(at(text0, "└─ running 3s")).toBeGreaterThan(at(text0, "echo hi"));
-		expect(text0.filter((row) => row.includes("echo hi"))).toHaveLength(1); // the row never repeats the label
-		transcript.setCallLiveRows("t", null);
+		expect(text0.some((row) => row.includes("echo hi") && row.includes("└─ running 3s"))).toBe(true);
+		expect(text0.filter((row) => row.includes("└─ running 3s"))).toHaveLength(1); // never duplicated
+		transcript.setCallSuffix("t", null);
 		transcript.toolSink.end({
 			toolCallId: "t",
 			toolName: "bash",

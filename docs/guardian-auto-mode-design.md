@@ -1854,8 +1854,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 ## 17. Detector `<<` structure & breaker counting — track C (draft for independent review — 2026-10-03)
 
-> Status: **rev 2 — R1 and R2 findings (N1–N7) folded; awaiting R3 (same
-> reviewer).** Both revision rounds changed this section only.
+> Status: **rev 3 — R1/R2/R3 findings folded; awaiting R4 (same
+> reviewer).** Every revision round changed this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design
@@ -1916,7 +1916,7 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 | # | Decision |
 |---|---|
-| D40 | **Heredoc/here-string structure in the analysis tiers.** A quote- and escape-aware scanner derives heredoc body spans (`<<`, `<<-`; `<<<` recognized as bodiless) and the two analysis tiers are evaluated with those spans masked: `EXPANSION` ignores **quoted-delimiter** bodies only (unquoted bodies expand — `$`/backtick stay live); `PATTERNS` ignores **all** bodies (under the *outer* shell no heredoc body performs pathname or brace expansion). **Pre-filter (R2 N1):** the parser and its guards run only when the raw command contains `<<`; commands without it keep today's narrowing path untouched. **Contamination guards (R1 P1-1/P1-3; R2 N6):** an unquoted word-start `#` comment (line start, or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`), or a backslash-newline that bash treats as a line continuation (i.e. outside single-quoted text), in *live text while the scanner walks the command structure*, fails the parse conservatively — comments and line continuations are not modeled. **Shell consumers (R1 P1-2; R2 N2):** when **any word of the operator's pipeline** (its `;`/`&`/newline segment plus every `|`-joined segment; live text word-split on unquoted whitespace; quote-removed) has a basename in `bash sh zsh dash ksh`, the body is *program text for the inner shell* and masking is unsound — parse fails conservatively (deliberately a word scan, not command-position analysis: `cat <<'EOF' | bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash` all fall back; the cost is over-firing only). Any parse failure (the guards, the shell consumer, unterminated body, unparsable delimiter, `$`/backtick in an unquoted delimiter, four-or-more `<`) yields the whole-command region — byte-identical to today. The raw `command.includes("<<")` check (G:309) is replaced by the pre-filter plus the parser's result. **Rule matching, the floor and `rmTargets` are unchanged** (write-then-execute defense; §17.6). |
+| D40 | **Heredoc/here-string structure in the analysis tiers.** A quote- and escape-aware scanner derives heredoc body spans (`<<`, `<<-`; `<<<` recognized as bodiless) and the two analysis tiers are evaluated with those spans masked: `EXPANSION` ignores **quoted-delimiter** bodies only (unquoted bodies expand — `$`/backtick stay live); `PATTERNS` ignores **all** bodies (under the *outer* shell no heredoc body performs pathname or brace expansion). **Pre-filter (R2 N1):** the parser and its guards run only when the raw command contains `<<`; commands without it keep today's narrowing path untouched. **Contamination guards (R1 P1-1/P1-3; R2 N6):** an unquoted word-start `#` comment (line start, or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`), or a backslash-newline that bash treats as a line continuation (i.e. outside single-quoted text), in *live text while the scanner walks the command structure*, fails the parse conservatively — comments and line continuations are not modeled. **Shell consumers (R1 P1-2; R2 N2; R3-1):** when **any word of the operator's pipeline** (its `;`/`&`/newline segment plus every `|`-joined segment; tokenized on unquoted whitespace **and the shell metacharacters** `| & ; ( ) < >` — operator-adjacent spellings like `bash<<EOF` or `|bash` must yield the same word; quote-removed) has a basename in `bash sh zsh dash ksh`, the body is *program text for the inner shell* and masking is unsound — parse fails conservatively (deliberately a word scan, not command-position analysis: `cat <<'EOF' | bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash`, and the metacharacter-adjacent `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash` all fall back; the cost is over-firing only). Any parse failure (the guards, the shell consumer, unterminated body, unparsable delimiter, `$`/backtick in an unquoted delimiter, four-or-more `<`) yields the whole-command region — byte-identical to today. The raw `command.includes("<<")` check (G:309) is replaced by the pre-filter plus the parser's result. **Rule matching, the floor and `rmTargets` are unchanged** (write-then-execute defense; §17.6). |
 | D41 | **Breaker counts classifier outcomes only (amends D10/§5.7, folded in §17.9).** Countable: `ask` and unavailable — the classifier was consulted and did not allow. Neutral (neither count nor reset): by-design manual-only skips (no verified context, unresolvable expansion/glob, over-budget write — the §14 pin 35/test 35 expectations are re-pinned accordingly). Resets: `allow`, restart, and every `/guardian` invocation that changes or re-arms the mode (set/cycle/reload — **`status` does not reset**; R1 P2-2). Trip → manual until re-armed (unchanged). Shadow never flips (unchanged). Surfacing: `/guardian status` gains `breaker N/3`; the trip audit line stays byte-identical (and gains a test; the wording overstates “consecutive non-allows” once skips are neutral — accepted and recorded, R1 P3). |
 
 ### 17.3 The refinement
@@ -1964,15 +1964,18 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     stripped — bash 3.2 does not terminate on `EOF\r`; R1 P2-5).
     Not found ⇒ `ok=false`. Multiple operators consume bodies in
     operator order (POSIX); a `<<` inside a body is body text.
-  - Shell consumer (§17.2 D40; R2 N2): the operator's pipeline — its
-    `;`/`&`/newline segment plus every `|`-joined segment (same
-    segmentation as §13); word-split the pipeline's live text on
-    unquoted whitespace and quote-remove for the compare; **any** word
-    whose basename is in `bash sh zsh dash ksh` ⇒ `ok=false`. A word
-    scan on purpose (over-approximate; `bash` as an ordinary argument
-    also falls back) — the N2 bypasses (`| bash`, `command`, `time`,
-    `nice`, `nohup`, `sudo -u …`, `env -u …`) all close. Interpreters
-    (`node <<'EOF'`, …) are not in the set — §17.6 residual.
+  - Shell consumer (§17.2 D40; R2 N2; R3-1): the operator's pipeline —
+    its `;`/`&`/newline segment plus every `|`-joined segment (same
+    segmentation as §13); tokenize the pipeline's live text on unquoted
+    whitespace **and the shell metacharacters** `| & ; ( ) < >` (a
+    real shell word splitter, not whitespace-only: `bash<<EOF`,
+    `|bash`, `cat<<EOF|bash` must split into shell words), quote-remove
+    for the compare; **any** word whose basename is in
+    `bash sh zsh dash ksh` ⇒ `ok=false`. A word scan on purpose
+    (over-approximate; `bash` as an ordinary argument also falls back)
+    — the N2 bypasses and the R3-1 adjacent spellings all close.
+    Interpreters (`node <<'EOF'`, …) are not in the set — §17.6
+    residual.
 - **Masked evaluation**: `hitsOutside(text, regex, spans)` — regex
   execs, match start outside every span counts; zero-width guard kept.
   Wiring (G:560-562): no `<<` ⇒ today's path, untouched; else
@@ -1999,7 +2002,7 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   | `rm -rf x && cat <<'EOF'` unterminated / `EOF\r` terminator | skip | skip (fallback) |
   | `echo start #<<'EOF'` + live `rm` line + `EOF` line | skip | skip (comment guard) |
   | `cat <<'EOF' \` + newline + `&& rm … *.log` | skip | skip (continuation guard) |
-  | `bash <<'EOF'` body with globs (and the N2 set: `… | bash`, `command bash`, `time bash`, `sudo -u root bash`) | skip | skip (shell consumer) |
+  | `bash <<'EOF'` body `rm -rf /tmp/y/*.log` (and the N2/R3-1 set: `… | bash`, `command bash`, `time bash`, `sudo -u root bash`, `bash<<'EOF'`, `cat<<'EOF'|bash`) | skip | skip (shell consumer) |
   | `rm -rf x && ls *.log # cleanup {a,b}` / `rm -rf x \` + newline + `&& ls *.log` | classified | classified (pre-filter: no `<<` ⇒ untouched) |
 
 **B. Breaker counting (extension side).**
@@ -2017,7 +2020,7 @@ render(events, allowance):                 # allowance = min(cap − others, 327
   *fresh* (no `remember` key), so falling back to manual after repeated
   skips would hand the user the manual `remember` shortcut — D41
   deliberately gives that up in exchange for a breaker that means what
-  it says. §17.7 tracks it for R3/owner.
+  it says. §17.7 tracks it for R4/owner.
 - Rejected alternatives (recorded): (i) keep counting everything —
   conflates two independent subsystems and tripped on exactly the
   detector conservatism D40 removes; (ii) count only unavailable —
@@ -2081,18 +2084,22 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     (`rm -rf /tmp/x && cat <<'EOF' # note`) also falls back.
 78. Continuation guards (R1 P1-3; R2 N6): (i) `cat <<'EOF' \` +
     newline + `&& rm -rf /tmp/y/*.log` skips; (ii) `rm -rf /tmp/x &&
-    cat <<E\` + newline + `OF` skips (word continuation); (iii) a
-    *body* containing backslash-newline does not trip the guard
-    (positive twin classifies); (iv) backslash-newline inside
-    *single-quoted* text is literal — the guard does not fire
-    (positive twin classifies).
-79. Shell consumer (R1 P1-2; R2 N2): the pipeline-word scan pinned as
-    a table — `bash`, `sh`, `zsh`, `dash`, `ksh`, `sudo bash`,
-    `/bin/sh`, `cat <<'EOF' | bash`, `command bash`, `time bash`,
-    `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash` —
-    each with globs in the body: all skip; a non-shell consumer
-    (`node <<'EOF'`, body free of live hazards) classifies (masking
-    applies; §17.6 residual).
+    cat <<E\` + newline + `OF` skips (word continuation); (iii) the
+    positive twin — quoted body containing backslash-newline plus a
+    masked `{}` — classifies; (iv) completeness twin with a real
+    heredoc: `rm -rf /tmp/x && echo 'a\` + newline + `b' && cat
+    <<'EOF'` + body `{}` + `EOF` + `touch f{1,2}` — the single-quoted
+    continuation is literal, the body is masked, the trailing pattern
+    sits outside the narrowed region ⇒ classified (mutation “fire the
+    guard inside single quotes” ⇒ fallback ⇒ skip: red).
+79. Shell consumer (R1 P1-2; R2 N2; R3-1): the pipeline-word scan
+    pinned as a table — `bash`, `sh`, `zsh`, `dash`, `ksh`, `sudo
+    bash`, `/bin/sh`, `cat <<'EOF' | bash`, `command bash`, `time
+    bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X
+    bash`, `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash` —
+    each with body `rm -rf /tmp/y/*.log` (rule token + globs): all
+    skip; a non-shell consumer (`node <<'EOF'`, body free of live
+    hazards) classifies (masking applies; §17.6 residual).
 80. Boundaries — no weakening: `rm -rf` inside a quoted body still
     matches the rule (gated, label `recursive force delete`) and a
     protected path in the body still floor-denies; `bash s.sh` after a
@@ -2121,9 +2128,12 @@ unterminated body; add `\r` tolerance (pin 74); drop the comment guard
 (pin 77); drop either continuation guard (pin 78); fire the
 continuation guard inside single quotes (pin 78-iv); drop the
 shell-consumer guard (pin 79); narrow the shell scan back to the
-leading word only (the N2 bypass table in pin 79); make bodies
-non-opaque in the quote map (pin 76); drop the `<<` pre-filter (pin
-85); re-count skips in the breaker (pin 82); reset (instead of ignore)
+leading word only (pin 79's bypass table); tokenize on whitespace
+only, dropping the metacharacter split (pin 79's adjacent spellings);
+make bodies non-opaque in the quote map (pin 76); drop the `<<`
+pre-filter (pin 85); stop matching rules in heredoc bodies / drop
+body scanning from `rmTargets` (pin 80); re-count skips in the
+breaker (pin 82); reset (instead of ignore)
 on skip (pin 82); drop `breaker N/3` (pin 83); alter the recount
 formula (pin 84).
 
@@ -2143,6 +2153,10 @@ formula (pin 84).
   those languages do not apply *shell* expansion to it, but the inner
   execution belongs to the same residual class as executing any written
   script (§17.7-Q2 records it; R2 N7).
+- **Shell-set completeness** (R3-4): the consumer set is a basename
+  allowlist — `ash`/`mksh`/`ksh93` spellings and stdin-forwarding
+  consumers (`ssh host <<EOF`, `docker exec … <<EOF`) are not covered;
+  accepted residual.
 - **Deferred neighbor list** (from §17.1-3; none in this batch):
   `rmTargets` quote-blindness/false floor denials (E2/E3 — needs its
   own batch; recon hit it live); `/bin/rm` floor miss (E4); split
@@ -2156,7 +2170,7 @@ formula (pin 84).
   CRLF: no tolerance — `\r` before the delimiter means "not a
   terminator" (bash semantics; falls back through unterminated).
 
-### 17.7 Open questions (R3 / owner)
+### 17.7 Open questions (R4 / owner)
 
 1. Breaker without skip counting: acceptable that repeated
    manual-only sessions no longer reach the manual `remember` UX
@@ -2193,6 +2207,17 @@ formula (pin 84).
   the missing §0 D10 row, guard precision (single-quote continuations,
   `#` predecessor set), and the interpreter residual. All folded in
   rev 2; R3 requested.
+- R3 (same reviewer, micro-verification of rev 2): **NEEDS REVISION** —
+  R3-1 (P1): the consumer word scan as written (whitespace-only split)
+  misses operator-adjacent spellings (`bash<<'EOF'`, `|bash`,
+  `cat<<'EOF'|bash` — bash executes all three; fixed via the
+  metacharacter split and added to pin 79). R3-2/R3-3 (P3): pin 78-iv
+  needed a complete command to be mutation-red; remaining rule-token
+  gaps (table row 11, pin 79 bodies, pin 78-iii). R3-4: the shell-set
+  completeness residual (allowlist). Mutation audit: pin 80 gains a
+  dedicated mutation (rule/floor body scanning is the write-then-
+  execute defense); pins 75/81 remain assertion-only. All folded in
+  rev 3; R4 requested.
 
 ### 17.9 Amendments to earlier sections (folded)
 

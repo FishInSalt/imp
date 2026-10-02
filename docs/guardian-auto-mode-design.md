@@ -111,6 +111,10 @@ export interface ClassifyRequest {
    *  The host resolves it (auth, availability); an unresolvable reference
    *  falls back to the session model (noted in the record). */
   model?: string;
+  /** §15/D29: a short identifier of the call under judgment (`bash: <first
+   *  line>`, `write <path>`, `edit <path>`), rendered in the host's record
+   *  line; cleaned and capped by the host, display only. */
+  subject?: string;
 }
 
 export interface ClassifyResult {
@@ -340,11 +344,13 @@ not decide); its counters are observational only.
 ### 5.8 Audit log
 
 `~/.imp/guardian.log` gains one line per **auto** decision: timestamp, tool,
-verdict, model, first line of the reason. (**§14**: shadow decisions are
-not audited — the rev-3 “auto/shadow” wording was never implemented; shadow's
-evidence is the host verdict record and the D16 counters.) Blocked/error
-lines keep their current format (append-only, never fatal — unchanged
-contract).
+verdict, model and now the verdict's reason (**§15**/D27 — the reason claim
+above was never implemented before §15). Shadow decisions are audited too
+(**§15**/D28): one deferred `[shadow]` line per decision, written once the
+human's answer is known, carrying the verdict (or the over-budget skip),
+reason, model, identity and `human: approved|denied` — superseding §14's
+“auto-only” note. Blocked/error lines keep their current format (append-only,
+never fatal — unchanged contract).
 
 ## 6. Invariants
 
@@ -996,7 +1002,9 @@ outside-cwd + auto:
   `[auto] not classified (no verified user context) — write <path>`,
   `[auto] not classified (request over the classify budget) — write <path>`,
   `[auto] classifier unavailable — write <path>`. Shadow writes no audit
-  (parity — §5.8 amended, §14.8).
+  (parity — §5.8 amended, §14.8). **§15 supersedes both halves**: the
+  `allow`/`ask` shapes gain `— reason: …`, and shadow writes one deferred
+  `[shadow]` line per decision.
 - **Confirm surfaces**: the base message/detail stay
   (`allow writing outside <cwd>?` / `path: …\nwhy it matched: …`); fresh
   paths append the same classifier/not-classified lines the bash gate uses
@@ -1140,7 +1148,9 @@ Mutations (each must be caught):
   model-authored, and the target's existing content is never read).
 - §5.8: audit lines are **auto-only**; shadow decisions surface via the
   host verdict record and the D16 counters (the rev-3 “auto/shadow”
-  wording was never implemented).
+  wording was never implemented). **§15 supersedes this**: shadow
+  decisions are audited (D28) and auto verdict lines carry the reason
+  (D27).
 - §9.2: “write-gate classification” → this section.
 - §11.3: open question 3 (failure-record dedupe) resolves to **none**.
 - D16 / §5.3 (status): counters are session-wide across gates; the
@@ -1207,3 +1217,240 @@ Mutations (each must be caught):
   `ClassifyRequest` doc comment merged; the §14.3 template aligned with the
   shipped edit-pair / JSON-quoted rendering; the D23 rewording recorded;
   §4.2's timeout row annotated; anchors refreshed.
+
+## 15. Observability batch (draft for independent review — 2026-10-02)
+
+> Status: **rev 2.3 — design review closed (R3 CONFIRMED); IMPLEMENTED
+> (2026-10-02); implementation review closed (R4 APPROVE WITH CORRECTIONS →
+> R5 folds → R6 CONFIRMED).**
+> Scope: **track A** of the 2026-10-02 problem
+> triage — the read side (records only). It changes no classification input,
+> no prompt, no gate decision, no detector and no breaker: those are track B
+> (input mechanism) and track C (detector/breaker), specified separately.
+
+### 15.1 Observed problem (owner dogfooding, 2026-10-02)
+
+Three record failures, all observed the same day:
+
+1. **Reasons are not durable.** The classifier's one-line reasons survive
+   only in the transient `▪` note and the confirm detail. At drafting time
+   the day's log held 11 auto decisions (5 allow, 3 ask, 3 manual-only
+   skips) plus one breaker trip; the 3 asks' reasons could not be recovered
+   afterwards — classify requests bypass `~/.imp/logs` (the seam calls the
+   provider directly) and `guardian.log` carries only the decision class.
+2. **The record line has no call identity.** `▪ guardian — classifier:
+   allow — <reason> (<model>)` names no call. The allow record for the
+   `/tmp/a1-red` setup rendered adjacent to the NEXT call's confirm
+   (`/tmp/a1-mut` setup, a detector skip) and was read as “the classifier
+   allowed this call, yet I am still asked” — a misreading that cost a
+   debugging round. §7's implementation note routed skip explanations into
+   the confirm detail only, so skips have no standing line either.
+3. **Shadow writes nothing durable.** Audit is auto-only (§5.8/§14.5) and
+   the D16 counters are session-scoped, so the observation phase — this
+   design's own evidence-gathering instrument — leaves no reviewable trace.
+
+### 15.2 Owner decisions (locked in conversation, 2026-10-02)
+
+| # | Decision |
+|---|---|
+| D26 | Track A touches **record surfaces only**. No behavior change to classification, gates, detector, breaker, prompts or context sources. |
+| D27 | **Verdict reasons reach the durable log.** Every auto line carrying a classifier verdict (`allow`/`ask`) gains a trailing `— reason: <reason>` segment. Lines without a verdict (unavailable, manual-only skips) stay byte-identical to today. |
+| D28 | **Shadow decisions are audited** — one line per gated shadow decision carrying the `allow`/`ask` verdict (or the over-budget skip class), the reason, the model, the call identity (`<cmd>`/`<path>`, §15.3), and the **human outcome**; written once the human's answer is known. Amends §5.8/§14.5 (“audit is auto-only”). |
+| D29 | **The host record line carries a subject.** `ClassifyRequest` gains optional `subject: string` — a short extension-authored identifier of the call under judgment (`bash: <first line>`, `write <path>`, `edit <path>`). The host renders it between the verdict and the reason, sanitized and capped; absent ⇒ today's exact line. Amends §4.1/§4.2. |
+| D30 | **No prompt or context content is logged by the extension.** The durable additions are the reason (host-sanitized/capped) and the subject (host-cleaned/capped). The trusted-context block, the payload and the raw prompt never enter
+`guardian.log` as bodies — only the reason and subject segments do; a
+model-authored reason may quote fragments — an accepted residual (§15.6). Classify request/response bodies stay out of `~/.imp/logs`. |
+
+### 15.3 Formats (drafts — owner eyeballs; pins in §15.5)
+
+Auto (prefixes and write timing unchanged; the reason is appended where a
+verdict exists):
+
+    [auto] allow — <cmd> (<model>) — reason: <reason>
+    [auto] ask — <cmd> (<model>) — reason: <reason>
+    [auto] not classified (no verified user context) — <cmd>
+    [auto] not classified (shell expansion or glob syntax) — <cmd>
+    [auto] not classified (request over the classify budget) — write <path>
+    [auto] classifier unavailable — <cmd>
+
+`<cmd>` stays `firstLine(command)` (160 cap); writes stay `write|edit <path>`.
+
+Shadow (new; one line per decision, written after `api.confirm` resolves):
+
+    [shadow] allow — <cmd> (<model>) — reason: <reason> — human: approved|denied
+    [shadow] ask — <cmd> (<model>) — reason: <reason> — human: approved|denied
+    [shadow] classifier unavailable — <cmd> — human: approved|denied
+    [shadow] not classified (request over the classify budget) — write <path> — human: approved|denied
+
+- `human: denied` covers a cancel as well as a denial (the confirm
+  contract's documented blind spot, D16).
+- The line is deferred until the answer: a prompt that is never answered
+  records nothing (an un-answered prompt is not a decision). Auto lines
+  keep decision-time writes — they feed the breaker path.
+- Deferred writes order the log by resolution, not by request: a pending
+  shadow line can land after later auto lines. Accepted — every line
+  carries its own timestamp and outcome.
+- An empty reason (the host may clean a verdict reason to `""`) drops the
+  `— reason: …` segment on every auto and shadow line.
+- Counter semantics are unchanged: the same outcomes keep feeding
+  `allowHumanApproved`/`allowHumanDenied`; the line is additive (D16).
+
+Subject (D29): the extension supplies `bash: ${firstLine(command)}` /
+`write ${path}` / `edit ${path}` at the classify call sites; the host
+applies `sanitizeDisplay`, collapses whitespace, trims — a subject that is
+empty after cleaning emits no segment — then caps at
+`CLASSIFY_MAX_SUBJECT_CHARS` (160, new host constant; the cap includes the
+`…`: a cleaned subject of ≤ 160 chars renders whole, longer ones are
+sliced to 159 + `…`). The subject is display text only: the host does not
+verify it against the tool arguments (a buggy label is the documented
+residual, §15.6). Record line:
+
+    ▪ <label> — classifier: <verdict> — <subject> — <reason> (<model>)
+
+with today's omission rules preserved: no subject ⇒ today's bytes; empty
+reason drops only the reason segment; the fallback-model `note` suffix is
+untouched.
+
+### 15.4 Surfaces that change
+
+- `examples/extensions/guardian.mjs` — bash auto audit sites
+  (`:565,572,579,585,590`): allow/ask gain the reason; skips/unavailable
+  unchanged. Write auto audit sites (`:670,677,684,694,699`): same rule.
+  Both shadow branches (`:552–560`, `:652–665`): the confirm outcome is
+  computed first, then one `[shadow]` line is written on both paths.
+  Classify call sites gain `subject` (bash `:529–536`; write `:629–635`).
+  Manual paths, floors, breaker, counters: untouched.
+- `src/extensions/types.ts` — `ClassifyRequest.subject?: string` plus doc.
+- `src/repl/classify.ts` — subject cleaning/capping and record-line
+  assembly (`:171–175`); the verdict/failure paths are unchanged.
+- Tests — `test/guardian-auto.test.ts` pin 43 (the five write shapes
+  become exact post-timestamp line assertions including the reason; the
+  shadow “no audit” assertion is replaced by pins 47–48; pin 45 asserts
+  the extension-supplied `subject` on the classify mock calls);
+  `test/classify-seam.test.ts` record pin `:86` stays green (absent
+  subject ⇒ legacy bytes) with new subject pins alongside. New pins 45–53
+  below.
+- Docs — §4.1/§4.2, §5.8, §7, §14.5/§14.8 notes, this section; ledger per
+  repo convention at implementation time.
+
+### 15.5 Pins (red-first) and mutations
+
+45. auto allow + ask (bash, write, edit) carry `— reason: <reason>`; the
+    classify mock calls carried `subject` = `bash: <firstLine(command)>` /
+    `write <path>` / `edit <path>`;
+46. skip/unavailable auto lines are exact-match unchanged (no reason
+    segment) — a regression keep; an empty verdict reason drops the
+    `reason:` segment everywhere;
+47. shadow allow + approved and allow + denied: both lines exact-match with
+    the `human:` outcome; the D16 counters still move;
+48. shadow ask / unavailable / over-budget shapes (the over-budget line has
+    no model/reason segment);
+49. deferred write: with the confirm promise still pending, the log holds no
+    shadow line; after it resolves, exactly one line appears;
+50. host record line: subject rendered as specified; absent subject ⇒ exact
+    legacy bytes (the classify-seam pin stays green);
+51. host subject handling: sanitize → collapse → trim (a subject of ANSI
+    codes + spaces is empty after cleaning and omitted); length cap 160
+    includes the `…` (boundary: 160 ⇒ whole, 161 ⇒ 159 + `…`);
+52. manual mode byte-for-byte regression (existing pins 26/38 stay green);
+53. privacy: a distinctive write-payload token never appears in
+    `guardian.log` while the `reason:` segment is present; a host-level
+    classify-seam check shows the record line carries neither the `system`
+    nor the `prompt` bodies (distinctive tokens).
+
+Mutations (each must be caught): drop the reason from one auto site;
+append the reason to a skip/unavailable line; write the shadow line before
+the confirm resolves (49); label a shadow denial as approved; leak the
+write payload into `guardian.log` (53); omit the subject at a call site
+(45); render the subject without cleaning (51); emit an empty subject
+segment (50); keep the `reason:` segment when the verdict reason is empty
+(46).
+
+### 15.6 Non-goals and residual limits
+
+- Tracks B (input sources/capacity/prompt) and C (detector refinement,
+  breaker counting) — separate design batches; this section is read-only.
+- Classify request/response bodies in `~/.imp/logs` — an explicit non-goal
+  (full prompts carry user context and payloads; privacy).
+- Auto asks' human outcomes — not persisted in this batch (shadow carries
+  the measurement; auto counters stay session-scoped). A future batch may
+  revisit.
+- Line-forging residual: a command or path can contain text resembling a
+  log/record segment; both subject and reason are flattened to one line but
+  not escaped. Accepted (local append-only log; the same residual exists
+  for the model-authored reason today).
+- Reason echo: the logged reason is model-authored and may quote fragments
+  of the command, the payload or the context. The host's cleaning flattens
+  it to one line and caps it at 200 chars; the content is not otherwise
+  filtered (D30's accepted residual).
+- Subject trust: the subject is extension-authored and not verified against
+  the tool arguments; a buggy extension could mislabel a call. Guardian
+  supplies it from the values it gates; the host still writes the verdict
+  itself (D9/I5 intact).
+- `guardian.log` retention/pagination — unchanged from today.
+
+### 15.7 Amendments to earlier sections (folded)
+
+- §4.1: `ClassifyRequest` gains `subject?` (D29); no new host member — a
+  field on the existing request does not add an API member (D6's
+  accounting is unchanged).
+- §4.2 / §7: the `▪` record line gains the optional subject segment; the
+  §7 implementation note stands (skips still ride the confirm detail; no
+  new API member). §7's sentence “The command itself is not repeated in
+  these records” is superseded for the classifier record line: the subject
+  deliberately repeats the call identity — the 2026-10-02 misreading
+  showed adjacency alone does not identify the call.
+- §5.8: “audit lines are auto-only” is superseded — shadow decisions are
+  audited (D28); §5.8's “first line of the reason” claim (never
+  implemented) is now implemented for auto by D27.
+- §14.5 (audit bullet) and §14.8: the five write shapes gain the reason;
+  the shadow no-audit pin is replaced.
+- §8: pin 43 is updated in place; pins 45–53 are added.
+
+### 15.8 Review log (this amendment)
+
+- **R1 (adversarial, fresh context): NEEDS REVISION** — nine findings, no
+  P0. P1: D29's extension-side subject was unpinned. P2: the privacy
+  mutation was uncatchable as written (and D30 overclaimed against the
+  reason echo); §7's “command is not repeated” sentence contradicted the
+  subject without being retired; pin 43's byte-identical claims were
+  `toContain`-shaped; the empty-reason rendering was unspecified. P3: a
+  wrong branch anchor; D28 said “subject” where the formats say `<cmd>` and
+  the deferred write orders lines by resolution; the subject
+  cleaning/cap boundary and the subject-trust residual were underspecified;
+  §5.8's “first line of the reason” claim was never implemented. All folded
+  in rev 2.
+- **R2 (same reviewer, verification): CONFIRMED WITH NOTES** — all nine
+  folds verified genuine and correctly anchored; three P3 notes: §15.4
+  overstated pin 47; the subject cleaning order (trim first) diverged from
+  `cleanReason` and missed an ANSI+whitespace case; D30's “as such”
+  wording stayed loose for bash command lines. Folded in rev 2.1.
+- **R3 (same reviewer, micro-verification): CONFIRMED** — all three folds
+  verified in place; numbering and prior folds remain consistent; no
+  regressions; review closed on rev 2.1.
+- **R4 (implementation review, independent, on f19fa1e): APPROVE WITH
+  CORRECTIONS** — no behavioral defect; the emitted strings, cleaning
+  order, cap arithmetic and containment were verified green (2691/2691).
+  Four pin-coverage gaps, each reproduced by mutation in a scratch copy:
+  the write-branch shadow verdict line had no assertion; the deferred-write
+  pin covered only bash; the subject cap boundary (160/161) was untested;
+  the empty-reason segment drop was unasserted at the write and shadow
+  sites. Three notes: the payload-token pin covered only auto (folded into
+  the new shadow-write pins); the absent-subject legacy assertion was
+  `toContain`-shaped (now an exact-line pin); the §4.1/§5.8/§14.5/§14.8
+  folds were absent. All folded in rev 2.2.
+- **R5 (same reviewer, verification of the R4 folds): CONFIRMED WITH
+  NOTES** — the write-shadow inverted-outcome, cap-boundary and
+  empty-reason mutations were re-run and caught; two folds were
+  incomplete: pin 49's write half lacked the exactly-one-line count, and
+  the empty-reason case covered only the bash verdict site; the write
+  shadow's unavailable branch had no exercise; and §4.1's comment missed
+  `edit <path>`. All folded (pins count 1/2 around the write deferral; the
+  empty-reason and unavailable cases now cover the write site; the §4.1
+  comment completed).
+- **R6 (same reviewer, micro-verification of the R5 folds): CONFIRMED** —
+  the duplicated-write-branch mutation now fails pin 49; the always-emit
+  mutation at the write shadow verdict site now fails the write
+  empty-reason case; the unavailable line is asserted exactly; §4.1 is
+  complete; focused 57/57, full suite 2693/2693. No remaining findings;
+  implementation review closed.

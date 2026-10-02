@@ -87,6 +87,15 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		expect(output()).toContain("(anthropic/session-model)");
 	});
 
+	it("§15/R4: an absent subject keeps the exact legacy record line", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"removing the build dir is safe here"}');
+		await call(() => host.handler({ system: "s", prompt: "p" }, "guardian"));
+		expect(output()).toBe(
+			"▪ guardian — classifier: allow — removing the build dir is safe here (anthropic/session-model)\n",
+		);
+	});
+
 	it("returns undefined for garbage, refusal, and truncated answers", async () => {
 		const { host } = makeHost();
 		for (const text of ["I think it is fine", "I cannot help with that", '{"verdict":"al']) {
@@ -241,6 +250,64 @@ describe("api.classify host seam (#guardian-auto-mode §4)", () => {
 		expect((result?.reason ?? "").length).toBeLessThanOrEqual(200);
 		expect(result?.reason.endsWith("…")).toBe(true);
 		expect(output()).not.toContain("\u001b[31m");
+	});
+
+	it("§15/D29: renders the optional subject between the verdict and the reason", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"scratch dir matches the task"}');
+		await call(() =>
+			host.handler({ system: "s", prompt: "p", subject: "bash: rm -rf /tmp/a1-red" }, "guardian"),
+		);
+		expect(output()).toContain(
+			"▪ guardian — classifier: allow — bash: rm -rf /tmp/a1-red — scratch dir matches the task (anthropic/session-model)",
+		);
+	});
+
+	it("§15/D29: cleans and caps the subject (160 incl. …); an empty subject is omitted", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"ask","reason":"r"}');
+		await call(() =>
+			host.handler({ system: "s", prompt: "p", subject: `\u001b[31m  a\n b ${"s".repeat(300)}` }, "guardian"),
+		);
+		const line =
+			output()
+				.split("\n")
+				.find((l) => l.includes("classifier: ask")) ?? "";
+		const subject = line.slice(line.indexOf("ask — ") + "ask — ".length, line.indexOf(" — r ("));
+		expect(subject.startsWith("a b ")).toBe(true);
+		expect(subject.endsWith("…")).toBe(true);
+		expect(subject.length).toBe(160);
+
+		await call(() => host.handler({ system: "s", prompt: "p", subject: " \u001b[0m  " }, "guardian"));
+		expect(output()).toContain("▪ guardian — classifier: ask — r (anthropic/session-model)");
+	});
+
+	it("§15/R4: the subject cap boundary — 160 renders whole, 161 → 159 + …", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"ask","reason":"r"}');
+		const subjectOf = (line: string): string =>
+			line.slice(line.indexOf("ask — ") + "ask — ".length, line.indexOf(" — r ("));
+		await call(() => host.handler({ system: "s", prompt: "p", subject: "x".repeat(160) }, "guardian"));
+		await call(() => host.handler({ system: "s", prompt: "p", subject: "x".repeat(161) }, "guardian"));
+		const lines = output()
+			.split("\n")
+			.filter((l) => l.includes("classifier: ask"));
+		expect(subjectOf(lines[0] ?? "")).toBe("x".repeat(160));
+		expect(subjectOf(lines[1] ?? "")).toBe(`${"x".repeat(159)}…`);
+	});
+
+	it("§15/D30: the record line carries neither the system nor the prompt bodies", async () => {
+		const { host, output } = makeHost();
+		state.provider = textProvider('{"verdict":"allow","reason":"ok"}');
+		await call(() =>
+			host.handler(
+				{ system: "SYSTEM-TOKEN-1a2b", prompt: "PROMPT-TOKEN-3c4d", subject: "bash: probe" },
+				"guardian",
+			),
+		);
+		expect(output()).toContain("bash: probe");
+		expect(output()).not.toContain("SYSTEM-TOKEN-1a2b");
+		expect(output()).not.toContain("PROMPT-TOKEN-3c4d");
 	});
 
 	it("wires the handler through loadExtensions with the extension's name as the source (D9 idiom)", async () => {

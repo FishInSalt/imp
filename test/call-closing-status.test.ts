@@ -1,0 +1,181 @@
+import { describe, expect, it } from "vitest";
+import { bashPresentation, readPresentation, taskPresentation } from "../src/core/tools/presentation.js";
+import { ToolBlockFold } from "../src/repl/components/tool-block.js";
+import { preparedInputBlock, sanitizeDisplay } from "../src/repl/tool-presentation.js";
+import { prepareCall } from "../src/repl/tool-presentation-hooks.js";
+import { TranscriptSink } from "../src/repl/transcript.js";
+import { visibleWidth } from "../src/tui.js";
+
+const plain = (rows: readonly string[]) => rows.map((row) => sanitizeDisplay(row));
+const input = (
+	name: string,
+	args: unknown,
+	hook: unknown,
+	elapsedMs?: number,
+	failed?: boolean,
+): ToolBlockFold => {
+	const block = preparedInputBlock(prepareCall("id", name, args, () => hook as never));
+	if (elapsedMs !== undefined) block.elapsedMs = elapsedMs;
+	if (failed !== undefined) block.failed = failed;
+	return new ToolBlockFold(block);
+};
+const rowsFit = (fold: ToolBlockFold, w: number) => fold.render(w).every((row) => visibleWidth(row) <= w);
+
+describe("call closing slot (#call-closing-status, design D2/D8)", () => {
+	it("closes the last chunk of a wrapped single-line command", () => {
+		const rows = plain(
+			input(
+				"bash",
+				{ command: "rg -n pattern src/ --glob '*.ts' --hidden --no-ignore" },
+				bashPresentation,
+				2300,
+			).render(40),
+		);
+		expect(rows.length).toBeGreaterThan(1);
+		expect(rows[0]).not.toContain("✓");
+		expect(rows.at(-1)).toMatch(/ ✓ 2\.3s$/);
+	});
+
+	it("closes the last visible row when the collapsed cap cuts the info", () => {
+		const rows = plain(input("bash", { command: "l1\nl2\nl3\nl4\nl5" }, bashPresentation, 2300).render(40));
+		expect(rows[0]).toBe("● bash  l1");
+		expect(rows[1]).toBe("    l2");
+		expect(rows[2]).toBe("    l3 ✓ 2.3s");
+		expect(rows.join("\n")).toContain("… more · Ctrl+O");
+	});
+
+	it("skips a trailing empty row when targeting the slot", () => {
+		const rows = plain(input("bash", { command: "echo a\n" }, bashPresentation, 2300).render(40));
+		expect(rows[0]).toBe("● bash  echo a ✓ 2.3s");
+		expect(rows.slice(1).every((row) => row.trim() === "")).toBe(true);
+	});
+
+	it("re-lays a single row that only fits with the full budget", () => {
+		// 28-column command at w=40: the full budget (32) fits one row; with the
+		// 7-column slot the re-lay budget is 25 and the text splits (25 + 3), so
+		// the slot closes the tail chunk (design D8 case walk).
+		const command = "x".repeat(28);
+		const rows = plain(input("bash", { command }, bashPresentation, 2300).render(40));
+		expect(rows).toEqual([`● bash  ${"x".repeat(25)}`, `    xxx ✓ 2.3s`]);
+	});
+
+	it("renders a multi-line command fully before the slot (no mid-command row)", () => {
+		const fold = input("bash", { command: "cd /tmp\nls -la\necho done" }, bashPresentation);
+		expect(fold.setRunningSuffix("└─ running 3s")).toBe(true);
+		expect(plain(fold.render(44))).toEqual(["● bash  cd /tmp", "    ls -la", "    echo done └─ running 3s"]);
+	});
+
+	it("closes the last summary row for a wrapped task prompt", () => {
+		const rows = plain(
+			input(
+				"task",
+				{
+					agent: "scout",
+					prompt:
+						"explore the repository tree and report the main modules and their responsibilities in detail",
+				},
+				taskPresentation,
+				12300,
+			).render(44),
+		);
+		const slot = rows.findIndex((row) => row.includes("✓ 12.3s"));
+		expect(slot).toBeGreaterThan(0); // never pinned to the first row
+		expect(rows[slot]).toMatch(/ ✓ 12\.3s$/);
+	});
+});
+
+describe("running-suffix render and swap (#call-closing-status, design D1/D3/D4/D5)", () => {
+	it("shows the running text, then the completion marker in the same slot", () => {
+		const fold = input("bash", { command: "echo hi" }, bashPresentation);
+		expect(fold.setRunningSuffix("└─ running 3s")).toBe(true);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo hi └─ running 3s"]);
+		expect(fold.setRunningSuffix("└─ running 3s")).toBe(false);
+		expect(fold.setRunningSuffix("└─ running 4s")).toBe(true);
+		expect(plain(fold.render(40))).toEqual(["● bash  echo hi └─ running 4s"]);
+		fold.updateBlock({ ...fold.block, elapsedMs: 2300 });
+		expect(plain(fold.render(40))).toEqual(["● bash  echo hi ✓ 2.3s"]);
+		fold.updateBlock({ ...fold.block, elapsedMs: 400 });
+		expect(plain(fold.render(40))).toEqual(["● bash  echo hi ✓"]);
+	});
+
+	it("hides the slot on interrupted blocks, running text included", () => {
+		const live = input("bash", { command: "echo hi" }, bashPresentation);
+		live.setRunningSuffix("└─ running 3s");
+		live.updateBlock({ ...live.block, error: true });
+		expect(plain(live.render(40))).toEqual(["● bash  echo hi"]);
+		const done = input("bash", { command: "echo hi" }, bashPresentation, 2300);
+		done.updateBlock({ ...done.block, error: true });
+		expect(plain(done.render(40))).toEqual(["● bash  echo hi"]);
+	});
+
+	it("omits the running text below the floor while the completion marker fits", () => {
+		const live = input("bash", { command: "echo hi" }, bashPresentation);
+		live.setRunningSuffix("└─ running 3s");
+		expect(plain(live.render(25))).toEqual(["● bash  echo hi"]);
+		expect(plain(live.render(31))).toEqual(["● bash  echo hi └─ running 3s"]);
+		const done = input("bash", { command: "echo hi" }, bashPresentation, 2300);
+		expect(plain(done.render(23))).toEqual(["● bash  echo hi ✓ 2.3s"]);
+		expect(plain(done.render(22))).toEqual(["● bash  echo hi"]);
+	});
+
+	it("renders the running text on a pathFirst call row", () => {
+		const fold = input("read", { path: "src/a.ts" }, readPresentation);
+		fold.setRunningSuffix("└─ running 3s");
+		expect(plain(fold.render(40))).toEqual(["● read  src/a.ts └─ running 3s"]);
+	});
+
+	it("never exceeds the width for any width with running or completion slots (I1)", () => {
+		const live = input("bash", { command: "echo first\necho second line with more text" }, bashPresentation);
+		live.setRunningSuffix("└─ running 9999+s");
+		const done = input(
+			"bash",
+			{ command: "echo first\necho second line with more text" },
+			bashPresentation,
+			61200,
+		);
+		const task = input(
+			"task",
+			{ agent: "scout", prompt: "explore the repository tree and report" },
+			taskPresentation,
+			2300,
+		);
+		for (let w = 1; w <= 60; w++) for (const fold of [live, done, task]) expect(rowsFit(fold, w)).toBe(true);
+	});
+});
+
+describe("running-suffix channel (#call-closing-status, design D3)", () => {
+	it("publishes and clears the suffix on a known fold, ignores unknown keys", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		transcript.setCallSuffix("t1", "└─ running 1s");
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("echo hi └─ running 1s");
+		expect(() => transcript.setCallSuffix("nope", "└─ running 1s")).not.toThrow();
+		transcript.setCallSuffix("t1", null);
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+	});
+
+	it("pulls the suffix at fold-creation time (late fold)", () => {
+		const transcript = new TranscriptSink();
+		transcript.callSuffixResolver = (key) => (key === "t1" ? "└─ running 2s" : null);
+		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("└─ running 2s");
+	});
+
+	it("a suppressed duplicate start drops the id so later pushes no-op until a new lifecycle", () => {
+		const transcript = new TranscriptSink();
+		transcript.toolSink.start("t1", "extension", {});
+		transcript.toolSink.end({ toolCallId: "t1", toolName: "extension", content: "ok", isError: false });
+		transcript.setCallSuffix("t1", "└─ running 5s"); // the shell push for the reused id
+		// The settled block's completion marker wins over any pushed suffix (D1).
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+		transcript.toolSink.start("t1", "extension", {}); // terminal duplicate: suppressed
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+		// The mapping is dropped: later pushes no-op until a new fold is created.
+		transcript.setCallSuffix("t1", "└─ running 9s");
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).not.toContain("running");
+		transcript.toolSink.finalize();
+		transcript.toolSink.start("t1", "extension", {});
+		transcript.setCallSuffix("t1", "└─ running 7s");
+		expect(sanitizeDisplay(transcript.render(80).join("\n"))).toContain("running 7s");
+	});
+});

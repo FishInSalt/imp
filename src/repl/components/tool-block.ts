@@ -166,7 +166,20 @@ export class ToolBlockFold implements Component {
 	 *  when it ends; never part of the block or the session. */
 	private liveRows: readonly string[] | null = null;
 	private liveRevision = 0;
-	private cache?: { width: number; expanded: boolean; raw: boolean; live: number; rows: string[] };
+	/** #call-closing-status (design D3): the running timer text for a non-task
+	 *  call, rendered in the same closing slot the completion suffix will close
+	 *  with. Transient — set while the call is in flight, cleared when it ends;
+	 *  never part of the block or the session. */
+	private runSuffix: string | null = null;
+	private suffixRevision = 0;
+	private cache?: {
+		width: number;
+		expanded: boolean;
+		raw: boolean;
+		live: number;
+		suffix: number;
+		rows: string[];
+	};
 	constructor(public block: ToolBlock) {}
 	updateBlock(block: ToolBlock): void {
 		this.block = block;
@@ -187,6 +200,17 @@ export class ToolBlockFold implements Component {
 		if (same) return false;
 		this.liveRows = next;
 		this.liveRevision++;
+		this.invalidate();
+		return true;
+	}
+	/** #call-closing-status (design D3): the running timer channel; returns
+	 *  whether anything changed. A no-op on non-input folds, like setLiveRows. */
+	setRunningSuffix(text: string | null): boolean {
+		if (this.block.kind !== "input") return false;
+		const next = text === null || text === "" ? null : text;
+		if (this.runSuffix === next) return false;
+		this.runSuffix = next;
+		this.suffixRevision++;
 		this.invalidate();
 		return true;
 	}
@@ -214,7 +238,8 @@ export class ToolBlockFold implements Component {
 			this.cache?.width === w &&
 			this.cache.expanded === this.expanded &&
 			this.cache.raw === this.raw &&
-			this.cache.live === this.liveRevision
+			this.cache.live === this.liveRevision &&
+			this.cache.suffix === this.suffixRevision
 		)
 			return this.cache.rows;
 		const block = this.block;
@@ -460,9 +485,11 @@ export class ToolBlockFold implements Component {
 			if (count < limit) summaryVisible.push({ start: summaryOffset, end: summaryOffset + 1 });
 			summaryOffset++;
 		};
-		let inline = false;
 		let pathCropped = false;
 		let emittedSummary = "";
+		/** #call-closing-status (design D8): the planned continuation rows of a
+		 *  call's inline info, pushed by the tail loop in place of `emit`. */
+		let plannedTail: string[] | undefined;
 		const pathWidth = Math.max(1, Math.min(w - indent.length, w - visibleWidth(`● ${block.title}  `)));
 		const pathText = block.callPath
 			? [
@@ -491,16 +518,17 @@ export class ToolBlockFold implements Component {
 					spans.push({ start: decoration.length + name.length, end: header.length, style: RED });
 			}
 			const prefix = `${header}  `;
-			// #tui-tool-elapsed (design I1-I6; amendments 1-3): the completed
-			// call's suffix is a marker — green ✓, or red ✗ when the result
-			// failed — unconditional for measured calls, plus a dim time when
-			// the call took ≥1s, closing the first row. Call sites must not wrap
-			// `dur` in an extra DIM; `durW` measures the plain form
-			// (`" ✓"`/`" ✗"` 2 cols, `" ✓ X.Ys"` 7); the time text is gated on
-			// `elapsedMs >= 1000`, never on field presence (zero and negative
-			// elapsed render the bare marker). Content rows reserve its width from
-			// that row's budget; below an 8-column floor it is omitted entirely.
-			// Header-only rows carry it only when the header fits with it.
+			// #tui-tool-elapsed (design I1-I6; amendments 1-3) + #call-closing-status
+			// (design D1/D5): the call's closing slot carries the completion suffix —
+			// a marker, green ✓ or red ✗ when the result failed, unconditional for
+			// measured calls, plus a dim time when the call took ≥1s — or, while the
+			// call still runs, the shell's `└─ running Ns` timer text. The completion
+			// wins over the timer; an interrupted block carries neither. The slot
+			// closes the call info's last visible non-empty row (D2/D8); `slotWidth`
+			// measures the plain form and is reserved from that row's budget before
+			// layout; below an 8-column floor the slot is omitted entirely. Header
+			// fallback rows keep the legacy first-row placement (E1) and carry the
+			// slot only when the header fits with it (I4).
 			const elapsedMs = block.elapsedMs;
 			const measured = elapsedMs !== undefined;
 			const elapsedText = measured && elapsedMs >= 1000 ? formatToolElapsed(elapsedMs) : "";
@@ -508,19 +536,23 @@ export class ToolBlockFold implements Component {
 			const glyph = failed ? "✗" : "✓";
 			const marker = failed ? `${RED}✗` : `${GREEN}✓`;
 			const durPlain = !measured ? "" : elapsedText === "" ? ` ${glyph}` : ` ${glyph} ${elapsedText}`;
-			const durW = visibleWidth(durPlain);
 			const dur = !measured
 				? ""
 				: elapsedText === ""
 					? ` ${marker}`
 					: ` ${marker}${RESET} ${DIM}${elapsedText}`;
-			// Two width bases by design: content rows reserve against `prefix`
-			// (header + two spaces) with an 8-column floor (I3); header-only rows
-			// measure the bare `header` against the full width (I4).
-			const reserve = durW > 0 && w - visibleWidth(prefix) - durW >= 8 ? durW : 0;
+			const running =
+				!block.error && !measured && this.runSuffix !== null ? sanitizeDisplay(this.runSuffix) : null;
+			const slotPlain = block.error ? "" : measured ? durPlain : running !== null ? ` ${running}` : "";
+			const slotWidth = visibleWidth(slotPlain);
+			const slotStyled = block.error ? "" : measured ? dur : running !== null ? ` ${DIM}${running}` : "";
+			// Content rows reserve against their own budget with an 8-column floor
+			// (I3, retargeted by #call-closing-status to the closing row); header
+			// fallback rows measure the bare `header` against the full width (I4).
+			const reserve = slotWidth > 0 && w - visibleWidth(prefix) - slotWidth >= 8 ? slotWidth : 0;
 			const addHeader = (): void => {
-				if (durW > 0 && visibleWidth(header) + durW <= w) {
-					rows.push(`${styledPrefix(header, "", spans)}${dur}${RESET}`);
+				if (slotWidth > 0 && visibleWidth(header) + slotWidth <= w) {
+					rows.push(`${styledPrefix(header, "", spans)}${slotStyled}${RESET}`);
 					return;
 				}
 				add(header, "", "", spans);
@@ -531,7 +563,7 @@ export class ToolBlockFold implements Component {
 				else if (this.expanded || visibleWidth(prefix) >= w) {
 					if (visibleWidth(prefix) < w) {
 						const first = wrappedRows(pathText, w - visibleWidth(prefix) - reserve).next().value ?? "";
-						rows.push(`${styledPrefix(prefix, "", spans)}${first}${reserve > 0 ? dur : ""}${RESET}`);
+						rows.push(`${styledPrefix(prefix, "", spans)}${first}${reserve > 0 ? slotStyled : ""}${RESET}`);
 						if (first.length < pathText.length) add(pathText.slice(first.length), indent);
 					} else {
 						addHeader();
@@ -541,18 +573,112 @@ export class ToolBlockFold implements Component {
 					const preview = ellipsize(pathText, w - visibleWidth(prefix) - reserve);
 					pathCropped = preview !== pathText;
 					const suffix = semantic?.summary ? `  ${sanitizeDisplay(semantic.summary)}` : "";
-					if (!pathCropped && visibleWidth(prefix + preview + suffix + (reserve > 0 ? durPlain : "")) <= w)
+					if (!pathCropped && visibleWidth(prefix + preview + suffix + (reserve > 0 ? slotPlain : "")) <= w)
 						emittedSummary = sanitizeDisplay(semantic?.summary ?? "");
 					rows.push(
-						`${styledPrefix(prefix, "", spans)}${preview}${emittedSummary ? `  ${emittedSummary}` : ""}${reserve > 0 ? dur : ""}${RESET}`,
+						`${styledPrefix(prefix, "", spans)}${preview}${emittedSummary ? `  ${emittedSummary}` : ""}${reserve > 0 ? slotStyled : ""}${RESET}`,
 					);
 				}
 			} else if (!this.expanded && !title.includes("\n") && visibleWidth(prefix) < w && body.length) {
-				// Header is chrome; only the summary's wrapped rows consume the budget.
-				const start = rows.length;
-				emit(body[0] ?? "", false, prefix, spans, reserve > 0 ? dur : "");
-				// Continuation indentation is established by emit, not another header.
-				inline = rows.length > start;
+				// #call-closing-status (design D2/D8): plan the whole inline info,
+				// pick the last visible non-empty row among the first `limit` rows,
+				// and re-lay that row at its slot-reduced budget; the slot closes
+				// the last of its chunks that remains visible.
+				type InfoChunk = {
+					text: string;
+					prefix: string;
+					spans: StyleSpan[];
+					budget: number;
+					consumed: number;
+					match: boolean;
+					line: number;
+				};
+				const layoutInfoLine = (
+					line: string,
+					firstPrefix: string,
+					firstSpans: StyleSpan[],
+					reserved: number,
+				): InfoChunk[] => {
+					const out: InfoChunk[] = [];
+					let remaining = sanitizeDisplay(line);
+					let first = true;
+					do {
+						const current = first ? firstPrefix : indent;
+						const budget = Math.max(1, w - visibleWidth(current) - reserved);
+						const text = wrappedRows(remaining, budget).next().value ?? "";
+						let consumed = 0;
+						let columns = 0;
+						for (const { segment } of segmenter.segment(remaining)) {
+							if (segment === "\n") break;
+							const size = Math.min(budget, visibleWidth(segment));
+							if (columns + size > budget) break;
+							columns += size;
+							consumed += segment.length;
+						}
+						out.push({
+							text,
+							prefix: current,
+							spans: first ? firstSpans : [],
+							budget,
+							consumed,
+							match: text === remaining.slice(0, consumed),
+							line: -1,
+						});
+						remaining = remaining.slice(Math.max(1, consumed));
+						first = false;
+					} while (remaining.length);
+					return out;
+				};
+				const infoPlan: InfoChunk[] = [];
+				for (const [index, line] of body.entries()) {
+					const chunks = layoutInfoLine(line, index === 0 ? prefix : indent, index === 0 ? spans : [], 0);
+					for (const chunk of chunks) {
+						chunk.line = index;
+						infoPlan.push(chunk);
+					}
+				}
+				const visibleEnd = Math.min(infoPlan.length, limit);
+				let targetIndex = visibleEnd - 1;
+				for (let index = 0; index < visibleEnd; index++)
+					if (infoPlan[index]!.text !== "") targetIndex = index;
+				const target = infoPlan[targetIndex]!;
+				let finalPlan = infoPlan;
+				let slotIndex = -1;
+				if (slotWidth > 0 && target.budget - slotWidth >= 8) {
+					const relaid = layoutInfoLine(target.text, target.prefix, target.spans, slotWidth);
+					for (const chunk of relaid) chunk.line = target.line;
+					finalPlan = [...infoPlan.slice(0, targetIndex), ...relaid, ...infoPlan.slice(targetIndex + 1)];
+					slotIndex = Math.min(targetIndex + relaid.length - 1, limit - 1);
+				}
+				// Occurrence accounting for the argument-coverage checks mirrors
+				// `emit` over the final plan; the reduced budget applies to every
+				// re-laid chunk (design D8 step 4).
+				count = 0;
+				let previousLine = -1;
+				for (const chunk of finalPlan) {
+					if (chunk.line !== previousLine) {
+						if (previousLine >= 0) {
+							if (count < limit) summaryVisible.push({ start: summaryOffset, end: summaryOffset + 1 });
+							summaryOffset++;
+						}
+						previousLine = chunk.line;
+					}
+					count++;
+					if (count <= limit && block.commandExcerpt && chunk.match)
+						summaryVisible.push({ start: summaryOffset, end: summaryOffset + chunk.consumed });
+					summaryOffset += chunk.consumed;
+				}
+				if (previousLine >= 0) {
+					if (count < limit) summaryVisible.push({ start: summaryOffset, end: summaryOffset + 1 });
+					summaryOffset++;
+				}
+				plannedTail = [];
+				for (const [index, chunk] of finalPlan.entries()) {
+					if (index >= limit) break;
+					const row = `${styledPrefix(chunk.prefix, "", chunk.spans)}${chunk.text}${index === slotIndex ? slotStyled : ""}${RESET}`;
+					if (chunk.line === 0) rows.push(row);
+					else plannedTail.push(row);
+				}
 			} else addHeader();
 		} else if (block.title)
 			add(
@@ -606,8 +732,12 @@ export class ToolBlockFold implements Component {
 			if (detailRows > detailCapacity)
 				notices.push(`${detailRows - detailCapacity} semantic detail rows omitted from this view`);
 		} else {
-			for (const line of pathFirst ? [] : body.slice(inline ? 1 : 0))
-				emit(line, block.kind === "diff" && !semantic, call ? indent : resultPrefix());
+			if (plannedTail !== undefined) {
+				for (const row of plannedTail) rows.push(row);
+			} else {
+				for (const line of pathFirst ? [] : body)
+					emit(line, block.kind === "diff" && !semantic, call ? indent : resultPrefix());
+			}
 
 			for (const section of block.sections ?? [])
 				if (section.discarded)
@@ -766,7 +896,14 @@ export class ToolBlockFold implements Component {
 			const live = this.liveRows.map((row) => `${DIM}${ellipsize(activityText(row), w)}${RESET}`);
 			rows.splice(headerEnd, 0, ...live);
 		}
-		this.cache = { width: w, expanded: this.expanded, raw: this.raw, live: this.liveRevision, rows };
+		this.cache = {
+			width: w,
+			expanded: this.expanded,
+			raw: this.raw,
+			live: this.liveRevision,
+			suffix: this.suffixRevision,
+			rows,
+		};
 		return rows;
 	}
 }

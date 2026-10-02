@@ -4939,12 +4939,12 @@ describe("TuiShell activity region (M10 B)", () => {
 		shell.close();
 	});
 
-	it("working rows render the tool live row under its own header and subagent tree lines", async () => {
+	it("working rows render the tool timer in its call row and subagent tree lines", async () => {
 		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
-		// #tool-inline-live-rows: both call types need their fold — live rows
-		// address the call's own transcript entry.
+		// #tool-inline-live-rows / #call-closing-status: both call types need
+		// their fold — the timer addresses the call's own transcript entry.
 		transcript.toolSink.start("t1", "bash", { command: "echo hi" });
 		transcript.toolSink.start("t9", "task", { agent: "scout", prompt: "explore the tree" });
 		shell.setActivity({
@@ -4968,8 +4968,9 @@ describe("TuiShell activity region (M10 B)", () => {
 			.map((line) => line.trimEnd());
 		const header = lines.findIndex((line) => line.includes("● bash") && line.includes("echo hi"));
 		expect(header).toBeGreaterThanOrEqual(0);
-		expect(lines[header + 1]).toContain("└─ running"); // its own live row, directly under the header
-		expect(lines[header + 1]).not.toContain("echo hi"); // no label repeat
+		// #call-closing-status: the timer closes the call info row itself.
+		expect(lines[header]).toContain("└─ running");
+		expect(lines[header + 1] ?? "").not.toContain("└─ running"); // no separate live row
 		const taskHeader = lines.findIndex((line) => line.includes("● task"));
 		expect(taskHeader).toBeGreaterThanOrEqual(0);
 		expect(lines[taskHeader + 1]).toContain("pending #1 scout");
@@ -5022,7 +5023,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		shell.close();
 	});
 
-	it("tool live row shape: zero seconds omitted, count capped", async () => {
+	it("call closing slot shape: zero seconds omitted, count capped", async () => {
 		const { terminal, shell, transcript } = makeShell();
 		shell.start();
 		await settle(0);
@@ -5036,7 +5037,7 @@ describe("TuiShell activity region (M10 B)", () => {
 		const zero = stripAnsi(terminal.frameSince(0))
 			.split("\n")
 			.find((line) => line.includes("running"));
-		expect(zero?.trim()).toBe("└─ running"); // no `0s` form
+		expect(zero?.trimEnd().endsWith("└─ running")).toBe(true); // no `0s` form
 		const mark = terminal.writes.length;
 		shell.setActivity({
 			phase: "working",

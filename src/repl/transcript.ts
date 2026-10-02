@@ -77,6 +77,10 @@ export class TranscriptSink implements Component {
 	 *  sink is handed from the one-shot trust-ask shell to the real REPL shell.
 	 *  Must be a pure read — it runs inside the append closure. */
 	callLiveRowsResolver: ((key: string) => readonly string[] | null) | null = null;
+	/** #call-closing-status (design D3): the running timer text for a non-task
+	 *  call, pulled at fold-creation time the same way as `callLiveRowsResolver`
+	 *  (same public-field + ownership-guard pattern). */
+	callSuffixResolver: ((key: string) => string | null) | null = null;
 	/** #tui-tool-elapsed: the clock is injectable for deterministic duration
 	 *  tests (production passes nothing — the sink defaults to Date.now). */
 	readonly toolSink: ToolPresentationSink;
@@ -102,13 +106,19 @@ export class TranscriptSink implements Component {
 				// A reused id lands here too: drop the superseded fold's live rows
 				// before re-pointing the map (see `inputFoldById`).
 				const displaced = this.inputFoldById.get(block.id);
-				if (displaced !== undefined && displaced !== fold) displaced.setLiveRows(null);
+				if (displaced !== undefined && displaced !== fold) {
+					displaced.setLiveRows(null);
+					displaced.setRunningSuffix(null);
+				}
 				this.inputFoldById.set(block.id, fold);
 				// #task-inline-live-rows (B1) / #tool-inline-live-rows: pull the
 				// rows the shell published before this fold existed, so the first
 				// paint is complete.
 				const rows = this.callLiveRowsResolver?.(block.id) ?? null;
 				if (rows !== null) fold.setLiveRows(rows);
+				// #call-closing-status (D3): same pull for the running timer text.
+				const suffix = this.callSuffixResolver?.(block.id) ?? null;
+				if (suffix !== null) fold.setRunningSuffix(suffix);
 				this.inputEntryById.set(block.id, this.appendEntry(fold));
 			},
 			(previous, next) => {
@@ -175,6 +185,15 @@ export class TranscriptSink implements Component {
 		if (fold.setLiveRows(rows)) this.onUpdate?.();
 	}
 
+	/** #call-closing-status (D3): publish a running non-task call's timer text
+	 *  to its fold's closing slot. Same late-fold and no-op semantics as
+	 *  {@link setCallLiveRows}. */
+	setCallSuffix(key: string, text: string | null): void {
+		const fold = this.inputFoldById.get(key);
+		if (fold === undefined) return;
+		if (fold.setRunningSuffix(text)) this.onUpdate?.();
+	}
+
 	/** #tool-inline-live-rows: a start for an id whose previous lifecycle is
 	 *  still terminal is suppressed by the sink (no new fold, no result; the
 	 *  provider-synthesized `call_${index}` reuse within one run). The shell may
@@ -186,7 +205,9 @@ export class TranscriptSink implements Component {
 		const fold = this.inputFoldById.get(id);
 		if (fold === undefined) return;
 		this.inputFoldById.delete(id);
-		if (fold.setLiveRows(null)) this.onUpdate?.();
+		const clearedLive = fold.setLiveRows(null);
+		const clearedSuffix = fold.setRunningSuffix(null);
+		if (clearedLive || clearedSuffix) this.onUpdate?.();
 	}
 
 	feedUser(text: string): void {

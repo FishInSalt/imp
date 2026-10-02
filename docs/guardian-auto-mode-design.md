@@ -1220,8 +1220,9 @@ Mutations (each must be caught):
 
 ## 15. Observability batch (draft for independent review — 2026-10-02)
 
-> Status: **rev 2.2 — review closed (R3 CONFIRMED); IMPLEMENTED
-> (2026-10-02); implementation review R4 APPROVE WITH CORRECTIONS, folded.**
+> Status: **rev 2.3 — design review closed (R3 CONFIRMED); IMPLEMENTED
+> (2026-10-02); implementation review closed (R4 APPROVE WITH CORRECTIONS →
+> R5 folds → R6 CONFIRMED).**
 > Scope: **track A** of the 2026-10-02 problem
 > triage — the read side (records only). It changes no classification input,
 > no prompt, no gate decision, no detector and no breaker: those are track B
@@ -1447,3 +1448,9 @@ segment (50); keep the `reason:` segment when the verdict reason is empty
   `edit <path>`. All folded (pins count 1/2 around the write deferral; the
   empty-reason and unavailable cases now cover the write site; the §4.1
   comment completed).
+- **R6 (same reviewer, micro-verification of the R5 folds): CONFIRMED** —
+  the duplicated-write-branch mutation now fails pin 49; the always-emit
+  mutation at the write shadow verdict site now fails the write
+  empty-reason case; the unavailable line is asserted exactly; §4.1 is
+  complete; focused 57/57, full suite 2693/2693. No remaining findings;
+  implementation review closed.

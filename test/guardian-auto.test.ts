@@ -996,6 +996,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		const cases = [
 			"rm -rf /tmp/x && cat <<'EOF'\nconst o = {};", // no terminator
 			"rm -rf /tmp/x && cat <<'EOF'\nconst o = {};\nEOF\r", // \r is not a terminator (bash 3.2)
+			"((1<<2)) && cat <<'EOF'\n{}\nEOF\nrm -rf /tmp/y/*.log\n2\nEOF", // arithmetic shift, not an operator
 		];
 		for (const command of cases) {
 			const h = await loadGuardian("/proj");
@@ -1096,6 +1097,9 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			`b\\ash <<'EOF'\n${body}\nEOF`,
 			`\\bash <<'EOF'\n${body}\nEOF`,
 			`c\\at <<'EOF' | b\\ash\n${body}\nEOF`,
+			`source /dev/stdin <<'EOF'\n${body}\nEOF`,
+			`. /dev/stdin <<'EOF'\n${body}\nEOF`,
+			`exec 0<<'EOF'\n${body}\nEOF\nbash`,
 			`cat <<'EOF' |bash\n${body}\nEOF`,
 			`cat<<'EOF'|bash\n${body}\nEOF`,
 		];

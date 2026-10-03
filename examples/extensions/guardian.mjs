@@ -349,7 +349,16 @@ export default function (api) {
 	/** §17/D40: the shell-consumer word set and the pipeline word scan. The
 	 *  split runs on whitespace and shell metacharacters and is deliberately
 	 *  over-approximate (quoted fragments may split too — over-firing only). */
-	const SHELL_CONSUMERS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+	const SHELL_CONSUMERS = new Set([
+		"bash",
+		"sh",
+		"zsh",
+		"dash",
+		"ksh",
+		"exec", // fd redirection can hand the body to a later segment
+		"source", // a sourced script may read the body as stdin
+		".", // the POSIX source builtin
+	]);
 	const hasShellWord = (slice) => {
 		for (const raw of slice.split(/[\s|&;()<>]+/u)) {
 			// §17 impl-review fold: bash quote removal strips backslash escapes
@@ -530,6 +539,9 @@ export default function (api) {
 			}
 			if (c === "#" && (i === 0 || /[\s;&|()<>]/u.test(command[i - 1]))) {
 				return { ok: false }; // guard: word-start comment
+			}
+			if (c === "(" && command[i + 1] === "(") {
+				return { ok: false }; // guard: arithmetic context (`((1<<2))` — `<<` is a shift, not a heredoc)
 			}
 			if (c === "\n") {
 				if (pending.length > 0) {

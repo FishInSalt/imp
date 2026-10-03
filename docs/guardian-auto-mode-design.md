@@ -1862,9 +1862,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 > Status: **rev 4 — design review closed (R1 NEEDS REVISION → rev 1;
 > R2 → rev 2; R3 → rev 3; R4 CONFIRMED WITH NOTES → rev 4; R5
 > CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first; full suite
-> 2766/2766, 140 files, baseline 2749); implementation review: P1/P3
-> findings folded (see §17.8) — fresh verification pending.** Every
-> revision round changed this section only.
+> 2766/2766, 140 files, baseline 2749); implementation review: APPROVE
+> WITH CORRECTIONS → folds applied (`\`, `((`, `source`/`.`, `exec`;
+> pins 86-88) — micro-verification pending.** Every revision round
+> changed this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design
@@ -2137,6 +2138,15 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     `rm -rf /tmp/x \` + newline + `&& ls *.log` both classify exactly
     as today, `relaxed` counts as today (mutation: drop the pre-filter
     ⇒ both skip).
+86. Arithmetic context (impl-review fold): `((1<<2)) && cat <<'EOF'` +
+    body `{}` + `EOF` + live `rm -rf /tmp/y/*.log` + `2` + `EOF` skips
+    (a false `<<` operator would otherwise swallow the live line;
+    mutation: drop the `((` guard).
+87. Stdin-source consumers (impl-review fold): `source /dev/stdin
+    <<'EOF'` + body `rm -rf /tmp/y/*.log` + `EOF` skips; `. /dev/stdin`
+    twin; mutation: drop `source`/`.` from the consumer set.
+88. `exec` fd redirection (impl-review fold): `exec 0<<'EOF'` + body +
+    `EOF` + `bash` skips; mutation: drop `exec` from the set.
 
 Mutations to run at implementation review: drop the quoted-body
 `EXPANSION` mask; drop the `PATTERNS` body mask; ignore `<<-` tab
@@ -2150,7 +2160,9 @@ shell-consumer guard (pin 79); narrow the shell scan back to the
 leading word only (pin 79's bypass table); tokenize on whitespace
 only, dropping the metacharacter split (pin 79's adjacent spellings);
 drop the backslash removal in the consumer word compare (pin 79's
-escape spellings); make bodies non-opaque in the quote map (pin 76); drop the `<<`
+escape spellings); drop the `((` guard (pin 86); drop `source`/`.`
+from the consumer set (pin 87); drop `exec` (pin 88); make bodies
+non-opaque in the quote map (pin 76); drop the `<<`
 pre-filter (pin 85); stop matching rules in heredoc bodies / drop
 body scanning from `rmTargets` (pin 80); re-count skips in the
 breaker (pin 82); reset (instead of ignore)
@@ -2184,11 +2196,16 @@ formula (pin 84).
   safety-relevant under-fire; **recommended as the next micro-batch**,
   owner to decide); `[ -e … ]` bracket false skip (E8); quote-aware
   rule matching (E1).
-- **Not a shell parser**: process substitution and nested contexts are
-  modeled only to the extent of operator order; the comment and
-  continuation guards make those constructs conservative-by-fallback.
-  CRLF: no tolerance — `\r` before the delimiter means "not a
-  terminator" (bash semantics; falls back through unterminated).
+- **Not a shell parser**: comments, live backslash-newlines and
+  unquoted `((` arithmetic (`<<` there is a shift) are
+  conservative-by-fallback guards; consumers that are not shell
+  binaries but still execute the body — `exec` fd redirection,
+  `source` / `.` — joined the consumer word set (impl-review folds).
+  Residuals: fd juggling not written as `exec` (`N<&M` chains),
+  `$'…'`-style command spellings (other tiers force the call
+  unresolvable), process substitution beyond operator order. CRLF: no
+  tolerance — `\r` before the delimiter means "not a terminator"
+  (bash semantics; falls back through unterminated).
 
 ### 17.7 Open questions (R4 / owner)
 
@@ -2252,20 +2269,20 @@ formula (pin 84).
   pin 79 node clause now a discriminating pin, red under the
   shell-set-addition mutation; the §17.3-A phrasings; the review-log
   corrections); no new contradictions. **Design review closed.**
-- Implementation review (fresh reviewer; P1/P3 folds pre-applied):
-  P1 — backslash-escaped shell words (`b\ash`, `\bash`) bypassed the
-  consumer word scan (probe: classified while bash executes the body);
-  folded — the compare strips `\` like quotes; pin 79 extended, one
-  mutation added. P3 — pin 78-i's shape could not distinguish guarding
-  from modeling the continuation (mutation survived); a mutation-visible
-  twin added. Mutation matrix (reviewer runner): 20/22 pre-fold; `10b`
-  is outcome-equivalent (both paths fall back — recorded, not a gap).
-  Fresh verification pending.
-- R5 (same reviewer, verification of rev 4): **CONFIRMED** — all four
-  P3 folds verified (pin 78-iii named command + dedicated mutation red;
-  pin 79 node clause now a discriminating pin, red under the
-  shell-set-addition mutation; the §17.3-A phrasings; the review-log
-  corrections); no new contradictions. **Design review closed.**
+- Implementation review (fresh reviewer): **APPROVE WITH CORRECTIONS**
+  — round 1 findings folded: P1 backslash-escaped consumer words
+  (`b\ash`/`\bash`; probe: classified while bash executes the body —
+  the compare now strips `\` like quotes; pin 79 extended; mutation
+  #23 caught); P3 pin 78-i's shape could not distinguish guarding from
+  modeling the continuation (mutation-visible twin added). Round 2
+  (post-fold re-run): red-first re-proved (tests 74/79 red on the
+  pre-fold impl), matrix 21/22 + #23 all caught (`10b`
+  outcome-equivalent, recorded), plus three new under-fire finds all
+  folded the same round: P2 unquoted `((` arithmetic (`<<` is a shift
+  — guard added, pin 86), P2 `source`/`.` stdin consumers (added to
+  the consumer set, pin 87), P3 `exec` fd redirection (added, pin 88);
+  the duplicated R5 paragraph below was removed. Micro-verification
+  pending.
 
 ### 17.9 Amendments to earlier sections (folded)
 

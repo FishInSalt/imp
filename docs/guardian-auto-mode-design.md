@@ -1864,7 +1864,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 > CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first; full suite
 > 2766/2766, 140 files, baseline 2749); implementation review: APPROVE
 > WITH CORRECTIONS → folds applied (`\`, `((`, `source`/`.`, `exec`;
-> pins 86-88) — micro-verification pending.** Every revision round
+> pins 86-88) — micro-verification CONFIRMED WITH NOTES (counts
+> fixed); implementation review closed.** Every revision round
 > changed this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
@@ -2276,13 +2277,17 @@ formula (pin 84).
   #23 caught); P3 pin 78-i's shape could not distinguish guarding from
   modeling the continuation (mutation-visible twin added). Round 2
   (post-fold re-run): red-first re-proved (tests 74/79 red on the
-  pre-fold impl), matrix 21/22 + #23 all caught (`10b`
-  outcome-equivalent, recorded), plus three new under-fire finds all
+  pre-fold impl); the reviewer's mutation runner (base 24 mutations,
+  3 more added through the folds) reports 27/28 caught — the sole
+  uncaptured item, `10b`, is outcome-equivalent (recorded); three new
+  under-fire finds were all
   folded the same round: P2 unquoted `((` arithmetic (`<<` is a shift
   — guard added, pin 86), P2 `source`/`.` stdin consumers (added to
   the consumer set, pin 87), P3 `exec` fd redirection (added, pin 88);
-  the duplicated R5 paragraph below was removed. Micro-verification
-  pending.
+  the duplicated R5 paragraph below was removed. Micro-verification:
+  **CONFIRMED WITH NOTES** — the matrix counts above are the runner's
+  numbers (base 24 pre-fold; 27/28 with the folds, `10b` the only
+  equivalent). **Implementation review closed.**
 
 ### 17.9 Amendments to earlier sections (folded)
 

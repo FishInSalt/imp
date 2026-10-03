@@ -22,7 +22,7 @@ in imp: *let a model judge first, hand only the suspicious calls to the human*
 | D7 | Phase A verdict set is `{allow, ask}` — **the model cannot write the block path**; blocking stays with the deterministic floor. |
 | D8 | Failure posture is **fail-to-ask**; in **auto mode** every fallback (`ask` / unavailable / manual-only) is a **fresh** confirmation with no session-memory reuse (D13), and **shadow's evaluation path is fresh too** (D16) — its samples must be real human judgments. Manual keeps today's confirm options. A host without an interactive prompt never serves the seam, so non-interactive runs keep today's block behavior. |
 | D9 | The verdict record is a property of the **seam call**, not of the extension's next action. |
-| D10 | Circuit breaker: N=3 consecutive non-`allow` results flip the session back to manual (auto mode only). |
+| D10 | Circuit breaker: N=3 consecutive non-`allow` **classifier outcomes** (`ask`/unavailable; manual-only skips neutral — amended by §17/D41) flip the session back to manual (auto mode only). |
 | D11 | **Positioning (R4 #1; amended by R7 #1 and R11 #1)**: task-aware with **provenance-verified** context — the host's **user-input log**. **Capture point (R11 #1)**: the human submission boundary *before* any dispatch — `handleLine` (`repl.ts:442`, the funnel both shells wire their input to: TUI `:1606`, legacy `:1622`) and the steering/follow-up queues. The log records the raw submission (typed text verbatim, per-entry elided at 2000 chars with a marker — R1 fold, §14.4; a slash-command/skill invocation as `/<name> <args>`), **never expansion products**: command- and skill-file bodies reach the model via `submitPrompt`→`enqueuePrompt`→`submitTurn` (`commands-md.ts:151-158`, `skills.ts:525-527`, `repl.ts:491-506,685-686`) and never through `handleLine` — they are *not* user attestation. Never derived from message roles either (summaries and child task prompts are stored as `role: "user"`: `store.ts:973-988`, `task.ts:621`). Children inherit the same session snapshot — never their own history. The classifier may allow only when safety *and* fit with that evidence are clear; otherwise ask. **No provenance-verified snapshot ⇒ auto does not classify (fresh confirm); shadow may still classify for observation, with an explicit no-verified-context marker.** Invalidation rules: D18. |
 | D12 | **Scope honesty (R4 #2)**: the floor is **known-dangerous-shape detection, not an enforcement boundary** (no sandbox, no completeness claim). A matched command whose affected target cannot be statically resolved is **manual-only** — never classified (§5.5). |
 | D13 | **Fresh fallback (R4 #3, scope extended by R7 #3)**: auto-mode fallbacks (`ask` / unavailable / manual-only) must perform a *fresh* confirmation — the call carries **no `sessionKey`**, so a remembered “don't ask again” cannot approve behind the classifier's back. **Shadow's evaluation confirm is fresh for the same reason** (D16); only manual keeps today's session memory. |
@@ -270,7 +270,7 @@ if (mode === "shadow"):
   → **fresh confirm** — the human decides, and the sample is a real judgment
 if (mode === "auto"):
   if (event.verifiedUserContext === false) → fresh confirm (D17; never classified)
-  if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; breaker counts)
+  if (!targetStaticallyResolvable(command)) → fresh confirm (§5.5; skip: neutral — §17/D41)
   verdict = await api.classify({ system, prompt, model: config.model })
   undefined → fresh confirm(detail + "\nclassifier unavailable")   [breaker counts]
   ask       → fresh confirm(detail + "\nclassifier: " + reason)    [breaker counts]
@@ -336,10 +336,12 @@ regardless of its stored role** (summaries, delegation prompts, tool results).
 
 ### 5.7 Circuit breaker (D10)
 
-Auto mode only. Count consecutive non-`allow` results (`ask`, unavailable, or a
-manual-only skip). On the 3rd: flip the session to manual, write a record line,
-update the status. Any `allow` resets the counter. Shadow never flips (it does
-not decide); its counters are observational only.
+Auto mode only. Count consecutive non-`allow` **classifier outcomes** — `ask`
+and unavailable. By-design manual-only skips are neutral: they neither count
+nor reset. On the 3rd: flip the session to manual, write a record line, update
+the status. Any `allow` resets. Mode-changing `/guardian` calls re-arm;
+`status` does not reset. Shadow never flips (it does not decide); its counters
+are observational only. (§17/D41 folded; rationale and review in §17.)
 
 ### 5.8 Audit log
 
@@ -779,6 +781,8 @@ from the model; the host only stops *refusing to ask*.
 - the `<<` precondition is a **raw substring check**: a quoted literal
   (`rm -rf /tmp/x && echo "a<<b"`) also forces whole-command. Accepted
   approximation — over-triggering stays the safe direction (R2 P2);
+  **superseded by §17/D40** for the analysis tiers (structured parsing
+  behind the same raw pre-filter);
 - non-`<<` constructs that still feed later text to a command (`… | sh`,
   `source file`) are not modeled; unmatched by the rule table, their text is
   the classifier's to weigh (R2 P2);
@@ -1037,7 +1041,8 @@ Guardian pins continue the existing numbering in
     field** fails safe the same way (mirror of test 25);
 35. auto + payload over the mirror cap ⇒ classify **not called**, fresh
     confirm `not classified: request exceeds the classifier input budget`,
-    status shows `size 1`, the breaker counts it;
+    status shows `size 1`; the skip is breaker-neutral (§17/D41 — pin 35's old
+    “the breaker counts it” is superseded);
 36. shadow + write ⇒ classify called (even for `allow`), fresh confirm,
     `allow + human approved/denied` counters mirror test 24; the host's
     verdict record is out of the fake's scope (real-host behavior);
@@ -1851,3 +1856,464 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 - **R8 (same reviewer, micro-verification of rev 2.3): CONFIRMED** —
   both builders' child-fact forms are pinned (either single-site revert
   now fails test 44); no remaining notes; implementation review closed.
+
+## 17. Detector `<<` structure & breaker counting — track C (draft for independent review — 2026-10-03)
+
+> Status: **rev 4 — design review closed (R1 NEEDS REVISION → rev 1;
+> R2 → rev 2; R3 → rev 3; R4 CONFIRMED WITH NOTES → rev 4; R5
+> CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first; full suite
+> 2766/2766, 140 files, baseline 2749); implementation review: APPROVE
+> WITH CORRECTIONS → folds applied (`\`, `((`, `source`/`.`, `exec`;
+> pins 86-88) — micro-verification CONFIRMED WITH NOTES (counts
+> fixed); implementation review closed.** Every revision round
+> changed this section only.
+> Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
+> bash detector's heredoc handling (over-conservative `not classified`
+> skips) and the auto-mode breaker's counting semantics (by-design
+> manual-only skips count toward the manual fallback). It touches two
+> things only: the *analysis tiers* of the bash detector (what the
+> region/expansion scans read) and the breaker's count. It does **not**
+> touch the rule table, the floor, `rmTargets`, the write gate, the
+> classify request format, or the host seam.
+
+### 17.1 Observed problems (evidence, 2026-10-03)
+
+1. **Heredoc bodies are scanned as live shell text.** Field evidence —
+   the two lines share one timestamp; the skip carried the deciding
+   count:
+
+   ```
+   2026-10-02T16:36:55.420Z [breaker] 3 non-allows in a row — back to manual
+   2026-10-02T16:36:55.420Z [auto] not classified (shell expansion or glob syntax) — cd /tmp/rev16 && cat > capture_ext.mjs <<'EOF'
+   ```
+
+   The call *wrote a file*; the body (JS source: `$`, braces, brackets)
+   is inert under the quoted delimiter `'EOF'` — nothing in it could
+   expand or glob — yet the expansions tier skipped the call. Code
+   facts (recon 2026-10-03, read-only): the `<<` carve-out is a raw
+   substring test (`command.includes("<<")`, guardian.mjs:309) that
+   forces the whole-command region; `EXPANSION` scans the whole command
+   always (G:263/:561); `PATTERNS` therefore scans the whole command too
+   (G:264/:561). Quoted vs unquoted delimiters take the identical path
+   (no difference exists in the code). Tests pin only the *unquoted*
+   `<<EOF` shapes (test/guardian-auto.test.ts:658-659); `<<'EOF'`,
+   `<<-`, `<<<`, multiple heredocs are unpinned today.
+
+2. **The breaker counts detector events as classifier failures.** D10
+   (§5.7) counts every non-`allow` result — `ask`, unavailable **and
+   manual-only skips**. The skip above was, literally, the third count.
+   The consequence is user-visible: the session silently flips to
+   manual (footer clears; later calls become session-memory asks with
+   `remember` keys), even though the classifier was never consulted on
+   that event. Recon confirms: `bumpBreaker()` runs unconditionally
+   after the auto-allow early return (G:610 bash, G:735 write) — skips
+   (no-context, unresolvable, over-budget), unavailable, and `ask` all
+   bump exactly once; the trip audit line (G:436) is unpinned.
+
+3. **Adjacent facts surfaced by the recon (dispositions in §17.6).**
+   Rules match raw text without quote awareness (`echo "rm -rf x"`
+   gates; guardian.test pin only covers the auto fallback); `rmTargets`
+   splits on `/[;&|]/` inside quotes and scans every word after any
+   `rm` word to segment end — carried across newlines — so a live
+   incident floor-denied a `node -e` call whose *program text* merely
+   contained `rm /etc/hosts` (recon, observed); `/bin/rm` misses the
+   floor (`rmTargets` requires the exact word `rm`); `rm -r X -f` /
+   `rm --recursive X --force` match no rule and no floor (flags after an
+   operand); `PATTERNS` fires on `[ -e … ]` test brackets (pinned
+   :657); `<<` inside quotes disables narrowing for the whole command
+   (design-accepted, doc :830).
+
+### 17.2 Decision entries (D40–D41 — proposed; to lock at review close)
+
+| # | Decision |
+|---|---|
+| D40 | **Heredoc/here-string structure in the analysis tiers.** A quote- and escape-aware scanner derives heredoc body spans (`<<`, `<<-`; `<<<` recognized as bodiless) and the two analysis tiers are evaluated with those spans masked: `EXPANSION` ignores **quoted-delimiter** bodies only (unquoted bodies expand — `$`/backtick stay live); `PATTERNS` ignores **all** bodies (under the *outer* shell no heredoc body performs pathname or brace expansion). **Pre-filter (R2 N1):** the parser and its guards run only when the raw command contains `<<`; commands without it keep today's narrowing path untouched. **Contamination guards (R1 P1-1/P1-3; R2 N6):** an unquoted word-start `#` comment (line start, or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`), or a backslash-newline that bash treats as a line continuation (i.e. outside single-quoted text), in *live text while the scanner walks the command structure*, fails the parse conservatively — comments and line continuations are not modeled. **Shell consumers (R1 P1-2; R2 N2; R3-1):** when **any word of the operator's pipeline** (its `;`/`&`/newline segment plus every `|`-joined segment; tokenized on unquoted whitespace **and the shell metacharacters** `| & ; ( ) < >` — operator-adjacent spellings like `bash<<EOF` or `|bash` must yield the same word; quote/backslash-removed — bash quote removal strips `\` too) has a basename in `bash sh zsh dash ksh`, the body is *program text for the inner shell* and masking is unsound — parse fails conservatively (deliberately a word scan, not command-position analysis: `cat <<'EOF' | bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash`, the metacharacter-adjacent `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash`, and the backslash spellings `b\ash` / `\bash` all fall back; the cost is over-firing only). Any parse failure (the guards, the shell consumer, unterminated body, unparsable delimiter, `$`/backtick in an unquoted delimiter, four-or-more `<`) yields the whole-command region — byte-identical to today. The raw `command.includes("<<")` check (G:309) is replaced by the pre-filter plus the parser's result. **Rule matching, the floor and `rmTargets` are unchanged** (write-then-execute defense; §17.6). |
+| D41 | **Breaker counts classifier outcomes only (amends D10/§5.7, folded in §17.9).** Countable: `ask` and unavailable — the classifier was consulted and did not allow. Neutral (neither count nor reset): by-design manual-only skips (no verified context, unresolvable expansion/glob, over-budget write — the §14 pin 35/test 35 expectations are re-pinned accordingly). Resets: `allow`, restart, and every `/guardian` invocation that changes or re-arms the mode (set/cycle/reload — **`status` does not reset**; R1 P2-2). Trip → manual until re-armed (unchanged). Shadow never flips (unchanged). Surfacing: `/guardian status` gains `breaker N/3`; the trip audit line stays byte-identical (and gains a test; the wording overstates “consecutive non-allows” once skips are neutral — accepted and recorded, R1 P3). |
+
+### 17.3 The refinement
+
+**A. Heredoc structure (detector).**
+
+- **Scanner** (new, beside `quotedRegions`; one forward pass, walked
+  from index 0, sharing the backslash/quote discipline; invoked only
+  when the raw command contains `<<` — pre-filter, R2 N1):
+  - Live text is scanned with the quote map; **body spans are
+    opaque**: the scanner jumps over a body wholesale, so body content
+    (apostrophes included) can never flip the quote state that the
+    region logic consumes (R1 P2-1). Output: `{ok, bodies: [{start,
+    end, quoted}], quoteMap}` — on `ok=false` the call site uses
+    today's whole-command behavior.
+  - The parser (and these guards) exist only for `<<`-containing
+    commands; in live text, an unquoted **word-start `#`** (line start,
+    or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`)
+    or a **backslash-newline outside single-quoted text** (bash line
+    continuation; inside double quotes it is one too) ⇒ `ok=false`
+    (guards; §17.2 D40; R2 N6). Body content may contain both freely.
+  - Operator: `<<` / `<<-` outside quotes. `<<<` (third `<`) =
+    here-string: all three consumed, **no body**, scan continues;
+    `<<<<` ⇒ `ok=false`. A preceding digits-run (`3<<EOF`, fd) is not
+    part of the operator and does not block it (R1 confirms).
+  - Delimiter word: optional blanks after the operator (`<<-`: blanks
+    and tabs); the word ends at unquoted whitespace or one of
+    `; & | ( ) < >` + newline (fixed set — `/`, `#`, `=` do not end
+    it). Any quoting or escape in the word ⇒ body `quoted`; the
+    delimiter value is the word after quote/backslash removal, where
+    backslash-newline is removed **first** and does not itself quote
+    (R1 P1-3ii; covers `E'OF'`-style mixed quoting, `E''F`). An
+    **unquoted** delimiter containing `$` or a backtick ⇒ `ok=false`
+    (bash renders it literally, POSIX unspecified — R1 P3). The body
+    span starts *after* the operator's logical line, so characters in
+    the delimiter word itself stay in live text (`<<'$X'` still trips
+    `EXPANSION` — unchanged behavior, stated).
+  - Logical lines (R1 P1-3i): an unescaped backslash-newline continues
+    a line — but per the guard above it has already failed the parse in
+    live text; this matters only for the *fallback equivalence* claim:
+    with the guard, continuation cases simply read like today.
+  - Body: starts after the operator's logical-line newline; ends at a
+    line equal **byte-for-byte** to the delimiter (leading tabs
+    stripped first iff `<<-`, all of them; a trailing `\r` is *not*
+    stripped — bash 3.2 does not terminate on `EOF\r`; R1 P2-5).
+    Not found ⇒ `ok=false`. Multiple operators consume bodies in
+    operator order (POSIX); a `<<` inside a body is body text.
+  - Shell consumer (§17.2 D40; R2 N2; R3-1): the operator's pipeline —
+    §13's `;`/`&`/newline segmentation, extended to the full
+    `|`-pipeline that contains the operator; tokenize the pipeline's
+    live text on whitespace and the shell metacharacters
+    `| & ; ( ) < >` (the split runs outside quotes — a real shell word
+    splitter, not whitespace-only: `bash<<EOF`, `|bash`,
+    `cat<<EOF|bash`, `b\ash` must split into shell words), quote- and
+    backslash-remove for the compare (bash strips `\`); **any** word
+    whose basename is in
+    `bash sh zsh dash ksh` ⇒ `ok=false`. A word scan on purpose
+    (over-approximate; `bash` as an ordinary argument also falls back)
+    — the N2 bypasses and the R3-1 adjacent spellings all close.
+    Interpreters (`node <<'EOF'`, …) are not in the set — §17.6
+    residual.
+- **Masked evaluation**: `hitsOutside(text, regex, spans)` — regex
+  execs, match start outside every span counts; zero-width guard kept.
+  Wiring (G:560-562): no `<<` ⇒ today's path, untouched; else
+  `bodies = parseHeredocs(command)`; on `ok=false` → `region = command`
+  and both tiers read exactly like today; on `ok=true` →
+  `unresolvable = hitsOutside(command, EXPANSION, quotedBodies) ||
+  hitsOutside(region, PATTERNS, allBodies)`. The region math itself is
+  unchanged and consumes the scanner's body-opaque `quoteMap`;
+  `relaxedPatterns` recount (exact formula, pinned):
+  `PATTERNS.test(command) && !hitsOutside(region, PATTERNS, allBodies)`.
+- **Outcome flips** (concrete; "skip" = `not classified (shell
+  expansion or glob syntax)` in auto; every row carries a rule token so
+  the gate is actually entered — R1 P2-3):
+
+  | call shape | today | after |
+  |---|---|---|
+  | `rm -rf x && cat <<'EOF'` body with `$` / backtick | skip | classified |
+  | `rm -rf x && cat <<'EOF'` body with `{}[]*?` | skip | classified |
+  | `rm -rf x && cat <<EOF` body with `$VAR` / backtick | skip | skip (unchanged) |
+  | `rm -rf x && cat <<EOF` body with patterns only | skip | classified (body globs inert under the outer shell) |
+  | `rm -rf x && cat <<< "a" && touch f{1,2}` | skip (fallback region) | classified |
+  | `rm -rf x && echo "a<<b" && touch f{1,2}` | skip (fallback region) | classified (quoted `<<` is not an operator) |
+  | `rm -rf x && cat <<'EOF' > "$F"` body `{}` | skip | skip (`$` in live text) |
+  | `rm -rf x && cat <<'EOF'` unterminated / `EOF\r` terminator | skip | skip (fallback) |
+  | `echo start #<<'EOF'` + live `rm` line + `EOF` line | skip | skip (comment guard) |
+  | `cat <<'EOF' \` + newline + `&& rm … *.log` | skip | skip (continuation guard) |
+  | `bash <<'EOF'` body `rm -rf /tmp/y/*.log` (and the N2/R3-1 set: `… | bash`, `command bash`, `time bash`, `sudo -u root bash`, `bash<<'EOF'`, `cat<<'EOF'|bash`) | skip | skip (shell consumer) |
+  | `rm -rf x && ls *.log # cleanup {a,b}` / `rm -rf x \` + newline + `&& ls *.log` | classified | classified (pre-filter: no `<<` ⇒ untouched) |
+
+**B. Breaker counting (extension side).**
+
+- `bumpBreaker()` moves out of the shared post-allow position into the
+  two countable branches of each gate: the `ask` branch (bash G:632,
+  write G:761) and the unavailable branch (G:626, G:755). The skip
+  branches (G:612-624, G:744-753) no longer bump.
+- Semantics spelled: `ask, skip, ask, ask` trips on the 4th (skips are
+  neutral, neither count nor reset); `skip×3` never trips;
+  `unavailable×3` trips; `allow` resets; every mode-changing `/guardian`
+  invocation re-arms; `status` does not reset; restart resets
+  (unchanged).
+- Acknowledged counterargument (recorded): a skip in auto asks
+  *fresh* (no `remember` key), so falling back to manual after repeated
+  skips would hand the user the manual `remember` shortcut — D41
+  deliberately gives that up in exchange for a breaker that means what
+  it says. §17.7 tracks it for R4/owner.
+- Rejected alternatives (recorded): (i) keep counting everything —
+  conflates two independent subsystems and tripped on exactly the
+  detector conservatism D40 removes; (ii) count only unavailable —
+  `ask` is precisely "auto is not helping", and the manual fallback is
+  the honest end state for a session that only gets asked.
+
+### 17.4 Surfaces that change
+
+- Detector: the §17.3-A flip table only; everything else (rules,
+  labels, first-match selection, floor, `rmTargets`, write gate) is
+  unchanged (the pre-filter keeps non-`<<` commands byte-for-byte).
+- Counters: `relaxedPatterns` recount formula (pinned); the flipped
+  :658/:659 shapes start registering `relaxed` (their assertions gain
+  the increment); `manualOnlyTargets` strictly ≤ today for the same
+  inputs.
+- Breaker: trips only on classifier outcomes; `/guardian status`
+  gains `breaker N/3` (G:464-471; existing assertions are all
+  `toContain`, the only exact-equality one is the mode-change note —
+  unaffected); trip audit line byte-identical.
+- Tests to update: `guardian-auto.test.ts:658-659` — both are unquoted
+  `<<EOF` shapes whose only blocker was a body pattern; both flip to
+  *classified* (assertions rewritten with the flip pinned, not
+  deleted, plus the `relaxed` increments); **test 35** — three
+  over-budget writes no longer trip the breaker (re-pinned under D41:
+  stays auto; the trip moves to a new ask/unavailable case); pin 35's
+  “the breaker counts it” sentence is superseded (see §17.9); §14.6's
+  *mutation* entry (test 41, `ask`-driven) remains valid.
+- Unchanged on purpose: classify prompt bytes, audit line formats,
+  shadow behavior, host seam, config file.
+
+### 17.5 Pins (proposed; numbered 68+ — continues the §16 block) and mutations
+
+68. Heredoc, quoted delimiter: `rm -rf /tmp/x && cat > rev.mjs <<'EOF'`
+    + JS body (`$`, backticks, braces) classifies in auto; the prompt
+    carries no prefer-ask marker; the label comes from the live rule.
+69. Heredoc, unquoted delimiter: body `$VAR` still skips; body with
+    patterns only classifies — the :658/:659 flips pinned verbatim,
+    including their `relaxed` increments.
+70. `<<-`: `rm -rf /tmp/x && cat <<-EOF` with tab-led delimiter line
+    and tabs in the body — masked, classified (all leading tabs
+    stripped).
+71. Multiple heredocs: `rm -rf /tmp/x && cat <<'A' <<'B'` with `bb {}`
+    before `A` and `aa ${x}` before `B`, plus live trailing text —
+    correct operator order masks both bodies and classifies; a
+    body-order swap fails to find `B` and falls back
+    (mutation-visible).
+72. `<<<` here-string: bodiless — the flip-table row classifies.
+73. `<<` inside quoted text is not an operator — the flip-table row
+    classifies.
+74. Conservative set: `rm -rf /tmp/x && cat <<'EOF'` unterminated skips
+    with the byte-same audit line; an `EOF\r` terminator is *not* a
+    terminator (falls back).
+75. `$` in live text still skips: the flip-table row with `> "$F"` —
+    rule-token-prefixed, skip byte-same.
+76. Body opacity (R1 P2-1): `rm -rf /tmp/x && cat <<'EOF'` with an
+    unbalanced apostrophe (`don't`) in the body plus a live trailing
+    pattern still classifies, identical to its balanced twin; body
+    text can neither open quotes nor extend the region.
+77. Comment guard (R1 P1-1): `echo start #<<'EOF'` + live `rm …*.log`
+    line + `EOF` line skips, byte-same; an operator-line comment
+    (`rm -rf /tmp/x && cat <<'EOF' # note`) also falls back.
+78. Continuation guards (R1 P1-3; R2 N6): (i) `cat <<'EOF' \` +
+    newline + `&& rm -rf /tmp/y/*.log` skips, and the mutation-visible
+    twin `rm -rf /tmp/x ` + newline + `&& cat <<'EOF'` + body `{}` +
+    `EOF` skips too (modeling the continuation instead of guarding
+    would classify); (ii) `rm -rf /tmp/x &&
+    cat <<E\` + newline + `OF` skips (word continuation); (iii) the
+    positive twin — `rm -rf /tmp/x && cat <<'EOF'` + quoted body with
+    backslash-newline plus `{}` — classifies (dedicated mutation:
+    fire the continuation guard inside heredoc bodies ⇒ skip);
+    (iv) completeness twin with a real
+    heredoc: `rm -rf /tmp/x && echo 'a\` + newline + `b' && cat
+    <<'EOF'` + body `{}` + `EOF` + `touch f{1,2}` — the single-quoted
+    continuation is literal, the body is masked, the trailing pattern
+    sits outside the narrowed region ⇒ classified (mutation “fire the
+    guard inside single quotes” ⇒ fallback ⇒ skip: red).
+79. Shell consumer (R1 P1-2; R2 N2; R3-1): the pipeline-word scan
+    pinned as a table — `bash`, `sh`, `zsh`, `dash`, `ksh`, `sudo
+    bash`, `/bin/sh`, `cat <<'EOF' | bash`, `command bash`, `time
+    bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X
+    bash`, `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash`,
+    `b\ash <<'EOF'`, `\bash <<'EOF'`, `c\at <<'EOF' | b\ash` —
+    each with body `rm -rf /tmp/y/*.log` (rule token + globs): all
+    skip; a non-shell consumer (`rm -rf /tmp/x && node <<'EOF'` +
+    body `const s = {};`) classifies (masking applies; §17.6
+    residual).
+80. Boundaries — no weakening: `rm -rf` inside a quoted body still
+    matches the rule (gated, label `recursive force delete`) and a
+    protected path in the body still floor-denies; `bash s.sh` after a
+    written script stays ungated (documented boundary, unchanged).
+81. Breaker: three consecutive asks trip; the trip audit line asserted
+    byte-exact; the tripping call itself still shows the breaker note.
+82. Breaker: skips are neutral — `ask, skip, ask, ask` trips on the
+    fourth; three consecutive no-context skips never trip; status
+    shows the skip counter instead (`manualOnlyContext` / targets).
+83. Breaker: three unavailables trip; `allow` resets; mode-changing
+    `/guardian` calls re-arm; `/guardian status` does **not** reset;
+    status carries `breaker N/3` tracking the counted pair only.
+84. `relaxedPatterns` recount: the exact formula from §17.3-A pinned
+    on the flipped shapes (skip→classified registers `relaxed`).
+85. Pre-filter (R2 N1): commands without any `<<` are untouched by the
+    guards — `rm -rf /tmp/x && ls *.log # cleanup {a,b}` and
+    `rm -rf /tmp/x \` + newline + `&& ls *.log` both classify exactly
+    as today, `relaxed` counts as today (mutation: drop the pre-filter
+    ⇒ both skip).
+86. Arithmetic context (impl-review fold): `((1<<2)) && cat <<'EOF'` +
+    body `{}` + `EOF` + live `rm -rf /tmp/y/*.log` + `2` + `EOF` skips
+    (a false `<<` operator would otherwise swallow the live line;
+    mutation: drop the `((` guard).
+87. Stdin-source consumers (impl-review fold): `source /dev/stdin
+    <<'EOF'` + body `rm -rf /tmp/y/*.log` + `EOF` skips; `. /dev/stdin`
+    twin; mutation: drop `source`/`.` from the consumer set.
+88. `exec` fd redirection (impl-review fold): `exec 0<<'EOF'` + body +
+    `EOF` + `bash` skips; mutation: drop `exec` from the set.
+
+Mutations to run at implementation review: drop the quoted-body
+`EXPANSION` mask; drop the `PATTERNS` body mask; ignore `<<-` tab
+stripping; swap body order (pin 71); treat `<<<` as a body; treat
+quoted `<<` as an operator; make the scanner `ok=true` on an
+unterminated body; add `\r` tolerance (pin 74); drop the comment guard
+(pin 77); drop either continuation guard (pin 78); fire the
+continuation guard inside heredoc bodies (pin 78-iii); fire the
+continuation guard inside single quotes (pin 78-iv); drop the
+shell-consumer guard (pin 79); narrow the shell scan back to the
+leading word only (pin 79's bypass table); tokenize on whitespace
+only, dropping the metacharacter split (pin 79's adjacent spellings);
+drop the backslash removal in the consumer word compare (pin 79's
+escape spellings); drop the `((` guard (pin 86); drop `source`/`.`
+from the consumer set (pin 87); drop `exec` (pin 88); make bodies
+non-opaque in the quote map (pin 76); drop the `<<`
+pre-filter (pin 85); stop matching rules in heredoc bodies / drop
+body scanning from `rmTargets` (pin 80); re-count skips in the
+breaker (pin 82); reset (instead of ignore)
+on skip (pin 82); drop `breaker N/3` (pin 83); alter the recount
+formula (pin 84).
+
+### 17.6 Non-goals and residual limits (explicit)
+
+- **Rule matching on quoted strings and heredoc bodies is unchanged**,
+  and `rmTargets`/floor keep scanning bodies (write-then-execute
+  defense). Precise residual (R1 P1-2 refinement): after D40, a *write*
+  whose quoted body contains `$(…)`/globs may be classifier-allowed
+  where today it is skipped into a fresh ask — the rule match and the
+  floor still fire (the call is gated and labeled), but the classification
+  may allow a local file write whose later execution (`bash s.sh`) is
+  itself a pre-existing ungated boundary. Accepted as the intended
+  direction (bodies are data under the outer shell); tracked in §17.7.
+- **Interpreters fed a heredoc** (`node <<'EOF'`, `python3 <<'EOF'`, …)
+  execute the body as their program text; masking stays sound because
+  those languages do not apply *shell* expansion to it, but the inner
+  execution belongs to the same residual class as executing any written
+  script (§17.7-Q2 records it; R2 N7).
+- **Shell-set completeness** (R3-4): the consumer set is a basename
+  allowlist — `ash`/`mksh`/`ksh93` spellings and stdin-forwarding
+  consumers (`ssh host <<EOF`, `docker exec … <<EOF`) are not covered;
+  accepted residual.
+- **Deferred neighbor list** (from §17.1-3; none in this batch):
+  `rmTargets` quote-blindness/false floor denials (E2/E3 — needs its
+  own batch; recon hit it live); `/bin/rm` floor miss (E4); split
+  flags after an operand = **rule miss** `rm -r X -f` (E5 —
+  safety-relevant under-fire; **recommended as the next micro-batch**,
+  owner to decide); `[ -e … ]` bracket false skip (E8); quote-aware
+  rule matching (E1).
+- **Not a shell parser**: comments, live backslash-newlines and
+  unquoted `((` arithmetic (`<<` there is a shift) are
+  conservative-by-fallback guards; consumers that are not shell
+  binaries but still execute the body — `exec` fd redirection,
+  `source` / `.` — joined the consumer word set (impl-review folds).
+  Residuals: fd juggling not written as `exec` (`N<&M` chains),
+  `$'…'`-style command spellings (other tiers force the call
+  unresolvable), process substitution beyond operator order. CRLF: no
+  tolerance — `\r` before the delimiter means "not a terminator"
+  (bash semantics; falls back through unterminated).
+
+### 17.7 Open questions (R4 / owner)
+
+1. Breaker without skip counting: acceptable that repeated
+   manual-only sessions no longer reach the manual `remember` UX
+   automatically (§17.3-B counterargument)?
+2. Non-shell written bodies (`cat > s.sh <<'EOF'` with `$(…)`/globs)
+   become classifiable after D40, and interpreter heredocs
+   (`node <<'EOF'`) execute under the same residual class — accept
+   the §17.6 tradeoffs?
+3. Trip surfacing: keep the note only on the tripping prompt, or a
+   one-time standalone notice?
+
+### 17.8 Review log (this amendment)
+
+- R1 (design review): **NEEDS REVISION** — P1: comments misparsed as
+  operators mask live text (the "fallback by construction" claim
+  falsified with a concrete counterexample); shell consumers execute
+  the body so masking is unsound (`bash <<'EOF'`); line continuations
+  unmodeled (logical-line and delimiter-word cases); direct conflict
+  with locked §14 pin 35 / test 35. P2: body text polluting quote
+  state; `/guardian status` does not reset; pins not red-able as
+  written; `relaxedPatterns` formula unpinned; `\r` tolerance deviates
+  from bash; missing folded amendments to §13.4/§13.6. P3: spec
+  precision (delimiter boundary set, `E''F`, `<<-` tabs, `<<'$X'`
+  span semantics), mutation gaps, wording (“never asserted”). All
+  folded in rev 1; R2 requested.
+- R2 (same reviewer, micro-verification of rev 1): **NEEDS REVISION** —
+  N1 (P1): the guards had no `<<` pre-filter, dragging plain
+  comment/continuation commands out of today's narrowing (falsified
+  “byte-identical to today”, “flip table only”, “`manualOnlyTargets`
+  strictly ≤ today”); N2 (P1): the shell-consumer check was bypassable
+  by `| bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`,
+  `sudo -u … bash`, `env -u … bash` (all execute the body); N3 (P2):
+  pin/table rule-token gaps; N4–N7 (P3): a misquoted §14.6 retirement,
+  the missing §0 D10 row, guard precision (single-quote continuations,
+  `#` predecessor set), and the interpreter residual. All folded in
+  rev 2; R3 requested.
+- R3 (same reviewer, micro-verification of rev 2): **NEEDS REVISION** —
+  R3-1 (P1): the consumer word scan as written (whitespace-only split)
+  misses operator-adjacent spellings (`bash<<'EOF'`, `|bash`,
+  `cat<<'EOF'|bash` — bash executes all three; fixed via the
+  metacharacter split and added to pin 79). R3-2/R3-3 (P3): pin 78-iv
+  needed a complete command to be mutation-red; remaining rule-token
+  gaps (table row 11, pin 79 bodies, pin 78-iii). R3-4: the shell-set
+  completeness residual (allowlist). Mutation audit: pin 80 gains a
+  dedicated mutation (rule/floor body scanning is the write-then-
+  execute defense); pins 75/81 remain assertion-only. All folded in
+  rev 3 (pin 78-iii's named command and mutation completed in rev 4);
+  R4 requested.
+- R4 (same reviewer, micro-verification of rev 3): **CONFIRMED WITH
+  NOTES** — metacharacter split verified on the prototype (adjacent
+  spellings fall back, plain `cat` unaffected); pin 78-iv command
+  complete and the mutation red; pin 80 both mutation directions red;
+  shell-set residual recorded. Remaining P3 wording: pin 78-iii named
+  command + dedicated mutation, the pin 79 node clause, two §17.3-A
+  phrasings — folded in rev 4; R5 micro-verification requested for
+  closure.
+- R5 (same reviewer, verification of rev 4): **CONFIRMED** — all four
+  P3 folds verified (pin 78-iii named command + dedicated mutation red;
+  pin 79 node clause now a discriminating pin, red under the
+  shell-set-addition mutation; the §17.3-A phrasings; the review-log
+  corrections); no new contradictions. **Design review closed.**
+- Implementation review (fresh reviewer): **APPROVE WITH CORRECTIONS**
+  — round 1 findings folded: P1 backslash-escaped consumer words
+  (`b\ash`/`\bash`; probe: classified while bash executes the body —
+  the compare now strips `\` like quotes; pin 79 extended; mutation
+  #23 caught); P3 pin 78-i's shape could not distinguish guarding from
+  modeling the continuation (mutation-visible twin added). Round 2
+  (post-fold re-run): red-first re-proved (tests 74/79 red on the
+  pre-fold impl); the reviewer's mutation runner (base 24 mutations,
+  3 more added through the folds) reports 27/28 caught — the sole
+  uncaptured item, `10b`, is outcome-equivalent (recorded); three new
+  under-fire finds were all
+  folded the same round: P2 unquoted `((` arithmetic (`<<` is a shift
+  — guard added, pin 86), P2 `source`/`.` stdin consumers (added to
+  the consumer set, pin 87), P3 `exec` fd redirection (added, pin 88);
+  the duplicated R5 paragraph below was removed. Micro-verification:
+  **CONFIRMED WITH NOTES** — the matrix counts above are the runner's
+  numbers (base 24 pre-fold; 27/28 with the folds, `10b` the only
+  equivalent). **Implementation review closed.**
+
+### 17.9 Amendments to earlier sections (folded)
+
+- **§5.7 / D10 (circuit breaker)** — replacement text for the counting
+  rule: “Auto mode only. Count consecutive non-`allow` **classifier
+  outcomes** — `ask` and unavailable. By-design manual-only skips are
+  neutral: they neither count nor reset. On the 3rd: flip the session
+  to manual, write a record line, update the status. Any `allow`
+  resets. Mode-changing `/guardian` calls re-arm; `status` does not
+  reset. Shadow never flips (it does not decide); its counters are
+  observational only.”
+- **§0 owner-decisions row D10** — the row's summary (“N=3 consecutive
+  non-`allow` results”) is amended to “N=3 consecutive non-`allow`
+  classifier outcomes (`ask`/unavailable; manual-only skips neutral)”,
+  matching the §5.7 replacement text (R2 N5).
+- **§5.4 (`/guardian` call site pseudocode)** — the skip-path
+  annotation “[breaker counts]” is replaced by “[skip: neutral]”; the
+  ask/unavailable paths carry “[breaker counts]” (per D41).
+- **§14.6 pins (pin 35, test 35)** — superseded by D41: the three
+  over-budget writes no longer trip the breaker; test 35 is re-pinned
+  (session stays auto; trip asserted via a new ask/unavailable case);
+  pin 35's “the breaker counts it” sentence is retired. §14.6's
+  *mutation* entry (test 41: “breaker not counting write non-allows …”)
+  remains valid — test 41 drives the trip with an `ask` verdict.
+- **§13.4 / §13.6 (raw `<<` fallback)** — the documented
+  approximation (“raw substring; over-triggering is the safe
+  direction”) and the residual “heredocs and here-strings (fallback)”
+  list are superseded for the *analysis tiers* by D40; the residual
+  set shrinks to the parser-failure conditions enumerated in §17.2.

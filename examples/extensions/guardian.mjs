@@ -301,14 +301,11 @@ export default function (api) {
 		return command.length;
 	};
 
-	/** §13.2: the region the PATTERN tier scans. The WHOLE command on every
-	 *  conservative fallback (`region == command` then reads exactly like the
-	 *  pre-§13 detector): `<<` heredocs/here-strings, a rule match starting
-	 *  inside quotes, an unterminated quote, the split-flag path. */
-	const unresolvableRegion = (command, splitFlagPath) => {
-		if (splitFlagPath || command.includes("<<")) return command;
-		const { inQuote, unterminated } = quotedRegions(command);
-		if (unterminated) return command;
+	/** §13.2: the region the PATTERN tier scans, over a given quote map
+	 *  (§17/D40: the heredoc scanner's map — bodies opaque). Returns the
+	 *  WHOLE command on every conservative fallback: a rule match starting
+	 *  inside quotes, no match at all. */
+	const regionFromQuoteMap = (command, inQuote) => {
 		let maxEnd = -1;
 		let matchInQuote = false;
 		for (const rule of rules) {
@@ -326,6 +323,280 @@ export default function (api) {
 		}
 		if (matchInQuote || maxEnd < 0) return command;
 		return command.slice(0, maxEnd);
+	};
+
+	/** §13.2/§17/D40: the region the PATTERN tier scans. The WHOLE command on
+	 *  every conservative fallback (`region == command` then reads exactly like
+	 *  the pre-§13 detector): `<<`-carrying commands without a parser map, a
+	 *  rule match starting inside quotes, an unterminated quote, the
+	 *  split-flag path. With `quoteMap` given (heredoc scanner) the bodies are
+	 *  opaque and the quote walk is shared. */
+	const unresolvableRegion = (command, splitFlagPath, quoteMap) => {
+		if (splitFlagPath) return command;
+		if (quoteMap !== undefined) return regionFromQuoteMap(command, quoteMap);
+		if (command.includes("<<")) return command;
+		const { inQuote, unterminated } = quotedRegions(command);
+		if (unterminated) return command;
+		return regionFromQuoteMap(command, inQuote);
+	};
+
+	/* §17/D40: heredoc/here-string structure in the analysis tiers. The
+	 * scanner derives body spans (`<<`, `<<-`; `<<<` bodiless) behind the
+	 * raw `<<` pre-filter; guards fail conservatively (comments, live
+	 * backslash-newlines); shell-consumer pipelines fail (the body is
+	 * program text for the inner shell). */
+
+	/** §17/D40: the shell-consumer word set and the pipeline word scan. The
+	 *  split runs on whitespace and shell metacharacters and is deliberately
+	 *  over-approximate (quoted fragments may split too — over-firing only). */
+	const SHELL_CONSUMERS = new Set([
+		"bash",
+		"sh",
+		"zsh",
+		"dash",
+		"ksh",
+		"exec", // fd redirection can hand the body to a later segment
+		"source", // a sourced script may read the body as stdin
+		".", // the POSIX source builtin
+	]);
+	const hasShellWord = (slice) => {
+		for (const raw of slice.split(/[\s|&;()<>]+/u)) {
+			// §17 impl-review fold: bash quote removal strips backslash escapes
+			// too (`b\ash` resolves to `bash`) — the compare must not miss them.
+			const word = raw.replaceAll(/[\\'"]/gu, "");
+			if (word === "") continue;
+			const base = word.split("/").pop() ?? word;
+			if (SHELL_CONSUMERS.has(base)) return true;
+		}
+		return false;
+	};
+
+	/** §17/D40: the operator's pipeline — the `;`/`&`/newline segment (per
+	 *  §13's segmentation) that contains the operator, pipes included. The
+	 *  backward walk uses the scanned quote map; the forward walk tracks
+	 *  quotes locally (the map is not filled ahead of the scan). */
+	const pipelineSlice = (command, pos, inQuote) => {
+		let start = pos;
+		while (start > 0) {
+			const j = start - 1;
+			if (!inQuote[j]) {
+				const c = command[j];
+				if (c === ";" || c === "&" || c === "\n") break;
+			}
+			start -= 1;
+		}
+		let end = pos;
+		let quote = null;
+		while (end < command.length) {
+			const c = command[end];
+			if (quote === "'") {
+				if (c === "'") quote = null;
+			} else if (quote === '"') {
+				if (c === "\\" && command[end + 1] === "\n") {
+					end += 2;
+					continue;
+				}
+				if (c === '"') quote = null;
+			} else if (c === "'" || c === '"') {
+				quote = c;
+			} else if (c === "\\") {
+				end += 2;
+				continue;
+			} else if (c === ";" || c === "&" || c === "\n") {
+				break;
+			}
+			end += 1;
+		}
+		return command.slice(start, end);
+	};
+
+	/** §17/D40: read a heredoc delimiter word at `from` (the char after `<<`).
+	 *  `undefined` on any ambiguity (empty word; `$`/backtick in an unquoted
+	 *  word; a backslash-newline). `quoted` marks literal bodies. */
+	const delimiterAt = (command, from) => {
+		let j = from;
+		let dash = false;
+		if (command[j] === "-") {
+			dash = true;
+			j += 1;
+		}
+		while (command[j] === " " || command[j] === "\t") j += 1;
+		let value = "";
+		let quoted = false;
+		let wq = null;
+		let started = false;
+		while (j < command.length) {
+			const c = command[j];
+			if (wq === null && (/[\s;&|()<>]/u.test(c) || c === "\n")) break;
+			started = true;
+			if (wq === "'") {
+				if (c === "'") {
+					wq = null;
+					quoted = true;
+					j += 1;
+					continue;
+				}
+				value += c;
+				j += 1;
+				continue;
+			}
+			if (wq === '"') {
+				if (c === '"') {
+					wq = null;
+					quoted = true;
+					j += 1;
+					continue;
+				}
+				if (c === "\\") {
+					if (command[j + 1] === "\n") return undefined;
+					quoted = true;
+					if (j + 1 < command.length) value += command[j + 1];
+					j += 2;
+					continue;
+				}
+				value += c;
+				j += 1;
+				continue;
+			}
+			if (c === "'" || c === '"') {
+				wq = c;
+				quoted = true;
+				j += 1;
+				continue;
+			}
+			if (c === "\\") {
+				if (command[j + 1] === "\n") return undefined;
+				quoted = true;
+				if (j + 1 < command.length) value += command[j + 1];
+				j += 2;
+				continue;
+			}
+			value += c;
+			j += 1;
+		}
+		if (!started || wq !== null || value === "") return undefined;
+		if (!quoted && /[$`]/u.test(value)) return undefined;
+		return { value, quoted, dash, after: j };
+	};
+
+	/** §17/D40: the body of one heredoc — a line equal byte-for-byte to the
+	 *  delimiter (leading tabs stripped first iff `dash`, all of them; no
+	 *  `\r` tolerance — bash 3.2 does not terminate on `EOF\r`). */
+	const heredocBody = (command, start, { value, dash }) => {
+		let pos = start;
+		while (pos <= command.length) {
+			let lineEnd = command.indexOf("\n", pos);
+			if (lineEnd === -1) lineEnd = command.length;
+			const rawLine = command.slice(pos, lineEnd);
+			const line = dash ? rawLine.replace(/^\t+/u, "") : rawLine;
+			if (line === value) {
+				return { end: lineEnd < command.length ? lineEnd + 1 : lineEnd };
+			}
+			if (lineEnd === command.length) return undefined;
+			pos = lineEnd + 1;
+		}
+		return undefined;
+	};
+
+	/** §17/D40: heredoc/here-string structure over the raw command. Returns
+	 *  `{ok:false}` on every ambiguity (comments, live backslash-newlines,
+	 *  missing/unterminated bodies, `$`/backtick in an unquoted delimiter,
+	 *  `<<<<`, unterminated quotes, shell-consumer pipelines). Bodies are
+	 *  opaque: the returned quote map never sees their bytes. */
+	const parseHeredocs = (command) => {
+		const inQuote = new Array(command.length + 1).fill(false);
+		const bodies = [];
+		const pending = [];
+		let quote = null;
+		let i = 0;
+		while (i < command.length) {
+			const c = command[i];
+			inQuote[i] = quote !== null;
+			if (c === "\\") {
+				if (quote === "'") {
+					i += 1;
+					continue;
+				}
+				if (command[i + 1] === "\n") return { ok: false }; // guard: live continuation
+				if (i + 1 < command.length) inQuote[i + 1] = true;
+				i += 2;
+				continue;
+			}
+			if (quote === "'") {
+				if (c === "'") quote = null;
+				i += 1;
+				continue;
+			}
+			if (quote === '"') {
+				if (c === '"') quote = null;
+				i += 1;
+				continue;
+			}
+			if (c === "'" || c === '"') {
+				quote = c;
+				i += 1;
+				continue;
+			}
+			if (c === "#" && (i === 0 || /[\s;&|()<>]/u.test(command[i - 1]))) {
+				return { ok: false }; // guard: word-start comment
+			}
+			if (c === "(" && command[i + 1] === "(") {
+				return { ok: false }; // guard: arithmetic context (`((1<<2))` — `<<` is a shift, not a heredoc)
+			}
+			if (c === "\n") {
+				if (pending.length > 0) {
+					let pos = i + 1;
+					for (const spec of pending) {
+						const body = heredocBody(command, pos, spec);
+						if (body === undefined) return { ok: false };
+						bodies.push({ start: pos, end: body.end, quoted: spec.quoted });
+						pos = body.end;
+					}
+					pending.length = 0;
+					i = pos; // bodies opaque — jump wholesale
+					continue;
+				}
+				i += 1;
+				continue;
+			}
+			if (c === "<" && command[i + 1] === "<") {
+				if (command[i + 2] === "<") {
+					if (command[i + 3] === "<") return { ok: false };
+					i += 3; // here-string: no body
+					continue;
+				}
+				const spec = delimiterAt(command, i + 2);
+				if (spec === undefined) return { ok: false };
+				if (hasShellWord(pipelineSlice(command, i, inQuote))) return { ok: false };
+				pending.push(spec);
+				i = spec.after;
+				continue;
+			}
+			i += 1;
+		}
+		if (quote !== null || pending.length > 0) return { ok: false };
+		return { ok: true, bodies, inQuote };
+	};
+
+	/** §17/D40: does `regex` hit `text` outside every body span? */
+	const hitsOutside = (text, regex, spans) => {
+		const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+		const re = new RegExp(regex.source, flags);
+		for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+			if (m[0] === "") {
+				re.lastIndex += 1; // zero-width safety
+				continue;
+			}
+			let inside = false;
+			for (const span of spans) {
+				if (m.index >= span.start && m.index < span.end) {
+					inside = true;
+					break;
+				}
+			}
+			if (!inside) return true;
+		}
+		return false;
 	};
 
 	const setModeStatus = () => {
@@ -426,7 +697,7 @@ export default function (api) {
 			.join("\n");
 	};
 
-	/** D10: count a non-allow outcome; the 3rd flips the session to manual. */
+	/** §17/D41 (amends D10): count a non-allow *classifier* outcome; the 3rd flips the session to manual. */
 	const bumpBreaker = () => {
 		breakerCount += 1;
 		if (breakerCount >= 3 && mode !== "manual") {
@@ -467,7 +738,8 @@ export default function (api) {
 						`manual-only ${pct(manualOnly, counters.matched)} (targets ${counters.manualOnlyTargets}, no-context ${counters.manualOnlyContext}, size ${counters.manualOnlySize}, relaxed ${counters.relaxedPatterns}), ` +
 						`classify ${counters.classify} (allow ${counters.allow}, ask ${counters.ask}, unavailable ${counters.unavailable}), ` +
 						`ask-rate ${pct(counters.ask, counters.classify)}, ` +
-						`allow→human approved ${counters.allowHumanApproved}, denied ${counters.allowHumanDenied}`,
+						`allow→human approved ${counters.allowHumanApproved}, denied ${counters.allowHumanDenied}, ` +
+						`breaker ${breakerCount}/3`,
 				);
 				return "handled";
 			}
@@ -554,12 +826,26 @@ export default function (api) {
 				// (or whose call carries no verified user context, D17) is NEVER
 				// classified; shadow classifies anyway for observation (D14/D16).
 				const noContext = event.verifiedUserContext !== true;
-				// §13 (rev 2.1): expansion anywhere; patterns only up to the
-				// matched invocation's region (fallbacks hand back the whole
-				// command, reading exactly like the pre-§13 detector).
-				const region = unresolvableRegion(command, matched.match === undefined);
-				const unresolvable = EXPANSION.test(command) || PATTERNS.test(region);
-				if (PATTERNS.test(command) && !PATTERNS.test(region)) counters.relaxedPatterns += 1;
+				// §17/D40: heredoc-aware analysis behind the raw `<<` pre-filter —
+				// commands without it keep today's path byte-for-byte. Parser
+				// failure returns to the whole-command fallback.
+				const heredoc = command.includes("<<") ? parseHeredocs(command) : undefined;
+				let region;
+				let unresolvable;
+				if (heredoc !== undefined && heredoc.ok) {
+					const quotedBodies = heredoc.bodies.filter((body) => body.quoted);
+					region = unresolvableRegion(command, matched.match === undefined, heredoc.inQuote);
+					unresolvable =
+						hitsOutside(command, EXPANSION, quotedBodies) || hitsOutside(region, PATTERNS, heredoc.bodies);
+					if (PATTERNS.test(command) && !hitsOutside(region, PATTERNS, heredoc.bodies)) counters.relaxedPatterns += 1;
+				} else {
+					region =
+						heredoc !== undefined
+							? command // parser failure → today's whole-command fallback
+							: unresolvableRegion(command, matched.match === undefined);
+					unresolvable = EXPANSION.test(command) || PATTERNS.test(region);
+					if (PATTERNS.test(command) && !PATTERNS.test(region)) counters.relaxedPatterns += 1;
+				}
 				let verdict;
 				if (mode === "shadow" || (!noContext && !unresolvable)) {
 					verdict = await api.classify({
@@ -607,8 +893,9 @@ export default function (api) {
 					audit(`[auto] allow — ${firstLine(command)} (${verdict.model})${reasonSuffix(verdict.reason)}${basisSuffix(verdict.basis)}`);
 					return undefined; // allowed by the classifier — run it
 				}
-				bumpBreaker();
-				const breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
+				// §17/D41: countable outcomes are the classifier's (ask / unavailable);
+				// by-design skips are neutral — no bump.
+				let breakerNote = "";
 				if (noContext && verdict === undefined) {
 					counters.manualOnlyContext += 1;
 					audit(`[auto] not classified (no verified user context) — ${firstLine(command)}`);
@@ -624,11 +911,15 @@ export default function (api) {
 					return { block: true, reason: effective.reason };
 				}
 				if (verdict === undefined) {
+					bumpBreaker();
+					breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
 					audit(`[auto] classifier unavailable — ${firstLine(command)}`);
 					const approved = await askFresh(`classifier unavailable — asking${breakerNote}`);
 					if (approved) return undefined;
 					return { block: true, reason: effective.reason };
 				}
+				bumpBreaker();
+				breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
 				audit(`[auto] ask — ${firstLine(command)} (${verdict.model})${reasonSuffix(verdict.reason)}${basisSuffix(verdict.basis)}`);
 				const approved = await askFresh(
 					`classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}${breakerNote}`,
@@ -732,8 +1023,9 @@ export default function (api) {
 					audit(`[auto] allow — ${tool} ${firstLine(event.args.path)} (${verdict.model})${reasonSuffix(verdict.reason)}${basisSuffix(verdict.basis)}`);
 					return undefined; // allowed by the classifier — run it
 				}
-				bumpBreaker();
-				const breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
+				// §17/D41: countable outcomes are the classifier's (ask / unavailable);
+				// by-design skips are neutral — no bump.
+				let breakerNote = "";
 				if (noContext && verdict === undefined) {
 					counters.manualOnlyContext += 1;
 					audit(`[auto] not classified (no verified user context) — ${tool} ${firstLine(event.args.path)}`);
@@ -753,11 +1045,15 @@ export default function (api) {
 					return { block: true, reason: blockReason };
 				}
 				if (verdict === undefined) {
+					bumpBreaker();
+					breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
 					audit(`[auto] classifier unavailable — ${tool} ${firstLine(event.args.path)}`);
 					const approved = await askFresh(`classifier unavailable — asking${breakerNote}`);
 					if (approved) return undefined;
 					return { block: true, reason: blockReason };
 				}
+				bumpBreaker();
+				breakerNote = breakerTripped ? "\nclassifier breaker tripped — back to manual" : "";
 				audit(`[auto] ask — ${tool} ${firstLine(event.args.path)} (${verdict.model})${reasonSuffix(verdict.reason)}${basisSuffix(verdict.basis)}`);
 				const approved = await askFresh(
 					`classifier: ${verdict.verdict}${verdict.reason === "" ? "" : ` — ${verdict.reason}`}${breakerNote}`,

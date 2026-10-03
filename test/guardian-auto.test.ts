@@ -13,7 +13,8 @@ import { CLASSIFY_MAX_INPUT_CHARS } from "../src/repl/classify.js";
 
 // #guardian-auto-mode Wave 3: the guardian consumer against a fake api — the
 // example-extension test pattern (no REPL, no LLM, no network). Tests 14-44 of
-// the design's pin list, guardian side (§13: 28-30; §14: 31-44).
+// the design's pin list, guardian side (§13: 28-30; §14: 31-44; §15: 45-53;
+// §17: 68-85).
 
 let fakeHome = "";
 
@@ -188,6 +189,9 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		h.classifyImpl.fn = async () => verdict("ask", "unsure");
 		for (let i = 0; i < 3; i++) await h.gate({ args: { command: risky } });
 		expect(h.statuses.at(-1)).toEqual(["mode", undefined]); // back to manual → footer cleared
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(log, "[breaker] 3 non-allows in a row — back to manual");
+		expect(String(h.confirm.mock.calls.at(-1)?.[1])).toContain("classifier breaker tripped — back to manual");
 		const calls = h.classify.mock.calls.length;
 		await h.gate({ args: { command: risky } }); // manual now: no classifier
 		expect(h.classify.mock.calls.length).toBe(calls);
@@ -309,7 +313,7 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		expect(combined.notes.at(-1)).toContain("no-context 1, size 0");
 	});
 
-	it("35: §14 — an over-budget write payload is never classified in auto; size counted, breaker counts it", async () => {
+	it("35: §14/§17-D41 — an over-budget write payload is never classified; the skip is breaker-neutral", async () => {
 		const h = await loadGuardian("/proj");
 		await h.run("/guardian auto");
 		h.classifyImpl.fn = async () => verdict("allow", "x");
@@ -321,8 +325,17 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		);
 		await h.run("/guardian status");
 		expect(h.notes.at(-1)).toContain("manual-only 100% (targets 0, no-context 0, size 1, relaxed 0)");
+		// §17/D41: three over-budget skips no longer trip — the session stays auto
 		await h.gate(writeCall("/outside/big.txt", big));
 		await h.gate(writeCall("/outside/big.txt", big));
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("mode auto");
+		expect(h.notes.at(-1)).not.toContain("breaker tripped");
+		expect(h.notes.at(-1)).toContain("size 3");
+		expect(h.notes.at(-1)).toContain("breaker 0/3");
+		// the trip belongs to classifier outcomes only
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		for (let i = 0; i < 3; i++) await h.gate(writeCall("/outside/probe.txt"));
 		await h.run("/guardian status");
 		expect(h.notes.at(-1)).toContain("breaker tripped");
 	});
@@ -655,8 +668,6 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			"rm -rf /tmp/x; rm -rf /tmp/[ab]*", // the LAST match drives the span
 			"[ -e /tmp/x ] && rm -rf /tmp/x", // patterns before the match stay in-region
 			"rm -rf /tmp/dir* && { [ -e /tmp/dir ]; }", // decorated, but the target is a glob
-			"rm -rf /tmp/x && cat <<EOF\nls /tmp/[ab]*\nEOF", // heredoc body, patterns only — the << fallback
-			"rm -rf /tmp/x && cat <<EOF\nrm -rf /tmp/*.log\nEOF", // the body match also lands in-region
 			'echo "rm -rf x" && ls /tmp/[ab]*', // a match inside quotes → fallback
 			"rm -r -f /tmp/[ab]*", // split-flag path → whole command
 			'rm -rf /tmp/x && echo "$(date)"', // expansion tier, whole command
@@ -669,6 +680,22 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			expect(h.classify, command).not.toHaveBeenCalled();
 			expect(decision, command).toMatchObject({ block: true }); // confirm false
 			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
+
+		// §17/D40 (pins 69/84): the two former heredoc fallbacks now classify —
+		// the unquoted body's patterns are inert under the outer shell and the
+		// relaxation is counted.
+		for (const command of [
+			"rm -rf /tmp/x && cat <<EOF\nls /tmp/[ab]*\nEOF",
+			"rm -rf /tmp/x && cat <<EOF\nrm -rf /tmp/*.log\nEOF",
+		]) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			await h.gate({ args: { command } });
+			expect(h.classify, command).toHaveBeenCalledTimes(1);
+			await h.run("/guardian status");
+			expect(h.notes.at(-1), command).toContain("relaxed 1");
 		}
 	});
 
@@ -903,5 +930,279 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
 		expect(log).toContain("— reason: clearly authorized");
 		expect(log).not.toContain("PAYLOAD-TOKEN-9f3a2b");
+	});
+
+	// §17/D40–D41 (track C): heredoc/here-string structure in the analysis
+	// tiers, and the classifier-outcome-only breaker (pins 68-85, red-first).
+	const CONT = "\\\n"; // a shell line continuation: backslash + newline
+
+	it("68: §17/D40 — a quoted-delimiter body is masked from EXPANSION and PATTERNS", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the shell text is literal (quoted heredoc body)
+		const command = "rm -rf /tmp/x && cat > rev.mjs <<'EOF'\nconst s = `${x}`; const o = { a: 1 };\nEOF";
+		await h.gate({ args: { command } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+		expect(String(h.classify.mock.calls[0]?.[0].prompt)).not.toContain("prefer ask");
+	});
+
+	it("69: §17/D40 — an unquoted body: `$` stays live, patterns are inert", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the shell text is literal (unquoted body)
+		const command = "rm -rf /tmp/x && cat <<EOF\n${HOME}\nEOF";
+		const decision = await h.gate({ args: { command } });
+		expect(h.classify).not.toHaveBeenCalled();
+		expect(decision).toMatchObject({ block: true });
+		expect(String(h.confirm.mock.calls[0]?.[1])).toContain("not classified: the command contains");
+	});
+
+	it("70: §17/D40 — `<<-` strips leading tabs from body and terminator", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		await h.gate({ args: { command: "rm -rf /tmp/x && cat <<-EOF\n\tconst o = {};\n\tEOF\n" } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+	});
+
+	it("71: §17/D40 — multiple heredocs consume bodies in operator order", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the shell text is literal (second body)
+		await h.gate({ args: { command: "rm -rf /tmp/x && cat <<'A' <<'B'\nbb {}\nA\naa ${x}\nB\n" } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+	});
+
+	it("72: §17/D40 — a here-string is bodiless; the region narrows as before", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		await h.gate({ args: { command: 'rm -rf /tmp/x && cat <<< "a" && touch f{1,2}' } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+	});
+
+	it("73: §17/D40 — `<<` inside quotes is not an operator", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		await h.gate({ args: { command: 'rm -rf /tmp/x && echo "a<<b" && touch f{1,2}' } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+	});
+
+	it("74: §17/D40 — the parser-failure set stays manual-only (unterminated, `\\r`)", async () => {
+		const cases = [
+			"rm -rf /tmp/x && cat <<'EOF'\nconst o = {};", // no terminator
+			"rm -rf /tmp/x && cat <<'EOF'\nconst o = {};\nEOF\r", // \r is not a terminator (bash 3.2)
+			"((1<<2)) && cat <<'EOF'\n{}\nEOF\nrm -rf /tmp/y/*.log\n2\nEOF", // arithmetic shift, not an operator
+		];
+		for (const command of cases) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			const decision = await h.gate({ args: { command } });
+			expect(h.classify, command).not.toHaveBeenCalled();
+			expect(decision, command).toMatchObject({ block: true });
+			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
+	});
+
+	it("75: §17/D40 — expansion in live text still skips ($ outside the body)", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		const decision = await h.gate({ args: { command: `rm -rf /tmp/x && cat <<'EOF' > "$F"\n{}\nEOF` } });
+		expect(h.classify).not.toHaveBeenCalled();
+		expect(decision).toMatchObject({ block: true });
+	});
+
+	it("76: §17/D40 — bodies are opaque: an apostrophe in a body cannot flip the quote state", async () => {
+		const commands = [
+			"rm -rf /tmp/x && cat <<'EOF'\ndon't\nEOF\ntouch f{1,2}",
+			"rm -rf /tmp/x && cat <<'EOF'\nconst s = 'ok';\nEOF\ntouch f{1,2}",
+		];
+		for (const command of commands) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			await h.gate({ args: { command } });
+			expect(h.classify, command).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it("77: §17/D40 — the comment guards fall back (byte-same skip)", async () => {
+		const cases = [
+			"echo start #<<'EOF'\nrm -rf /tmp/probe/*.log\nEOF", // the operator sits in a comment
+			"rm -rf /tmp/x && cat <<'EOF' # note\n{}\nEOF", // comment on the operator line
+		];
+		for (const command of cases) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			const decision = await h.gate({ args: { command } });
+			expect(h.classify, command).not.toHaveBeenCalled();
+			expect(decision, command).toMatchObject({ block: true });
+			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
+	});
+
+	it("78: §17/D40 — continuation guards fall back; bodies and single quotes do not", async () => {
+		const guarded = [
+			`cat <<'EOF' ${CONT}&& rm -rf /tmp/y/*.log\nbody\nEOF`, // (i) operator-line continuation
+			`rm -rf /tmp/x ${CONT}&& cat <<'EOF'\n{}\nEOF`, // (i-bis) mutation-visible twin
+			`rm -rf /tmp/x && cat <<E${CONT}OF\nconst o = {};\nEOF`, // word continuation
+		];
+		for (const command of guarded) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			const decision = await h.gate({ args: { command } });
+			expect(h.classify, command).not.toHaveBeenCalled();
+			expect(decision, command).toMatchObject({ block: true });
+			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
+		const positives = [
+			`rm -rf /tmp/x && cat <<'EOF'\nconst a = 1; ${CONT}const b = {};\nEOF`, // body bytes are opaque
+			`rm -rf /tmp/x && echo 'a${CONT}b' && cat <<'EOF'\n{}\nEOF\ntouch f{1,2}`, // single quotes: literal
+		];
+		for (const command of positives) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			await h.gate({ args: { command } });
+			expect(h.classify, command).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it("79: §17/D40 — shell-consumer pipelines fall back; other consumers do not", async () => {
+		const body = "rm -rf /tmp/y/*.log";
+		const consumers = [
+			`bash <<'EOF'\n${body}\nEOF`,
+			`sh <<'EOF'\n${body}\nEOF`,
+			`zsh <<'EOF'\n${body}\nEOF`,
+			`dash <<'EOF'\n${body}\nEOF`,
+			`ksh <<'EOF'\n${body}\nEOF`,
+			`sudo bash <<'EOF'\n${body}\nEOF`,
+			`/bin/sh <<'EOF'\n${body}\nEOF`,
+			`cat <<'EOF' | bash\n${body}\nEOF`,
+			`command bash <<'EOF'\n${body}\nEOF`,
+			`time bash <<'EOF'\n${body}\nEOF`,
+			`nice bash <<'EOF'\n${body}\nEOF`,
+			`nohup bash <<'EOF'\n${body}\nEOF`,
+			`sudo -u root bash <<'EOF'\n${body}\nEOF`,
+			`env -u X bash <<'EOF'\n${body}\nEOF`,
+			`bash<<'EOF'\n${body}\nEOF`,
+			`b\\ash <<'EOF'\n${body}\nEOF`,
+			`\\bash <<'EOF'\n${body}\nEOF`,
+			`c\\at <<'EOF' | b\\ash\n${body}\nEOF`,
+			`source /dev/stdin <<'EOF'\n${body}\nEOF`,
+			`. /dev/stdin <<'EOF'\n${body}\nEOF`,
+			`exec 0<<'EOF'\n${body}\nEOF\nbash`,
+			`cat <<'EOF' |bash\n${body}\nEOF`,
+			`cat<<'EOF'|bash\n${body}\nEOF`,
+		];
+		for (const command of consumers) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			const decision = await h.gate({ args: { command } });
+			expect(h.classify, command).not.toHaveBeenCalled();
+			expect(decision, command).toMatchObject({ block: true });
+			expect(String(h.confirm.mock.calls[0]?.[1]), command).toContain("not classified: the command contains");
+		}
+		const node = await loadGuardian("/proj");
+		await node.run("/guardian auto");
+		node.classifyImpl.fn = async () => verdict("allow", "x");
+		await node.gate({ args: { command: "rm -rf /tmp/x && node <<'EOF'\nconst s = {};\nEOF" } });
+		expect(node.classify).toHaveBeenCalledTimes(1);
+	});
+
+	it("80: §17/D40 — bodies keep the rule match and the floor (write-then-execute defense)", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("allow", "x");
+		await h.gate({ args: { command: "cat > rev.sh <<'EOF'\nrm -rf /tmp/y\nEOF" } });
+		expect(h.classify).toHaveBeenCalledTimes(1);
+		expect(String(h.classify.mock.calls[0]?.[0].prompt)).toContain(
+			"gate rule matched: recursive force delete",
+		);
+		const floored = await h.gate({ args: { command: "cat > rev.sh <<'EOF'\nrm -rf ~/.ssh\nEOF" } });
+		expect(floored).toMatchObject({ block: true });
+		expect(String((floored as { reason?: string }).reason)).toContain("protected");
+		expect(h.confirm).not.toHaveBeenCalled();
+	});
+
+	it("81: §17/D41 — three consecutive asks trip; the audit line is exact", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		for (let i = 0; i < 3; i++) await h.gate({ args: { command: risky } });
+		expect(h.statuses.at(-1)).toEqual(["mode", undefined]);
+		expect(String(h.confirm.mock.calls.at(-1)?.[1])).toContain("classifier breaker tripped — back to manual");
+		const log = await readFile(path.join(fakeHome, ".imp", "guardian.log"), "utf8");
+		exactLogLine(log, "[breaker] 3 non-allows in a row — back to manual");
+	});
+
+	it("82: §17/D41 — by-design skips are neutral: they neither count nor reset", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => verdict("ask", "unsure");
+		await h.gate({ args: { command: risky } }); // ask → 1
+		await h.gate({ args: { command: risky }, verifiedUserContext: false }); // skip → neutral
+		await h.gate({ args: { command: risky } }); // ask → 2
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("breaker 2/3");
+		await h.gate({ args: { command: risky } }); // ask → 3 → trip
+		expect(h.statuses.at(-1)).toEqual(["mode", undefined]);
+
+		const s = await loadGuardian("/proj");
+		await s.run("/guardian auto");
+		s.classifyImpl.fn = async () => verdict("allow", "x");
+		for (let i = 0; i < 3; i++) await s.gate({ args: { command: risky }, verifiedUserContext: false });
+		await s.run("/guardian status");
+		expect(s.notes.at(-1)).toContain("mode auto");
+		expect(s.notes.at(-1)).not.toContain("breaker tripped");
+		expect(s.notes.at(-1)).toContain("no-context 3");
+		expect(s.notes.at(-1)).toContain("breaker 0/3");
+	});
+
+	it("83: §17/D41 — unavailables count; allow resets; status reports N/3 and never resets", async () => {
+		const h = await loadGuardian("/proj");
+		await h.run("/guardian auto");
+		h.classifyImpl.fn = async () => undefined;
+		await h.gate({ args: { command: risky } });
+		await h.gate({ args: { command: risky } });
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("breaker 2/3");
+		await h.gate({ args: { command: risky } });
+		expect(h.statuses.at(-1)).toEqual(["mode", undefined]);
+		await h.run("/guardian status");
+		expect(h.notes.at(-1)).toContain("breaker tripped");
+
+		const reset = await loadGuardian("/proj");
+		await reset.run("/guardian auto");
+		reset.classifyImpl.fn = async () => undefined;
+		await reset.gate({ args: { command: risky } });
+		await reset.gate({ args: { command: risky } });
+		reset.classifyImpl.fn = async () => verdict("allow", "fine");
+		await reset.gate({ args: { command: risky } });
+		await reset.run("/guardian status");
+		expect(reset.notes.at(-1)).toContain("breaker 0/3");
+		expect(reset.notes.at(-1)).toContain("mode auto");
+	});
+
+	it("85: §17/D40 — commands without `<<` never invoke the guards (pre-filter)", async () => {
+		const cases = ["rm -rf /tmp/x && ls *.log # cleanup {a,b}", `rm -rf /tmp/x ${CONT}&& ls *.log`];
+		for (const command of cases) {
+			const h = await loadGuardian("/proj");
+			await h.run("/guardian auto");
+			h.classifyImpl.fn = async () => verdict("allow", "x");
+			await h.gate({ args: { command } });
+			expect(h.classify, command).toHaveBeenCalledTimes(1);
+			await h.run("/guardian status");
+			expect(h.notes.at(-1), command).toContain("relaxed 1");
+		}
 	});
 });

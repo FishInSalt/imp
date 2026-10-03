@@ -1861,9 +1861,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 > Status: **rev 4 — design review closed (R1 NEEDS REVISION → rev 1;
 > R2 → rev 2; R3 → rev 3; R4 CONFIRMED WITH NOTES → rev 4; R5
-> CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first, full suite
-> 2766/2766 across 140 files, baseline 2749); implementation review
-> pending.** Every revision round changed this section only.
+> CONFIRMED); IMPLEMENTED at 406b62f (pins 68-85 red-first; full suite
+> 2766/2766, 140 files, baseline 2749); implementation review: P1/P3
+> findings folded (see §17.8) — fresh verification pending.** Every
+> revision round changed this section only.
 > Scope: **track C** of the 2026-10-02 triage (started 2026-10-03) — the
 > bash detector's heredoc handling (over-conservative `not classified`
 > skips) and the auto-mode breaker's counting semantics (by-design
@@ -1924,7 +1925,7 @@ render(events, allowance):                 # allowance = min(cap − others, 327
 
 | # | Decision |
 |---|---|
-| D40 | **Heredoc/here-string structure in the analysis tiers.** A quote- and escape-aware scanner derives heredoc body spans (`<<`, `<<-`; `<<<` recognized as bodiless) and the two analysis tiers are evaluated with those spans masked: `EXPANSION` ignores **quoted-delimiter** bodies only (unquoted bodies expand — `$`/backtick stay live); `PATTERNS` ignores **all** bodies (under the *outer* shell no heredoc body performs pathname or brace expansion). **Pre-filter (R2 N1):** the parser and its guards run only when the raw command contains `<<`; commands without it keep today's narrowing path untouched. **Contamination guards (R1 P1-1/P1-3; R2 N6):** an unquoted word-start `#` comment (line start, or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`), or a backslash-newline that bash treats as a line continuation (i.e. outside single-quoted text), in *live text while the scanner walks the command structure*, fails the parse conservatively — comments and line continuations are not modeled. **Shell consumers (R1 P1-2; R2 N2; R3-1):** when **any word of the operator's pipeline** (its `;`/`&`/newline segment plus every `|`-joined segment; tokenized on unquoted whitespace **and the shell metacharacters** `| & ; ( ) < >` — operator-adjacent spellings like `bash<<EOF` or `|bash` must yield the same word; quote-removed) has a basename in `bash sh zsh dash ksh`, the body is *program text for the inner shell* and masking is unsound — parse fails conservatively (deliberately a word scan, not command-position analysis: `cat <<'EOF' | bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash`, and the metacharacter-adjacent `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash` all fall back; the cost is over-firing only). Any parse failure (the guards, the shell consumer, unterminated body, unparsable delimiter, `$`/backtick in an unquoted delimiter, four-or-more `<`) yields the whole-command region — byte-identical to today. The raw `command.includes("<<")` check (G:309) is replaced by the pre-filter plus the parser's result. **Rule matching, the floor and `rmTargets` are unchanged** (write-then-execute defense; §17.6). |
+| D40 | **Heredoc/here-string structure in the analysis tiers.** A quote- and escape-aware scanner derives heredoc body spans (`<<`, `<<-`; `<<<` recognized as bodiless) and the two analysis tiers are evaluated with those spans masked: `EXPANSION` ignores **quoted-delimiter** bodies only (unquoted bodies expand — `$`/backtick stay live); `PATTERNS` ignores **all** bodies (under the *outer* shell no heredoc body performs pathname or brace expansion). **Pre-filter (R2 N1):** the parser and its guards run only when the raw command contains `<<`; commands without it keep today's narrowing path untouched. **Contamination guards (R1 P1-1/P1-3; R2 N6):** an unquoted word-start `#` comment (line start, or preceded by unquoted whitespace / `;` `&` `|` `(` `)` `<` `>`), or a backslash-newline that bash treats as a line continuation (i.e. outside single-quoted text), in *live text while the scanner walks the command structure*, fails the parse conservatively — comments and line continuations are not modeled. **Shell consumers (R1 P1-2; R2 N2; R3-1):** when **any word of the operator's pipeline** (its `;`/`&`/newline segment plus every `|`-joined segment; tokenized on unquoted whitespace **and the shell metacharacters** `| & ; ( ) < >` — operator-adjacent spellings like `bash<<EOF` or `|bash` must yield the same word; quote/backslash-removed — bash quote removal strips `\` too) has a basename in `bash sh zsh dash ksh`, the body is *program text for the inner shell* and masking is unsound — parse fails conservatively (deliberately a word scan, not command-position analysis: `cat <<'EOF' | bash`, `command bash`, `time bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X bash`, the metacharacter-adjacent `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash`, and the backslash spellings `b\ash` / `\bash` all fall back; the cost is over-firing only). Any parse failure (the guards, the shell consumer, unterminated body, unparsable delimiter, `$`/backtick in an unquoted delimiter, four-or-more `<`) yields the whole-command region — byte-identical to today. The raw `command.includes("<<")` check (G:309) is replaced by the pre-filter plus the parser's result. **Rule matching, the floor and `rmTargets` are unchanged** (write-then-execute defense; §17.6). |
 | D41 | **Breaker counts classifier outcomes only (amends D10/§5.7, folded in §17.9).** Countable: `ask` and unavailable — the classifier was consulted and did not allow. Neutral (neither count nor reset): by-design manual-only skips (no verified context, unresolvable expansion/glob, over-budget write — the §14 pin 35/test 35 expectations are re-pinned accordingly). Resets: `allow`, restart, and every `/guardian` invocation that changes or re-arms the mode (set/cycle/reload — **`status` does not reset**; R1 P2-2). Trip → manual until re-armed (unchanged). Shadow never flips (unchanged). Surfacing: `/guardian status` gains `breaker N/3`; the trip audit line stays byte-identical (and gains a test; the wording overstates “consecutive non-allows” once skips are neutral — accepted and recorded, R1 P3). |
 
 ### 17.3 The refinement
@@ -1978,8 +1979,9 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     live text on whitespace and the shell metacharacters
     `| & ; ( ) < >` (the split runs outside quotes — a real shell word
     splitter, not whitespace-only: `bash<<EOF`, `|bash`,
-    `cat<<EOF|bash` must split into shell words), quote-remove for the
-    compare; **any** word whose basename is in
+    `cat<<EOF|bash`, `b\ash` must split into shell words), quote- and
+    backslash-remove for the compare (bash strips `\`); **any** word
+    whose basename is in
     `bash sh zsh dash ksh` ⇒ `ok=false`. A word scan on purpose
     (over-approximate; `bash` as an ordinary argument also falls back)
     — the N2 bypasses and the R3-1 adjacent spellings all close.
@@ -2092,7 +2094,10 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     line + `EOF` line skips, byte-same; an operator-line comment
     (`rm -rf /tmp/x && cat <<'EOF' # note`) also falls back.
 78. Continuation guards (R1 P1-3; R2 N6): (i) `cat <<'EOF' \` +
-    newline + `&& rm -rf /tmp/y/*.log` skips; (ii) `rm -rf /tmp/x &&
+    newline + `&& rm -rf /tmp/y/*.log` skips, and the mutation-visible
+    twin `rm -rf /tmp/x ` + newline + `&& cat <<'EOF'` + body `{}` +
+    `EOF` skips too (modeling the continuation instead of guarding
+    would classify); (ii) `rm -rf /tmp/x &&
     cat <<E\` + newline + `OF` skips (word continuation); (iii) the
     positive twin — `rm -rf /tmp/x && cat <<'EOF'` + quoted body with
     backslash-newline plus `{}` — classifies (dedicated mutation:
@@ -2107,7 +2112,8 @@ render(events, allowance):                 # allowance = min(cap − others, 327
     pinned as a table — `bash`, `sh`, `zsh`, `dash`, `ksh`, `sudo
     bash`, `/bin/sh`, `cat <<'EOF' | bash`, `command bash`, `time
     bash`, `nice bash`, `nohup bash`, `sudo -u root bash`, `env -u X
-    bash`, `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash` —
+    bash`, `bash<<'EOF'`, `cat <<'EOF' |bash`, `cat<<'EOF'|bash`,
+    `b\ash <<'EOF'`, `\bash <<'EOF'`, `c\at <<'EOF' | b\ash` —
     each with body `rm -rf /tmp/y/*.log` (rule token + globs): all
     skip; a non-shell consumer (`rm -rf /tmp/x && node <<'EOF'` +
     body `const s = {};`) classifies (masking applies; §17.6
@@ -2143,7 +2149,8 @@ continuation guard inside single quotes (pin 78-iv); drop the
 shell-consumer guard (pin 79); narrow the shell scan back to the
 leading word only (pin 79's bypass table); tokenize on whitespace
 only, dropping the metacharacter split (pin 79's adjacent spellings);
-make bodies non-opaque in the quote map (pin 76); drop the `<<`
+drop the backslash removal in the consumer word compare (pin 79's
+escape spellings); make bodies non-opaque in the quote map (pin 76); drop the `<<`
 pre-filter (pin 85); stop matching rules in heredoc bodies / drop
 body scanning from `rmTargets` (pin 80); re-count skips in the
 breaker (pin 82); reset (instead of ignore)
@@ -2240,6 +2247,20 @@ formula (pin 84).
   command + dedicated mutation, the pin 79 node clause, two §17.3-A
   phrasings — folded in rev 4; R5 micro-verification requested for
   closure.
+- R5 (same reviewer, verification of rev 4): **CONFIRMED** — all four
+  P3 folds verified (pin 78-iii named command + dedicated mutation red;
+  pin 79 node clause now a discriminating pin, red under the
+  shell-set-addition mutation; the §17.3-A phrasings; the review-log
+  corrections); no new contradictions. **Design review closed.**
+- Implementation review (fresh reviewer; P1/P3 folds pre-applied):
+  P1 — backslash-escaped shell words (`b\ash`, `\bash`) bypassed the
+  consumer word scan (probe: classified while bash executes the body);
+  folded — the compare strips `\` like quotes; pin 79 extended, one
+  mutation added. P3 — pin 78-i's shape could not distinguish guarding
+  from modeling the continuation (mutation survived); a mutation-visible
+  twin added. Mutation matrix (reviewer runner): 20/22 pre-fold; `10b`
+  is outcome-equivalent (both paths fall back — recorded, not a gap).
+  Fresh verification pending.
 - R5 (same reviewer, verification of rev 4): **CONFIRMED** — all four
   P3 folds verified (pin 78-iii named command + dedicated mutation red;
   pin 79 node clause now a discriminating pin, red under the

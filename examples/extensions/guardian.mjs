@@ -352,7 +352,9 @@ export default function (api) {
 	const SHELL_CONSUMERS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 	const hasShellWord = (slice) => {
 		for (const raw of slice.split(/[\s|&;()<>]+/u)) {
-			const word = raw.replaceAll(/['"]/gu, "");
+			// §17 impl-review fold: bash quote removal strips backslash escapes
+			// too (`b\ash` resolves to `bash`) — the compare must not miss them.
+			const word = raw.replaceAll(/[\\'"]/gu, "");
 			if (word === "") continue;
 			const base = word.split("/").pop() ?? word;
 			if (SHELL_CONSUMERS.has(base)) return true;

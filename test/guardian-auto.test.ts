@@ -1049,7 +1049,8 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 
 	it("78: §17/D40 — continuation guards fall back; bodies and single quotes do not", async () => {
 		const guarded = [
-			`cat <<'EOF' ${CONT}&& rm -rf /tmp/y/*.log\nbody\nEOF`, // operator-line continuation
+			`cat <<'EOF' ${CONT}&& rm -rf /tmp/y/*.log\nbody\nEOF`, // (i) operator-line continuation
+			`rm -rf /tmp/x ${CONT}&& cat <<'EOF'\n{}\nEOF`, // (i-bis) mutation-visible twin
 			`rm -rf /tmp/x && cat <<E${CONT}OF\nconst o = {};\nEOF`, // word continuation
 		];
 		for (const command of guarded) {
@@ -1092,6 +1093,9 @@ describe("guardian auto mode (#guardian-auto-mode Phase A)", () => {
 			`sudo -u root bash <<'EOF'\n${body}\nEOF`,
 			`env -u X bash <<'EOF'\n${body}\nEOF`,
 			`bash<<'EOF'\n${body}\nEOF`,
+			`b\\ash <<'EOF'\n${body}\nEOF`,
+			`\\bash <<'EOF'\n${body}\nEOF`,
+			`c\\at <<'EOF' | b\\ash\n${body}\nEOF`,
 			`cat <<'EOF' |bash\n${body}\nEOF`,
 			`cat<<'EOF'|bash\n${body}\nEOF`,
 		];

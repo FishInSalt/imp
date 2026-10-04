@@ -1,8 +1,9 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.2 — owner answers folded.** Owner direction: minimal
-implementation; the port-based revisions are discarded as design input. R1
-findings are folded (rev 2.1); R2 verification is running.
+Status: **rev 2.3 — review closed; ready for implementation.** Owner
+direction: minimal implementation; the port-based revisions are discarded
+as design input. Owner decisions are settled (§9); R1 findings are folded
+(rev 2.1) and R2 confirmed the folds with two notes, applied in rev 2.3.
 
 - Worktree / branch: `imp-guardian2` / `design/guardian2`, base `main` (846b263).
 - Replaces guardian v1 (modes + classifier). v1 is deleted only after cutover
@@ -89,11 +90,13 @@ a string, pass through untouched):
    Audit.
 3. First `ask` rule whose regex matches → `confirm("allow this bash
    command?", <reason>, { sessionKey: "guardian2:session", rememberLabel:
-   "all guardian2 ask prompts this session" })`; `false` → block with the
-   reason (or "confirmation declined"). Audit the outcome. The shared
-   session key is v0's only memory: choosing the prompt's remember option
-   once stops every further ask prompt for the rest of the session ("allow
-   all this session"); deny rules are unaffected.
+   "all guardian2 ask prompts this session", preview: { kind: "command",
+   tool: "bash", text: command } })`; `false` → block with the reason (or
+   "confirmation declined"). Audit the outcome. The shared session key is
+   v0's only memory: choosing the prompt's remember option once stops every
+   further ask prompt for the rest of the session ("allow all this
+   session"); deny rules are unaffected. The `preview` shows the command in
+   the confirm picker — the human must see what they are approving.
 4. Otherwise → pass.
 
 - Precedence: **deny before ask**.
@@ -140,8 +143,10 @@ a string, pass through untouched):
   (confirm every bash call until fixed) is deliberately not taken: this is an
   opt-in heuristic gate, and v1's ask-everything degraded state was removed
   on purpose.
-- An internal error during evaluation → fresh confirmation (fail toward
-  asking — evaluation, unlike config loading, has unknown state).
+- An internal error during evaluation → fresh confirmation with **no
+  sessionKey** (fail toward asking — evaluation, unlike config loading, has
+  unknown state; a session-wide "stop asking" grant must not silently
+  auto-approve this fallback).
 
 ## 6. Phases
 
@@ -193,9 +198,9 @@ a string, pass through untouched):
    bad entry type; invalid regex; `g`/`y` flags rejected; reload recovers.
 2. Deny: first matching rule blocks; no confirm call; reason text (custom and
    default).
-3. Ask: confirm called with the reason + the shared `sessionKey` /
-   `rememberLabel` (pinned); approved → runs; declined → blocks;
-   string-shorthand rule works.
+3. Ask: confirm called with the reason, the shared `sessionKey` /
+   `rememberLabel`, and the command `preview` (all pinned); approved → runs;
+   declined → blocks; string-shorthand rule works.
 4. Pass: unmatched commands never confirm; non-bash tools pass untouched;
    non-string `command` passes; a quoted-text match (`git commit -m "… rm -rf
    …"`) **matches** (documents the raw-string limit, §1).
@@ -260,5 +265,9 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
   deferred until after P3; pass-through stays unaudited; the session-wide
   "stop asking" option added to ask prompts (shared sessionKey /
   rememberLabel).
+- rev 2.3 — R2 notes folded: the ask confirm carries the command `preview`
+  (the human must see what they approve); the internal-error fallback
+  confirm is keyless (a session-wide grant must not auto-approve it).
+  Review closed.
 - Owner decisions: settled (§9).
-- R2 (verification of this revision): pending.
+- R2 (verification): CONFIRMED WITH NOTES — folded in rev 2.3.

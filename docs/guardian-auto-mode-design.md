@@ -7,8 +7,8 @@ Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
 
 > **SUPERSEDED (2026-10-04).** guardian v1 and its host classify seam
 > (`api.classify`, the classify host, the user-input / gate-decision logs,
-> `verifiedUserContext`) were removed from the repo when guardian2 replaced
-> it — see `docs/guardian2-design.md` and the `chore/remove-guardian-v1`
+> `verifiedUserContext`) were removed from the repo when the rewritten gate
+> replaced it — see `docs/guardian-design.md` and the `chore/remove-guardian-v1`
 > commit. This document remains as the historical design record; nothing
 > below describes live code.
 

@@ -6,9 +6,9 @@ contract: module layout, signatures, exact diagnostics strings, conflict policy,
 test plan, and per-sub-milestone acceptance criteria.
 
 > **Note (2026-10-04).** guardian v1 (the §13 case study, `guardian.mjs`)
-> and its host classify seam were removed when guardian2 replaced it — the
+> and its host classify seam were removed when the rewritten gate replaced it — the
 > case study below is historical. The shipped gate example is
-> `examples/extensions/guardian2.mjs` (`docs/guardian2-design.md`), and the
+> `examples/extensions/guardian.mjs` (`docs/guardian-design.md`), and the
 > live `ExtensionApi` no longer carries `classify`
 > (`src/extensions/types.ts`).
 

@@ -614,10 +614,10 @@ export default function (api) {
 **Security**: extensions are code and run with your full permissions — the same
 posture as the agent itself. Check `.imp/extensions/` in repositories you
 didn't write, or run with `--no-extensions`. Case studies ship in
-`examples/extensions/`: `notes.mjs` (the API tour), `guardian2.mjs` (a
+`examples/extensions/`: `notes.mjs` (the API tour), `guardian.mjs` (a
 config-driven permission gate — wildcard/regex rules that deny or ask
 before a call runs, with file-scoped `write`/`edit` rules; config at
-`~/.imp/guardian2.json`, audited to `~/.imp/guardian2.log`), `notify.mjs`
+`~/.imp/guardian.json`, audited to `~/.imp/guardian.log`), `notify.mjs`
 (a macOS completion notification with sound), `task-timer.mjs` (a live
 per-run timer in the TUI footer, built on
 `run_start`/`run_end` + `setStatus`), `tool-colors.mjs` (a name-color theme

@@ -1,5 +1,5 @@
 {
-  "_comment": "guardian2 config — deny blocks, ask prompts, anything unmatched runs. Patterns are plain text where * matches anything (case-sensitive); use \"regex\" for full regular expressions. Entries target bash by default; add \"tool\" (write/edit) to guard file paths.",
+  "_comment": "guardian config — deny blocks, ask prompts, anything unmatched runs. Patterns are plain text where * matches anything (case-sensitive); use \"regex\" for full regular expressions. Entries target bash by default; add \"tool\" (write/edit) to guard file paths.",
   "deny": [
     "rm * ~",
     "rm * $HOME",

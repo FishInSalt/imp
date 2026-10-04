@@ -193,6 +193,26 @@ const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter 
  *  instantly, so deadlines clamp here instead of overflowing. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+/** #ask-timeout-countdown (design §12 D9): the ONE validated + clamped
+ *  deadline source — row visibility, initial text, countdown anchor and the
+ *  timeout timer all read this, so what is displayed can never diverge from
+ *  what is timed. Invalid values (non-finite / ≤ 0 / non-number) mean "no
+ *  deadline". */
+export function effectiveTimeoutMs(value: number | undefined): number | null {
+	return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, MAX_TIMER_MS) : null;
+}
+
+/** #ask-timeout-countdown (design §12 D11): `times out in …` duration text
+ *  for a REMAINING duration in milliseconds. The floor is 1 s (`0:01`): the
+ *  formatter structurally never emits `0:00`, independent of timer callback
+ *  ordering (D13). Minutes use floor/remainder — `0:60` is impossible. */
+export function countdownText(remainingMs: number): string {
+	const s = Math.max(1, Math.ceil(remainingMs / 1000));
+	if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+	if (s < 86400) return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+	return `${Math.floor(s / 86400)}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}h`;
+}
+
 /** #confirm-prompt (Phase 1 D2): the picker's key affordance, drawn inside the
  *  picker box because the editor hint row is blanked while a selector owns
  *  focus. The digit range is computed from the item count (D3 caps it at 9);
@@ -901,6 +921,10 @@ export class TuiShell implements LineInput {
 				this.pendingSelects.push(() => resolve(this.select(options)));
 			});
 		}
+		// #ask-timeout-countdown (design §12 D9): validated + clamped once;
+		// the countdown row, its initial text, the monotonic anchor and the
+		// timeout timer all read this single value.
+		const armedTimeoutMs = effectiveTimeoutMs(options.timeoutMs);
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked — the ORIGINAL index, so filtering (which hides
 		// rows) can never rewire what Enter resolves to.
@@ -946,6 +970,17 @@ export class TuiShell implements LineInput {
 		// render nothing (the helper returns "").
 		const previewHeader = renderCommandHeader(options.preview, this.options.toolColorResolver);
 		if (previewHeader !== "") box.addChild(new Text(previewHeader, 0, 0));
+		// #ask-timeout-countdown (design §12 D10): the countdown row sits after
+		// the preview and BEFORE the query row / blank spacer / list — the list
+		// must stay the last child for filterable pickers (applyFilter
+		// remove+appends it). The initial text is set at construction: an empty
+		// Text renders zero rows, and waiting for the first tick would pop the
+		// row in a second late (D12).
+		const countdownRow =
+			armedTimeoutMs === null
+				? null
+				: new Text(dim(`times out in ${countdownText(armedTimeoutMs)}`, true), 0, 0);
+		if (countdownRow !== null) box.addChild(countdownRow);
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;
 		const queryRow = new Text("", 0, 0);
@@ -962,12 +997,17 @@ export class TuiShell implements LineInput {
 		return new Promise<number | null | "timeout">((resolve) => {
 			let settled = false; // pick, cancel, timeout and close all funnel here — once
 			let timer: ReturnType<typeof setTimeout> | null = null;
+			let countdownTimer: ReturnType<typeof setInterval> | null = null;
 			const finish = (index: number | null | "timeout"): void => {
 				if (settled) return;
 				settled = true;
 				if (timer !== null) {
 					clearTimeout(timer); // manual answer/cancel and close all disarm the deadline
 					timer = null;
+				}
+				if (countdownTimer !== null) {
+					clearInterval(countdownTimer); // every settle path stops the ticks too
+					countdownTimer = null;
 				}
 				this.setSelector(null);
 				this.updatePlaceholder(); // the hint may come back with the picker gone
@@ -1065,12 +1105,28 @@ export class TuiShell implements LineInput {
 			// pick), resolving "timeout"; an answer arriving after the timer
 			// is inert (settled guard). unref: an armed deadline must not keep
 			// the process alive by itself.
-			const timeoutMs = options.timeoutMs;
-			if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-				// Clamp, never overflow: above the platform ceiling Node fires after
-				// ~1 ms, which would refuse every ask instantly.
-				timer = setTimeout(() => finish("timeout"), Math.min(timeoutMs, MAX_TIMER_MS));
+			// #ask-timeout-countdown (design §12 D12): the deadline timer is
+			// created BEFORE the countdown interval (pinned order); the
+			// formatter floor keeps `0:00` unreachable even if a tick were to
+			// win a same-tick race anyway.
+			if (armedTimeoutMs !== null) {
+				timer = setTimeout(() => finish("timeout"), armedTimeoutMs);
 				timer.unref?.();
+			}
+			if (armedTimeoutMs !== null && countdownRow !== null) {
+				// Monotonic anchor: a wall-clock step must never desync the text
+				// from the relative timeout timer (D11). Skip unchanged text —
+				// ≥1 h formats change once a minute (D12).
+				const deadline = performance.now() + armedTimeoutMs;
+				let lastText = countdownText(armedTimeoutMs);
+				countdownTimer = setInterval(() => {
+					const text = countdownText(deadline - performance.now());
+					if (text === lastText) return;
+					lastText = text;
+					countdownRow.setText(dim(`times out in ${text}`, true));
+					tui.requestRender();
+				}, 1000);
+				countdownTimer.unref?.();
 			}
 		});
 	}

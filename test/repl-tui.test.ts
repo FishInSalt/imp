@@ -22,7 +22,7 @@ import { Fold } from "../src/repl/components/fold.js";
 import { SectionRule } from "../src/repl/components/section-rule.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { replaySession } from "../src/repl/replay.js";
-import { type AutocompleteOptions, TuiShell } from "../src/repl/shell.js";
+import { type AutocompleteOptions, countdownText, effectiveTimeoutMs, TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import {
@@ -1257,6 +1257,9 @@ describe("M9-2 review regressions", () => {
 			await expect(chosen).resolves.toBe(0);
 			await settle(0);
 		}
+		// #ask-timeout-countdown: invalid values arm nothing — no countdown row
+		// can have rendered across any of the pickers above.
+		expect(terminal.frameSince(0)).not.toContain("times out in");
 		shell.close();
 	});
 
@@ -1352,6 +1355,125 @@ describe("M9-2 review regressions", () => {
 		const mark = terminal.writes.length; // post-timeout writes only
 		await settle();
 		expect(terminal.frameSince(mark)).not.toContain("→ 1. Yes"); // the picker died with the deadline
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: format boundaries (pure function)", () => {
+		const cases: Array<[number, string]> = [
+			[600000, "10:00"],
+			[59999, "1:00"],
+			[60000, "1:00"],
+			[61000, "1:01"],
+			[3599999, "1h 00m"],
+			[3600000, "1h 00m"],
+			[3661000, "1h 01m"],
+			[86399000, "23h 59m"],
+			[86400000, "1d 00h"],
+			[2147483647, "24d 20h"],
+			[0, "0:01"],
+			[-5000, "0:01"],
+		];
+		for (const [ms, want] of cases) {
+			expect(countdownText(ms)).toBe(want);
+		}
+	});
+
+	it("#ask-timeout-countdown: effectiveTimeoutMs is the single validated source", () => {
+		expect(effectiveTimeoutMs(undefined)).toBeNull();
+		expect(effectiveTimeoutMs(0)).toBeNull();
+		expect(effectiveTimeoutMs(-5)).toBeNull();
+		expect(effectiveTimeoutMs(Number.NaN)).toBeNull();
+		expect(effectiveTimeoutMs(Number.POSITIVE_INFINITY)).toBeNull();
+		expect(effectiveTimeoutMs("500" as unknown as number)).toBeNull();
+		expect(effectiveTimeoutMs(2147483648)).toBe(2147483647);
+		expect(effectiveTimeoutMs(600000)).toBe(600000);
+	});
+
+	it("#ask-timeout-countdown: the opening frame shows the full deadline and ticks down", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("times out in 10:00"); // opening frame, not a late pop-in
+		await frameContains({ terminal }, "times out in 9:59", 3000);
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		const mark = terminal.writes.length;
+		await settle();
+		expect(terminal.frameSince(mark)).not.toContain("times out in"); // the row left with the picker
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: no deadline renders no row (plain picker, rendered)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const plain = shell.select({ items: [{ label: "a" }] });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control: the picker rendered
+		expect(terminal.frameSince(0)).not.toContain("times out in");
+		terminal.data("\r");
+		await expect(plain).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: a timed-out picker never shows 0:00 and the ticks die with it", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 1000 });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("times out in 0:01");
+		await expect(chosen).resolves.toBe("timeout");
+		expect(terminal.frameSince(0)).not.toContain("times out in 0:00"); // lifetime history — structurally unreachable
+		const mark = terminal.writes.length;
+		await settle(1200); // past several ticks: the interval was cleared in finish
+		expect(terminal.frameSince(mark)).not.toContain("times out in");
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: close() disarms the countdown with the deadline", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("times out in 10:00");
+		shell.close();
+		await expect(chosen).resolves.toBe(null);
+		const mark = terminal.writes.length;
+		await settle(1200);
+		expect(terminal.frameSince(mark)).not.toContain("times out in");
+	});
+
+	it("#ask-timeout-countdown: a filterable picker keeps the row above the filter, list still last", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			items: [{ label: "alpha" }, { label: "beta" }],
+			filterable: true,
+			timeoutMs: 600000,
+		});
+		await settle(0);
+		terminal.data("a"); // refilter: the list rebuilds via remove+append
+		await settle();
+		const frame = terminal.frameSince(0);
+		expect(frame).toContain("filter: a");
+		expect(frame).toContain("times out in 10:00");
+		const lines = frame.split("\n");
+		const countdownAt = lines.findIndex((line) => line.includes("times out in 10:00"));
+		const filterAt = lines.findIndex((line) => line.includes("filter: a"));
+		const lastRowAt = lines.reduce(
+			(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+			-1,
+		);
+		expect(countdownAt).toBeGreaterThanOrEqual(0);
+		expect(filterAt).toBeGreaterThan(countdownAt); // D10 slot: countdown above the query row
+		expect(lastRowAt).toBeGreaterThan(filterAt); // refiltered list stays last
+		terminal.data("\x1b"); // cancel
+		await expect(chosen).resolves.toBeNull();
 		shell.close();
 	});
 

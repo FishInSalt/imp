@@ -1,0 +1,19 @@
+{
+  "_comment": "guardian2 config template — copy to ~/.imp/guardian2.json, edit, then /guardian2 reload. deny rules block a bash command outright; ask rules prompt the human; anything unmatched runs (the default is allow). Patterns are JavaScript regex sources; flags may not contain g or y.",
+  "deny": [
+    {
+      "pattern": "\\brm\\b[^\\n]*(~(/|\\s|$)|\\$\\{?HOME\\}?)",
+      "reason": "deleting under the home directory is never allowed — hand this to the human"
+    }
+  ],
+  "ask": [
+    {
+      "pattern": "\\bsudo\\b",
+      "reason": "running as root — do it as the normal user, or hand the privileged step to the human"
+    },
+    {
+      "pattern": "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))",
+      "reason": "force push rewrites shared history — push normally, or coordinate the rewrite first (--force-with-lease is the guarded variant)"
+    }
+  ]
+}

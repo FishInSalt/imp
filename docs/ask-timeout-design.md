@@ -1,7 +1,7 @@
 # #ask-timeout — 交互确认超时（设计 r4）
 
 - 日期：2026-10-04
-- 状态：**r5.1 — §12 r5 短评审（NEEDS-FIXES，5×P2+5×P3）已全折；待复核**；r4.3 实现已合并并现场验收（见 PROJECT_PLAN）
+- 状态：**r5.2 — §12 r5 短评审已复核 CONFIRMED（两条非阻断注已折）；待实现**；r4.3 实现已合并并现场验收（见 PROJECT_PLAN）
 - 关联：`#guardian`（驱动方）、`#confirm-prompt`（承载界面）
 
 ## 1. 背景与目标
@@ -152,7 +152,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **F4（P3）** → 本节状态与评审记录修正（本条目）；
   - **F5（P3）** → `countdownText` 非有限输入防御（→ `0:01`）+ 单测。
   - **复核：APPROVE**（F1-F5 逐条核实含变异复测——F1 钉对"行加在列表后"变异双向抓获；F3 钉对泄漏变异抓获；两处 P3 文字修正已折入 D14）。
-- **§12 r5 短评审（独立对抗，commit 1ec0867）：NEEDS-FIXES**（5×P2+5×P3：gap 算术未钉、形状钉测不出右对齐、负例/回归钉在 r5 下变钝、多行标题腐蚀帧、组件契约测试缺失、显示条件双条件未写明、测试构造细节、措辞）→ r5.1 全折（D10 算术与拍平定稿；D14 含组件契约单测、endsWith 形状钉、带标题负例、长标题回归钉）→ 复核待。
+- **§12 r5 短评审（独立对抗，commit 1ec0867）：NEEDS-FIXES**（5×P2+5×P3：gap 算术未钉、形状钉测不出右对齐、负例/回归钉在 r5 下变钝、多行标题腐蚀帧、组件契约测试缺失、显示条件双条件未写明、测试构造细节、措辞）→ r5.1 全折（D10 算术与拍平定稿；D14 含组件契约单测、endsWith 形状钉、带标题负例、长标题回归钉）→ **复核 CONFIRMED**（数值与钉子可实施性逐项实测；两处非阻断注——`dim(…, true)`、形状钉取首行——已折）。
 - **r3 实现评审（独立，只读；commit 5d8a9c8）：NEEDS-FIXES** → 已折叠：
   - **P2#1（计时上限）** → 宿主 `Math.min(timeoutMs, 2^31-1)` 钳位（S8/§5）+ guardian 配置拒绝 `> 2147483647`（§6）；测试：超上限不瞬发、手动答复仍胜（repl-tui）、上限接受 / 超界报错（guardian）。
   - **P3#2（stdin end 缺口）** → repl-tui 补测（armed + `process.stdin.emit("end")` → `null`）。
@@ -171,13 +171,13 @@ owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩�
 **r5 owner UI 修订（现场验收后提出，取代 r4.3 的独立行形态）**：① 去掉 `times out in` 前缀——倒计时本身即语义（裸时间）；② 挪到**问题标题行的右侧**（右对齐）。r4 的独立行槽位删除；无超时 picker 的渲染及其字节钉不变（超时态的旧倒计时钉随本修订重写）。
 
 - **D9 展示条件与单一来源**（不变）：仅当 `timeoutMs` 为合法正值（有限、> 0）才显示；实现为**一个** helper `effectiveTimeoutMs(options.timeoutMs): number | null`（含 `Math.min(…, 2^31-1)` 钳位），可见性、初始文本、deadline、timeout 定时器全部取自它。helper 单测：0 / 负 / NaN / `"500"` / Infinity → null；2147483648 → 2147483647（钳位）；600000 → 原样。
-- **D10 位置与形态（r5）**：新增宽度感知组件 `TitleCountdown`（`src/repl/components/title-countdown.ts`，`implements Component`；契约同 SectionRule：`invalidate()`（无缓存，no-op）+ `render(width)`）：**单行** = 左侧标题 + 右侧裸倒计时，右端对齐到与 SectionRule 相同的容器宽度（同一 Container 的兄弟子项，pi-tui 把同一 width 传给每个子项——右缘可对齐，评审核实）。**算术定稿（评审 P2-1/P3-6）**：`right = dim(countdown)`（ASCII 文本）；`rightWidth = visibleWidth(right)`；正常分支（`width ≥ rightWidth + 1`）：`leftBudget = width − rightWidth − 1`；`left = visibleWidth(title) ≤ leftBudget ? title : truncateToWidth(title, leftBudget, "…")`；`gap = width − visibleWidth(left) − rightWidth`（自动 ≥ 1）；`line = left + " ".repeat(gap) + right`。退化分支（`width < rightWidth + 1`）：`left = ""`、`right = truncateToWidth(right, width, "…")`——行**永不超宽**。**禁用基于 `.length` 或预算的补空格**（`truncateToWidth` 对 CJK 会欠宽——`"界"×30` 截到 34 实宽 33——只有 `visibleWidth` 参与算术）；`visibleWidth(line) ≤ width` 在所有分支成立且正常分支 = width（TUI 对超宽行会抛错——这是崩溃防护，不只是对齐）。**左标题先拍平**：`sanitizeDisplay(title)` + 换行折叠为空格再进布局（多行标题原本由 Text 折行处理；单行组件必须自己拍平——`\n` 零宽会溜过 TUI 超宽检查却腐蚀行结构，评审 P2-5）。标题截断而非折行（仅超时态；非超时仍走 Text 折行）。**显示条件 = 合法 `timeoutMs` 且非空标题**（`api.confirm(message)` 可为空串；无标题不生成孤立右对齐数字；deadline 照常计时——评审 P3-7）。排队中的问题没有倒计时（未打开，与 D7 一致）。同步：`SelectOptions.timeoutMs` JSDoc、`docs/confirm-prompt-design.md` 回链、CHANGELOG 改"标题行右侧"；实现时重写 `shell.ts` 旧独立行注释（:974-984/:1127 语义过时）。
+- **D10 位置与形态（r5）**：新增宽度感知组件 `TitleCountdown`（`src/repl/components/title-countdown.ts`，`implements Component`；契约同 SectionRule：`invalidate()`（无缓存，no-op）+ `render(width)`）：**单行** = 左侧标题 + 右侧裸倒计时，右端对齐到与 SectionRule 相同的容器宽度（同一 Container 的兄弟子项，pi-tui 把同一 width 传给每个子项——右缘可对齐，评审核实）。**算术定稿（评审 P2-1/P3-6）**：`right = dim(countdown, true)`（ASCII 文本；强制样式不随 TTY 探测——与 SectionRule/affordance 同惯例）；左侧保持原字重；有超时时组件取代原 `Text(options.title)` 子项，tick 走 `setRight`。`rightWidth = visibleWidth(right)`；正常分支（`width ≥ rightWidth + 1`）：`leftBudget = width − rightWidth − 1`；`left = visibleWidth(title) ≤ leftBudget ? title : truncateToWidth(title, leftBudget, "…")`；`gap = width − visibleWidth(left) − rightWidth`（自动 ≥ 1）；`line = left + " ".repeat(gap) + right`。退化分支（`width < rightWidth + 1`）：`left = ""`、`right = truncateToWidth(right, width, "…")`——行**永不超宽**。**禁用基于 `.length` 或预算的补空格**（`truncateToWidth` 对 CJK 会欠宽——`"界"×30` 截到 34 实宽 33——只有 `visibleWidth` 参与算术）；`visibleWidth(line) ≤ width` 在所有分支成立且正常分支 = width（TUI 对超宽行会抛错——这是崩溃防护，不只是对齐）。**左标题先拍平**：`sanitizeDisplay(title)` + 换行折叠为空格再进布局（多行标题原本由 Text 折行处理；单行组件必须自己拍平——`\n` 零宽会溜过 TUI 超宽检查却腐蚀行结构，评审 P2-5）。标题截断而非折行（仅超时态；非超时仍走 Text 折行）。**显示条件 = 合法 `timeoutMs` 且非空标题**（`api.confirm(message)` 可为空串；无标题不生成孤立右对齐数字；deadline 照常计时——评审 P3-7）。排队中的问题没有倒计时（未打开，与 D7 一致）。同步：`SelectOptions.timeoutMs` JSDoc、`docs/confirm-prompt-design.md` 回链、CHANGELOG 改"标题行右侧"；实现时重写 `shell.ts` 旧独立行注释（:974-984/:1127 语义过时）。
 - **D11 文本（r5）**：裸 `M:SS` / `Hh MMm` / `Dd HHh`——算法不变：`s = max(1, ceil((deadline - now) / 1000))`（下限 1 秒，见 D13）；`s < 3600` → `M:SS`（`10:00`、`0:59`）；`3600 ≤ s < 86400` → `Hh MMm`（`1h 00m`、`23h 59m`）；否则 `Dd HHh`（`1d 00h`、`24d 20h`）；floor/余数杜绝 `0:60`；打开瞬间完整期限；`performance.now()` 单调锚。前缀删除。
 - **D12 更新机制与装载顺序**（机制不变；更新目标 = `setRight`）：1s interval，`unref?.()`；每 tick 重算，文本不变则跳过 `setRight`/重绘（≥1h 格式每分钟才变）。**顺序硬约束**：① `effectiveTimeoutMs` 只算一次；② timeout 定时器先于 interval；③ 初始右侧文本在**构建组件时即携带**（开局帧即有）；④ `finish` 漏斗同时清 interval 与定时器——答复/取消/超时/close/SIGINT/stdin-end 全路径覆盖。
 - **D13 边界**：**裸文本的 `0:00` 结构性不可达**——formatter 下限恒 1 秒（剩余 ≤ 0 也只输出 `0:01`），不依赖同刻回调顺序；断言用词界（`\b0:00\b` 不会命中 `10:00` 内的子串）。拆除后无后续重绘；readline/print 无 select 面；颜色仍 dim-only。
 - **D14 测试（r5.1）**：
   - **组件契约单测（直接 render，SectionRule 先例——评审 P3-6）**：短标题适配；长 ASCII 截断（`…`、右段完整）；长 CJK（`"界"×30` 预算 34 → 实宽 33——gap 必须按 `visibleWidth` 算）；宽度扫 0…rightWidth+2（`visibleWidth(line) ≤ width` 恒成立、正常分支 = width）；**多行标题被拍平**（`"a\nb"` 不产生含 `\n` 的行——评审 P2-5）。
-  - 形状钉：timeout picker 的开局帧中，含标题的行（剥离 ANSI、**不 trim**）`endsWith(倒计时文本)` 且 `visibleWidth(line) === visibleWidth(分隔线行)`——`endsWith` 抓"左拼再补空格"的假实现（尾随空格会使其为假），宽度等式抓右缘；标题匹配用 `startsWith(title)` + 尾部 `/\s\d+:\d\d$/`（标题含正则元字符则不直接拼 regex——评审 P2-2/P3-8）。
+  - 形状钉：timeout picker 的开局帧中，取**首个** `startsWith(title)` 的行（后续 tick 会重写同一行，需取开局帧；剥离 ANSI、**不 trim**）`endsWith(倒计时文本)` 且 `visibleWidth(line) === visibleWidth(分隔线行)`——`endsWith` 抓"左拼再补空格"的假实现（尾随空格会使其为假），宽度等式抓右缘；标题匹配用 `startsWith(title)` + 尾部 `/\s\d+:\d\d$/`（标题含正则元字符则不直接拼 regex——评审 P2-2/P3-8）。
   - 递减钉：轮询标题行尾出现 `9:\d\d`（5s 预算；毫秒精度不钉——首 tick 被负载推迟会直接跳值）。
   - 截断钉：窄宽度（如 40 列）+ 长标题 + timeoutMs → 标题行含 `…`、右段完整、单行。
   - 负例（**带标题**——评审 P2-3）：无 `timeoutMs`（渲染后）与 §8-7 非法值（渲染后）的**有标题** picker：其标题行（trimEnd 后）不匹配 `/\s\d+:\d\d$/`；另设一个**无标题 + timeoutMs** 负例：整个帧无倒计时（无孤儿数字）。

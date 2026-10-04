@@ -211,7 +211,7 @@ untouched):
   (a symlink into a branch worktree breaks when that branch switches). Write
   `~/.imp/guardian.json`, run live probes, observe. Archive v1's log (rename
   it away before any rename of v2 to avoid collisions).
-- **P3 deletion batch** (after P2 observation): on `main` — delete
+- **P3 deletion batch** (after P2 observation): on `main` — delete v1's
   `examples/extensions/guardian.mjs`, `test/guardian.test.ts`,
   `test/guardian-auto.test.ts`, `test/guardian-auto-host.test.ts`,
   `test/classify-seam.test.ts`, `src/repl/classify.ts` and the seam plumbing

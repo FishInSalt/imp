@@ -61,8 +61,10 @@ export interface SelectOptions {
 	 *  resolves "timeout" when the deadline passes unanswered. Positive
 	 *  finite numbers only; anything else means no deadline (values beyond
 	 *  the platform timer ceiling clamp to it). With a deadline set and a
-	 *  non-empty title, the title line carries a dim, right-aligned bare
-	 *  countdown (e.g. `10:00`); titleless pickers show none. Only the
+	 *  title that flattens to something, the question line carries the dim
+	 *  parenthesized bare countdown right next to it (e.g.
+	 *  `allow this bash command? (9:59)`); empty and whitespace-only titles
+	 *  show none. Only the
 	 *  confirm path sets it. */
 	timeoutMs?: number;
 	items: SelectItemOption[];

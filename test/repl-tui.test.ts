@@ -1661,7 +1661,7 @@ describe("M9-2 review regressions", () => {
 			expect(line).not.toContain("\n");
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			if (width >= 6) expect(visibleWidth(line)).toBe(width);
-			else expect(stripAnsi(line)).not.toContain("allow"); // degenerate: the title is dropped (review P3-4)
+			else expect(stripAnsi(line)).toBe(stripAnsi(new TitleCountdown("", "10:00").render(width)[0] ?? "")); // degenerate: identical to the empty-title render (review P3-4)
 		}
 	});
 

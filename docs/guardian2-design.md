@@ -246,7 +246,8 @@ untouched):
   (`design-extension-model-access.bundle`) and deleted; merged guardian
   branches and the `imp-guardian2` / `imp-main` worktrees removed; the main
   repo returned to `main`; `~/.imp/guardian.json` deleted. Independent
-  implementation review: APPROVE WITH CORRECTIONS → all folds applied.
+  implementation review: APPROVE WITH CORRECTIONS → all folds applied →
+  CONFIRMED (re-verify round).
 
 ## 7. Tests (P1, red-first)
 
@@ -335,7 +336,7 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
   P3/P4 removal landed (`chore/remove-guardian-v1`). Independent
   implementation review of the removal: APPROVE WITH CORRECTIONS (README
   dangling reference; `temperature` / `workOrder` leftovers) → all folds
-  applied.
+  applied → CONFIRMED (re-verify round).
 
 - rev 2.7 — R5 folds: wildcard matching is a linear segment matcher now
   (no catastrophic backtracking; the `regex` escape hatch keeps the accepted

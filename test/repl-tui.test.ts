@@ -1517,6 +1517,36 @@ describe("M9-2 review regressions", () => {
 		shell.close();
 	});
 
+	it("#ask-timeout-countdown: the tick skips unchanged text (>=1h format: one repaint, then quiet)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({
+			title: "allow this bash command?",
+			items: [{ label: "a" }],
+			timeoutMs: 7200000,
+		});
+		await settle();
+		// The 2 h format rolls once (2h 00m -> 1h 59m) at the first tick, then the
+		// text is stable for a minute. The skip guard must hold setRight back —
+		// note the differential renderer writes nothing for an unchanged frame,
+		// so the write count cannot see a guard-less mutant; the spy can.
+		const spy = vi.spyOn(TitleCountdown.prototype, "setRight");
+		try {
+			const start = Date.now();
+			while (!terminal.frameSince(0).includes("(1h 59m)") && Date.now() - start < 5000) await settle(15);
+			expect(terminal.frameSince(0)).toContain("(1h 59m)");
+			const calls = spy.mock.calls.length;
+			await settle(2400); // two more ticks
+			expect(spy.mock.calls.length).toBe(calls); // unchanged text -> no setRight
+		} finally {
+			spy.mockRestore();
+		}
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
 	it("#ask-timeout-countdown: close() disarms the countdown with the deadline", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();

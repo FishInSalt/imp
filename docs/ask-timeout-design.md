@@ -159,7 +159,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
 owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩余时间提醒。
 **纯宿主展示层**——guardian / 扩展 API / 配置格式零变更（`timeoutMs` 已在 §2 定义）。
 
-- **D9 展示条件与单一来源**：仅当 `timeoutMs` 为合法正值（有限、> 0）才显示；实现为**一个** helper `effectiveTimeoutMs(options.timeoutMs): number | null`（含 `Math.min(…, 2^31-1)` 钳位），行可见性、初始文本、deadline、timeout 定时器全部取自它——显示的与计时的不可能公式分岔。helper 用 §8-7 的非法值清单（0 / 负 / NaN / `"500"` / Infinity / 2^31+5000）单测。无期限 = 无此行（无期限 picker 的字节钉全部不变）。
+- **D9 展示条件与单一来源**：仅当 `timeoutMs` 为合法正值（有限、> 0）才显示；实现为**一个** helper `effectiveTimeoutMs(options.timeoutMs): number | null`（含 `Math.min(…, 2^31-1)` 钳位），行可见性、初始文本、deadline、timeout 定时器全部取自它——显示的与计时的不可能公式分岔。helper 单测：0 / 负 / NaN / `"500"` / Infinity → null；2147483648 → 2147483647（钳位）；600000 → 原样。无期限 = 无此行（无期限 picker 的字节钉全部不变）。
 - **D10 位置**：dim 单行（`dim(text, true)`），置于 preview 行之后、filter 查询行 / 编号 Spacer(1) / 列表**之前**（`shell.ts` 装箱点：preview ~:948 → 本行 → 查询行 ~:951 / Spacer ~:959 → List ~:960）。filterable picker 的列表必须保持最后一个子元素（`applyFilter` remove+append，列表之后的行会被重排到上方）；编号 picker 的 query 为 null、affordance 在列表后不受影响。**修订 `docs/confirm-prompt-design.md` 的 D5 位置规则**：timeout picker 在 preview 与空行之间多一行倒计时，空行仍紧贴 items 上方（向该文档回加一行指向本节）。排队中的问题没有倒计时（未打开，与 D7 一致）。`SelectOptions.timeoutMs` JSDoc 补一句"设置了就在 picker 里显示倒计时行"。
 - **D11 文本与算法定稿**：`times out in <剩余>`。`s = max(1, ceil((deadline - now) / 1000))`（**下限 1 秒**，见 D13），然后：
   - `s < 3600` → `m = floor(s/60)`, `ss = s % 60` → `M:SS`（`10:00`、`0:59`）；
@@ -171,7 +171,7 @@ owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩�
 - **D14 测试（r4.1 补全）**：
   - 负例：无 `timeoutMs` 的普通 picker（渲染后）帧历史**不含** `times out in`；§8-7 非法值循环后同样断言不含；
   - 开局帧即含 `times out in 10:00`（timeoutMs 600000）；约 1 秒后含 `9:59`（用 `frameContains` 轮询，勿固定 settle 单次）；
-  - 格式纯函数单测（导出 `countdownText`）：600000→`10:00`、59999→`1:00`、60000→`1:00`、61000→`1:01`、3599999→`1h 00m`、3600000→`1h 00m`、3661000→`1h 01m`、86399000→`23h 59m`、86400000→`1d 00h`、钳位上限 2147483647→`24d 20h`、0/负数→`0:01`（下限）；
+  - 格式纯函数单测（导出 `countdownText(remainingMs)`，入参 = 剩余毫秒）：600000→`10:00`、59999→`1:00`、60000→`1:00`、61000→`1:01`、3599999→`1h 00m`、3600000→`1h 00m`、3661000→`1h 01m`、86399000→`23h 59m`、86400000→`1d 00h`、钳位上限 2147483647→`24d 20h`、0/负数→`0:01`（下限）；
   - `effectiveTimeoutMs` 单测：非法值清单 → null；2147483648 → 2147483647；正常值原样；
-  - 生命周期：答复 / 超时（短期限如 1200ms） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；
+  - 生命周期：答复 / 超时（短期限取 1000ms 整秒——tick 与到期同刻的路径也在其中；契约钉仍是纯函数 0/负数→`0:01`） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；
   - filterable + timeoutMs：行在列表上方；输入过滤字符重排后仍在列表上方（扩展既有 :906-931 用例）。

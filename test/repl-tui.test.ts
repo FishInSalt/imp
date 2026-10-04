@@ -15,6 +15,7 @@ import { taskPresentation } from "../src/core/tools/presentation.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { type LoadedExtensions, loadExtensions } from "../src/extensions/loader.js";
 import type { RegisteredExtensionCommand } from "../src/extensions/types.js";
+import { dim } from "../src/format.js";
 import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
@@ -1276,7 +1277,7 @@ describe("M9-2 review regressions", () => {
 		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control
 		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.trimEnd()).toBe(
 			"allow this bash command?",
-		); // no time tail on an invalid deadline
+		); // no time tail on an invalid deadline (the plain Text row pads to the box — trimEnd is normal here)
 		terminal.data("\r");
 		await expect(rendered).resolves.toBe(0);
 		// Titleless + a valid deadline: no orphan countdown row either (r6).
@@ -1389,6 +1390,7 @@ describe("M9-2 review regressions", () => {
 			[59999, "1:00"],
 			[60000, "1:00"],
 			[61000, "1:01"],
+			[59000, "0:59"],
 			[3599999, "1h 00m"],
 			[3600000, "1h 00m"],
 			[3661000, "1h 01m"],
@@ -1469,14 +1471,21 @@ describe("M9-2 review regressions", () => {
 		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control: the picker rendered
 		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.trimEnd()).toBe(
 			"allow this bash command?",
-		);
+		); // no tail; the row still shows the plain Text padding
+		const rule = terminal
+			.frameSince(0)
+			.split("\n")
+			.find((l) => l.includes("─"));
+		expect(visibleWidth(firstTitleLine(terminal.frameSince(0), "allow this bash command?") ?? "")).toBe(
+			visibleWidth(rule ?? ""),
+		); // padded to the box width exactly like the rule (plain Text, not the component)
 		terminal.data("\r");
 		await expect(plain).resolves.toBe(0);
 		shell.close();
 	});
 
 	it("#ask-timeout-countdown: titles that flatten to empty carry no countdown (no orphan tail)", async () => {
-		for (const title of ["   ", "\x1b[2K", "\u200b"]) {
+		for (const title of ["   ", "\x1b[2K", "\u200b", "\u0301", "\u2060"]) {
 			const { terminal, shell } = makeShell();
 			shell.start();
 			await settle(0);
@@ -1548,6 +1557,14 @@ describe("M9-2 review regressions", () => {
 			terminal.data("\r");
 			await expect(chosen).resolves.toBe(0);
 			expect(clearSpy.mock.calls.some((call) => call[0] === handle)).toBe(true);
+			// D14: a titleless timed picker arms NO interval — there is no
+			// component to repaint (the deadline timer still fires).
+			const afterTitled = setSpy.mock.calls.length;
+			const titleless = shell.select({ items: [{ label: "b" }], timeoutMs: 600000 });
+			await settle();
+			expect(setSpy.mock.calls.length).toBe(afterTitled);
+			terminal.data("\r");
+			await expect(titleless).resolves.toBe(0);
 			shell.close();
 		} finally {
 			setSpy.mockRestore();
@@ -1656,6 +1673,14 @@ describe("M9-2 review regressions", () => {
 		expect(visibleWidth(raw)).toBe(40);
 	});
 
+	it("#ask-timeout-countdown: TitleCountdown — degenerate clip: clip first, style after (raw bytes)", () => {
+		const raw = new TitleCountdown("x", "9:59").render(5)[0] ?? "";
+		// The ellipsis lives INSIDE the dim span (D10: 先裁后样式) — a
+		// clip-after-dim mutant changes these bytes.
+		expect(raw).toBe(dim(truncateToWidth("(9:59)", 5, "…"), true));
+		expect(stripAnsi(raw).endsWith("…")).toBe(true);
+	});
+
 	it("#ask-timeout-countdown: TitleCountdown — wide glyphs: one-column shortfall allowed, never over", () => {
 		// "界"×30 truncates to 31 columns at budget 32 (odd budgets cannot fill
 		// with width-2 glyphs) — line = 31 + space + "(10:00)" = 39 ≤ 40.
@@ -1686,6 +1711,10 @@ describe("M9-2 review regressions", () => {
 				// empty-title render.
 				expect(stripAnsi(line)).toBe(stripAnsi(new TitleCountdown("", "10:00").render(width)[0] ?? ""));
 			} else {
+				if (width === parenWidth + 1) {
+					// budget == 0: the title is dropped with NO leading space (D10).
+					expect(stripAnsi(line)).toBe("(10:00)");
+				}
 				expect(stripAnsi(line).endsWith("(10:00)")).toBe(true); // the time stays whole
 				// Above the natural width the line stays at natural width — the
 				// r6 no-pad beat: a pad/right-align mutant grows it to `width`.

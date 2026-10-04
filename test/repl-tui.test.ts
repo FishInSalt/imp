@@ -1430,6 +1430,7 @@ describe("M9-2 review regressions", () => {
 		const titleLine = firstTitleLine(frame, "allow this bash command?");
 		expect(titleLine).toBeDefined();
 		expect(titleLine?.endsWith("10:00")).toBe(true); // untrimmed right edge: no trailing pad
+		expect(terminal.writes.join("")).toContain("\x1b[2m10:00\x1b[0m"); // forced dim (non-TTY too — review P3-3)
 		const rule = frame.split("\n").find((line) => line.includes("─"));
 		expect(visibleWidth(titleLine ?? "")).toBe(visibleWidth(rule ?? "")); // same right edge as the rule
 		// The countdown contract is "it ticks down", not millisecond precision: a
@@ -1660,6 +1661,7 @@ describe("M9-2 review regressions", () => {
 			expect(line).not.toContain("\n");
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			if (width >= 6) expect(visibleWidth(line)).toBe(width);
+			else expect(stripAnsi(line)).not.toContain("allow"); // degenerate: the title is dropped (review P3-4)
 		}
 	});
 

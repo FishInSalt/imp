@@ -195,7 +195,7 @@ const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter 
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** #ask-timeout-countdown (design §12 D9): the ONE validated + clamped
- *  deadline source — row visibility, initial text, countdown anchor and the
+ *  deadline source — countdown visibility, initial text, countdown anchor and the
  *  timeout timer all read this, so what is displayed can never diverge from
  *  what is timed. Invalid values (non-finite / ≤ 0 / non-number) mean "no
  *  deadline". */
@@ -203,10 +203,11 @@ export function effectiveTimeoutMs(value: number | undefined): number | null {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, MAX_TIMER_MS) : null;
 }
 
-/** #ask-timeout-countdown (design §12 D11): `times out in …` duration text
- *  for a REMAINING duration in milliseconds. The floor is 1 s (`0:01`): the
- *  formatter structurally never emits `0:00`, independent of timer callback
- *  ordering (D13). Minutes use floor/remainder — `0:60` is impossible. */
+/** #ask-timeout-countdown (design §12 D11/r5): bare duration text (`M:SS` /
+ *  `Hh MMm` / `Dd HHh`) for a REMAINING duration in milliseconds. The floor
+ *  is 1 s (`0:01`): the formatter structurally never emits `0:00`, independent
+ *  of timer callback ordering (D13). Minutes use floor/remainder — `0:60` is
+ *  impossible. */
 export function countdownText(remainingMs: number): string {
 	if (!Number.isFinite(remainingMs)) return "0:01"; // defensive; the single source never passes non-finite input
 	const s = Math.max(1, Math.ceil(remainingMs / 1000));
@@ -924,8 +925,8 @@ export class TuiShell implements LineInput {
 			});
 		}
 		// #ask-timeout-countdown (design §12 D9): validated + clamped once;
-		// the countdown row, its initial text, the monotonic anchor and the
-		// timeout timer all read this single value.
+		// the title-line countdown, its initial text, the monotonic anchor and
+		// the timeout timer all read this single value.
 		const armedTimeoutMs = effectiveTimeoutMs(options.timeoutMs);
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked — the ORIGINAL index, so filtering (which hides

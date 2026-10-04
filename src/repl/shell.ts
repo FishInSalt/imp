@@ -21,7 +21,7 @@ import {
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
 import { SectionRule } from "./components/section-rule.js";
-import { TitleCountdown } from "./components/title-countdown.js";
+import { flattenTitle, TitleCountdown } from "./components/title-countdown.js";
 import { activityCount, activityText, renderCommandHeader, ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
@@ -951,15 +951,18 @@ export class TuiShell implements LineInput {
 		// the title tag; the name now rides here). Unconditional: every picker box
 		// gets the rule, unattributed → plain dashes.
 		box.addChild(new SectionRule(options.attribution));
-		// #ask-timeout-countdown (design §12 r5.2): with a deadline armed the
-		// title becomes a single-line title + right-aligned bare countdown; the
-		// plain wrapping Text stays byte-identical for every other picker.
+		// #ask-timeout-countdown (design §12 r6): with a deadline armed and a
+		// title that FLATTENS to something, the title becomes a single line —
+		// the question plus a parenthesized bare countdown right next to it;
+		// the plain wrapping Text stays byte-identical for every other picker.
+		// The flatten check (D9 r6) must run on the flattened text: whitespace-
+		// or escape-only titles would otherwise render an orphan `(9:59)` row.
 		let titleCountdown: TitleCountdown | null = null;
 		if (options.title !== undefined && options.title !== "") {
 			// #confirm-prompt (Phase 4 D13): the title is the extension's words
 			// alone — the ` · <attribution>` tag is gone, bytes exactly as before
 			// Phase 3 D9.
-			if (armedTimeoutMs !== null) {
+			if (armedTimeoutMs !== null && flattenTitle(options.title) !== "") {
 				titleCountdown = new TitleCountdown(options.title, countdownText(armedTimeoutMs));
 				box.addChild(titleCountdown);
 			} else {

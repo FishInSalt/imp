@@ -208,7 +208,7 @@ async function frameContains(
 	}
 }
 
-/** #ask-timeout-countdown (design §12 r5.1): the FIRST frame line starting with
+/** #ask-timeout-countdown (design §12 r6): the FIRST frame line starting with
  *  `title` — the opening frame's title row (later countdown ticks rewrite the
  *  same line, so "first" is the stable pick for shape pins). */
 function firstTitleLine(frame: string, title: string): string | undefined {
@@ -1279,7 +1279,7 @@ describe("M9-2 review regressions", () => {
 		); // no time tail on an invalid deadline
 		terminal.data("\r");
 		await expect(rendered).resolves.toBe(0);
-		// Titleless + a valid deadline: no orphan right-aligned number either (r5.1).
+		// Titleless + a valid deadline: no orphan countdown row either (r6).
 		const orphan = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
 		await settle();
 		expect(terminal.frameSince(0)).not.toContain("10:00");
@@ -1416,7 +1416,7 @@ describe("M9-2 review regressions", () => {
 		expect(effectiveTimeoutMs(600000)).toBe(600000);
 	});
 
-	it("#ask-timeout-countdown: the opening frame carries the bare time right-aligned; it ticks down", async () => {
+	it("#ask-timeout-countdown: the opening frame carries the bare time in parens next to the title; it ticks down", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
@@ -1429,22 +1429,22 @@ describe("M9-2 review regressions", () => {
 		const frame = terminal.frameSince(0);
 		const titleLine = firstTitleLine(frame, "allow this bash command?");
 		expect(titleLine).toBeDefined();
-		expect(titleLine?.endsWith("10:00")).toBe(true); // untrimmed right edge: no trailing pad
-		expect(terminal.writes.join("")).toContain("\x1b[2m10:00\x1b[0m"); // forced dim (non-TTY too — review P3-3)
-		const rule = frame.split("\n").find((line) => line.includes("─"));
-		expect(visibleWidth(titleLine ?? "")).toBe(visibleWidth(rule ?? "")); // same right edge as the rule
+		// Strict shape (r6): the time sits in parens right next to the question —
+		// no right-edge padding, no gap arithmetic (untrimmed equality).
+		expect(titleLine).toBe("allow this bash command? (10:00)");
+		expect(terminal.writes.join("")).toContain("\x1b[2m(10:00)\x1b[0m"); // forced dim (non-TTY too)
 		// The countdown contract is "it ticks down", not millisecond precision: a
 		// first tick delayed by system load renders 9:58 and would skip the exact
 		// 9:59 frame (flake observed live) — poll for the 9-minute window instead.
+		// The opening "(10:00)" row stays in the history and never matches
+		// `9:\d\d\)` — a dead interval cannot satisfy this poll (non-vacuous).
 		const start = Date.now();
 		let ticked: string | undefined;
 		while (Date.now() - start < 5000) {
-			// Scan ALL title lines: the opening "10:00" line stays in the history,
-			// so the first hit alone would never show the tick.
 			const hit = terminal
 				.frameSince(0)
 				.split("\n")
-				.find((line) => line.startsWith("allow this bash command?") && /9:\d\d$/u.test(line));
+				.find((line) => line.startsWith("allow this bash command?") && /9:\d\d\)$/u.test(line));
 			if (hit !== undefined) {
 				ticked = hit;
 				break;
@@ -1475,6 +1475,20 @@ describe("M9-2 review regressions", () => {
 		shell.close();
 	});
 
+	it("#ask-timeout-countdown: titles that flatten to empty carry no countdown (no orphan tail)", async () => {
+		for (const title of ["   ", "\x1b[2K", "\u200b"]) {
+			const { terminal, shell } = makeShell();
+			shell.start();
+			await settle(0);
+			const chosen = shell.select({ title, items: [{ label: "a" }], timeoutMs: 300 });
+			await settle();
+			expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control
+			expect(terminal.frameSince(0)).not.toMatch(/\(\d?\d:\d\d\)$/mu); // no countdown tail anywhere
+			await expect(chosen).resolves.toBe("timeout"); // the deadline still fires (D9 r6)
+			shell.close();
+		}
+	});
+
 	it("#ask-timeout-countdown: a timed-out picker never shows 0:00 and the ticks die with it", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
@@ -1485,7 +1499,7 @@ describe("M9-2 review regressions", () => {
 			timeoutMs: 1000,
 		});
 		await settle();
-		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("0:01")).toBe(true);
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("(0:01)")).toBe(true);
 		await expect(chosen).resolves.toBe("timeout");
 		expect(terminal.frameSince(0)).not.toMatch(/\b0:00\b/u); // lifetime history — structurally unreachable
 		const mark = terminal.writes.length;
@@ -1504,7 +1518,9 @@ describe("M9-2 review regressions", () => {
 			timeoutMs: 600000,
 		});
 		await settle();
-		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("10:00")).toBe(true);
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("(10:00)")).toBe(
+			true,
+		);
 		shell.close();
 		await expect(chosen).resolves.toBe(null);
 		const mark = terminal.writes.length;
@@ -1550,7 +1566,9 @@ describe("M9-2 review regressions", () => {
 			timeoutMs: 600000,
 		});
 		await settle(); // the initial FULL frame lands (pi-tui repaints changed rows only later)
-		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("10:00")).toBe(true);
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("(10:00)")).toBe(
+			true,
+		);
 		const mark = terminal.writes.length; // only the REFILTER diff region from here on
 		terminal.data("a"); // refilter: the list rebuilds via remove+append
 		await settle();
@@ -1593,7 +1611,7 @@ describe("M9-2 review regressions", () => {
 			.find((l) => l.startsWith("allow this bash command? "));
 		expect(line).toBeDefined();
 		expect(line?.includes("…")).toBe(true);
-		expect(line?.endsWith("10:00")).toBe(true);
+		expect(line?.endsWith("(10:00)")).toBe(true);
 		expect(visibleWidth(line ?? "")).toBe(40);
 		terminal.data("\r");
 		await expect(chosen).resolves.toBe(0);
@@ -1620,48 +1638,59 @@ describe("M9-2 review regressions", () => {
 		shell.close();
 	});
 
-	it("#ask-timeout-countdown: TitleCountdown — fits with the right edge at width", () => {
+	it("#ask-timeout-countdown: TitleCountdown — fits next to the title, NOT padded to width", () => {
 		const raw = new TitleCountdown("allow this bash command?", "10:00").render(80)[0] ?? "";
 		const line = stripAnsi(raw);
-		expect(line.startsWith("allow this bash command?")).toBe(true);
-		expect(line.endsWith("10:00")).toBe(true);
-		expect(visibleWidth(raw)).toBe(80);
+		expect(line).toBe("allow this bash command? (10:00)");
+		// Natural width — the r6 no-pad pin (a right-align/right-edge mutant
+		// would grow this to 80).
+		expect(visibleWidth(raw)).toBe(visibleWidth("allow this bash command?") + 1 + visibleWidth("(10:00)"));
 	});
 
-	it("#ask-timeout-countdown: TitleCountdown — long ASCII title truncates, right side whole", () => {
+	it("#ask-timeout-countdown: TitleCountdown — long ASCII title truncates, time whole, fills the width", () => {
 		const raw = new TitleCountdown("x".repeat(200), "10:00").render(40)[0] ?? "";
 		const line = stripAnsi(raw);
 		expect(line).toContain("…");
-		expect(line.endsWith("10:00")).toBe(true);
+		expect(line.endsWith("(10:00)")).toBe(true);
 		expect(line).not.toContain("\n");
 		expect(visibleWidth(raw)).toBe(40);
 	});
 
-	it("#ask-timeout-countdown: TitleCountdown — wide glyphs: the gap absorbs the shortfall", () => {
-		// "界"×30 clips to 33 columns at budget 34 (odd budgets can't fill with
-		// width-2 glyphs) — a budget-based gap would undershoot the right edge.
+	it("#ask-timeout-countdown: TitleCountdown — wide glyphs: one-column shortfall allowed, never over", () => {
+		// "界"×30 truncates to 31 columns at budget 32 (odd budgets cannot fill
+		// with width-2 glyphs) — line = 31 + space + "(10:00)" = 39 ≤ 40.
 		const raw = new TitleCountdown("界".repeat(30), "10:00").render(40)[0] ?? "";
 		const line = stripAnsi(raw);
-		expect(line.endsWith("10:00")).toBe(true);
-		expect(visibleWidth(raw)).toBe(40);
-		expect(visibleWidth(line.slice(0, line.indexOf("10:00")))).toBe(35);
+		expect(line.endsWith("(10:00)")).toBe(true);
+		expect(visibleWidth(raw)).toBe(39);
 	});
 
 	it("#ask-timeout-countdown: TitleCountdown — a multi-line title flattens to one row", () => {
 		const line = stripAnsi(new TitleCountdown("a\nb", "0:30").render(20)[0] ?? "");
 		expect(line).not.toContain("\n");
-		expect(line.startsWith("a b")).toBe(true);
-		expect(line.endsWith("0:30")).toBe(true);
+		expect(line).toBe("a b (0:30)");
 	});
 
-	it("#ask-timeout-countdown: TitleCountdown — width sweep: never wider, exact in the normal branch", () => {
-		const component = new TitleCountdown("allow this?", "10:00");
-		for (let width = 0; width <= 7; width++) {
+	it("#ask-timeout-countdown: TitleCountdown — width sweep: never wider; above natural width NOT padded", () => {
+		const left = "allow this?";
+		const component = new TitleCountdown(left, "10:00");
+		const parenWidth = visibleWidth("(10:00)");
+		const natural = visibleWidth(left) + 1 + parenWidth;
+		for (let width = 0; width <= natural + 3; width++) {
 			const line = component.render(width)[0] ?? "";
 			expect(line).not.toContain("\n");
-			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			if (width >= 6) expect(visibleWidth(line)).toBe(width);
-			else expect(stripAnsi(line)).toBe(stripAnsi(new TitleCountdown("", "10:00").render(width)[0] ?? "")); // degenerate: identical to the empty-title render (review P3-4)
+			const w = visibleWidth(line);
+			expect(w).toBeLessThanOrEqual(width);
+			if (width <= parenWidth) {
+				// Degenerate: no room for title + space — identical to the
+				// empty-title render.
+				expect(stripAnsi(line)).toBe(stripAnsi(new TitleCountdown("", "10:00").render(width)[0] ?? ""));
+			} else {
+				expect(stripAnsi(line).endsWith("(10:00)")).toBe(true); // the time stays whole
+				// Above the natural width the line stays at natural width — the
+				// r6 no-pad beat: a pad/right-align mutant grows it to `width`.
+				if (width >= natural) expect(w).toBe(natural);
+			}
 		}
 	});
 

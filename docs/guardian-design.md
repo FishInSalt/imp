@@ -135,8 +135,9 @@ untouched):
      detail `<resolved path>` + (`\n` + `<reason or "guardian ask rule:
      <source>">`); options `{ sessionKey, rememberLabel }` (no preview — the
      preview kind is command-only).
-   `false` → block with the reason (or "blocked by guardian — the
-   confirmation was declined"). Audit the outcome. The shared session key is
+   `false` → block with the reason (or "the user declined this call"); a
+   configured reason gets " — the user declined this call" appended.
+   Audit the outcome. The shared session key is
    the only memory: choosing the prompt's remember option once stops every
    further ask prompt for the rest of the session — bash and files alike
    ("allow all this session"); deny rules are unaffected.

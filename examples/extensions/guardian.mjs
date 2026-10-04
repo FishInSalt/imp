@@ -284,9 +284,10 @@ export default function (api) {
 					: await api.confirm(`allow this ${tool}?`, `${text}\n${detail}`, options);
 			audit(`[ask] ${oneLine(hit.rule.source)} — ${subject} — ${approved ? "approved" : "denied"}${who}`);
 			if (approved) return undefined;
+			const declined = "the user declined this call";
 			return {
 				block: true,
-				reason: hit.rule.reason === "" ? "blocked by guardian — the confirmation was declined" : hit.rule.reason,
+				reason: hit.rule.reason === "" ? declined : `${hit.rule.reason} — ${declined}`,
 			};
 		} catch {
 			try {

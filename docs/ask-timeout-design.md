@@ -1,7 +1,7 @@
-# #ask-timeout — 交互确认超时（设计 r2）
+# #ask-timeout — 交互确认超时（设计 r3）
 
 - 日期：2026-10-04
-- 状态：**r2 — 独立对抗评审（r1）已折叠，待复核**
+- 状态：**r3 — r1 折叠已复核 CONFIRMED（含三处非阻断补充 N1/N2/N3）；设计闭合，可进入实现**
 - 关联：`#guardian`（驱动方）、`#confirm-prompt`（承载界面）
 
 ## 1. 背景与目标
@@ -40,7 +40,7 @@ guardian 的 ask 弹窗目前会**无限等待**。owner 要求：
 | 位置 | 现状 | 变更 |
 |---|---|---|
 | `src/extensions/types.ts` `ConfirmOptions`（~62） | `sessionKey? / warnSpans? / rememberLabel? / preview?` | 增 `timeoutMs?: number`（注释：TUI picker 可见期计时、排队不计、非法忽略、S6 legacy 忽略） |
-| `src/extensions/types.ts` `api.confirm`（~158） | `Promise<boolean>` | `Promise<boolean \| "timeout">`；JSDoc 重写：**批准要求值恰为 `true`**；`"timeout"` 属非批准；"never hangs" 归因于调用方期限而非宿主承诺 |
+| `src/extensions/types.ts` `api.confirm`（~158） | `Promise<boolean>` | `Promise<boolean \| "timeout">`；JSDoc 重写：**批准要求值恰为 `true`**；`"timeout"` 属非批准；"never hangs" 的兜底归因于调用方期限，且**仅限能承载超时的宿主界面**（legacy/无交互面不生效，见 S6） |
 | `src/extensions/registry.ts`（字段 ~122、`confirm()` ~466、**Options ~94**） | `Promise<boolean>` ×3 | 同步加宽联合 |
 | `src/extensions/loader.ts`（`ExtensionLoaderOptions.confirm` ~36；接线 ~255, ~267） | `Promise<boolean>` | 同步加宽 |
 | `src/cli.ts`（`loadExtensionSetup` 的 confirm 参数 ~505-508；使用 ~607） | `Promise<boolean>` | 同步加宽 |
@@ -48,8 +48,9 @@ guardian 的 ask 弹窗目前会**无限等待**。owner 要求：
 | `src/repl/line-input.ts` `LineInput.select?`（~133） | `Promise<number \| null>` | `Promise<number \| null \| "timeout">` |
 | `src/repl/repl.ts` `bindSelect`（~348）+ confirm 包装（~279-346） | `(options) => Promise<number \| null>`；包装 `Promise<boolean>` | 签名与返回加宽；**分支顺序定稿**：`if (choice === "timeout")` 必须紧跟在 `await select(...)` 之后、早于 `choice === null` 与 sessionKey 逻辑（否则 `"timeout" !== 2` 会走成 `approved = true`——r1 评审 P1#1）；该分支写 S4 的 note 后返回 `"timeout"`、**不**写 `sessionAllowed` |
 | `src/repl/repl.ts` select 选项装配（~309-316） | 无 `timeoutMs` | **转发**：仅当 `options?.timeoutMs !== undefined` 时携带 `timeoutMs`（保持既有精确断言不被 undefined 键扰动） |
-| `src/repl/repl.ts` `ctx.select` 绑定（~1559-1560） | 将 `input.select` 赋给 `Promise<number \| null>` 类型 | **`ctx.select` 保持窄类型**：绑定处适配 `r === "timeout" ? null : r`（防御性；这些调用方不传 `timeoutMs`，实际不会出现 `"timeout"`）。不采用"加宽 ctx.select"方案（会触发 `commands.ts:585/1115/1445/1507/1548/1600`、`trust-ask.ts:64` 的 TS7015 索引链，收益为零） |
-| 测试侧 | `test/extensions-repl.test.ts:138` 等把 handler 传入 loader | loader 选项加宽后自然一致；实现时全库扫 `confirm(` / `select?(` / mock 类型 |
+| `src/repl/repl.ts` `ctx.select` 绑定（~1559-1560） | 将 `input.select` 赋给 `Promise<number \| null>` 类型 | **`ctx.select` 保持窄类型**：绑定处适配 `r === "timeout" ? null : r`（防御性；这些调用方不传 `timeoutMs`，实际不会出现 `"timeout"`）。不采用"加宽 ctx.select"方案（会触发 `commands.ts:585/1115/1445/1507/1548/1600` 的 TS7015 索引链，收益为零） |
+| `src/repl/trust-ask.ts`（~59 直用 `TuiShell.select`；~64 索引 `ANSWERS[pick]`） | `pick === null ? null : (ANSWERS[pick] ?? null)` | **独立站点**（不经 ctx.select）：直用加宽后的 select 返回必然受影响——守卫 `typeof pick !== "number" ? null : (ANSWERS[pick] ?? null)`（r2 复核 N1；非阻断，实现时修） |
+| 测试侧 | `test/extensions-repl.test.ts:138` 等把 handler 传入 loader；`test/repl-tui.test.ts` 三处回调（`:1183-1187`、`:1206-1210` 的 `(value: number \| null) =>`；`:900-903` 的 `settled = value` 赋入 `number \| null \| undefined`） | loader 加宽后前者自然一致；三处回调签名需加宽/守卫（r2 复核 N1）；实现时全库扫 `confirm(` / `select?(` / mock 类型 |
 
 **门禁补充**：`npm run typecheck`（双配置）为本次硬门禁（r1 评审用仓库 tsc 复现过原表的类型错误）。
 
@@ -104,7 +105,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
 13. reload：成功加载（含 ENOENT）替换超时值；加载失败保留。
 14. `humanDuration` 边界单测（999 / 1000 / 59999 / 60000 / 90000 / 600000）。
 15. 内部错误回退 + `askTimeoutMs`：options 带 `timeoutMs`；回退返回 `"timeout"` → 审计 `— timeout`、block reason 保持历史串；批准/拒绝分支不受扰动。
-16. 模板重写后的新 pin（替换 `test/guardian.test.ts:610-629` 旧断言）。
+16. 模板重写后的新 pin（替换 `test/guardian.test.ts:610-629` 旧断言）——本项与 §7 同批执行（宿主 API 落地之后），随该批过全量门禁。
 
 **门禁**：`npm run build`、`npm run typecheck`（双配置）、`npm run lint`、`npm run test`（全量）。
 
@@ -137,3 +138,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **P3#9（reload 生命周期）** → §6 原子替换语义 + §8-13。
   - **P3#10（S4 note 无定稿文本/归属）** → S4 字节定稿 + §8-5。
   - **P3#11（文档清扫缺口）** → §9 四项（JSDoc legacy 限定 / confirm-prompt-design:545 处 / "not approved" 家族 / `unref?.()` 风格入 D8）。
+- **r2 复核（同一独立评审，只读）：CONFIRMED**——上述 11 项折叠逐条核实通过；新增三项非阻断补充，r3 已折叠：
+  - **N1（P2 残余）** → §4 补 `trust-ask.ts:64` 独立站点（直用 `TuiShell.select`，与 ctx.select 决策无关）+ `test/repl-tui.test.ts` 三处回调签名；删除原"trust-ask 属于被拒方案后果"的错误归因。
+  - **N2（P3）** → §4 `api.confirm` 行："never hangs" 兜底限定为"能承载超时的宿主界面"（与 S6 对齐）。
+  - **N3（P3）** → §8-16 注明与 §7 同批执行。

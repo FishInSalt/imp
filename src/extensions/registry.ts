@@ -7,9 +7,6 @@ import { firstLine } from "../format.js";
 import { COMMANDS, type SlashCommand } from "../repl/commands.js";
 import { canonicalToolColor, isToolColor, TOOL_COLOR_NAMES, type ToolColor } from "../repl/tool-colors.js";
 import type {
-	ClassifyHandler,
-	ClassifyRequest,
-	ClassifyResult,
 	ConfirmOptions,
 	ContextSection,
 	ExtensionContextIdentity,
@@ -95,23 +92,11 @@ export interface ExtensionRegistryOptions {
 	 *  tests — api.confirm resolves false after one stderr teaching line and
 	 *  never hangs (spec part 2 item 5). */
 	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
-	/** Host-side classify implementation (#guardian-auto-mode D6). Absent —
-	 *  print mode, plain tests — api.classify resolves undefined without
-	 *  touching the network (the free degradation, D8). */
-	classify?: ClassifyHandler;
 }
 
 /** The one stderr line written when api.confirm runs without an interactive host. */
 export const NO_CONFIRM_LINE =
 	"imp: extension asked for confirmation but no interactive prompt is available — declining\n";
-
-/**
- * api.classify(): one shot, one verdict. Fails safe — no wired handler
- * (print mode, plain tests) resolves undefined WITHOUT touching the network,
- * and a throwing handler resolves undefined after a diagnostic; the
- * extension's contract reads undefined as “unavailable — ask the human”
- * (D8). The caller label rides the host's audit record (the D9 idiom).
- */
 
 function errorText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -137,7 +122,6 @@ export class ExtensionRegistry {
 	private readonly confirmHandler:
 		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
 		| undefined;
-	private readonly classifyHandler: ClassifyHandler | undefined;
 	/** The no-handler stderr line has been written once already. */
 	private noConfirmWarned = false;
 	/** Committed name → owning extension name (conflict policy, design §9). */
@@ -165,7 +149,6 @@ export class ExtensionRegistry {
 	constructor(options: ExtensionRegistryOptions = {}) {
 		this.report = options.report ?? (() => {});
 		this.confirmHandler = options.confirm;
-		this.classifyHandler = options.classify;
 	}
 
 	// --- load lifecycle (loader-facing) ---
@@ -474,23 +457,6 @@ export class ExtensionRegistry {
 	}
 
 	// --- emits (isolated; the runner wires them from M4c) ---
-
-	/**
-	 * api.classify(): one shot, one verdict. Fails safe — an absent handler
-	 * (print mode, plain tests) resolves undefined without touching the
-	 * network, and a throwing handler resolves undefined after a diagnostic;
-	 * the extension's contract reads undefined as “unavailable — ask the
-	 * human” (D8). The caller label rides the host's audit record.
-	 */
-	async classify(request: ClassifyRequest, source?: string): Promise<ClassifyResult | undefined> {
-		if (this.classifyHandler === undefined) return undefined;
-		try {
-			return await this.classifyHandler(request, source);
-		} catch (err) {
-			this.report(`imp: extension classify handler error — ${firstLine(errorText(err), 160)}`);
-			return undefined;
-		}
-	}
 
 	/**
 	 * api.confirm(): true only on explicit approval. Fails safe — no wired

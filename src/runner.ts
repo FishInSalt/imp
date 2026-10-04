@@ -63,16 +63,8 @@ import { createReadTool } from "./core/tools/read.js";
 import { createTaskTool } from "./core/tools/task.js";
 import type { Tool } from "./core/tools/types.js";
 import { createWriteTool } from "./core/tools/write.js";
-import { runWithToolCallContext, type ToolCallContext } from "./extensions/call-context.js";
 import type { ExtensionRegistry } from "./extensions/registry.js";
-import type { ExtensionFailure, ToolCallDecision, ToolCallEvent } from "./extensions/types.js";
-import {
-	type GateDecisionEvent,
-	type GateDecisionInput,
-	GateDecisionLog,
-	type HumanRecordEntry,
-	UserInputLog,
-} from "./extensions/user-input-log.js";
+import type { ExtensionFailure } from "./extensions/types.js";
 import { formatTokens, shorten, usageMoneySegment, VERSION } from "./format.js";
 import { compactionSettingsFor } from "./provider/compaction-settings.js";
 import { withLogging } from "./provider/logging.js";
@@ -307,17 +299,6 @@ export interface Runner {
 	/** Manual compaction for /compact (same code path as the auto hook, minus the gate). */
 	compactNow(signal?: AbortSignal): Promise<CompactOutcome>;
 	/** `/new`: fresh session store, empty history, re-assembled system prompt. */
-	/** #guardian-auto-mode (D11/D18): record one raw human submission — the
-	 *  repl machine's submission boundary is the only caller; the log is
-	 *  cleared on identity/history changes. */
-	recordUserInput(text: string): void;
-	/** A defensive copy of the verified submission log (tests, diagnostics). */
-	userInputSnapshot(): readonly HumanRecordEntry[];
-	/** §16/D33: record one gate-decision outcome (the confirm host's
-	 *  prompted-answer boundary calls this; gate dispatches only). */
-	recordGateDecision(event: GateDecisionInput): void;
-	/** A defensive copy of the gate-decision log (tests, diagnostics). */
-	gateDecisionSnapshot(): readonly GateDecisionEvent[];
 	newSession(): void;
 	/** `/sessions`: sessions saved for this cwd, newest first. */
 	listSessions(): SessionInfo[];
@@ -454,13 +435,6 @@ class RunnerImpl implements Runner {
 	/** #thinking-levels: the live level (pi's AgentState.thinkingLevel). */
 	private level: ThinkingLevel = "off";
 	private sessionStore: SessionStore | null = null;
-	/** #guardian-auto-mode (D11/D18): provenance-verified human submissions —
-	 *  appended only at the submission boundary, cleared on identity/history
-	 *  changes; feeds the classify context block via the gate snapshot. */
-	private readonly userInputLog = new UserInputLog();
-	/** §16/D33: gate-decision outcomes — recorded by the confirm host while
-	 *  a tool dispatch is active; same lifecycle as the submission log. */
-	private readonly gateDecisionLog = new GateDecisionLog();
 	/** SA-05: the whole-session usage aggregate — one tracker per store instance
 	 *  (a swap on resume/new rebuilds from that store's entries). */
 	private usageTracker: UsageTotalsTracker | null = null;
@@ -626,16 +600,13 @@ class RunnerImpl implements Runner {
 				// apart (M6a — closes the M5 design Q3 gap). cwd is the child's
 				// own working directory — the worktree path under isolation (M6b).
 				onToolCall: (call, info) =>
-					this.emitGatedToolCall(
-						{
-							type: "tool_call",
-							...call,
-							subagent: true,
-							agent: info.agent,
-							cwd: info.cwd,
-						},
-						{ workOrder: info.workOrder },
-					),
+					this.options.extensions?.emitToolCall({
+						type: "tool_call",
+						...call,
+						subagent: true,
+						agent: info.agent,
+						cwd: info.cwd,
+					}),
 				// Child tool_end feeds extension observers (audit trails) with
 				// the same discriminator. M10: child events ALSO flow to the live
 				// turn's onEvent tap (this.turnEventTap) with their info — the REPL
@@ -885,73 +856,6 @@ class RunnerImpl implements Runner {
 		this.history.length = 0;
 		this.syncEstimateFloor(); // fresh session — no compaction boundary (review P0-2)
 		this.systemText = this.assembleSystem();
-		// #guardian-auto-mode D18: a new conversation invalidates every
-		// authorization the old one carried — the decision record too.
-		this.userInputLog.clear();
-		this.gateDecisionLog.clear();
-	}
-
-	/** #guardian-auto-mode (D11): record one raw human submission. Called ONLY
-	 *  from the submission boundary (the repl machine's `handleLine`, before
-	 *  dispatch) — never for command/skill expansions (`submitPrompt`) and never
-	 *  by internal producers (task prompts, summaries, tool results). */
-	recordUserInput(text: string): void {
-		this.userInputLog.record(text);
-	}
-
-	/** §16/D33: record one gate-decision outcome (the confirm host reports
-	 *  prompted answers only — never an unbound or replayed one). */
-	recordGateDecision(event: GateDecisionInput): void {
-		this.gateDecisionLog.record(event);
-	}
-
-	/** A defensive copy of the gate-decision log (tests, diagnostics). */
-	gateDecisionSnapshot(): readonly GateDecisionEvent[] {
-		return this.gateDecisionLog.snapshot();
-	}
-
-	/** A defensive copy of the verified submission log (tests, diagnostics).
-	 *  The classify seam reads the copy frozen into the call snapshot instead. */
-	userInputSnapshot(): readonly HumanRecordEntry[] {
-		return this.userInputLog.snapshot();
-	}
-
-	/** #guardian-auto-mode (D15/D17): emit a tool_call with the host facts the
-	 *  classify seam relies on — the `verifiedUserContext` marker on the event
-	 *  and the call-scoped snapshot (frozen HERE, at the gate) around the
-	 *  dispatch. The snapshot is what the handler's `classify` call sees, not
-	 *  the live log. */
-	private emitGatedToolCall(
-		event: ToolCallEvent,
-		extras: { workOrder?: string } = {},
-	): Promise<ToolCallDecision | undefined> | undefined {
-		const marked: ToolCallEvent = { ...event, verifiedUserContext: this.userInputLog.verified };
-		const context: ToolCallContext = {
-			callId: event.toolCallId,
-			subagent: event.subagent === true,
-			...(event.agent === undefined ? {} : { agent: event.agent }),
-			...(event.cwd === undefined ? {} : { cwd: event.cwd }),
-			tool: event.name,
-			callIdentity: this.callIdentityFor(event),
-			userInputs: this.userInputLog.snapshot(),
-			decisions: this.gateDecisionLog.snapshot(),
-			...(extras.workOrder === undefined ? {} : { workOrder: extras.workOrder }),
-		};
-		return runWithToolCallContext(context, () => this.options.extensions?.emitToolCall(marked));
-	}
-
-	/** §16/D33: `<tool> @ <JSON cwd> <JSON call text>` — the decision record's
-	 *  per-call identity (display/equality text; never extension-authored). */
-	private callIdentityFor(event: ToolCallEvent): string {
-		const cwd = event.cwd ?? this.options.cwd;
-		const args = event.args;
-		const callText =
-			typeof args.command === "string"
-				? args.command
-				: typeof args.path === "string"
-					? args.path
-					: JSON.stringify(args);
-		return `${event.name} @ ${JSON.stringify(cwd)} ${JSON.stringify(callText)}`;
 	}
 
 	listSessions(): SessionInfo[] {
@@ -1096,12 +1000,6 @@ class RunnerImpl implements Runner {
 		const positionMoves = newLeaf !== store.getLeafId();
 		if (positionMoves) {
 			store.branchTo(newLeaf);
-			// #guardian-auto-mode D18: the move rewinds (or re-grows) history —
-			// authorizations recorded at the abandoned position no longer hold.
-			// Keyed on positionMoves, not on the summary's outcome: a failed
-			// branch summary still moved the position.
-			this.userInputLog.clear();
-			this.gateDecisionLog.clear();
 		}
 		if (summary !== undefined) {
 			if (this.sessionStore !== store) return { summary: "failed", messages: this.history.length };
@@ -1144,10 +1042,6 @@ class RunnerImpl implements Runner {
 		this.estimateFloor = loaded.compactionBoundary;
 		this.restoreThinkingFromSession(store); // pi restores the branch's level on resume
 		this.systemText = this.assembleSystem();
-		// #guardian-auto-mode D18: resumed history may predate the live log's
-		// entries — a restored conversation starts with none.
-		this.userInputLog.clear();
-		this.gateDecisionLog.clear();
 		return { id8: store.header.id.slice(0, 8), messages: this.history.length };
 	}
 
@@ -1539,7 +1433,8 @@ class RunnerImpl implements Runner {
 				// knows the generic { block, reason } decision. Events carry the
 				// runner's cwd so gates resolve relative paths against the loop
 				// that is about to execute them (M6b).
-				onToolCall: (call) => this.emitGatedToolCall({ type: "tool_call", ...call, cwd: this.options.cwd }),
+				onToolCall: (call) =>
+					this.options.extensions?.emitToolCall({ type: "tool_call", ...call, cwd: this.options.cwd }),
 				onBeforeTurn: session
 					? async (history) => {
 							if (!this.autoCompact) return;

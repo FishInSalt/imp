@@ -21,6 +21,7 @@ import {
 import { type ClipboardImage, readClipboardImage, writeClipboardImageToTmp } from "./clipboard-image.js";
 import { Fold } from "./components/fold.js";
 import { SectionRule } from "./components/section-rule.js";
+import { TitleCountdown } from "./components/title-countdown.js";
 import { activityCount, activityText, renderCommandHeader, ToolActivity } from "./components/tool-block.js";
 import { TreeSelectorBox, TreeSelectorComponent } from "./components/tree-selector.js";
 import { appendInputHistory, loadInputHistory } from "./history.js";
@@ -194,7 +195,7 @@ const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter 
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** #ask-timeout-countdown (design §12 D9): the ONE validated + clamped
- *  deadline source — row visibility, initial text, countdown anchor and the
+ *  deadline source — countdown visibility, initial text, countdown anchor and the
  *  timeout timer all read this, so what is displayed can never diverge from
  *  what is timed. Invalid values (non-finite / ≤ 0 / non-number) mean "no
  *  deadline". */
@@ -202,10 +203,11 @@ export function effectiveTimeoutMs(value: number | undefined): number | null {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, MAX_TIMER_MS) : null;
 }
 
-/** #ask-timeout-countdown (design §12 D11): `times out in …` duration text
- *  for a REMAINING duration in milliseconds. The floor is 1 s (`0:01`): the
- *  formatter structurally never emits `0:00`, independent of timer callback
- *  ordering (D13). Minutes use floor/remainder — `0:60` is impossible. */
+/** #ask-timeout-countdown (design §12 D11/r5): bare duration text (`M:SS` /
+ *  `Hh MMm` / `Dd HHh`) for a REMAINING duration in milliseconds. The floor
+ *  is 1 s (`0:01`): the formatter structurally never emits `0:00`, independent
+ *  of timer callback ordering (D13). Minutes use floor/remainder — `0:60` is
+ *  impossible. */
 export function countdownText(remainingMs: number): string {
 	if (!Number.isFinite(remainingMs)) return "0:01"; // defensive; the single source never passes non-finite input
 	const s = Math.max(1, Math.ceil(remainingMs / 1000));
@@ -923,8 +925,8 @@ export class TuiShell implements LineInput {
 			});
 		}
 		// #ask-timeout-countdown (design §12 D9): validated + clamped once;
-		// the countdown row, its initial text, the monotonic anchor and the
-		// timeout timer all read this single value.
+		// the title-line countdown, its initial text, the monotonic anchor and
+		// the timeout timer all read this single value.
 		const armedTimeoutMs = effectiveTimeoutMs(options.timeoutMs);
 		// SelectList carries string values; the row's index is the identity
 		// the caller picked — the ORIGINAL index, so filtering (which hides
@@ -949,11 +951,20 @@ export class TuiShell implements LineInput {
 		// the title tag; the name now rides here). Unconditional: every picker box
 		// gets the rule, unattributed → plain dashes.
 		box.addChild(new SectionRule(options.attribution));
+		// #ask-timeout-countdown (design §12 r5.2): with a deadline armed the
+		// title becomes a single-line title + right-aligned bare countdown; the
+		// plain wrapping Text stays byte-identical for every other picker.
+		let titleCountdown: TitleCountdown | null = null;
 		if (options.title !== undefined && options.title !== "") {
 			// #confirm-prompt (Phase 4 D13): the title is the extension's words
 			// alone — the ` · <attribution>` tag is gone, bytes exactly as before
 			// Phase 3 D9.
-			box.addChild(new Text(options.title, 0, 0));
+			if (armedTimeoutMs !== null) {
+				titleCountdown = new TitleCountdown(options.title, countdownText(armedTimeoutMs));
+				box.addChild(titleCountdown);
+			} else {
+				box.addChild(new Text(options.title, 0, 0));
+			}
 		}
 		// The confirm detail rides in the picker (not just transcript notes):
 		// Text wraps + preserves newlines, so the gated command and its reason
@@ -971,17 +982,6 @@ export class TuiShell implements LineInput {
 		// render nothing (the helper returns "").
 		const previewHeader = renderCommandHeader(options.preview, this.options.toolColorResolver);
 		if (previewHeader !== "") box.addChild(new Text(previewHeader, 0, 0));
-		// #ask-timeout-countdown (design §12 D10): the countdown row sits after
-		// the preview and BEFORE the query row / blank spacer / list — the list
-		// must stay the last child for filterable pickers (applyFilter
-		// remove+appends it). The initial text is set at construction: an empty
-		// Text renders zero rows, and waiting for the first tick would pop the
-		// row in a second late (D12).
-		const countdownRow =
-			armedTimeoutMs === null
-				? null
-				: new Text(dim(`times out in ${countdownText(armedTimeoutMs)}`, true), 0, 0);
-		if (countdownRow !== null) box.addChild(countdownRow);
 		/** The live filter query (M11 #9): null while not filterable. */
 		let query: string | null = options.filterable === true ? "" : null;
 		const queryRow = new Text("", 0, 0);
@@ -1114,17 +1114,18 @@ export class TuiShell implements LineInput {
 				timer = setTimeout(() => finish("timeout"), armedTimeoutMs);
 				timer.unref?.();
 			}
-			if (armedTimeoutMs !== null && countdownRow !== null) {
+			if (armedTimeoutMs !== null && titleCountdown !== null) {
 				// Monotonic anchor: a wall-clock step must never desync the text
 				// from the relative timeout timer (D11). Skip unchanged text —
 				// ≥1 h formats change once a minute (D12).
+				const target = titleCountdown;
 				const deadline = performance.now() + armedTimeoutMs;
 				let lastText = countdownText(armedTimeoutMs);
 				countdownTimer = setInterval(() => {
 					const text = countdownText(deadline - performance.now());
 					if (text === lastText) return;
 					lastText = text;
-					countdownRow.setText(dim(`times out in ${text}`, true));
+					target.setRight(text);
 					tui.requestRender();
 				}, 1000);
 				countdownTimer.unref?.();

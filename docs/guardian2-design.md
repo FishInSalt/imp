@@ -1,9 +1,9 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.6 — R4 folds applied; design-delta review closed.** Owner
-direction: wildcard patterns by default with a `regex` escape hatch;
+Status: **rev 2.7 — R5 folds applied; implementation review closed.**
+Owner direction: wildcard patterns by default with a `regex` escape hatch;
 optional `tool` scoping for `write` / `edit` paths; `reason` stays optional
-(the template demonstrates both forms). Implementation next.
+(the template demonstrates both forms). Ready for merge.
 
 - Worktree / branch: `imp-guardian2` / `feat/guardian2-friendly-config`,
   base `main` (5fb3a24 — guardian2 v0 merged).
@@ -319,7 +319,7 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
   source and match text (spec aligned); the fallback-detail wording aligned;
   tests added (vice-versa tool scoping, file fallback, template `sudo` /
   `--force`, a many-star pattern); size target adjusted. Verification
-  pending.
+  CONFIRMED.
 - rev 2.6 — R4 folds: `*` spans newlines; the template regains
   the `$HOME` / `${HOME}` deny variants; a worktree-cwd test; known limits
   for lexical, case-sensitive path matching; validation edges (empty

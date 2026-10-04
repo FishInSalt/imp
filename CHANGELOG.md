@@ -18,7 +18,8 @@ All notable changes to imp are documented here. The format follows
   path, bash rules match the command. Anything unmatched runs; there is no
   `allow` action. A broken config keeps the last good rules (footer hint,
   `/guardian reload`); every deny/ask outcome is audited to
-  `~/.imp/guardian.log`. Start from
+  `~/.imp/guardian.log`. The ask picker red-highlights the span the rule
+  matched (`preview.warnSpans`). Start from
   `examples/extensions/guardian.template.json`; design and review log:
   `docs/guardian-design.md`.
 

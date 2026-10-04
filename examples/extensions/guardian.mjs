@@ -9,7 +9,8 @@
 //     reason as a teaching-style tool result and the run continues;
 //   • ask rules ask the human first (approved runs, declined blocks); the
 //     prompt offers "don't ask again this session" once, which stops every
-//     further ask prompt for the rest of the session;
+//     further ask prompt for the rest of the session; the picker
+//     red-highlights the span the matched rule covers;
 //   • a call matching neither rule runs — the default is allow.
 //
 // Patterns are plain text where `*` matches anything (including newlines);
@@ -39,17 +40,22 @@ const plainObject = (value) => typeof value === "object" && value !== null && !A
 
 const TOOL_NAMES = ["bash", "write", "edit"];
 
-/** Linear wildcard match: `*` spans any run of characters (newlines
- *  included), no backtracking. The text may match anywhere. */
-const wildcardMatch = (pattern, text) => {
+/** Linear wildcard locate: `*` spans any run of characters (newlines
+ *  included), no backtracking. Returns the matched span — first segment
+ *  start … last segment end — or undefined. */
+const wildcardLocate = (pattern, text) => {
 	let position = 0;
+	let start = -1;
+	let end = -1;
 	for (const segment of pattern.split("*")) {
 		if (segment === "") continue;
 		const index = text.indexOf(segment, position);
-		if (index === -1) return false;
+		if (index === -1) return undefined;
+		if (start === -1) start = index;
 		position = index + segment.length;
+		end = position;
 	}
-	return true;
+	return start === -1 ? { start: 0, end: 0 } : { start, end };
 };
 
 /** Compile one rule entry; returns `{rule}` or `{error}`. */
@@ -118,9 +124,9 @@ const compileEntry = (entry, where) => {
 		}
 		tools = [...new Set(names)];
 	}
-	let test;
+	let locate;
 	if (wildcard !== undefined) {
-		test = (text) => wildcardMatch(wildcard, text);
+		locate = (text) => wildcardLocate(wildcard, text);
 	} else {
 		let regex;
 		try {
@@ -128,12 +134,15 @@ const compileEntry = (entry, where) => {
 		} catch (err) {
 			return { error: `${where}: invalid regex (${oneLine(err && err.message ? err.message : err)})` };
 		}
-		test = (text) => regex.test(text);
+		locate = (text) => {
+			const found = regex.exec(text);
+			return found === null ? undefined : { start: found.index, end: found.index + found[0].length };
+		};
 	}
 	return {
 		rule: {
 			source: wildcard !== undefined ? wildcard : regexSource,
-			test,
+			locate,
 			reason: reason ?? "",
 			tools: new Set(tools),
 		},
@@ -222,10 +231,14 @@ export default function (api) {
 
 	const match = (tool, text) => {
 		for (const rule of rules.deny) {
-			if (rule.tools.has(tool) && rule.test(text)) return { kind: "deny", rule };
+			if (!rule.tools.has(tool)) continue;
+			const span = rule.locate(text);
+			if (span !== undefined) return { kind: "deny", rule, span };
 		}
 		for (const rule of rules.ask) {
-			if (rule.tools.has(tool) && rule.test(text)) return { kind: "ask", rule };
+			if (!rule.tools.has(tool)) continue;
+			const span = rule.locate(text);
+			if (span !== undefined) return { kind: "ask", rule, span };
 		}
 		return undefined;
 	};
@@ -261,9 +274,13 @@ export default function (api) {
 				sessionKey: "guardian:session",
 				rememberLabel: "all guardian ask prompts this session",
 			};
+			const warnSpans = hit.span.end > hit.span.start ? [[hit.span.start, hit.span.end]] : undefined;
 			const approved =
 				tool === "bash"
-					? await api.confirm("allow this bash command?", detail, { ...options, preview })
+					? await api.confirm("allow this bash command?", detail, {
+							...options,
+							preview: warnSpans === undefined ? preview : { ...preview, warnSpans },
+						})
 					: await api.confirm(`allow this ${tool}?`, `${text}\n${detail}`, options);
 			audit(`[ask] ${oneLine(hit.rule.source)} — ${subject} — ${approved ? "approved" : "denied"}${who}`);
 			if (approved) return undefined;

@@ -1,6 +1,6 @@
 // test/guardian.test.ts — behavior pins for the minimal guardian example
 // extension (examples/extensions/guardian.mjs). Binding spec:
-// docs/guardian-design.md (rev 2.9).
+// docs/guardian-design.md (rev 3.0).
 //
 // Pattern: the real example runs against a fake api — a confirm spy, captured
 // statuses, an audit-file reader, and the registered /guardian command
@@ -276,7 +276,63 @@ describe("guardian ask", () => {
 		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "running as root", {
 			sessionKey: "guardian:session",
 			rememberLabel: "all guardian ask prompts this session",
-			preview: { kind: "command", tool: "bash", text: "sudo ls" },
+			preview: { kind: "command", tool: "bash", text: "sudo ls", warnSpans: [[0, 4]] },
+		});
+	});
+
+	it("the preview highlights the matched span: wildcard covers first segment start … last segment end", async () => {
+		const w = await boot({ config: { ask: ["rm * ~"] } });
+		await w.gate(bash("rm -rf ~/x"));
+		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "guardian ask rule: rm * ~", {
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
+			preview: { kind: "command", tool: "bash", text: "rm -rf ~/x", warnSpans: [[0, 8]] },
+		});
+	});
+
+	it("a leading `*` anchors the span at the first literal segment", async () => {
+		const w = await boot({ config: { ask: ["*cfg"] } });
+		await w.gate(bash("cat /etc/x.cfg"));
+		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "guardian ask rule: *cfg", {
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
+			preview: { kind: "command", tool: "bash", text: "cat /etc/x.cfg", warnSpans: [[11, 14]] },
+		});
+	});
+
+	it("a regex rule highlights its exec span", async () => {
+		const w = await boot({
+			config: { ask: [{ regex: "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))" }] },
+		});
+		await w.gate(bash("git push --force origin main"));
+		expect(w.confirm).toHaveBeenCalledWith(
+			"allow this bash command?",
+			"guardian ask rule: git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))",
+			{
+				sessionKey: "guardian:session",
+				rememberLabel: "all guardian ask prompts this session",
+				preview: { kind: "command", tool: "bash", text: "git push --force origin main", warnSpans: [[0, 16]] },
+			},
+		);
+	});
+
+	it("a multi-segment wildcard spans its middle segments too", async () => {
+		const w = await boot({ config: { ask: ["a*b*c"] } });
+		await w.gate(bash("xaXbYcZ"));
+		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "guardian ask rule: a*b*c", {
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
+			preview: { kind: "command", tool: "bash", text: "xaXbYcZ", warnSpans: [[1, 6]] },
+		});
+	});
+
+	it("a match with no literal span (pattern `*`) carries no warnSpans", async () => {
+		const w = await boot({ config: { ask: ["*"] } });
+		await w.gate(bash("echo hi"));
+		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "guardian ask rule: *", {
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
+			preview: { kind: "command", tool: "bash", text: "echo hi" },
 		});
 	});
 

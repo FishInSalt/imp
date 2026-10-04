@@ -129,7 +129,8 @@ untouched):
      warnSpans: [[start, end]] } }` — `warnSpans` is the span the rule
      matched (wildcard: first segment start … last segment end; regex: the
      `exec` match span), which the picker styles with its alert color;
-     omitted when empty (an all-`*` pattern).
+     omitted when empty (e.g. an all-`*` pattern or a zero-length regex
+     match).
    - `write` / `edit`: message `"allow this write?"` / `"allow this edit?"`;
      detail `<resolved path>` + (`\n` + `<reason or "guardian ask rule:
      <source>">`); options `{ sessionKey, rememberLabel }` (no preview — the

@@ -311,7 +311,12 @@ describe("guardian ask", () => {
 			{
 				sessionKey: "guardian:session",
 				rememberLabel: "all guardian ask prompts this session",
-				preview: { kind: "command", tool: "bash", text: "git push --force origin main", warnSpans: [[0, 16]] },
+				preview: {
+					kind: "command",
+					tool: "bash",
+					text: "git push --force origin main",
+					warnSpans: [[0, 16]],
+				},
 			},
 		);
 	});
@@ -347,7 +352,7 @@ describe("guardian ask", () => {
 		const w = await boot({ config: { ask: [{ pattern: "sudo", reason: "running as root" }] } });
 		const result = blockOf(await w.gate(bash("sudo ls")));
 		expect(result.block).toBe(true);
-		expect(result.reason).toBe("running as root");
+		expect(result.reason).toBe("running as root — the user declined this call");
 		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — denied"]);
 	});
 
@@ -359,7 +364,7 @@ describe("guardian ask", () => {
 			"guardian ask rule: sudo",
 			expect.anything(),
 		);
-		expect(result.reason).toBe("blocked by guardian — the confirmation was declined");
+		expect(result.reason).toBe("the user declined this call");
 	});
 
 	it("first matching ask rule wins (config order)", async () => {
@@ -490,7 +495,7 @@ describe("guardian tool scoping", () => {
 		w.confirm.mockClear();
 		const declined = blockOf(await w.gate(fileCall("edit", "/etc/hosts")));
 		expect(declined.block).toBe(true);
-		expect(declined.reason).toBe("config dir");
+		expect(declined.reason).toBe("config dir — the user declined this call");
 		expect(w.confirm).toHaveBeenCalledWith("allow this edit?", "/etc/hosts\nconfig dir", {
 			sessionKey: "guardian:session",
 			rememberLabel: "all guardian ask prompts this session",

@@ -84,6 +84,16 @@ export interface ConfirmOptions {
 	 *  in the picker where one exists, as one plain note (newlines preserved)
 	 *  otherwise. */
 	preview?: CommandPreview;
+	/** Deadline in milliseconds for hearing an answer (#ask-timeout). The
+	 *  host starts the clock when the question becomes actually visible — a
+	 *  queued question (blocked behind another picker) does not count down —
+	 *  and resolves it as "timeout" when the deadline passes unanswered.
+	 *  Positive finite numbers only; anything else is ignored, and values
+	 *  beyond the platform timer ceiling wait the ceiling — a huge deadline
+	 *  clamps, it never overflows into an instant fire. Capability-gated like
+	 *  every interactive affordance: hosts without a picker (print mode, the
+	 *  legacy readline shell) ignore the deadline entirely. */
+	timeoutMs?: number;
 }
 
 /**
@@ -149,13 +159,18 @@ export interface ExtensionApi {
 	setStatus(key: string, text: string | undefined): void;
 
 	/** Ask the human a yes/no question (the interactive host renders a [y/N]
-	 *  prompt on the tty). Resolves true only on explicit approval; false
-	 *  covers declines, empty/EOF answers, and hosts without an interactive
-	 *  prompt (print mode, plain tests) — it never rejects and never hangs,
-	 *  so a gate can always treat false as "not allowed". A sessionKey in
-	 *  options lets the host remember a "don't ask again this session" choice
-	 *  for that key (M10); hosts without that affordance just ignore it. */
-	confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean>;
+	 *  prompt on the tty). Resolves exactly true only on explicit approval;
+	 *  false covers declines, empty/EOF answers, and hosts without an
+	 *  interactive prompt (print mode, plain tests). "timeout" is a third
+	 *  outcome: options.timeoutMs expired with the question visible and
+	 *  unanswered — a NON-approval, and truthy, so a gate must compare with
+	 *  `=== true`, never a truthy check. It never rejects; without a
+	 *  timeoutMs the wait for an answer is unbounded, and hosts that cannot
+	 *  time out (no picker) ignore it — the deadline is a caller-set bound on
+	 *  picker hosts, not a universal guarantee. A sessionKey in options lets
+	 *  the host remember a "don't ask again this session" choice for that key
+	 *  (M10); hosts without that affordance just ignore it. */
+	confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean | "timeout">;
 }
 
 /**

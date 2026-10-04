@@ -264,7 +264,7 @@ function confirmItems(rememberLabel: string | undefined, sessionKey: string | un
  */
 export class TtyConfirm {
 	private ask: ((question: string) => Promise<boolean>) | null = null;
-	private select: ((options: SelectOptions) => Promise<number | null>) | null = null;
+	private select: ((options: SelectOptions) => Promise<number | null | "timeout">) | null = null;
 	/** sessionKeys the user approved with "don't ask again this session". */
 	private readonly sessionAllowed = new Set<string>();
 	private readonly renderer: Renderer;
@@ -281,7 +281,7 @@ export class TtyConfirm {
 		detail?: string,
 		options?: ConfirmOptions,
 		source?: string,
-	): Promise<boolean> => {
+	): Promise<boolean | "timeout"> => {
 		// #confirm-prompt (Phase 3 D9): the caller name rides the record line only
 		// when the host supplied one; without it the bytes are exactly as before.
 		const label = source === undefined || source === "" ? "" : `${source} — `;
@@ -312,8 +312,19 @@ export class TtyConfirm {
 				detail,
 				warnSpans: options?.warnSpans,
 				preview: options?.preview,
+				// #ask-timeout: forwarded only when set — the option bag stays
+				// byte-compatible with what shells and tests saw before.
+				...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
 				items,
 			});
+			// #ask-timeout: this branch MUST precede the null and sessionKey logic
+			// below — with a sessionKey present, `choice !== 2` would otherwise
+			// read "timeout" as approval. A timed-out question is a decline the
+			// user never answered; it grants no session memory.
+			if (choice === "timeout") {
+				this.renderer.note(`▪ confirm: ${label}${message} — timed out (declined)`);
+				return "timeout";
+			}
 			if (choice === null) {
 				// cancelled picker declines, like Ctrl+C at the ask
 				return false;
@@ -345,7 +356,7 @@ export class TtyConfirm {
 	}
 
 	/** runRepl binds the picker when the input shell implements select. */
-	bindSelect(select: (options: SelectOptions) => Promise<number | null>): void {
+	bindSelect(select: (options: SelectOptions) => Promise<number | null | "timeout">): void {
 		this.select = select;
 	}
 }
@@ -1557,7 +1568,15 @@ class ReplMachine {
 		// M9 phase 2); binding it to the input keeps the method's `this`.
 		// Commands without it keep their text fallbacks.
 		const select = this.input.select?.bind(this.input);
-		if (select !== undefined) ctx.select = select;
+		if (select !== undefined) {
+			// ctx.select keeps its narrow contract (commands compare indexes):
+			// none of its callers set a deadline, so "timeout" cannot occur —
+			// map it to a cancel defensively (#ask-timeout).
+			ctx.select = async (options) => {
+				const choice = await select(options);
+				return choice === "timeout" ? null : choice;
+			};
+		}
 		const secret = this.input.secret?.bind(this.input);
 		if (secret !== undefined) ctx.secret = secret;
 		// #tree: the navigator picker and the editor draft (editorText

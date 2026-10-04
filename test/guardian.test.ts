@@ -605,6 +605,132 @@ describe("guardian command", () => {
 	});
 });
 
+/* ------------------------------ ask timeout ------------------------------ */
+
+describe("guardian #ask-timeout", () => {
+	it("askTimeoutMs rides every ask confirm; unconfigured keeps the option bag byte-identical", async () => {
+		const configured = await boot({ config: { ask: ["sudo"], askTimeoutMs: 600000 } });
+		await configured.gate(bash("sudo ls"));
+		expect(configured.confirm).toHaveBeenCalledWith("allow this bash command?", "guardian ask rule: sudo", {
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
+			timeoutMs: 600000,
+			preview: { kind: "command", tool: "bash", text: "sudo ls", warnSpans: [[0, 4]] },
+		});
+		const bare = await boot({ config: { ask: ["sudo"] } });
+		await bare.gate(bash("sudo ls"));
+		const options = (bare.confirm.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
+		expect("timeoutMs" in options).toBe(false);
+	});
+
+	it("a timed-out ask blocks with the timeout wording — audited as timeout, not denied", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 600000 } });
+		w.confirm.mockResolvedValueOnce("timeout");
+		const result = blockOf(await w.gate(bash("sudo ls")));
+		expect(result.block).toBe(true);
+		expect(result.reason).toBe("the confirmation timed out after 10 minutes — the call was not approved");
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — timeout"]);
+	});
+
+	it("a timed-out ask with a rule reason prefixes the reason, like a decline does", async () => {
+		const w = await boot({
+			config: { ask: [{ pattern: "sudo", reason: "running as root" }], askTimeoutMs: 600000 },
+		});
+		w.confirm.mockResolvedValueOnce("timeout");
+		const result = blockOf(await w.gate(bash("sudo ls")));
+		expect(result.reason).toBe(
+			"running as root — the confirmation timed out after 10 minutes — the call was not approved",
+		);
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — timeout"]);
+	});
+
+	it("humanDuration boundaries shape the timeout wording", async () => {
+		const cases: Array<[number, string]> = [
+			[999, "1 second"],
+			[1000, "1 second"],
+			[59999, "60 seconds"],
+			[60000, "1 minute"],
+			[90000, "2 minutes"],
+			[600000, "10 minutes"],
+		];
+		for (const [ms, wording] of cases) {
+			const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: ms } });
+			w.confirm.mockResolvedValueOnce("timeout");
+			const result = blockOf(await w.gate(bash("sudo ls")));
+			expect(result.reason).toBe(`the confirmation timed out after ${wording} — the call was not approved`);
+		}
+	});
+
+	it("an invalid askTimeoutMs is a config error (no rules active, flag set, audited)", async () => {
+		for (const bad of ["600000", 0, -5, 1.5, true, 2147483648]) {
+			const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: bad } });
+			expect(w.statuses.get("config")).toBe("config error");
+			expect(await w.gate(bash("sudo ls"))).toBeUndefined(); // no rules active
+			expect(w.confirm).not.toHaveBeenCalled();
+			expect(auditBodies().at(-1)).toContain(
+				"[load] config error — askTimeoutMs must be a positive integer of milliseconds",
+			);
+		}
+	});
+
+	it("reload swaps the deadline atomically: a new config replaces it, a failed load keeps it", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 600000 } });
+		// a failed reload keeps the last valid deadline
+		await writeConfig("nope");
+		await w.runCommand("reload");
+		await w.gate(bash("sudo ls"));
+		expect((w.confirm.mock.calls.at(-1) as unknown[])[2]).toMatchObject({ timeoutMs: 600000 });
+		// a successful reload replaces it (here: drops it)
+		await writeConfig({ ask: ["sudo"] });
+		await w.runCommand("reload");
+		await w.gate(bash("sudo ls"));
+		const options = (w.confirm.mock.calls.at(-1) as unknown[])[2] as Record<string, unknown>;
+		expect("timeoutMs" in options).toBe(false);
+		expect(w.statuses.get("config")).toBeUndefined();
+	});
+
+	it("the platform timer ceiling (2147483647 ms) is the accepted maximum", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 2147483647 } });
+		expect(w.statuses.get("config")).toBeUndefined();
+		await w.gate(bash("sudo ls"));
+		expect((w.confirm.mock.calls[0] as unknown[])[2]).toMatchObject({ timeoutMs: 2147483647 });
+	});
+
+	it("an ENOENT reload clears the deadline together with the rules", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 600000 } });
+		await rm(configPath());
+		await w.runCommand("reload"); // missing file: rules AND deadline reset
+		await writeConfig({ ask: ["sudo"] }); // a fresh config without the field
+		await w.runCommand("reload");
+		await w.gate(bash("sudo ls"));
+		const options = (w.confirm.mock.calls.at(-1) as unknown[])[2] as Record<string, unknown>;
+		expect("timeoutMs" in options).toBe(false);
+		expect(w.statuses.get("config")).toBeUndefined();
+	});
+
+	it("a host reporting timeout without a configured deadline gets the fallback wording", async () => {
+		const w = await boot({ config: { ask: ["sudo"] } }); // no askTimeoutMs
+		w.confirm.mockResolvedValueOnce("timeout"); // a contract-violating host
+		const result = blockOf(await w.gate(bash("sudo ls")));
+		expect(result.reason).toBe("the confirmation timed out — the call was not approved");
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — timeout"]);
+	});
+
+	it("the internal-error fallback carries the deadline; a fallback timeout keeps the historical reason", async () => {
+		const w = await boot({ config: { ask: ["ls"], askTimeoutMs: 600000 } });
+		w.confirm.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("timeout");
+		const result = blockOf(await w.gate(bash("ls")));
+		expect(result.block).toBe(true);
+		expect(result.reason).toBe("guardian internal error — the call was not allowed");
+		const fallback = w.confirm.mock.calls[1] as unknown[];
+		expect(fallback[2]).toEqual({
+			preview: { kind: "command", tool: "bash", text: "ls" },
+			timeoutMs: 600000,
+		});
+		expect(auditBodies()).toEqual(["[ask] internal error — ls — timeout"]);
+	});
+});
+
 /* -------------------------------- template ------------------------------- */
 
 describe("guardian template", () => {
@@ -615,21 +741,34 @@ describe("guardian template", () => {
 	it("validates cleanly and the shipped cases behave as documented", async () => {
 		const w = await boot({ config: template });
 		expect(w.statuses.get("config")).toBeUndefined();
+		// whole-home wipes, both portable spellings (plus the quoted form)
 		expect(blockOf(await w.gate(bash("rm -rf ~"))).block).toBe(true);
-		expect(blockOf(await w.gate(bash("rm -fr ~"))).block).toBe(true);
-		expect(blockOf(await w.gate(bash("rm -r -f $HOME/x"))).block).toBe(true);
-		expect(blockOf(await w.gate(bash(`rm -rf \${HOME}/y`))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("rm -fr ~/"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash(`rm -rf \${HOME}`))).block).toBe(true);
+		expect(blockOf(await w.gate(bash('rm -rf "$HOME"/*'))).block).toBe(true);
+		// the filesystem root and raw disk tools
+		expect(blockOf(await w.gate(bash("rm -rf /"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("diskutil eraseDisk JHFS+ x /dev/disk2"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("diskutil apfs deleteVolume disk3s1"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("dd if=/dev/zero of=/dev/disk4 bs=1m count=1"))).block).toBe(true);
+		// the .ssh folder as a whole is denied; deeper paths stay the user's call
+		expect(blockOf(await w.gate(bash("rm -rf ~/.ssh"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("rm -rf $HOME/.ssh/"))).block).toBe(true);
+		expect(await w.gate(bash("rm ~/.ssh/known_hosts"))).toBeUndefined();
+		// everyday calls pass: scratch deletes and lease-guarded pushes
 		expect(await w.gate(bash("rm -rf /tmp/x"))).toBeUndefined();
 		expect(await w.gate(bash("git push --force-with-lease"))).toBeUndefined();
-		w.confirm.mockResolvedValueOnce(true);
-		await w.gate(bash("sudo ls"));
+		// the two asks; the shipped askTimeoutMs rides every confirm
 		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(bash("git push -f origin main"));
 		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(bash("git push --force origin main"));
 		w.confirm.mockResolvedValueOnce(true);
-		await w.gate(fileCall("write", "/etc/hosts"));
-		expect(w.confirm).toHaveBeenCalledTimes(4);
+		await w.gate(bash("gh repo delete owner/repo --yes"));
+		expect(w.confirm).toHaveBeenCalledTimes(3);
+		for (const call of w.confirm.mock.calls) {
+			expect((call as unknown[])[2]).toMatchObject({ timeoutMs: 600000 });
+		}
 	});
 });
 

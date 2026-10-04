@@ -542,7 +542,10 @@ Acceptance criteria (scriptable):
 | 2 | `test/repl-tui.test.ts`, `test/repl-confirm.test.ts`, `test/guardian.test.ts` | picker pins, text-host preview note, `:107` update |
 
 No new dependencies. No persistence or session-format changes. No model-visible
-change: `api.confirm` still resolves boolean.
+change: `api.confirm` still resolves boolean. (Superseded by #ask-timeout:
+the return widened to `boolean | "timeout"` — approval still requires the
+literal `true`; see `docs/ask-timeout-design.md` and `docs/guardian-design.md`
+rev 3.1.)
 
 ## 10. Test plan (red-first)
 

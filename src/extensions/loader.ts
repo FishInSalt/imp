@@ -32,8 +32,14 @@ export interface LoadExtensionsOptions {
 	onDiagnostic?: (line: string) => void;
 	/** Interactive confirm handler (the REPL's tty prompt), forwarded to the
 	 *  registry's api.confirm. Absent (print mode, tests): api.confirm resolves
-	 *  false with one stderr teaching line — never hangs. */
-	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
+	 *  false with one stderr teaching line — never hangs. Picker hosts may
+	 *  resolve "timeout" (#ask-timeout); it passes through. */
+	confirm?: (
+		message: string,
+		detail?: string,
+		options?: ConfirmOptions,
+		source?: string,
+	) => Promise<boolean | "timeout">;
 }
 
 export interface LoadedExtensions {

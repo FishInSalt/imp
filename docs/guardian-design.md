@@ -1,6 +1,10 @@
 # guardian — a minimal config-driven permission gate (design)
 
-Status: **rev 3.0 — the ask picker red-highlights the rule-matched span.**
+Status: **rev 3.1 — ask prompts time out (`askTimeoutMs`; #ask-timeout).**
+rev 3.0 shipped the ask picker red-highlighting the rule-matched span; rev 3.1
+adds the optional host-side deadline (a question left unanswered once visible
+counts as declined, reported distinctly from a manual decline) and rebuilds
+the shipped template around portable catastrophe-only rules.
 Renamed to `guardian` (rev 2.9); merged to `main` (`5fb3a24` v0, `bce6df2`
 friendly config), cut over on 2026-10-04 (P2), guardian v1 removed (P3/P4,
 `chore/remove-guardian-v1`), and the working name guardian2 retired —
@@ -79,14 +83,16 @@ Known limits, documented and accepted:
     "sudo",                                    // plain text: appears anywhere
     { "regex": "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))" },
     { "tool": ["write", "edit"], "pattern": "/etc/" }
-  ]
+  ],
+  "askTimeoutMs": 600000                       // an unanswered ask question counts as declined
 }
 ```
 
 Schema and validation (strict, checked at load):
 
-- Top level must be a JSON object; allowed keys: `deny`, `ask`, and `_…`
-  prefixed. Unknown keys are errors (catches typos such as `deni`).
+- Top level must be a JSON object; allowed keys: `deny`, `ask`,
+  `askTimeoutMs`, and `_…` prefixed. Unknown keys are errors (catches typos
+  such as `deni`).
 - `deny` / `ask` are arrays; missing arrays are empty.
 - An entry is either a string (a wildcard pattern) or an object with:
   - exactly one of `pattern` (wildcard) or `regex` (raw regular expression);
@@ -108,6 +114,18 @@ Schema and validation (strict, checked at load):
   patterns now; a v0 regex string must move to a `regex` entry.
 - Every `regex` is compiled at load; any failure fails the whole load (§5).
 - Missing file = zero rules = the gate does nothing.
+- `askTimeoutMs` (optional) — a positive safe integer of milliseconds, at
+  most 2147483647 (the platform timer ceiling; anything larger is a config
+  error). Bounds
+  how long an ask question may wait **once visible**: queued questions do
+  not count down (the host's picker queue re-opens the question when its
+  turn comes, so the timer starts at that opening). On expiry the question
+  counts as declined, with its own wording and audit token (§3/§4). The
+  field is read atomically with the rules: a successful reload replaces it
+  (a config without the field clears it; a missing file clears it), a
+  failed load keeps the last valid value. Absent ⇒ questions wait
+  indefinitely; hosts without a picker (legacy readline, print mode) ignore
+  it — the deadline is a host affordance, not a config-side promise.
 
 ## 3. Behavior
 
@@ -137,7 +155,16 @@ untouched):
      preview kind is command-only).
    `false` → block with the reason (or "the user declined this call"); a
    configured reason gets " — the user declined this call" appended.
-   Audit the outcome. The shared session key is
+   When `askTimeoutMs` is configured, both branches' options bag also
+   carries `timeoutMs: <askTimeoutMs>` (absent otherwise — the bag keeps
+   its pre-timeout shape).
+   `"timeout"` (only possible with a configured `askTimeoutMs`) → block
+   with "the confirmation timed out after <duration> — the call was not
+   approved"; a configured reason is prefixed exactly like a decline
+   ("<reason> — …"). Duration wording is pinned: minutes at ≥ 60 s ("10
+   minutes"), seconds below, rounded, never zero. A timeout grants **no**
+   session memory.
+   Audit the outcome (`approved` / `denied` / `timeout`). The shared session key is
    the only memory: choosing the prompt's remember option once stops every
    further ask prompt for the rest of the session — bash and files alike
    ("allow all this session"); deny rules are unaffected.
@@ -165,13 +192,15 @@ untouched):
   [deny] <source> — <command or resolved path> — blocked (child:<agent>)
   [ask] <source> — <command or resolved path> — approved
   [ask] <source> — <command or resolved path> — denied
-  [ask] internal error — <command or path> — approved|denied
+  [ask] <source> — <command or resolved path> — timeout
+  [ask] internal error — <command or path> — approved|denied|timeout
   [load] config error — <first line of the error>
   ```
 
   Formats pinned byte-exact in tests; every line carries an ISO-8601
   timestamp prefix (`new Date().toISOString()` + space). `denied` covers
-  declines and hosts with no interactive prompt (§3).
+  declines and hosts with no interactive prompt (§3); `timeout` means the
+  configured deadline expired with the question visible.
 - **Footer**: `setStatus("config", "config error")` while the last load
   failed; cleared on a successful load. Nothing else (no rule count, no
   per-call status).
@@ -196,8 +225,11 @@ untouched):
   unknown state; a session-wide "stop asking" grant must not silently
   auto-approve this fallback). The confirm's detail is the match text
   (command or path), flattened and capped like the audit text; the command
-  preview rides along when the match is a bash command; the outcome is
-  audited as `[ask] internal error — <command or path> — approved|denied`.
+  preview rides along when the match is a bash command; the configured
+  `askTimeoutMs` rides along too; the outcome is audited as `[ask] internal
+  error — <command or path> — approved|denied|timeout`, and a fallback
+  timeout keeps the historical block reason ("guardian internal error — the
+  call was not allowed").
 
 ## 6. Phases
 
@@ -340,6 +372,31 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
    both forms); optional `tool` scoping for `write` / `edit` path rules.
 
 ## 10. Review log
+
+- rev 3.1 — ask prompts time out (#ask-timeout, 2026-10-04): the host gained
+  `ConfirmOptions.timeoutMs` (counts only while the picker is visible;
+  queued questions re-enter `select()` on promotion) and `api.confirm` may
+  now resolve `"timeout"` — a **non-approval** that is truthy, so gates
+  must compare `=== true` (JSDoc updated; all existing call sites keep
+  their narrow contracts via a binding adapter). guardian reads the
+  optional top-level `askTimeoutMs` (positive safe integer; rules and
+  deadline swap atomically on reload), submits it on ask confirms, audits
+  `timeout` as a third outcome, and blocks timed-out calls with the
+  dedicated wording. Oversized deadlines clamp at the platform ceiling
+  (host-side) and are a config error above it (guardian-side); a
+  contract-violating host that reports `timeout` without a configured
+  deadline degrades the wording to "the confirmation timed out — the call
+  was not approved". The shipped template was rebuilt around portable
+  catastrophe-only rules: home wipes (`~` / `$HOME` spellings), filesystem
+  root, `diskutil erase*` / `apfs delete*`, raw-device `dd`, and the `.ssh`
+  folder (`~` / `$HOME` spellings) — absolute paths stay out (a `_comment`
+  points the user at them), and `askTimeoutMs: 600000` ships. Design review
+  (#ask-timeout doc): NEEDS-FIXES (2 P1 / 6 P2 / 3 P3 — incl. the
+  sessionKey truthiness trap: a misplaced timeout branch would read
+  `"timeout" !== 2` as approval) → folded → CONFIRMED, plus a follow-up
+  nits round. Owner-decided rule standard: deny only irreversible
+  catastrophes with no legitimate autonomous use; ask rules carry **no**
+  reason (the model gets the decline / timeout signal, not prose).
 
 - rev 3.0 — matched-span highlight: the bash ask preview carries
   `warnSpans` = `[[start, end]]` of the region the rule matched (wildcard:

@@ -61,5 +61,8 @@ export async function askTrustViaTui(options: {
 	// The delayed terminal stop (40ms) must RUN before the real shell binds
 	// stdin — otherwise it pauses the stream under the successor (review P0).
 	await shell.whenSettled();
-	return pick === null ? null : (ANSWERS[pick] ?? null);
+	// #ask-timeout widened select()'s result; this direct caller sets no
+	// deadline, so "timeout" is unreachable — the bare null fallback keeps
+	// the type honest either way.
+	return typeof pick !== "number" ? null : (ANSWERS[pick] ?? null);
 }

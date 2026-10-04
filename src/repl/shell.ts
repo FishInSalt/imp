@@ -187,6 +187,12 @@ const PLACEHOLDER_HINT = dim(
  *  reach for it, and "typing queues" advertises steering. */
 const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter follow-up)", true);
 
+/** #ask-timeout: setTimeout's platform ceiling (2^31 - 1 ms ≈ 24.85 days).
+ *  Node fires delays above it after ~1 ms (TimeoutOverflowWarning) — a
+ *  caller's "very long" deadline would otherwise refuse every ask
+ *  instantly, so deadlines clamp here instead of overflowing. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** #confirm-prompt (Phase 1 D2): the picker's key affordance, drawn inside the
  *  picker box because the editor hint row is blanked while a selector owns
  *  focus. The digit range is computed from the item count (D3 caps it at 9);
@@ -880,7 +886,7 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
-	select(options: SelectOptions): Promise<number | null> {
+	select(options: SelectOptions): Promise<number | null | "timeout"> {
 		const tui = this.tui;
 		if (tui === null || this.closed || options.items.length === 0) return Promise.resolve(null); // unstarted/closed, or nothing to pick
 		if (this.selector !== null) {
@@ -888,7 +894,10 @@ export class TuiShell implements LineInput {
 			// confirm arriving while e.g. the /model picker is open still gets
 			// asked — a silent decline would veto the tool without the user
 			// ever seeing the question.
-			return new Promise<number | null>((resolve) => {
+			// #ask-timeout: the queued closure re-enters select() on promotion,
+			// so the deadline (if any) starts from the second opening, after
+			// the current picker settles — never from queue-entry time.
+			return new Promise<number | null | "timeout">((resolve) => {
 				this.pendingSelects.push(() => resolve(this.select(options)));
 			});
 		}
@@ -950,11 +959,16 @@ export class TuiShell implements LineInput {
 		if (numbered) box.addChild(new Spacer(1));
 		box.addChild(list);
 		if (numbered) box.addChild(new Text(dim(pickerAffordance(items.length), true), 0, 0));
-		return new Promise<number | null>((resolve) => {
-			let settled = false; // pick, cancel and close all funnel here — once
-			const finish = (index: number | null): void => {
+		return new Promise<number | null | "timeout">((resolve) => {
+			let settled = false; // pick, cancel, timeout and close all funnel here — once
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			const finish = (index: number | null | "timeout"): void => {
 				if (settled) return;
 				settled = true;
+				if (timer !== null) {
+					clearTimeout(timer); // manual answer/cancel and close all disarm the deadline
+					timer = null;
+				}
 				this.setSelector(null);
 				this.updatePlaceholder(); // the hint may come back with the picker gone
 				this.askContainer.removeChild(box);
@@ -1045,6 +1059,19 @@ export class TuiShell implements LineInput {
 			this.askContainer.addChild(box);
 			tui.setFocus(list);
 			tui.requestRender();
+			// #ask-timeout: the deadline starts here — the picker is on screen.
+			// The deadline expires through the same finish funnel (like a
+			// cancel: teardown, focus restore, promotion of the next queued
+			// pick), resolving "timeout"; an answer arriving after the timer
+			// is inert (settled guard). unref: an armed deadline must not keep
+			// the process alive by itself.
+			const timeoutMs = options.timeoutMs;
+			if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+				// Clamp, never overflow: above the platform ceiling Node fires after
+				// ~1 ms, which would refuse every ask instantly.
+				timer = setTimeout(() => finish("timeout"), Math.min(timeoutMs, MAX_TIMER_MS));
+				timer.unref?.();
+			}
 		});
 	}
 

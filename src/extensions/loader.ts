@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { firstLine, VERSION } from "../format.js";
 import { compareCodePoints, ExtensionRegistry } from "./registry.js";
 import type {
-	ClassifyHandler,
 	ConfirmOptions,
 	ExtensionApi,
 	ExtensionEventHandlerMap,
@@ -35,9 +34,6 @@ export interface LoadExtensionsOptions {
 	 *  registry's api.confirm. Absent (print mode, tests): api.confirm resolves
 	 *  false with one stderr teaching line — never hangs. */
 	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
-	/** Host-side classify implementation (#guardian-auto-mode, D6/D8). Absent:
-	 *  api.classify resolves undefined without touching the network. */
-	classify?: ClassifyHandler;
 }
 
 export interface LoadedExtensions {
@@ -257,8 +253,6 @@ function extensionApi(
 		// #confirm-prompt (Phase 3 D9): the host names the caller — the extension
 		// itself cannot set or spoof this label, and ConfirmOptions stays unchanged.
 		confirm: (message, detail, options) => registry.confirm(message, detail, options, facts.name),
-		// classify works at RUNTIME like confirm; the host names the caller too.
-		classify: (request) => registry.classify(request, facts.name),
 	};
 }
 
@@ -270,7 +264,7 @@ function extensionApi(
  */
 export async function loadExtensions(options: LoadExtensionsOptions): Promise<LoadedExtensions> {
 	const report = options.onDiagnostic ?? (() => {});
-	const registry = new ExtensionRegistry({ report, confirm: options.confirm, classify: options.classify });
+	const registry = new ExtensionRegistry({ report, confirm: options.confirm });
 	const summaries: ExtensionSummary[] = [];
 	const failures: ExtensionFailure[] = [];
 

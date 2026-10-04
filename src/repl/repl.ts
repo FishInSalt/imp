@@ -9,7 +9,6 @@ import { type QueueMode, saveSettings } from "../core/settings.js";
 import { detectBinary } from "../core/tools/bin-detect.js";
 import type { ToolExecuteResult } from "../core/tools/types.js";
 import { priceUsageTotals } from "../core/usage-totals.js";
-import { currentToolCallContext } from "../extensions/call-context.js";
 import type { ExtensionRegistry } from "../extensions/registry.js";
 import { NO_CONFIRM_LINE } from "../extensions/registry.js";
 import type { ConfirmOptions, RegisteredExtensionCommand } from "../extensions/types.js";
@@ -20,7 +19,6 @@ import { supportedThinkingLevels, thinkingMetaFor } from "../provider/thinking.j
 import { imageSuffix, type Renderer } from "../render.js";
 import { type AgentEventInfo, noModelText, type Runner } from "../runner.js";
 import { type AutocompleteSlashCommand, resolveShell, type Terminal } from "../tui.js";
-import type { HostClassify } from "./classify.js";
 import { copyToClipboard } from "./clipboard-write.js";
 import {
 	COMMANDS,
@@ -74,11 +72,6 @@ export interface ReplOptions {
 	/** Cross-session input history file for the TUI shell (M11 #4); cli.ts
 	 *  resolves the real ~/.imp path, hermetic runs omit it. */
 	inputHistoryPath?: string;
-	/** Interactive classify host for extension gates (api.classify,
-	 *  #guardian-auto-mode): created by cli.ts for any interactive session,
-	 *  bound below to the live model reference. Absent (print mode, tests):
-	 *  api.classify resolves undefined without touching the network. */
-	classify?: HostClassify;
 	/** Interactive confirm host for extension gates (api.confirm): created by
 	 *  cli.ts before extension loading (which precedes this call) and bound
 	 *  here to the live input — the [y/N] prompt asks on this REPL's tty. */
@@ -241,9 +234,9 @@ function entryLabel(entry: QueueEntry): string {
 
 /** The confirm picker's items: approve, approve-for-the-session, decline.
  *  The remember entry exists only when a `sessionKey` gives the memory
- *  something to key on — the fresh fallbacks of #guardian-auto-mode (D13/D16)
- *  deliberately pass none, and offering "don't ask again" with no memory to
- *  back it would be a lie. `rememberLabel` (#confirm-prompt Phase 2 D7) names
+ *  something to key on — the fresh fallbacks deliberately pass none, and
+ *  offering "don't ask again" with no memory to back it would be a lie.
+ *  `rememberLabel` (#confirm-prompt Phase 2 D7) names
  *  what the session memory covers, in the extension's own words — the host
  *  still owns the memory itself. */
 function confirmItems(rememberLabel: string | undefined, sessionKey: string | undefined): SelectItemOption[] {
@@ -274,16 +267,6 @@ export class TtyConfirm {
 	private select: ((options: SelectOptions) => Promise<number | null>) | null = null;
 	/** sessionKeys the user approved with "don't ask again this session". */
 	private readonly sessionAllowed = new Set<string>();
-	/** §16/D33: the gate-decision recorder (bound by runRepl); unbound ⇒
-	 *  nothing is ever recorded. */
-	private recordGateDecision:
-		| ((event: {
-				tool: string;
-				callIdentity: string;
-				outcome: "approved" | "denied";
-				remember?: boolean;
-		  }) => void)
-		| null = null;
 	private readonly renderer: Renderer;
 
 	constructor(renderer: Renderer) {
@@ -333,31 +316,26 @@ export class TtyConfirm {
 			});
 			if (choice === null) {
 				// cancelled picker declines, like Ctrl+C at the ask
-				this.reportOutcome("denied");
 				return false;
 			}
 			if (sessionKey !== undefined) {
 				if (choice === 1) {
 					this.sessionAllowed.add(sessionKey);
-					this.reportOutcome("approved", true); // §16/D33: once, at the pick
 					return true;
 				}
 				const approved = choice !== 2; // [Yes, remember, No]
-				this.reportOutcome(approved ? "approved" : "denied");
 				return approved;
 			}
 			const approved = choice === 0; // [Yes, No] — no key, nothing to remember
-			this.reportOutcome(approved ? "approved" : "denied");
 			return approved;
 		}
 		const ask = this.ask;
 		if (ask === null) {
-			// No human was asked: not a decision — never recorded (D33).
+			// No interactive prompt: decline, never hang.
 			process.stderr.write(NO_CONFIRM_LINE);
 			return false;
 		}
 		const answer = await ask("proceed? [y/N] ");
-		this.reportOutcome(answer ? "approved" : "denied");
 		return answer;
 	};
 
@@ -369,34 +347,6 @@ export class TtyConfirm {
 	/** runRepl binds the picker when the input shell implements select. */
 	bindSelect(select: (options: SelectOptions) => Promise<number | null>): void {
 		this.select = select;
-	}
-
-	/** §16/D33: runRepl binds the host's gate-decision recorder. */
-	bindRecorder(
-		record: (event: {
-			tool: string;
-			callIdentity: string;
-			outcome: "approved" | "denied";
-			remember?: boolean;
-		}) => void,
-	): void {
-		this.recordGateDecision = record;
-	}
-
-	/** §16/D33: report one PROMPTED outcome. Never called for the unbound
-	 *  fallback (no human) or for sessionKey replays (no new decision); a
-	 *  confirm outside a gate dispatch (no call-scoped store) is skipped. */
-	private reportOutcome(outcome: "approved" | "denied", remember = false): void {
-		const record = this.recordGateDecision;
-		if (record === null) return;
-		const gate = currentToolCallContext();
-		if (gate === undefined) return;
-		record({
-			tool: gate.tool,
-			callIdentity: gate.callIdentity,
-			...(remember ? { remember: true } : {}),
-			outcome,
-		});
 	}
 }
 
@@ -429,16 +379,6 @@ interface ReplMachineOptions {
  * exits when EOF/an exit request is pending. Double Ctrl+C force-exits
  * through `exit()` — never awaiting a possibly-hung tool.
  */
-/** #guardian-auto-mode (D11): does this submitted line count as human input?
- *  Blanks never do; `!` bangs run in the shell and never reach the model.
- *  Everything else — typed text, slash commands (recorded as the invocation,
- *  not its expansion) — is recorded at the submission boundary, before any
- *  dispatch. Module scope: the repl machine calls it, tests pin it. */
-export function capturesAsUserInput(line: string): boolean {
-	if (line.trim() === "") return false;
-	return line[0] !== "!";
-}
-
 class ReplMachine {
 	private state: ReplState = "idle";
 	/** "exiting" is the bounded window of a graceful shutdown awaiting the
@@ -536,10 +476,6 @@ class ReplMachine {
 			this.input.refresh();
 			return;
 		}
-		// #guardian-auto-mode D11: the provenance-verified log is appended
-		// HERE — the human submission boundary, before command dispatch and
-		// before any prompt expansion (submitPrompt never passes through).
-		if (capturesAsUserInput(line)) this.runner.recordUserInput(line);
 		// "! cmd" passthrough (M10): the shell runs it directly — never model
 		// input, never a session entry. Checked before parseCommand so "/" and
 		// "!" stay unambiguous; while a phase is active the existing queue
@@ -1766,13 +1702,6 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	// picker-capable shell the host also gets select — the three-option
 	// confirm (M10) reuses the same binding path as ctx.select.
 	options.confirm?.bind((question: string) => input.ask(question));
-	// §16/D33: prompted gate outcomes feed the HUMAN RECORD's decision log —
-	// the confirm host reports them while the tool-call dispatch is active.
-	options.confirm?.bindRecorder((event) => runner.recordGateDecision(event));
-	// #guardian-auto-mode: api.classify reads the live model reference per
-	// call (/model may change between calls); the user-context block arrives
-	// through the call-scoped snapshot, not through this binding.
-	options.classify?.bind({ renderer, modelReference: () => runner.modelReference() });
 	const confirmSelect = input.select?.bind(input);
 	if (confirmSelect !== undefined) options.confirm?.bindSelect(confirmSelect);
 

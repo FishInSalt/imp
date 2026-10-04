@@ -884,10 +884,10 @@ export class TuiShell implements LineInput {
 		const tui = this.tui;
 		if (tui === null || this.closed || options.items.length === 0) return Promise.resolve(null); // unstarted/closed, or nothing to pick
 		if (this.selector !== null) {
-			// Queued, not declined (M10 semantic review P2): a guardian confirm
-			// arriving while e.g. the /model picker is open still gets asked —
-			// a silent decline would veto the tool without the user ever seeing
-			// the question.
+			// Queued, not declined (M10 semantic review P2): an extension
+			// confirm arriving while e.g. the /model picker is open still gets
+			// asked — a silent decline would veto the tool without the user
+			// ever seeing the question.
 			return new Promise<number | null>((resolve) => {
 				this.pendingSelects.push(() => resolve(this.select(options)));
 			});

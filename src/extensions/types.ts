@@ -75,8 +75,8 @@ export interface ConfirmOptions {
 	 *  words (e.g. "this command pattern", "this directory"). The host renders
 	 *  it inside the remember option's label; absent → the stock wording.
 	 *  The remember option itself appears only when `sessionKey` is present —
-	 *  without a key there is no memory to offer (#guardian-auto-mode D13's
-	 *  fresh fallbacks render plain Yes/No). */
+	 *  without a key there is no memory to offer (fresh fallbacks render
+	 *  plain Yes/No). */
 	rememberLabel?: string;
 	/** The request being decided, rendered in the transcript's call-header idiom
 	 *  instead of prose. The host sanitizes both fields, styles `warnSpans` with
@@ -86,55 +86,10 @@ export interface ConfirmOptions {
 	preview?: CommandPreview;
 }
 
-/** `api.classify` (#guardian-auto-mode D6): the extension supplies the
- *  question, the host supplies everything else — model resolution and auth,
- *  the trusted-context block (host-extracted, D11), the output contract, the
- *  timeout, the audit record, and whether the seam exists on this surface at
- *  all (D8). */
-export interface ClassifyRequest {
-	/** The extension's policy framing (the system head) — the host appends
-	 *  the output contract and assembles the user message (HUMAN RECORD /
-	 *  WORK ORDER / this prompt); the assembled request is bounded per
-	 *  §16/D39 — over-budget fails to unavailable. */
-	system: string;
-	/** What to judge (one user message): the candidate action and its context. */
-	prompt: string;
-	/** Optional provider/model reference; absent → the session model. */
-	model?: string;
-	/** §15/D29: a short extension-authored identifier of the call under
-	 *  judgment (`bash: <first line>`, `write <path>`, `edit <path>`),
-	 *  rendered in the host's record line. Display only — the host cleans
-	 *  and caps it (CLASSIFY_MAX_SUBJECT_CHARS) and never verifies it
-	 *  against the tool arguments. */
-	subject?: string;
-}
-
-export interface ClassifyResult {
-	/** Phase A verdicts only (D7): the model cannot write the block path. */
-	verdict: "allow" | "ask";
-	/** One line, sanitized and capped by the host. */
-	reason: string;
-	/** §16/D37: the covering-evidence quote (verbatim text of a HUMAN RECORD
-	 *  entry), when the model supplied one; host-cleaned and capped
-	 *  (`CLASSIFY_MAX_BASIS_CHARS`). Absent — never `""` — when empty.
-	 *  Record-only pilot: the extension writes it to its audit lines. */
-	basis?: string;
-	/** The reference actually used (may differ from the request's). */
-	model: string;
-}
-
-/** Host-side implementation injected by the surface — the same pattern as the
- *  confirm handler. A surface without it serves no classify calls. */
-export type ClassifyHandler = (
-	request: ClassifyRequest,
-	source: string | undefined,
-) => Promise<ClassifyResult | undefined>;
-
 /**
- * The extension api: three read-only facts, four registration methods, one
- * subscriber, one status setter, one ask-the-human method, one ask-the-model
- * method — twelve members. Anything an extension cannot do with this, it cannot
- * do.
+ * The extension api: three read-only facts, five registration methods, one
+ * subscriber, one status setter, one ask-the-human method — eleven members.
+ * Anything an extension cannot do with this, it cannot do.
  */
 export interface ExtensionApi {
 	/** Absolute working directory imp was started in. */
@@ -201,20 +156,6 @@ export interface ExtensionApi {
 	 *  options lets the host remember a "don't ask again this session" choice
 	 *  for that key (M10); hosts without that affordance just ignore it. */
 	confirm(message: string, detail?: string, options?: ConfirmOptions): Promise<boolean>;
-
-	/** Ask a model a yes/no question about a call (#guardian-auto-mode),
-	 *  through a host-resolved one-shot request (no tools, no streaming).
-	 *
-	 *  The host supplies the model (or resolves `request.model`), the
-	 *  provenance-verified user context, the output contract and the audit
-	 *  record; the extension supplies only the question. Resolves `undefined`
-	 *  whenever the seam is unavailable — no interactive host, no verified
-	 *  call association, an unresolvable model that cannot fall back, an
-	 *  over-cap request, a timeout, a provider error, or an answer that does
-	 *  not match the contract. **It never throws and never hangs; a gate must
-	 *  treat `undefined` as “unavailable” and ask the human.** Two verdicts
-	 *  exist in Phase A: `allow` and `ask` — the model cannot block.*/
-	classify(request: ClassifyRequest): Promise<ClassifyResult | undefined>;
 }
 
 /**
@@ -229,12 +170,6 @@ export interface ToolCallEvent {
 	name: string;
 	/** Schema-validated arguments (the same object execute() will receive). */
 	args: Record<string, unknown>;
-	/** #guardian-auto-mode (D17): the host's provenance fact for a call — true
-	 *  when the host verified a non-empty human-submission log for the emitting
-	 *  run. Absent or false means “no verified context”: a gate must check
-	 *  `=== true`, never the negation, before treating a call as
-	 *  auto-approvable. */
-	verifiedUserContext?: boolean;
 
 	/** True when the call comes from a subagent (task tool child), not the
 	 * main loop (M6a) — gates can apply stricter rules to children. */

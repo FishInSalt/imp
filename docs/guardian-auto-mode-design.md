@@ -5,6 +5,13 @@ second-opinion rounds (R7 provenance/association/shadow samples; R8 the
 context-presence channel; R11 the input-boundary and invalidation rules — §12).
 Branch: `design/guardian-auto-mode`. Base: `1d097a0` (main).
 
+> **SUPERSEDED (2026-10-04).** guardian v1 and its host classify seam
+> (`api.classify`, the classify host, the user-input / gate-decision logs,
+> `verifiedUserContext`) were removed from the repo when guardian2 replaced
+> it — see `docs/guardian2-design.md` and the `chore/remove-guardian-v1`
+> commit. This document remains as the historical design record; nothing
+> below describes live code.
+
 The owner experienced Claude Code's auto-approval and asked for the same shape
 in imp: *let a model judge first, hand only the suspicious calls to the human*
 (“让模型先判一轮，只把可疑的递给你”). This document specifies the batch.

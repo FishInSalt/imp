@@ -848,123 +848,6 @@ describe("context injection and loop events through the real path (M4c, design �
 	});
 });
 
-describe("guardian case study (design §13.1)", () => {
-	it("the real examples/extensions/guardian.mjs blocks rm -rf and outside-cwd writes with teaching reasons, and audits both", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
-		vi.stubEnv("HOME", fakeHome); // guardian audits to ~/.imp/guardian.log — keep it hermetic
-		// The hazards are armed hermetically: the delete targets a sacrificial
-		// tree inside the temp project, the write targets a sibling temp dir — a
-		// fail-open gate reds the survival assertions below without touching
-		// anything real (review P1: the gate must not be the only containment).
-		const outsideDir = await mkdtemp(path.join(tmpdir(), "imp-guardout-"));
-		const env = await startRepl({
-			scripts: [
-				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
-				reply("adapted after the bash block"),
-				toolCall("g2", "write", {
-					path: path.join(outsideDir, "imp-guardian-must-not-exist.txt"),
-					content: "nope",
-				}),
-				reply("adapted after the write block"),
-			],
-			extensionFiles: {
-				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
-			},
-		});
-		// what the blocked rm would have deleted — a bare relative name can only
-		// ever resolve under the runner's cwd, never above it
-		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
-		await mkdir(sacrifice, { recursive: true });
-		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
-		env.send("clean up\n");
-		await waitUntil(() => env.output().includes("adapted after the bash block"));
-		env.send("write outside\n");
-		await waitUntil(() => env.output().includes("adapted after the write block"));
-		const refusal1 = env.requests[1]?.messages.find((m) => m.role === "toolResult")?.results[0];
-		expect(refusal1?.content).toBe(
-			'Tool "bash" blocked by extension guardian: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
-		);
-		const refusal2 = env.requests[3]?.messages
-			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
-			.find((r) => r.toolCallId === "g2");
-		expect(refusal2?.content).toMatch(
-			/^Tool "write" blocked by extension guardian: writing outside the project directory \(.*\) — /,
-		);
-		// both hazards were vetoed: the sacrificial tree still stands and the outside file never appeared
-		expect(existsSync(sacrifice)).toBe(true);
-		expect(existsSync(path.join(outsideDir, "imp-guardian-must-not-exist.txt"))).toBe(false);
-		// audit: one line per blocked result in ~/.imp/guardian.log
-		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8")
-			.trim()
-			.split("\n");
-		expect(audit).toHaveLength(2);
-		expect(audit[0]).toContain("[bash]");
-		expect(audit[1]).toContain("[write]");
-		for (const line of audit) expect(line).toContain("blocked by extension guardian");
-		env.fake.eof();
-		expect(await env.repl).toBe(0);
-	});
-
-	it("M6a audit: a named subagent's blocked call is logged as [bash child:wrecker]", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
-		vi.stubEnv("HOME", fakeHome);
-		const env = await startRepl({
-			scripts: [
-				toolCall("t1", "task", { prompt: "delete the sacrifice tree", agent: "wrecker" }),
-				toolCall("g1", "bash", { command: "rm -rf sacrifice" }),
-				reply("child adapted"),
-				reply("parent done"),
-			],
-			agentFiles: {
-				// no `tools:` restriction — the child pool includes bash
-				"wrecker.md": "---\nname: wrecker\ndescription: demolishes sacrificial trees\n---\nWreck things.",
-			},
-			extensionFiles: {
-				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
-			},
-		});
-		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
-		await mkdir(sacrifice, { recursive: true });
-		env.send("go\n");
-		await waitUntil(() => env.output().includes("parent done"));
-		// the veto reached the child, and the audit line names the child
-		const refusal = env.requests[2]?.messages.find((m) => m.role === "toolResult")?.results[0];
-		expect(refusal?.content).toContain("blocked by extension guardian: recursive force delete");
-		const audit = readFileSync(path.join(fakeHome, ".imp", "guardian.log"), "utf8")
-			.trim()
-			.split("\n");
-		expect(audit).toHaveLength(1);
-		expect(audit[0]).toContain("[bash child:wrecker]");
-		expect(audit[0]).toContain("blocked by extension guardian");
-		// the tree the child tried to delete still stands
-		expect(existsSync(sacrifice)).toBe(true);
-		env.fake.eof();
-		expect(await env.repl).toBe(0);
-	});
-
-	it("IMP_GUARDIAN_BLOCK adds custom patterns with a teaching reason; invalid patterns are skipped without taking the gate down", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-guardhome-"));
-		vi.stubEnv("HOME", fakeHome); // the blocked result triggers an audit write
-		vi.stubEnv("IMP_GUARDIAN_BLOCK", "deploy-prod, ([unclosed");
-		const env = await startRepl({
-			scripts: [toolCall("g1", "bash", { command: "deploy-prod --yes" }), reply("adapted")],
-			extensionFiles: {
-				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
-			},
-		});
-		env.send("ship\n");
-		await waitUntil(() => env.output().includes("adapted"));
-		const refusal = env.requests[1]?.messages.find((m) => m.role === "toolResult")?.results[0];
-		expect(refusal?.content).toBe(
-			'Tool "bash" blocked by extension guardian: matched your IMP_GUARDIAN_BLOCK pattern deploy-prod — adjust the env var if this should run',
-		);
-		// the invalid regex was skipped — the extension loaded and gated anyway
-		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
-		env.fake.eof();
-		expect(await env.repl).toBe(0);
-	});
-});
-
 describe("handler isolation through the full path (design §6.1, E10)", () => {
 	it("a throwing observer (sync tool_end, rejected message_end) reports E10 lines and never breaks the run or the host", async () => {
 		const executed: string[] = [];
@@ -1009,6 +892,31 @@ describe("handler isolation through the full path (design §6.1, E10)", () => {
 	});
 });
 
+/** An inline bash gate for confirm-flow tests: every bash call asks the human
+ *  first; a declined call is blocked with a plain reason. */
+const ASKER = {
+	"asker.mjs": `export default function (api) {
+	api.on("tool_call", async (event) => {
+		if (event.name !== "bash") return;
+		const ok = await api.confirm("allow this bash command?", "the asker wants a decision");
+		if (!ok) return { block: true, reason: "declined at the confirmation — the command did not run" };
+	});
+}
+`,
+};
+
+/** Same, for file writes — the write-side confirm flow. */
+const WRITE_ASKER = {
+	"write-asker.mjs": `export default function (api) {
+	api.on("tool_call", async (event) => {
+		if (event.name !== "write" && event.name !== "edit") return;
+		const ok = await api.confirm("allow this write?", String(event.args.path));
+		if (!ok) return { block: true, reason: "declined at the confirmation — nothing was written" };
+	});
+}
+`,
+};
+
 describe("caller cwd on gate events + ui.confirm through the live REPL (spec parts 1-3)", () => {
 	/** Logs one line per tool_call with its cwd — the cwd-discriminator probe. */
 	const CWD_LOG_FIXTURE = `import { appendFileSync } from "node:fs";
@@ -1042,7 +950,7 @@ export default function (api) {
 		const childWrite = events.find((e) => e.name === "write");
 		expect(taskCall).toMatchObject({ subagent: false, cwd: env.cwd });
 		// the whole point (M6b): the child's cwd is ITS worktree, not the parent
-		// project — the known guardian false positive on absolute worktree paths
+		// project — gates read the child's own cwd
 		expect(childWrite).toMatchObject({ subagent: true });
 		expect(childWrite?.cwd).toContain("imp-worktree-");
 		expect(childWrite?.cwd).not.toBe(env.cwd);
@@ -1050,9 +958,9 @@ export default function (api) {
 		expect(await env.repl).toBe(0);
 	});
 
-	it("ui.confirm over the fake tty: y approves and the tool runs; n declines with the pre-confirm teaching text", async () => {
+	it("ui.confirm over the fake tty: y approves and the tool runs; n declines with the gate's reason", async () => {
 		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
-		vi.stubEnv("HOME", fakeHome); // guardian audits to ~/.imp/guardian.log — keep it hermetic
+		vi.stubEnv("HOME", fakeHome); // keep extension discovery hermetic (never the real ~/.imp)
 		const env = await startRepl({
 			confirm: true,
 			scripts: [
@@ -1061,11 +969,8 @@ export default function (api) {
 				toolCall("g2", "bash", { command: "rm -rf sacrifice" }),
 				reply("adapted after the decline"),
 			],
-			extensionFiles: {
-				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
-			},
+			extensionFiles: ASKER,
 		});
-		expect(env.output()).toContain("▪ extension guardian [project] — 1 command, 2 hooks");
 		const sacrifice = path.join(env.cwd, "sacrifice", "nested");
 		// approved: the question renders on the tty, y executes the delete
 		await mkdir(sacrifice, { recursive: true });
@@ -1074,7 +979,7 @@ export default function (api) {
 		env.send("y\n");
 		await waitUntil(() => env.output().includes("ran the approved delete"));
 		expect(existsSync(sacrifice)).toBe(false); // approved → the command really ran
-		// declined: same rule, answered n → the old teaching reason reaches the model
+		// declined: same gate, answered n → the gate's reason reaches the model
 		await mkdir(sacrifice, { recursive: true });
 		env.send("clean up again\n");
 		await waitUntil(() => env.output().split("[y/N]").length >= 3); // second prompt shown
@@ -1084,7 +989,7 @@ export default function (api) {
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g2");
 		expect(refusal?.content).toBe(
-			'Tool "bash" blocked by extension guardian: recursive force delete — list the files that would go and ask first, or delete the specific files one by one',
+			'Tool "bash" blocked by extension asker: declined at the confirmation — the command did not run',
 		);
 		expect(existsSync(sacrifice)).toBe(true); // declined → nothing deleted
 		env.fake.eof();
@@ -1103,9 +1008,7 @@ export default function (api) {
 				toolCall("g2", "write", { path: path.join(outsideDir, "declined.txt"), content: "no" }),
 				reply("adapted"),
 			],
-			extensionFiles: {
-				"guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8"),
-			},
+			extensionFiles: WRITE_ASKER,
 		});
 		env.send("write outside\n");
 		await waitUntil(() => env.output().includes("proceed? [y/N]"));
@@ -1120,8 +1023,8 @@ export default function (api) {
 		const refusal = env.requests[3]?.messages
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g2");
-		expect(refusal?.content).toMatch(
-			/^Tool "write" blocked by extension guardian: writing outside the project directory \(.*\) — /,
+		expect(refusal?.content).toBe(
+			'Tool "write" blocked by extension write-asker: declined at the confirmation — nothing was written',
 		);
 		expect(existsSync(path.join(outsideDir, "declined.txt"))).toBe(false);
 		env.fake.eof();
@@ -1130,8 +1033,6 @@ export default function (api) {
 });
 
 describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => {
-	const GUARDIAN = { "guardian.mjs": readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8") };
-
 	it("EOF (Ctrl+D) at a pending ask declines it and exits cleanly — no ERR_USE_AFTER_CLOSE, no lost turn", async () => {
 		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-eofhome-"));
 		vi.stubEnv("HOME", fakeHome);
@@ -1145,7 +1046,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 				toolCall("g2", "bash", { command: "rm -rf sacrifice" }),
 				reply("both declined"),
 			],
-			extensionFiles: GUARDIAN,
+			extensionFiles: ASKER,
 		});
 		env.send("clean up\n");
 		await waitUntil(() => env.output().includes("proceed? [y/N]"));
@@ -1171,7 +1072,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 				),
 				reply("handled both"),
 			],
-			extensionFiles: GUARDIAN,
+			extensionFiles: ASKER,
 		});
 		await mkdir(path.join(env.cwd, "first"), { recursive: true });
 		await mkdir(path.join(env.cwd, "second"), { recursive: true });
@@ -1200,7 +1101,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 		const env = await startRepl({
 			confirm: true,
 			scripts: [toolCall("g1", "bash", { command: "rm -rf sacrifice" }), reply("adapted after ctrl-c")],
-			extensionFiles: GUARDIAN,
+			extensionFiles: ASKER,
 		});
 		env.send("clean up\n");
 		await waitUntil(() => env.output().includes("proceed? [y/N]"));
@@ -1209,7 +1110,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 		const refusal = env.requests[1]?.messages
 			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
 			.find((r) => r.toolCallId === "g1");
-		expect(refusal?.content).toContain("blocked by extension guardian");
+		expect(refusal?.content).toContain("blocked by extension asker");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
 	});

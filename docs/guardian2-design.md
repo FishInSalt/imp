@@ -1,14 +1,17 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.7 — R5 folds applied; implementation review closed.**
+Status: **rev 2.8 — shipped.** Merged to `main` (`5fb3a24` v0, `bce6df2`
+friendly config), cut over on 2026-10-04 (P2), and guardian v1 removed
+(P3/P4, `chore/remove-guardian-v1`).
 Owner direction: wildcard patterns by default with a `regex` escape hatch;
 optional `tool` scoping for `write` / `edit` paths; `reason` stays optional
-(the template demonstrates both forms). Ready for merge.
+(the template demonstrates both forms).
 
 - Worktree / branch: `imp-guardian2` / `feat/guardian2-friendly-config`,
   base `main` (5fb3a24 — guardian2 v0 merged).
-- Replaces guardian v1 (modes + classifier). v1 is deleted only after cutover
-  (phase P3, §6).
+- Replaces guardian v1 (modes + classifier). v1 was deleted after cutover
+  (phase P3, §6); v1's design record stays at
+  `docs/guardian-auto-mode-design.md` with a superseded banner.
 
 ## 0. The model (owner direction)
 
@@ -231,6 +234,21 @@ untouched):
   (`docs/acceptance-guardian-input`, `docs/ledger-guardian-*` …), leftover
   worktrees.
 
+- **P2 — done (2026-10-04)**: v1's symlink removed, guardian2 installed by
+  copy, `~/.imp/guardian2.json` written from the template, and probes run
+  against the real install — pass-through, deny, ask (bash and file), audit
+  all observed. v1's log archived to `guardian.log.v1-archive`.
+- **P3/P4 — done (2026-10-04)**: v1's extension, its tests, and the host
+  classify seam removed on `chore/remove-guardian-v1` (see its commit);
+  `test/extensions-repl.test.ts` ported to an inline asker fixture; README,
+  CHANGELOG, m4 and confirm-prompt references updated; the v1 design doc
+  kept with a superseded banner; `design/extension-model-access` bundled
+  (`design-extension-model-access.bundle`) and deleted; merged guardian
+  branches and the `imp-guardian2` / `imp-main` worktrees removed; the main
+  repo returned to `main`; `~/.imp/guardian.json` deleted. Independent
+  implementation review: APPROVE WITH CORRECTIONS → all folds applied →
+  CONFIRMED (re-verify round).
+
 ## 7. Tests (P1, red-first)
 
 1. Load: missing file (zero rules, gate lets everything through); valid file
@@ -312,6 +330,13 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
    both forms); optional `tool` scoping for `write` / `edit` path rules.
 
 ## 10. Review log
+
+- rev 2.8 — shipped: v0 merged (`5fb3a24`), friendly config merged
+  (`bce6df2`), P2 cutover done 2026-10-04 (probes green, v1's log archived),
+  P3/P4 removal landed (`chore/remove-guardian-v1`). Independent
+  implementation review of the removal: APPROVE WITH CORRECTIONS (README
+  dangling reference; `temperature` / `workOrder` leftovers) → all folds
+  applied → CONFIRMED (re-verify round).
 
 - rev 2.7 — R5 folds: wildcard matching is a linear segment matcher now
   (no catastrophic backtracking; the `regex` escape hatch keeps the accepted

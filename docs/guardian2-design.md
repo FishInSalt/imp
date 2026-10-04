@@ -1,9 +1,8 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.1 — minimal redesign, R1 folded.** Owner direction: minimal
-implementation; the port-based revisions are discarded as design input.
-Owner review and an independent adversarial review are pending; no
-implementation before both close.
+Status: **rev 2.2 — owner answers folded.** Owner direction: minimal
+implementation; the port-based revisions are discarded as design input. R1
+findings are folded (rev 2.1); R2 verification is running.
 
 - Worktree / branch: `imp-guardian2` / `design/guardian2`, base `main` (846b263).
 - Replaces guardian v1 (modes + classifier). v1 is deleted only after cutover
@@ -33,7 +32,9 @@ appears):
 - `write` / `edit` calls and any path facts (`protectedPaths`, `outsideCwd`);
 - `rm` parsing, quote / heredoc masking, over-cap analysis;
 - rule ids; per-rule tools; structured predicates;
-- session memory for asks ("don't ask again this session");
+- per-pattern session memory ("don't ask again for this command") — the only
+  memory in v0 is one session-wide "stop asking" option on the ask prompt
+  (§3);
 - config file watching; project-level config; `init` / `explain` commands.
 
 Known limits, documented and accepted:
@@ -86,9 +87,13 @@ a string, pass through untouched):
 2. First `deny` rule whose regex matches → block: return
    `{block: true, reason: <reason> or "blocked by guardian2 rule: <pattern>"}`.
    Audit.
-3. First `ask` rule whose regex matches → `confirm("allow this bash command?",
-   <reason>)`; `false` → block with the reason (or "confirmation declined").
-   Audit the outcome.
+3. First `ask` rule whose regex matches → `confirm("allow this bash
+   command?", <reason>, { sessionKey: "guardian2:session", rememberLabel:
+   "all guardian2 ask prompts this session" })`; `false` → block with the
+   reason (or "confirmation declined"). Audit the outcome. The shared
+   session key is v0's only memory: choosing the prompt's remember option
+   once stops every further ask prompt for the rest of the session ("allow
+   all this session"); deny rules are unaffected.
 4. Otherwise → pass.
 
 - Precedence: **deny before ask**.
@@ -130,7 +135,7 @@ a string, pass through untouched):
 - Invalid config → keep the last valid rules (if any); audit
   `[load] config error`; footer flag; `/guardian2 reload` recovers.
 - First run with an invalid file → no rules, footer flag, audit line.
-  Trade-off (owner question §9 Q1): a broken config disarms an unconfigured
+  Trade-off (owner-accepted in rev 2.2, §9): a broken config disarms an unconfigured
   gate — the footer shows `config error` while it lasts. The alternative
   (confirm every bash call until fixed) is deliberately not taken: this is an
   opt-in heuristic gate, and v1's ask-everything degraded state was removed
@@ -175,8 +180,8 @@ a string, pass through untouched):
   (explicit owner sign-off when P3 runs). The `imp` worktree is checked out
   on that branch: switch it off, archive-tag the branch, then delete it.
   Remove the machine's v1 files (`~/.imp/extensions/guardian.mjs`,
-  `~/.imp/guardian.json`; archive `guardian.log`). Apply the rename decision
-  (§9 Q2).
+  `~/.imp/guardian.json`; archive `guardian.log`). Rename is deferred until
+  after this deletion batch (owner, §9); revisit then.
 - **P4 cleanup**: leftover merged branches
   (`docs/acceptance-guardian-input`, `docs/ledger-guardian-*` …), leftover
   worktrees.
@@ -188,7 +193,8 @@ a string, pass through untouched):
    bad entry type; invalid regex; `g`/`y` flags rejected; reload recovers.
 2. Deny: first matching rule blocks; no confirm call; reason text (custom and
    default).
-3. Ask: confirm called with the reason; approved → runs; declined → blocks;
+3. Ask: confirm called with the reason + the shared `sessionKey` /
+   `rememberLabel` (pinned); approved → runs; declined → blocks;
    string-shorthand rule works.
 4. Pass: unmatched commands never confirm; non-bash tools pass untouched;
    non-string `command` passes; a quoted-text match (`git commit -m "… rm -rf
@@ -220,23 +226,22 @@ Considered and **not** borrowed for v0:
   patterns; unanchored user regexes do not need it.
 - skipping invalid rules with a warning (CC) — we fail the whole load and
   keep the last valid set; louder, simpler to reason about.
-- session "always allow" write-back and prompt suggestions — deferred (§9
-  Q4). Note `ConfirmOptions.sessionKey` already exists if this is wanted.
+- session "always allow" write-back and prompt suggestions — not borrowed;
+  the v0 answer is one session-wide "stop asking" option (§3).
 
 Other CC files for reference: `src/utils/permissions/permissions.ts`,
 `src/utils/permissions/permissionRuleParser.ts`,
 `src/utils/settings/types.ts`, `src/utils/settings/permissionValidation.ts`.
 
-## 9. Open questions (owner)
+## 9. Owner decisions (rev 2.2, settled)
 
-1. First-run invalid config: flag-only (proposed, with the trade-off stated
-   in §5) vs fail-closed until fixed (v1's old posture).
-2. Rename bundle at P3: extension filename, slash command, config / log
-   names, status key, archived-log naming — one decision for all, or keep
-   `guardian2` everywhere.
-3. Pass-through calls stay unaudited (proposed; minimal log volume) — keep?
-4. Session memory for asks stays out of v0 (`ConfirmOptions.sessionKey` is
-   available if wanted later).
+1. First-run invalid config: flag-only accepted — no rules + footer flag;
+   the trade-off is stated in §5.
+2. Rename: keep `guardian2` for now; revisit only after the v1 deletion
+   batch (P3) has landed.
+3. Pass-through calls stay unaudited (deny/ask decisions are logged).
+4. Session memory: no per-pattern memory; a single session-wide "stop
+   asking" option rides every ask prompt (§3).
 
 ## 10. Review log
 
@@ -251,5 +256,9 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
   `denied` (documented).
 - rev 2 — minimal redesign per owner direction; rev 0/1 (port-based) and
   the earlier approach documents are discarded as design input.
-- Owner decisions: pending (§9).
-- R2 (review of this revision): pending.
+- rev 2.2 — owner answers folded: first-run posture accepted; rename
+  deferred until after P3; pass-through stays unaudited; the session-wide
+  "stop asking" option added to ask prompts (shared sessionKey /
+  rememberLabel).
+- Owner decisions: settled (§9).
+- R2 (verification of this revision): pending.

@@ -1,16 +1,18 @@
 {
-  "_comment": "guardian config — deny blocks, ask prompts, anything unmatched runs. Patterns are plain text where * matches anything (case-sensitive); use \"regex\" for full regular expressions. Entries target bash by default; add \"tool\" (write/edit) to guard file paths.",
+  "_comment": "guardian config — deny blocks, ask prompts, anything unmatched runs. Patterns are plain text where * matches anything (case-sensitive); use \"regex\" for full regular expressions (flags supported, but no g/y). Entries target bash by default; add \"tool\" (write/edit) to guard file paths. This starter sticks to irreversible catastrophes (whole-home / filesystem-root / disk wipes, the .ssh folder) plus remote-destroying git and gh operations. Absolute paths cannot be portable, so nothing here names a specific home directory — if you want those rules too, add your own path to the regexes (much like the ~ / $HOME entries below). askTimeoutMs: an ask question left unanswered for this long counts as declined; drop the field to wait indefinitely.",
   "deny": [
-    "rm * ~",
-    "rm * $HOME",
-    "rm * ${HOME}"
+    { "regex": "(^|[;&|] *)(sudo +)?rm .* ~/?([*]|[.][*])?[\"']?( |$)", "flags": "m", "reason": "refusing a whole-home wipe — if truly intended, the user must run it manually" },
+    { "regex": "(^|[;&|] *)(sudo +)?rm .* \"?[$](HOME|[{]HOME[}])[\"']?/?([*]|[.][*])?[\"']?( |$)", "flags": "m", "reason": "refusing a whole-home wipe — if truly intended, the user must run it manually" },
+    { "regex": "(^|[;&|] *)(sudo +)?rm .* /([*]| |$)", "flags": "m", "reason": "refusing to delete the filesystem root" },
+    { "pattern": "diskutil erase*", "reason": "refusing to erase a disk volume — irreversible; if truly intended, the user must run it manually" },
+    { "pattern": "diskutil apfs delete*", "reason": "refusing to delete an APFS volume — irreversible; if truly intended, the user must run it manually" },
+    { "regex": "(^|[;&|] *)(sudo +)?dd .* of=/dev/(r?disk|sd|nvme)", "flags": "m", "reason": "refusing to write to a raw disk device — irreversible; if truly intended, the user must run it manually" },
+    { "regex": "(^|[;&|] *)(sudo +)?rm .* ~/[.]ssh[\"']?/?([*]|[.][*])?[\"']?( |$)", "flags": "m", "reason": "refusing to wipe the .ssh folder as a whole — if truly intended, the user must run it manually" },
+    { "regex": "(^|[;&|] *)(sudo +)?rm .* \"?[$](HOME|[{]HOME[}])[\"']?/[.]ssh[\"']?/?([*]|[.][*])?[\"']?( |$)", "flags": "m", "reason": "refusing to wipe the .ssh folder as a whole — if truly intended, the user must run it manually" }
   ],
   "ask": [
-    {
-      "pattern": "sudo",
-      "reason": "running as root — do it as the normal user, or hand the privileged step to the human"
-    },
-    { "regex": "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))" },
-    { "tool": ["write", "edit"], "pattern": "/etc/" }
-  ]
+    { "regex": "git +push( |$)(.* )?(-f( |$)|--force(?!-with-lease)( |$)|--delete( |$)|--mirror( |$)|--prune( |$)|[+][^ ]+|[:][^ ]+)" },
+    { "regex": "(^|[;&|] *)gh +repo +delete( |$)", "flags": "m" }
+  ],
+  "askTimeoutMs": 600000
 }

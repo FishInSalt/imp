@@ -90,8 +90,14 @@ export interface ExtensionRegistryOptions {
 	report?: (line: string) => void;
 	/** Interactive confirm (the REPL's tty prompt). Absent — print mode, plain
 	 *  tests — api.confirm resolves false after one stderr teaching line and
-	 *  never hangs (spec part 2 item 5). */
-	confirm?: (message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>;
+	 *  never hangs (spec part 2 item 5). A wired picker host may also resolve
+	 *  "timeout" (#ask-timeout); it passes through untouched. */
+	confirm?: (
+		message: string,
+		detail?: string,
+		options?: ConfirmOptions,
+		source?: string,
+	) => Promise<boolean | "timeout">;
 }
 
 /** The one stderr line written when api.confirm runs without an interactive host. */
@@ -120,7 +126,12 @@ export class ExtensionRegistry {
 
 	private readonly report: (line: string) => void;
 	private readonly confirmHandler:
-		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
+		| ((
+				message: string,
+				detail?: string,
+				options?: ConfirmOptions,
+				source?: string,
+		  ) => Promise<boolean | "timeout">)
 		| undefined;
 	/** The no-handler stderr line has been written once already. */
 	private noConfirmWarned = false;
@@ -462,13 +473,17 @@ export class ExtensionRegistry {
 	 * api.confirm(): true only on explicit approval. Fails safe — no wired
 	 * prompt or a throwing handler resolves false (with a teaching line), so
 	 * an extension gate can never hang a run on a question nobody can answer.
+	 * A wired picker handler may additionally resolve "timeout" (#ask-timeout:
+	 * its deadline expired with the question visible); that value passes
+	 * through unchanged — it is still a NON-approval (gates must test
+	 * `=== true`).
 	 */
 	async confirm(
 		message: string,
 		detail?: string,
 		options?: ConfirmOptions,
 		source?: string,
-	): Promise<boolean> {
+	): Promise<boolean | "timeout"> {
 		if (this.confirmHandler === undefined) {
 			// once per registry: a chatty gate in print mode (a model retrying a
 			// blocked call in a loop) must not spam one stderr line per attempt

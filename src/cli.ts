@@ -503,7 +503,12 @@ async function loadExtensionSetup(
 	opts: CliOptions,
 	renderer: Renderer,
 	confirm:
-		| ((message: string, detail?: string, options?: ConfirmOptions, source?: string) => Promise<boolean>)
+		| ((
+				message: string,
+				detail?: string,
+				options?: ConfirmOptions,
+				source?: string,
+		  ) => Promise<boolean | "timeout">)
 		| undefined,
 	projectTrusted: boolean,
 ): Promise<LoadedExtensions> {

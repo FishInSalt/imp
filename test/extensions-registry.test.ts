@@ -313,6 +313,26 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 		expect(calls).toEqual([["m", "d", { sessionKey: "guardian:write:/proj" }]]);
 	});
 
+	it('#ask-timeout: timeoutMs reaches the handler, and a "timeout" resolution flows back untouched', async () => {
+		const calls: Array<[string, string | undefined, unknown]> = [];
+		const registry = new ExtensionRegistry({
+			confirm: async (message, detail, options) => {
+				calls.push([message, detail, options]);
+				return "timeout";
+			},
+		});
+		await expect(registry.confirm("m", "d", { timeoutMs: 600000 })).resolves.toBe("timeout");
+		expect(calls).toEqual([["m", "d", { timeoutMs: 600000 }]]);
+		// the no-handler path NEVER produces it: false stays the no-host answer
+		const bare = new ExtensionRegistry();
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		try {
+			await expect(bare.confirm("m", undefined, { timeoutMs: 600000 })).resolves.toBe(false);
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
 	it("no handler: resolves false promptly (bounded) and writes one stderr teaching line — never hangs", async () => {
 		const registry = new ExtensionRegistry();
 		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);

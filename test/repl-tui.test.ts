@@ -36,6 +36,7 @@ import {
 	assistant,
 	gate,
 	gatedTool,
+	makeRenderer,
 	type ScriptStep,
 	scriptedProvider,
 	ticks,
@@ -897,7 +898,7 @@ describe("TuiShell selector", () => {
 		await settle();
 		terminal.data("9"); // no ninth row: resolves nothing
 		await settle();
-		let settled: number | null | undefined;
+		let settled: number | null | "timeout" | undefined;
 		void chosen.then((value) => {
 			settled = value;
 		});
@@ -1180,8 +1181,8 @@ describe("M9-2 review regressions", () => {
 		await settle(0);
 		const first = shell.select({ items: [{ label: "a" }, { label: "b" }] });
 		await settle();
-		let secondSettled: (value: number | null) => void = () => {};
-		const second = new Promise<number | null>((resolve) => {
+		let secondSettled: (value: number | null | "timeout") => void = () => {};
+		const second = new Promise<number | null | "timeout">((resolve) => {
 			secondSettled = resolve;
 		});
 		void shell.select({ items: [{ label: "x" }] }).then(secondSettled);
@@ -1203,14 +1204,129 @@ describe("M9-2 review regressions", () => {
 		shell.start();
 		await settle(0);
 		const first = shell.select({ items: [{ label: "a" }] });
-		let secondSettled: (value: number | null) => void = () => {};
-		const second = new Promise<number | null>((resolve) => {
+		let secondSettled: (value: number | null | "timeout") => void = () => {};
+		const second = new Promise<number | null | "timeout">((resolve) => {
 			secondSettled = resolve;
 		});
 		void shell.select({ items: [{ label: "x" }] }).then(secondSettled);
 		shell.close(); // tears the first down, drains the queued one
 		await expect(first).resolves.toBe(null);
 		await expect(second).resolves.toBe(null);
+	});
+
+	it('#ask-timeout: an unanswered picker resolves "timeout", tears down like a cancel, and a late answer goes to the editor', async () => {
+		const { terminal, shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ title: "q", items: [{ label: "a" }], timeoutMs: 150 });
+		await settle(); // the picker repaint lands (16ms minimum render interval)
+		expect(terminal.frameSince(0)).toContain("→ 1. a");
+		await expect(chosen).resolves.toBe("timeout");
+		const mark = terminal.writes.length; // everything from here on is post-timeout
+		await settle();
+		expect(terminal.frameSince(mark)).not.toContain("→ 1. a"); // torn down
+		terminal.data("late\r"); // the editor owns keys again — no ghost picker
+		await settle(0);
+		expect(events).toContain("line:steer:late");
+		shell.close();
+	});
+
+	it("#ask-timeout: an answer arriving first disarms the deadline (no late settle)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 150 });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("→ 1. a");
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		const mark = terminal.writes.length;
+		await settle(200); // well past the deadline: the funnel already settled, nothing re-fires
+		expect(terminal.frameSince(mark)).not.toContain("→ 1. a");
+		shell.close();
+	});
+
+	it("#ask-timeout: non-positive / non-finite deadlines mean no deadline (manual answer still rules)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		for (const value of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: value });
+			await settle(0);
+			terminal.data("\r");
+			await expect(chosen).resolves.toBe(0);
+			await settle(0);
+		}
+		shell.close();
+	});
+
+	it("#ask-timeout: a queued pick's deadline starts at its opening — queue time does not count (D7)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		let secondValue: number | null | "timeout" | undefined;
+		const first = shell.select({ items: [{ label: "a" }], timeoutMs: 400 });
+		const second = shell.select({ items: [{ label: "x" }], timeoutMs: 150 });
+		void second.then((value) => {
+			secondValue = value;
+		});
+		await settle(); // the first picker repaint lands
+		expect(terminal.frameSince(0)).toContain("→ 1. a");
+		await expect(first).resolves.toBe("timeout"); // ~400ms, B still queued
+		await settle(30);
+		// B opened when A settled and must still be waiting: a queue-time clock
+		// would have fired long ago (B's 150ms vs. A's 400ms) — a fresh window
+		// starts at the opening, never at queue entry.
+		expect(secondValue).toBeUndefined();
+		expect(terminal.frameSince(0)).toContain("→ 1. x"); // B opened
+		await expect(second).resolves.toBe("timeout"); // ~150ms after opening
+		shell.close();
+	});
+
+	it("#ask-timeout: close() with an armed deadline resolves null — the timer fires nothing later", async () => {
+		const { shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 30 });
+		await settle(0);
+		shell.close();
+		await expect(chosen).resolves.toBe(null);
+		await settle(60); // past the deadline: the close path disarmed it
+		// no second settlement is possible; reaching here without a crash is the pin
+	});
+
+	it("#ask-timeout: process SIGINT with an armed deadline cancels (null), it does not time out", async () => {
+		const { shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({ items: [{ label: "a" }], timeoutMs: 60 });
+		await settle(0);
+		process.emit("SIGINT");
+		await expect(pick).resolves.toBe(null);
+		expect(events).toEqual(["interrupt"]);
+		shell.close();
+	});
+
+	it("#ask-timeout: integration — TtyConfirm + TuiShell fire the deadline end to end", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const { renderer, output } = makeRenderer();
+		const confirm = new TtyConfirm(renderer);
+		confirm.bindSelect(shell.select.bind(shell));
+		await expect(
+			confirm.handler(
+				"allow this bash command?",
+				"why it matched: recursive force delete",
+				{ timeoutMs: 30, preview: { kind: "command", tool: "bash", text: "rm -rf x" } },
+				"guardian",
+			),
+		).resolves.toBe("timeout");
+		expect(output()).toContain("▪ confirm: guardian — allow this bash command? — timed out (declined)");
+		const mark = terminal.writes.length; // post-timeout writes only
+		await settle();
+		expect(terminal.frameSince(mark)).not.toContain("→ 1. Yes"); // the picker died with the deadline
+		shell.close();
 	});
 
 	it("a question queued while a picker is open renders only after the picker resolves", async () => {

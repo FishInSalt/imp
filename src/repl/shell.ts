@@ -880,7 +880,7 @@ export class TuiShell implements LineInput {
 		this.tui?.requestRender();
 	}
 
-	select(options: SelectOptions): Promise<number | null> {
+	select(options: SelectOptions): Promise<number | null | "timeout"> {
 		const tui = this.tui;
 		if (tui === null || this.closed || options.items.length === 0) return Promise.resolve(null); // unstarted/closed, or nothing to pick
 		if (this.selector !== null) {
@@ -888,7 +888,10 @@ export class TuiShell implements LineInput {
 			// confirm arriving while e.g. the /model picker is open still gets
 			// asked — a silent decline would veto the tool without the user
 			// ever seeing the question.
-			return new Promise<number | null>((resolve) => {
+			// #ask-timeout: the queued closure re-enters select() on promotion,
+			// so the deadline (if any) starts from the second opening, after
+			// the current picker settles — never from queue-entry time.
+			return new Promise<number | null | "timeout">((resolve) => {
 				this.pendingSelects.push(() => resolve(this.select(options)));
 			});
 		}
@@ -950,11 +953,16 @@ export class TuiShell implements LineInput {
 		if (numbered) box.addChild(new Spacer(1));
 		box.addChild(list);
 		if (numbered) box.addChild(new Text(dim(pickerAffordance(items.length), true), 0, 0));
-		return new Promise<number | null>((resolve) => {
-			let settled = false; // pick, cancel and close all funnel here — once
-			const finish = (index: number | null): void => {
+		return new Promise<number | null | "timeout">((resolve) => {
+			let settled = false; // pick, cancel, timeout and close all funnel here — once
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			const finish = (index: number | null | "timeout"): void => {
 				if (settled) return;
 				settled = true;
+				if (timer !== null) {
+					clearTimeout(timer); // manual answer/cancel and close all disarm the deadline
+					timer = null;
+				}
 				this.setSelector(null);
 				this.updatePlaceholder(); // the hint may come back with the picker gone
 				this.askContainer.removeChild(box);
@@ -1045,6 +1053,17 @@ export class TuiShell implements LineInput {
 			this.askContainer.addChild(box);
 			tui.setFocus(list);
 			tui.requestRender();
+			// #ask-timeout: the deadline starts here — the picker is on screen.
+			// The deadline expires through the same finish funnel (like a
+			// cancel: teardown, focus restore, promotion of the next queued
+			// pick), resolving "timeout"; an answer arriving after the timer
+			// is inert (settled guard). unref: an armed deadline must not keep
+			// the process alive by itself.
+			const timeoutMs = options.timeoutMs;
+			if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+				timer = setTimeout(() => finish("timeout"), timeoutMs);
+				timer.unref?.();
+			}
 		});
 	}
 

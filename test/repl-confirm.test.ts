@@ -27,7 +27,7 @@ function makeConfirmHost(args?: { select?: boolean }) {
 	const confirm = new TtyConfirm(renderer);
 	const questions: string[] = [];
 	const picks: SelectOptions[] = [];
-	const pickAnswer = { value: 0 as number | null };
+	const pickAnswer = { value: 0 as number | null | "timeout" };
 	const askAnswer = { value: true };
 	confirm.bind((question: string) => {
 		questions.push(question);
@@ -271,6 +271,44 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 		await expect(host.confirm.handler("m", undefined, { sessionKey: "k" })).resolves.toBe(true);
 		await expect(host.confirm.handler("m", undefined, { sessionKey: "k" })).resolves.toBe(true);
 		expect(host.picks).toHaveLength(2); // one-shot approval never writes the allowlist
+	});
+
+	it("#ask-timeout: the deadline rides the picker options — forwarded only when set", async () => {
+		const host = makeConfirmHost();
+		host.pickAnswer.value = 0;
+		await expect(host.confirm.handler("m", undefined, { timeoutMs: 600000 })).resolves.toBe(true);
+		expect(host.picks[0]?.timeoutMs).toBe(600000);
+		// unset → the option bag keeps the pre-timeout shape (no undefined key)
+		await expect(host.confirm.handler("m2")).resolves.toBe(true);
+		expect("timeoutMs" in (host.picks[1] ?? {})).toBe(false);
+	});
+
+	it('#ask-timeout: a timed-out picker resolves "timeout" with the record note — and grants no session memory', async () => {
+		const host = makeConfirmHost();
+		host.pickAnswer.value = "timeout";
+		await expect(
+			host.confirm.handler(
+				"allow this bash command?",
+				"why it matched: risky",
+				{ sessionKey: "k" },
+				"guardian",
+			),
+		).resolves.toBe("timeout");
+		expect(host.output()).toContain("▪ confirm: guardian — allow this bash command? — timed out (declined)");
+		// the question was never answered: the key is NOT remembered — it prompts again
+		host.pickAnswer.value = 1; // "Yes, don't ask again"
+		await expect(host.confirm.handler("q2", undefined, { sessionKey: "k" })).resolves.toBe(true);
+		expect(host.picks).toHaveLength(2);
+		// now the key IS remembered (the timeout granted nothing; this pick did)
+		host.pickAnswer.value = null;
+		await expect(host.confirm.handler("q3", undefined, { sessionKey: "k" })).resolves.toBe(true);
+		expect(host.picks).toHaveLength(2);
+	});
+
+	it("#ask-timeout: a no-picker host ignores the deadline (the [y/N] path stays byte-identical)", async () => {
+		const host = makeConfirmHost({ select: false });
+		await expect(host.confirm.handler("m", undefined, { timeoutMs: 5 })).resolves.toBe(true);
+		expect(host.questions).toEqual(["proceed? [y/N] "]);
 	});
 
 	it("without a picker the [y/N] ask path runs verbatim (readline shell, byte-identical)", async () => {

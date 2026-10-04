@@ -55,6 +55,13 @@ export interface SelectOptions {
 	 *  transcript's call-header idiom between the detail and the items. Absent or
 	 *  malformed → nothing is drawn. */
 	preview?: CommandPreview;
+	/** #ask-timeout: deadline (ms) for this picker. The shell starts the clock
+	 *  only when the picker actually opens — a queued pick re-enters select()
+	 *  on promotion, so time spent behind another picker does not count — and
+	 *  resolves "timeout" when the deadline passes unanswered. Positive
+	 *  finite numbers only; anything else means no deadline. Only the confirm
+	 *  path sets it. */
+	timeoutMs?: number;
 	items: SelectItemOption[];
 	/** Type-to-filter while the picker is open (M11 #9): printable input
 	 *  builds a case-insensitive substring query over the labels; arrows and
@@ -129,8 +136,10 @@ export interface LineInput {
 	clearConversation?(): void;
 	/** Item picker (M9 phase 2, TUI only — the readline shell has none, so
 	 *  callers must fall back to a text flow when absent). Enter confirms,
-	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. */
-	select?(options: SelectOptions): Promise<number | null>;
+	 *  Esc/Ctrl+C cancel; resolves to the chosen index or null. With
+	 *  options.timeoutMs set, an unanswered picker also resolves "timeout"
+	 *  (#ask-timeout). */
+	select?(options: SelectOptions): Promise<number | null | "timeout">;
 	/** #tree: session-tree navigator (TUI only). Renders the full tree with
 	 *  filter/search/fold (Tab/f/typing); Enter resolves the chosen ENTRY
 	 *  ID, cancel resolves null. Follows select()'s lifecycle contract

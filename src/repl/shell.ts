@@ -207,6 +207,7 @@ export function effectiveTimeoutMs(value: number | undefined): number | null {
  *  formatter structurally never emits `0:00`, independent of timer callback
  *  ordering (D13). Minutes use floor/remainder — `0:60` is impossible. */
 export function countdownText(remainingMs: number): string {
+	if (!Number.isFinite(remainingMs)) return "0:01"; // defensive; the single source never passes non-finite input
 	const s = Math.max(1, Math.ceil(remainingMs / 1000));
 	if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 	if (s < 86400) return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;

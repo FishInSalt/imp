@@ -1257,9 +1257,14 @@ describe("M9-2 review regressions", () => {
 			await expect(chosen).resolves.toBe(0);
 			await settle(0);
 		}
-		// #ask-timeout-countdown: invalid values arm nothing — no countdown row
-		// can have rendered across any of the pickers above.
+		// #ask-timeout-countdown: one RENDERED invalid-deadline picker — the loop
+		// above answers before a frame flushes, so this is the pin with teeth.
+		const rendered = shell.select({ items: [{ label: "a" }], timeoutMs: Number.NaN });
+		await settle();
+		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control
 		expect(terminal.frameSince(0)).not.toContain("times out in");
+		terminal.data("\r");
+		await expect(rendered).resolves.toBe(0);
 		shell.close();
 	});
 
@@ -1372,6 +1377,8 @@ describe("M9-2 review regressions", () => {
 			[2147483647, "24d 20h"],
 			[0, "0:01"],
 			[-5000, "0:01"],
+			[Number.NaN, "0:01"],
+			[Number.POSITIVE_INFINITY, "0:01"],
 		];
 		for (const [ms, want] of cases) {
 			expect(countdownText(ms)).toBe(want);
@@ -1396,7 +1403,10 @@ describe("M9-2 review regressions", () => {
 		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
 		await settle();
 		expect(terminal.frameSince(0)).toContain("times out in 10:00"); // opening frame, not a late pop-in
-		await frameContains({ terminal }, "times out in 9:59", 3000);
+		// The countdown contract is "it ticks down", not millisecond precision: a
+		// first tick delayed by system load renders 9:58 and would skip the exact
+		// 9:59 frame (flake observed live) — search the 9-minute window instead.
+		await frameContains({ terminal }, "times out in 9:", 5000);
 		terminal.data("\r");
 		await expect(chosen).resolves.toBe(0);
 		const mark = terminal.writes.length;
@@ -1447,6 +1457,29 @@ describe("M9-2 review regressions", () => {
 		expect(terminal.frameSince(mark)).not.toContain("times out in");
 	});
 
+	it("#ask-timeout-countdown: finish clears the interval handle (spy pin)", async () => {
+		const setSpy = vi.spyOn(globalThis, "setInterval");
+		const clearSpy = vi.spyOn(globalThis, "clearInterval");
+		try {
+			const { terminal, shell } = makeShell();
+			shell.start();
+			await settle(0);
+			const before = setSpy.mock.calls.length;
+			const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+			await settle();
+			expect(setSpy.mock.calls.length).toBeGreaterThan(before); // the countdown interval armed
+			const handle = setSpy.mock.results[before]?.value;
+			expect(handle).toBeDefined();
+			terminal.data("\r");
+			await expect(chosen).resolves.toBe(0);
+			expect(clearSpy.mock.calls.some((call) => call[0] === handle)).toBe(true);
+			shell.close();
+		} finally {
+			setSpy.mockRestore();
+			clearSpy.mockRestore();
+		}
+	});
+
 	it("#ask-timeout-countdown: a filterable picker keeps the row above the filter, list still last", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
@@ -1456,22 +1489,51 @@ describe("M9-2 review regressions", () => {
 			filterable: true,
 			timeoutMs: 600000,
 		});
-		await settle(0);
+		await settle(); // the initial FULL frame lands (pi-tui repaints changed rows only later)
+		expect(terminal.frameSince(0)).toContain("times out in 10:00");
+		// F1 (implementation review): pin the D10 slot on the INITIAL full frame
+		// — the countdown renders ABOVE the list rows. A countdown appended
+		// after the list renders below them instead and fails
+		// `lastRowAt > countdownAt` (proven by mutation).
+		{
+			const lines = terminal
+				.frameSince(0)
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line !== "");
+			const countdownAt = lines.findIndex((line) => line.includes("times out in 10:00"));
+			const lastRowAt = lines.reduce(
+				(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+				-1,
+			);
+			expect(countdownAt).toBeGreaterThanOrEqual(0);
+			expect(lastRowAt).toBeGreaterThan(countdownAt);
+		}
+		const mark = terminal.writes.length; // only the REFILTER diff region from here on
 		terminal.data("a"); // refilter: the list rebuilds via remove+append
 		await settle();
-		const frame = terminal.frameSince(0);
-		expect(frame).toContain("filter: a");
-		expect(frame).toContain("times out in 10:00");
-		const lines = frame.split("\n");
-		const countdownAt = lines.findIndex((line) => line.includes("times out in 10:00"));
-		const filterAt = lines.findIndex((line) => line.includes("filter: a"));
-		const lastRowAt = lines.reduce(
-			(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
-			-1,
-		);
-		expect(countdownAt).toBeGreaterThanOrEqual(0);
-		expect(filterAt).toBeGreaterThan(countdownAt); // D10 slot: countdown above the query row
-		expect(lastRowAt).toBeGreaterThan(filterAt); // refiltered list stays last
+		// The refilter repaints CHANGED rows only (observed: filter row + list rows
+		// + editor rules). Two contract pins: the query row leads and the list rows
+		// follow it directly (a countdown that drifted below the list would sit
+		// between them here), and no picker chrome follows the last row — the next
+		// content is the editor rule (mirrors the Phase-1 D5 pin above).
+		{
+			const lines = terminal
+				.frameSince(mark)
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line !== "");
+			expect(lines[0]).toContain("filter: a");
+			expect(lines[1] ?? "").toMatch(/alpha|beta/u);
+			const lastRowAt = lines.reduce(
+				(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+				-1,
+			);
+			expect(lastRowAt).toBeGreaterThanOrEqual(0);
+			const after = lines.slice(lastRowAt + 1);
+			expect(after.some((line) => line.includes("times out in"))).toBe(false);
+			expect(after.some((line) => line.includes("quick pick"))).toBe(false);
+		}
 		terminal.data("\x1b"); // cancel
 		await expect(chosen).resolves.toBeNull();
 		shell.close();

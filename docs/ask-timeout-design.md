@@ -1,7 +1,7 @@
 # #ask-timeout — 交互确认超时（设计 r4）
 
 - 日期：2026-10-04
-- 状态：**r4.1 — §12 短评审（NEEDS-FIXES）已全折；待复核**；r3 实现已合并、机器侧验收通过（见 PROJECT_PLAN）
+- 状态：**r4.2 — §12 短评审已复核 CONFIRMED（N1-N3 已折）；实现评审 NEEDS-FIXES 已全折（F1-F5）、待复核**；r3 实现已合并、机器侧验收通过（见 PROJECT_PLAN）
 - 关联：`#guardian`（驱动方）、`#confirm-prompt`（承载界面）
 
 ## 1. 背景与目标
@@ -144,6 +144,13 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **N1（P2 残余）** → §4 补 `trust-ask.ts:64` 独立站点（直用 `TuiShell.select`，与 ctx.select 决策无关）+ `test/repl-tui.test.ts` 三处回调签名；删除原"trust-ask 属于被拒方案后果"的错误归因。
   - **N2（P3）** → §4 `api.confirm` 行："never hangs" 兜底限定为"能承载超时的宿主界面"（与 S6 对齐）。
   - **N3（P3）** → §8-16 注明与 §7 同批执行。
+- **§12 短评审（独立对抗，commit 109d5b0）：NEEDS-FIXES**（3×P2+4×P3：0:00 顺序保证归因错误、装载顺序/开局帧未钉、测试矩阵缺口、算术/时钟、单一来源、文档同步、措辞）→ r4.1 全折 → **复核 CONFIRMED**（N1-N3 非阻断注已再折）。
+- **§12 实现评审（独立对抗，commit 79d90c8）：NEEDS-FIXES** → 折叠（F1-F5）：
+  - **F1（P2，变异证明）** → 可过滤行序钉改为 write-mark 区域分析（原整史比较对"倒计时加在列表后"的回归变钝）；
+  - **F2（P3）** → 非法值负例补一条真实渲染（settle + 正控）的 picker；
+  - **F3（P3）** → interval 句柄以 setInterval/clearInterval spy 钉住；
+  - **F4（P3）** → 本节状态与评审记录修正（本条目）；
+  - **F5（P3）** → `countdownText` 非有限输入防御（→ `0:01`）+ 单测。
 - **r3 实现评审（独立，只读；commit 5d8a9c8）：NEEDS-FIXES** → 已折叠：
   - **P2#1（计时上限）** → 宿主 `Math.min(timeoutMs, 2^31-1)` 钳位（S8/§5）+ guardian 配置拒绝 `> 2147483647`（§6）；测试：超上限不瞬发、手动答复仍胜（repl-tui）、上限接受 / 超界报错（guardian）。
   - **P3#2（stdin end 缺口）** → repl-tui 补测（armed + `process.stdin.emit("end")` → `null`）。
@@ -173,5 +180,5 @@ owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩�
   - 开局帧即含 `times out in 10:00`（timeoutMs 600000）；约 1 秒后含 `9:59`（用 `frameContains` 轮询，勿固定 settle 单次）；
   - 格式纯函数单测（导出 `countdownText(remainingMs)`，入参 = 剩余毫秒）：600000→`10:00`、59999→`1:00`、60000→`1:00`、61000→`1:01`、3599999→`1h 00m`、3600000→`1h 00m`、3661000→`1h 01m`、86399000→`23h 59m`、86400000→`1d 00h`、钳位上限 2147483647→`24d 20h`、0/负数→`0:01`（下限）；
   - `effectiveTimeoutMs` 单测：非法值清单 → null；2147483648 → 2147483647；正常值原样；
-  - 生命周期：答复 / 超时（短期限取 1000ms 整秒——tick 与到期同刻的路径也在其中；契约钉仍是纯函数 0/负数→`0:01`） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；
-  - filterable + timeoutMs：行在列表上方；输入过滤字符重排后仍在列表上方（扩展既有 :906-931 用例）。
+  - 生命周期：答复 / 超时（短期限取 1000ms 整秒——tick 与到期同刻的路径也在其中；契约钉仍是纯函数 0/负数→`0:01`） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；**interval 句柄以 setInterval/clearInterval spy 钉住**（负例对泄漏不敏感——实现评审 F3）；
+  - filterable + timeoutMs：**write-mark 区域分析**——重排帧内倒计时行在 filter 行之前、列表行之后（整史 index 比较对"行加在列表后"的布局回归变钝——实现评审 F1 变异证明）。

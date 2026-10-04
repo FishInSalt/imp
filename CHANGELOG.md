@@ -24,8 +24,8 @@ All notable changes to imp are documented here. The format follows
   `api.confirm`; the shipped template uses 10 minutes): the timeout counts
   as declined, is audited as `timeout`, grants no session memory, and
   reaches the model with its own wording, distinct from a manual decline.
-  While a deadline is set, the picker itself shows a dim `times out in …`
-  countdown.
+  While a deadline is set, the picker's question line carries a dim,
+  right-aligned countdown (e.g. `10:00`, ticking down).
   The template was rebuilt around portable, catastrophe-only rules
   (whole-home and filesystem-root wipes, disk tools, the `.ssh` folder,
   remote-destroying git / gh operations). Start from

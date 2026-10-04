@@ -20,6 +20,7 @@ import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
 import { Fold } from "../src/repl/components/fold.js";
 import { SectionRule } from "../src/repl/components/section-rule.js";
+import { TitleCountdown } from "../src/repl/components/title-countdown.js";
 import { runRepl, TtyConfirm } from "../src/repl/repl.js";
 import { replaySession } from "../src/repl/replay.js";
 import { type AutocompleteOptions, countdownText, effectiveTimeoutMs, TuiShell } from "../src/repl/shell.js";
@@ -205,6 +206,13 @@ async function frameContains(
 		}
 		await settle(15);
 	}
+}
+
+/** #ask-timeout-countdown (design §12 r5.1): the FIRST frame line starting with
+ *  `title` — the opening frame's title row (later countdown ticks rewrite the
+ *  same line, so "first" is the stable pick for shape pins). */
+function firstTitleLine(frame: string, title: string): string | undefined {
+	return frame.split("\n").find((line) => line.startsWith(title));
 }
 
 function makeShell(options?: {
@@ -1257,14 +1265,26 @@ describe("M9-2 review regressions", () => {
 			await expect(chosen).resolves.toBe(0);
 			await settle(0);
 		}
-		// #ask-timeout-countdown: one RENDERED invalid-deadline picker — the loop
-		// above answers before a frame flushes, so this is the pin with teeth.
-		const rendered = shell.select({ items: [{ label: "a" }], timeoutMs: Number.NaN });
+		// #ask-timeout-countdown: one RENDERED titled invalid-deadline picker — the
+		// loop above answers before a frame flushes, so this is the pin with teeth.
+		const rendered = shell.select({
+			title: "allow this bash command?",
+			items: [{ label: "a" }],
+			timeoutMs: Number.NaN,
+		});
 		await settle();
 		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control
-		expect(terminal.frameSince(0)).not.toContain("times out in");
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.trimEnd()).toBe(
+			"allow this bash command?",
+		); // no time tail on an invalid deadline
 		terminal.data("\r");
 		await expect(rendered).resolves.toBe(0);
+		// Titleless + a valid deadline: no orphan right-aligned number either (r5.1).
+		const orphan = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+		await settle();
+		expect(terminal.frameSince(0)).not.toContain("10:00");
+		terminal.data("\r");
+		await expect(orphan).resolves.toBe(0);
 		shell.close();
 	});
 
@@ -1396,33 +1416,59 @@ describe("M9-2 review regressions", () => {
 		expect(effectiveTimeoutMs(600000)).toBe(600000);
 	});
 
-	it("#ask-timeout-countdown: the opening frame shows the full deadline and ticks down", async () => {
+	it("#ask-timeout-countdown: the opening frame carries the bare time right-aligned; it ticks down", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+		const chosen = shell.select({
+			title: "allow this bash command?",
+			items: [{ label: "a" }],
+			timeoutMs: 600000,
+		});
 		await settle();
-		expect(terminal.frameSince(0)).toContain("times out in 10:00"); // opening frame, not a late pop-in
+		const frame = terminal.frameSince(0);
+		const titleLine = firstTitleLine(frame, "allow this bash command?");
+		expect(titleLine).toBeDefined();
+		expect(titleLine?.endsWith("10:00")).toBe(true); // untrimmed right edge: no trailing pad
+		const rule = frame.split("\n").find((line) => line.includes("─"));
+		expect(visibleWidth(titleLine ?? "")).toBe(visibleWidth(rule ?? "")); // same right edge as the rule
 		// The countdown contract is "it ticks down", not millisecond precision: a
 		// first tick delayed by system load renders 9:58 and would skip the exact
-		// 9:59 frame (flake observed live) — search the 9-minute window instead.
-		await frameContains({ terminal }, "times out in 9:", 5000);
+		// 9:59 frame (flake observed live) — poll for the 9-minute window instead.
+		const start = Date.now();
+		let ticked: string | undefined;
+		while (Date.now() - start < 5000) {
+			// Scan ALL title lines: the opening "10:00" line stays in the history,
+			// so the first hit alone would never show the tick.
+			const hit = terminal
+				.frameSince(0)
+				.split("\n")
+				.find((line) => line.startsWith("allow this bash command?") && /9:\d\d$/u.test(line));
+			if (hit !== undefined) {
+				ticked = hit;
+				break;
+			}
+			await settle(15);
+		}
+		expect(ticked).toBeDefined();
 		terminal.data("\r");
 		await expect(chosen).resolves.toBe(0);
 		const mark = terminal.writes.length;
 		await settle();
-		expect(terminal.frameSince(mark)).not.toContain("times out in"); // the row left with the picker
+		expect(firstTitleLine(terminal.frameSince(mark), "allow this bash command?")).toBeUndefined(); // left with the picker
 		shell.close();
 	});
 
-	it("#ask-timeout-countdown: no deadline renders no row (plain picker, rendered)", async () => {
+	it("#ask-timeout-countdown: no deadline → the title stays the plain Text (byte-exact, no tail)", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		const plain = shell.select({ items: [{ label: "a" }] });
+		const plain = shell.select({ title: "allow this bash command?", items: [{ label: "a" }] });
 		await settle();
 		expect(terminal.frameSince(0)).toContain("→ 1. a"); // positive control: the picker rendered
-		expect(terminal.frameSince(0)).not.toContain("times out in");
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.trimEnd()).toBe(
+			"allow this bash command?",
+		);
 		terminal.data("\r");
 		await expect(plain).resolves.toBe(0);
 		shell.close();
@@ -1432,14 +1478,18 @@ describe("M9-2 review regressions", () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 1000 });
+		const chosen = shell.select({
+			title: "allow this bash command?",
+			items: [{ label: "a" }],
+			timeoutMs: 1000,
+		});
 		await settle();
-		expect(terminal.frameSince(0)).toContain("times out in 0:01");
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("0:01")).toBe(true);
 		await expect(chosen).resolves.toBe("timeout");
-		expect(terminal.frameSince(0)).not.toContain("times out in 0:00"); // lifetime history — structurally unreachable
+		expect(terminal.frameSince(0)).not.toMatch(/\b0:00\b/u); // lifetime history — structurally unreachable
 		const mark = terminal.writes.length;
 		await settle(1200); // past several ticks: the interval was cleared in finish
-		expect(terminal.frameSince(mark)).not.toContain("times out in");
+		expect(firstTitleLine(terminal.frameSince(mark), "allow this bash command?")).toBeUndefined();
 		shell.close();
 	});
 
@@ -1447,14 +1497,18 @@ describe("M9-2 review regressions", () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+		const chosen = shell.select({
+			title: "allow this bash command?",
+			items: [{ label: "a" }],
+			timeoutMs: 600000,
+		});
 		await settle();
-		expect(terminal.frameSince(0)).toContain("times out in 10:00");
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("10:00")).toBe(true);
 		shell.close();
 		await expect(chosen).resolves.toBe(null);
 		const mark = terminal.writes.length;
 		await settle(1200);
-		expect(terminal.frameSince(mark)).not.toContain("times out in");
+		expect(firstTitleLine(terminal.frameSince(mark), "allow this bash command?")).toBeUndefined();
 	});
 
 	it("#ask-timeout-countdown: finish clears the interval handle (spy pin)", async () => {
@@ -1465,7 +1519,11 @@ describe("M9-2 review regressions", () => {
 			shell.start();
 			await settle(0);
 			const before = setSpy.mock.calls.length;
-			const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 600000 });
+			const chosen = shell.select({
+				title: "allow this bash command?",
+				items: [{ label: "a" }],
+				timeoutMs: 600000,
+			});
 			await settle();
 			expect(setSpy.mock.calls.length).toBeGreaterThan(before); // the countdown interval armed
 			const handle = setSpy.mock.results[before]?.value;
@@ -1480,63 +1538,129 @@ describe("M9-2 review regressions", () => {
 		}
 	});
 
-	it("#ask-timeout-countdown: a filterable picker keeps the row above the filter, list still last", async () => {
+	it("#ask-timeout-countdown: a filterable picker carries the time on its title; refilter keeps the list last", async () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
 		const chosen = shell.select({
+			title: "allow this bash command?",
 			items: [{ label: "alpha" }, { label: "beta" }],
 			filterable: true,
 			timeoutMs: 600000,
 		});
 		await settle(); // the initial FULL frame lands (pi-tui repaints changed rows only later)
-		expect(terminal.frameSince(0)).toContain("times out in 10:00");
-		// F1 (implementation review): pin the D10 slot on the INITIAL full frame
-		// — the countdown renders ABOVE the list rows. A countdown appended
-		// after the list renders below them instead and fails
-		// `lastRowAt > countdownAt` (proven by mutation).
-		{
-			const lines = terminal
-				.frameSince(0)
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line !== "");
-			const countdownAt = lines.findIndex((line) => line.includes("times out in 10:00"));
-			const lastRowAt = lines.reduce(
-				(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
-				-1,
-			);
-			expect(countdownAt).toBeGreaterThanOrEqual(0);
-			expect(lastRowAt).toBeGreaterThan(countdownAt);
-		}
+		expect(firstTitleLine(terminal.frameSince(0), "allow this bash command?")?.endsWith("10:00")).toBe(true);
 		const mark = terminal.writes.length; // only the REFILTER diff region from here on
 		terminal.data("a"); // refilter: the list rebuilds via remove+append
 		await settle();
 		// The refilter repaints CHANGED rows only (observed: filter row + list rows
-		// + editor rules). Two contract pins: the query row leads and the list rows
-		// follow it directly (a countdown that drifted below the list would sit
-		// between them here), and no picker chrome follows the last row — the next
-		// content is the editor rule (mirrors the Phase-1 D5 pin above).
-		{
-			const lines = terminal
-				.frameSince(mark)
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line !== "");
-			expect(lines[0]).toContain("filter: a");
-			expect(lines[1] ?? "").toMatch(/alpha|beta/u);
-			const lastRowAt = lines.reduce(
-				(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
-				-1,
-			);
-			expect(lastRowAt).toBeGreaterThanOrEqual(0);
-			const after = lines.slice(lastRowAt + 1);
-			expect(after.some((line) => line.includes("times out in"))).toBe(false);
-			expect(after.some((line) => line.includes("quick pick"))).toBe(false);
-		}
+		// + editor rules). Contract pins: the query row leads, the list rows follow
+		// it directly, and no picker chrome follows the last row (the Phase-1 D5
+		// list-last pin; the old countdown-position pin is superseded by the title
+		// shape pin above — r5.1).
+		const lines = terminal
+			.frameSince(mark)
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== "");
+		expect(lines[0]).toContain("filter: a");
+		expect(lines[1] ?? "").toMatch(/alpha|beta/u);
+		const lastRowAt = lines.reduce(
+			(last, line, index) => (line.includes("alpha") || line.includes("beta") ? index : last),
+			-1,
+		);
+		expect(lastRowAt).toBeGreaterThanOrEqual(0);
+		const after = lines.slice(lastRowAt + 1);
+		expect(after.some((line) => line.includes("quick pick"))).toBe(false);
 		terminal.data("\x1b"); // cancel
 		await expect(chosen).resolves.toBeNull();
 		shell.close();
+	});
+
+	it("#ask-timeout-countdown: a narrow terminal truncates the title, keeping the time whole", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		terminal.resize(40);
+		await settle();
+		const title = `allow this bash command? ${"x".repeat(60)}`;
+		const chosen = shell.select({ title, items: [{ label: "a" }], timeoutMs: 600000 });
+		await settle();
+		const line = terminal
+			.frameSince(0)
+			.split("\n")
+			.find((l) => l.startsWith("allow this bash command? "));
+		expect(line).toBeDefined();
+		expect(line?.includes("…")).toBe(true);
+		expect(line?.endsWith("10:00")).toBe(true);
+		expect(visibleWidth(line ?? "")).toBe(40);
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: without a deadline a long title still wraps (no … substitution)", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		const long = "T".repeat(120);
+		const pick = shell.select({ title: long, items: [{ label: "a" }] });
+		await settle();
+		const frame = terminal.frameSince(0);
+		const tLines = frame
+			.split("\n")
+			.filter((line) => /^T+ *$/u.test(line))
+			.map((line) => line.trimEnd());
+		expect(tLines.length).toBeGreaterThanOrEqual(2); // wrapped, multi-row
+		expect(tLines.join("")).toBe(long); // nothing dropped
+		expect(frame).not.toContain("…"); // and no truncation ellipsis anywhere
+		terminal.data("\r");
+		await expect(pick).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#ask-timeout-countdown: TitleCountdown — fits with the right edge at width", () => {
+		const raw = new TitleCountdown("allow this bash command?", "10:00").render(80)[0] ?? "";
+		const line = stripAnsi(raw);
+		expect(line.startsWith("allow this bash command?")).toBe(true);
+		expect(line.endsWith("10:00")).toBe(true);
+		expect(visibleWidth(raw)).toBe(80);
+	});
+
+	it("#ask-timeout-countdown: TitleCountdown — long ASCII title truncates, right side whole", () => {
+		const raw = new TitleCountdown("x".repeat(200), "10:00").render(40)[0] ?? "";
+		const line = stripAnsi(raw);
+		expect(line).toContain("…");
+		expect(line.endsWith("10:00")).toBe(true);
+		expect(line).not.toContain("\n");
+		expect(visibleWidth(raw)).toBe(40);
+	});
+
+	it("#ask-timeout-countdown: TitleCountdown — wide glyphs: the gap absorbs the shortfall", () => {
+		// "界"×30 clips to 33 columns at budget 34 (odd budgets can't fill with
+		// width-2 glyphs) — a budget-based gap would undershoot the right edge.
+		const raw = new TitleCountdown("界".repeat(30), "10:00").render(40)[0] ?? "";
+		const line = stripAnsi(raw);
+		expect(line.endsWith("10:00")).toBe(true);
+		expect(visibleWidth(raw)).toBe(40);
+		expect(visibleWidth(line.slice(0, line.indexOf("10:00")))).toBe(35);
+	});
+
+	it("#ask-timeout-countdown: TitleCountdown — a multi-line title flattens to one row", () => {
+		const line = stripAnsi(new TitleCountdown("a\nb", "0:30").render(20)[0] ?? "");
+		expect(line).not.toContain("\n");
+		expect(line.startsWith("a b")).toBe(true);
+		expect(line.endsWith("0:30")).toBe(true);
+	});
+
+	it("#ask-timeout-countdown: TitleCountdown — width sweep: never wider, exact in the normal branch", () => {
+		const component = new TitleCountdown("allow this?", "10:00");
+		for (let width = 0; width <= 7; width++) {
+			const line = component.render(width)[0] ?? "";
+			expect(line).not.toContain("\n");
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			if (width >= 6) expect(visibleWidth(line)).toBe(width);
+		}
 	});
 
 	it("a question queued while a picker is open renders only after the picker resolves", async () => {

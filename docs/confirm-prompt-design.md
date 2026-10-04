@@ -295,9 +295,10 @@ pickers**, so the item list stays the last child for filterable ones —
 remove+append (`src/repl/shell.ts:905`), so a hint appended after the list
 would leave a refiltered list *below* the hint (round-1 P2). Pin a test that
 refiltering keeps the list below nothing else. (#ask-timeout-countdown later
-amended this layout for timeout pickers only: one dim `times out in …` row
-sits between the preview and the blank row — see
-`docs/ask-timeout-design.md` §12 D10.) Every row honors the terminal
+amended this layout for timeout pickers only: the title line itself renders
+the question plus a dim right-aligned bare countdown, and the title
+truncates instead of wrapping there — see `docs/ask-timeout-design.md` §12
+D10. The blank-row rule below is unchanged.) Every row honors the terminal
 width (enforcement pattern: `test/repl-tui.test.ts:732`, `:299`); the item list
 keeps its `Math.min(items.length, 8)` window and scroll indicator.
 

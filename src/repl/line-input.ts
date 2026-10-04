@@ -60,8 +60,9 @@ export interface SelectOptions {
 	 *  on promotion, so time spent behind another picker does not count — and
 	 *  resolves "timeout" when the deadline passes unanswered. Positive
 	 *  finite numbers only; anything else means no deadline (values beyond
-	 *  the platform timer ceiling clamp to it). Only the confirm
-	 *  path sets it. */
+	 *  the platform timer ceiling clamp to it). With a deadline set, the
+	 *  open picker also shows a dim `times out in …` countdown row. Only the
+	 *  confirm path sets it. */
 	timeoutMs?: number;
 	items: SelectItemOption[];
 	/** Type-to-filter while the picker is open (M11 #9): printable input

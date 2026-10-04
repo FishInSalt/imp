@@ -1,7 +1,7 @@
-# #ask-timeout — 交互确认超时（设计 r3）
+# #ask-timeout — 交互确认超时（设计 r4）
 
 - 日期：2026-10-04
-- 状态：**r3 — r1 折叠已复核 CONFIRMED（含三处非阻断补充 N1/N2/N3）；设计闭合，可进入实现**
+- 状态：**r4.3 — 设计/实现评审均闭合（§12 短评审 CONFIRMED；实现评审复核 APPROVE：F1-F5 与两处 P3 文字修正已折）**；r3 实现已合并、机器侧验收通过（见 PROJECT_PLAN）
 - 关联：`#guardian`（驱动方）、`#confirm-prompt`（承载界面）
 
 ## 1. 背景与目标
@@ -122,7 +122,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
 ## 10. 范围外（v1）
 
 - 每条 ask 规则独立超时（先全局一个字段；需要再加覆写）。
-- 弹窗上的倒计时显示。
+- ~~弹窗上的倒计时显示~~ → 已追加为 §12（#ask-timeout-countdown，owner 2026-10-04）。
 - readline legacy 路径与 `secret`/login 等其它问询形式的超时（S6）。
 - 超时记忆（"这个问题超时过"）——不做。
 
@@ -144,6 +144,14 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **N1（P2 残余）** → §4 补 `trust-ask.ts:64` 独立站点（直用 `TuiShell.select`，与 ctx.select 决策无关）+ `test/repl-tui.test.ts` 三处回调签名；删除原"trust-ask 属于被拒方案后果"的错误归因。
   - **N2（P3）** → §4 `api.confirm` 行："never hangs" 兜底限定为"能承载超时的宿主界面"（与 S6 对齐）。
   - **N3（P3）** → §8-16 注明与 §7 同批执行。
+- **§12 短评审（独立对抗，commit 109d5b0）：NEEDS-FIXES**（3×P2+4×P3：0:00 顺序保证归因错误、装载顺序/开局帧未钉、测试矩阵缺口、算术/时钟、单一来源、文档同步、措辞）→ r4.1 全折 → **复核 CONFIRMED**（N1-N3 非阻断注已再折）。
+- **§12 实现评审（独立对抗，commit 79d90c8）：NEEDS-FIXES** → 折叠（F1-F5）：
+  - **F1（P2，变异证明）** → 可过滤行序钉改为 write-mark 区域分析（原整史比较对"倒计时加在列表后"的回归变钝）；
+  - **F2（P3）** → 非法值负例补一条真实渲染（settle + 正控）的 picker；
+  - **F3（P3）** → interval 句柄以 setInterval/clearInterval spy 钉住；
+  - **F4（P3）** → 本节状态与评审记录修正（本条目）；
+  - **F5（P3）** → `countdownText` 非有限输入防御（→ `0:01`）+ 单测。
+  - **复核：APPROVE**（F1-F5 逐条核实含变异复测——F1 钉对"行加在列表后"变异双向抓获；F3 钉对泄漏变异抓获；两处 P3 文字修正已折入 D14）。
 - **r3 实现评审（独立，只读；commit 5d8a9c8）：NEEDS-FIXES** → 已折叠：
   - **P2#1（计时上限）** → 宿主 `Math.min(timeoutMs, 2^31-1)` 钳位（S8/§5）+ guardian 配置拒绝 `> 2147483647`（§6）；测试：超上限不瞬发、手动答复仍胜（repl-tui）、上限接受 / 超界报错（guardian）。
   - **P3#2（stdin end 缺口）** → repl-tui 补测（armed + `process.stdin.emit("end")` → `null`）。
@@ -153,3 +161,25 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **P3#6（两处过时陈述）** → `docs/guardian-auto-mode-design.md` D16/§11 补 superseded 注释。
   - **P3#7（humanDuration(undefined) 防御）** → 退化文案分支 + 测试（§6）。
   - 核心路径（P0 类分支顺序、定时器生命周期、类型加宽、guardian 三分支）逐行核实无 P0/P1。
+
+## 12. 追加：confirm 窗口的超时倒计时（#ask-timeout-countdown，r4.1）
+
+owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩余时间提醒。
+**纯宿主展示层**——guardian / 扩展 API / 配置格式零变更（`timeoutMs` 已在 §2 定义）。
+
+- **D9 展示条件与单一来源**：仅当 `timeoutMs` 为合法正值（有限、> 0）才显示；实现为**一个** helper `effectiveTimeoutMs(options.timeoutMs): number | null`（含 `Math.min(…, 2^31-1)` 钳位），行可见性、初始文本、deadline、timeout 定时器全部取自它——显示的与计时的不可能公式分岔。helper 单测：0 / 负 / NaN / `"500"` / Infinity → null；2147483648 → 2147483647（钳位）；600000 → 原样。无期限 = 无此行（无期限 picker 的字节钉全部不变）。
+- **D10 位置**：dim 单行（`dim(text, true)`），置于 preview 行之后、filter 查询行 / 编号 Spacer(1) / 列表**之前**（`shell.ts` 装箱点：preview ~:948 → 本行 → 查询行 ~:951 / Spacer ~:959 → List ~:960）。filterable picker 的列表必须保持最后一个子元素（`applyFilter` remove+append，列表之后的行会被重排到上方）；编号 picker 的 query 为 null、affordance 在列表后不受影响。**修订 `docs/confirm-prompt-design.md` 的 D5 位置规则**：timeout picker 在 preview 与空行之间多一行倒计时，空行仍紧贴 items 上方（向该文档回加一行指向本节）。排队中的问题没有倒计时（未打开，与 D7 一致）。`SelectOptions.timeoutMs` JSDoc 补一句"设置了就在 picker 里显示倒计时行"。
+- **D11 文本与算法定稿**：`times out in <剩余>`。`s = max(1, ceil((deadline - now) / 1000))`（**下限 1 秒**，见 D13），然后：
+  - `s < 3600` → `m = floor(s/60)`, `ss = s % 60` → `M:SS`（`10:00`、`0:59`）；
+  - `s < 86400` → `Hh MMm`（`mm = floor((s % 3600)/60)`；`1h 00m`、`23h 59m`）；
+  - 否则 → `Dd HHh`（`hh = floor((s % 86400)/3600)`；`1d 00h`、`24d 20h`）。
+  floor/余数写法杜绝 `0:60`；打开瞬间显示完整期限（ceil 吸收打开延迟：600000 → `10:00`）。**时钟锚用 `performance.now()`**（单调；与相对 `setTimeout` 同语义——`Date.now()` 的墙钟跳变会与计时器分岔）。
+- **D12 更新机制与装载顺序（规范性）**：1s interval，`unref?.()`；每 tick 重算文本，文本与上次相同则跳过 `setText`/重绘（≥1h 的格式每分钟才变）。**顺序硬约束**：① `effectiveTimeoutMs` 只算一次；② timeout 定时器先于 interval 创建；③ 初始行文本在**构建行时即携带**（空 Text 渲染零行；等首 tick 会晚 1 秒才出现）；④ `finish` 漏斗（唯一结算点）同时清 interval 与定时器——答复/取消/超时/close/SIGINT/stdin-end 全路径覆盖。
+- **D13 边界**：**`times out in 0:00` 结构性不可达**——formatter 下限恒 1 秒（剩余 ≤ 0 也只输出 `0:01`），**不依赖**"同刻回调谁先触发"（Node 对同到期定时器无顺序保证；pi-tui 延迟渲染只是额外兜底，契约写在格式化层）。拆除后无后续重绘；readline/print 无 select 面天然无倒计时；颜色**不**随临近变化（保持 dim；未来若做临近变色，需重审"文本不变跳过重绘"的检查）。
+- **D14 测试（r4.1 补全）**：
+  - 负例：无 `timeoutMs` 的普通 picker（渲染后）帧历史**不含** `times out in`；§8-7 非法值循环后同样断言不含；
+  - 开局帧即含 `times out in 10:00`（timeoutMs 600000）；随后轮询 `times out in 9:`（5s 预算）——首 tick 被负载推迟时会直接渲染 9:58、跳过精确 9:59 帧（实测 flake），断言"在倒数"而非毫秒精度（格式精确性由纯函数单测钉住）；
+  - 格式纯函数单测（导出 `countdownText(remainingMs)`，入参 = 剩余毫秒）：600000→`10:00`、59999→`1:00`、60000→`1:00`、61000→`1:01`、3599999→`1h 00m`、3600000→`1h 00m`、3661000→`1h 01m`、86399000→`23h 59m`、86400000→`1d 00h`、钳位上限 2147483647→`24d 20h`、0/负数→`0:01`（下限）；
+  - `effectiveTimeoutMs` 单测：非法值清单 → null；2147483648 → 2147483647；正常值原样；
+  - 生命周期：答复 / 超时（短期限取 1000ms 整秒——tick 与到期同刻的路径也在其中；契约钉仍是纯函数 0/负数→`0:01`） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；**interval 句柄以 setInterval/clearInterval spy 钉住**（负例对泄漏不敏感——实现评审 F3）；
+  - filterable + timeoutMs：**双钉**——初始全帧钉倒计时行在列表行之上（行加在列表后会渲染在其下，变异自验被抓）；重排 diff 区域钉查询行在前、列表行紧随其后（pi-tui 只重绘变更行，未变的倒计时不在区域内）、列表行之后无任何 picker chrome（整史 index 比较对布局回归变钝——实现评审 F1）。

@@ -1,21 +1,23 @@
-# guardian2 — a minimal config-driven permission gate (design)
+# guardian — a minimal config-driven permission gate (design)
 
-Status: **rev 2.8 — shipped.** Merged to `main` (`5fb3a24` v0, `bce6df2`
-friendly config), cut over on 2026-10-04 (P2), and guardian v1 removed
-(P3/P4, `chore/remove-guardian-v1`).
+Status: **rev 2.9 — renamed to `guardian`.** Merged to `main` (`5fb3a24`
+v0, `bce6df2` friendly config), cut over on 2026-10-04 (P2), guardian v1
+removed (P3/P4, `chore/remove-guardian-v1`), and the working name guardian2
+retired — files, command, config/audit paths, and this document are
+`guardian` now.
 Owner direction: wildcard patterns by default with a `regex` escape hatch;
 optional `tool` scoping for `write` / `edit` paths; `reason` stays optional
 (the template demonstrates both forms).
 
 - Worktree / branch: `imp-guardian2` / `feat/guardian2-friendly-config`,
-  base `main` (5fb3a24 — guardian2 v0 merged).
+  base `main` (5fb3a24 — guardian v0 merged).
 - Replaces guardian v1 (modes + classifier). v1 was deleted after cutover
   (phase P3, §6); v1's design record stays at
   `docs/guardian-auto-mode-design.md` with a superseded banner.
 
 ## 0. The model (owner direction)
 
-1. The user writes two rule lists in `~/.imp/guardian2.json`: **deny** and
+1. The user writes two rule lists in `~/.imp/guardian.json`: **deny** and
    **ask**. Patterns are plain text where `*` matches anything (a match is
    "the text appears"); a `regex` entry is the escape hatch for full regular
    expressions.
@@ -34,8 +36,8 @@ In scope:
 - `write` / `edit` tool calls: patterns match the **resolved absolute path**
   of the target file; rules opt in with `"tool"`.
 - `deny` / `ask` handling; deny evaluated before ask.
-- A minimal audit log; `/guardian2 status | reload`.
-- A shipped template (`examples/extensions/guardian2.template.json`).
+- A minimal audit log; `/guardian status | reload`.
+- A shipped template (`examples/extensions/guardian.template.json`).
 
 Deliberately out of scope (add only if a real need appears):
 
@@ -65,7 +67,7 @@ Known limits, documented and accepted:
 - a broken config disarms the gate until fixed; the footer shows
   `config error` (§5).
 
-## 2. Config: `~/.imp/guardian2.json`
+## 2. Config: `~/.imp/guardian.json`
 
 ```jsonc
 {
@@ -117,18 +119,18 @@ untouched):
    caller cwd: `event.cwd ?? api.cwd`; non-string `path` ⇒ pass).
 2. No rules whose `tool` covers this call → pass.
 3. First `deny` rule that matches → block: return
-   `{block: true, reason: <reason> or "blocked by guardian2 rule: <source>"}`.
+   `{block: true, reason: <reason> or "blocked by guardian rule: <source>"}`.
    Audit.
 4. First `ask` rule that matches → confirm:
    - `bash`: message `"allow this bash command?"`; detail `<reason or
-     "guardian2 ask rule: <source>">`; options `{ sessionKey:
-     "guardian2:session", rememberLabel: "all guardian2 ask prompts this
+     "guardian ask rule: <source>">`; options `{ sessionKey:
+     "guardian:session", rememberLabel: "all guardian ask prompts this
      session", preview: { kind: "command", tool: "bash", text: command } }`.
    - `write` / `edit`: message `"allow this write?"` / `"allow this edit?"`;
-     detail `<resolved path>` + (`\n` + `<reason or "guardian2 ask rule:
+     detail `<resolved path>` + (`\n` + `<reason or "guardian ask rule:
      <source>">`); options `{ sessionKey, rememberLabel }` (no preview — the
      preview kind is command-only).
-   `false` → block with the reason (or "blocked by guardian2 — the
+   `false` → block with the reason (or "blocked by guardian — the
    confirmation was declined"). Audit the outcome. The shared session key is
    the only memory: choosing the prompt's remember option once stops every
    further ask prompt for the rest of the session — bash and files alike
@@ -147,7 +149,7 @@ untouched):
 
 ## 4. Surfaces
 
-- **Audit** `~/.imp/guardian2.log`, one line per deny/ask decision plus load
+- **Audit** `~/.imp/guardian.log`, one line per deny/ask decision plus load
   errors (pass-through calls are not logged). Whitespace runs in the source
   and the match text are flattened, and both are capped at 160 chars
   including the trailing `…`, so the one-line invariant holds:
@@ -167,8 +169,8 @@ untouched):
 - **Footer**: `setStatus("config", "config error")` while the last load
   failed; cleared on a successful load. Nothing else (no rule count, no
   per-call status).
-- **Commands**: `/guardian2 status` (config path, rule counts, error flag) and
-  `/guardian2 reload` (re-read the file; report the outcome).
+- **Commands**: `/guardian status` (config path, rule counts, error flag) and
+  `/guardian reload` (re-read the file; report the outcome).
 - The log file is created with mode `0600` (match text may contain
   secrets).
 
@@ -176,7 +178,7 @@ untouched):
 
 - Missing file → zero rules; the gate does nothing (a valid, opt-in state).
 - Invalid config → keep the last valid rules (if any); audit
-  `[load] config error`; footer flag; `/guardian2 reload` recovers.
+  `[load] config error`; footer flag; `/guardian reload` recovers.
 - First run with an invalid file → no rules, footer flag, audit line.
   Trade-off (owner-accepted in rev 2.2, §9): a broken config disarms an unconfigured
   gate — the footer shows `config error` while it lasts. The alternative
@@ -195,21 +197,21 @@ untouched):
 
 - **P0 (now)**: owner review of this doc → independent adversarial review →
   fold → review closed.
-- **P1 (this branch)**: implement `examples/extensions/guardian2.mjs`
-  (target: ~150-350 lines including comments) + `guardian2.template.json`;
-  `test/guardian2.test.ts` (fake-api pattern, like v1's example tests); full
+- **P1 (this branch)**: implement `examples/extensions/guardian.mjs`
+  (target: ~150-350 lines including comments) + `guardian.template.json`;
+  `test/guardian.test.ts` (fake-api pattern, like v1's example tests); full
   suite; implementation review per the working agreement. Create an
   `imp-main` worktree (`git worktree add ../imp-main main`) for the merge
   (`--no-ff`) and later main-side edits — `main` currently has no worktree.
 - **P2 cutover** (owner-driven): on this machine
   `~/.imp/extensions/guardian.mjs` is a symlink into
   `imp/examples/extensions/guardian.mjs` — remove or repoint it **before**
-  installing guardian2, so both gates never load at once. Install guardian2
+  installing guardian, so both gates never load at once. Install guardian
   by **copy**, or by a symlink to a stable path outside any branch worktree
   (a symlink into a branch worktree breaks when that branch switches). Write
-  `~/.imp/guardian2.json`, run live probes, observe. Archive v1's log (rename
+  `~/.imp/guardian.json`, run live probes, observe. Archive v1's log (rename
   it away before any rename of v2 to avoid collisions).
-- **P3 deletion batch** (after P2 observation): on `main` — delete
+- **P3 deletion batch** (after P2 observation): on `main` — delete v1's
   `examples/extensions/guardian.mjs`, `test/guardian.test.ts`,
   `test/guardian-auto.test.ts`, `test/guardian-auto-host.test.ts`,
   `test/classify-seam.test.ts`, `src/repl/classify.ts` and the seam plumbing
@@ -234,8 +236,8 @@ untouched):
   (`docs/acceptance-guardian-input`, `docs/ledger-guardian-*` …), leftover
   worktrees.
 
-- **P2 — done (2026-10-04)**: v1's symlink removed, guardian2 installed by
-  copy, `~/.imp/guardian2.json` written from the template, and probes run
+- **P2 — done (2026-10-04)**: v1's symlink removed, guardian installed by
+  copy, `~/.imp/guardian.json` written from the template, and probes run
   against the real install — pass-through, deny, ask (bash and file), audit
   all observed. v1's log archived to `guardian.log.v1-archive`.
 - **P3/P4 — done (2026-10-04)**: v1's extension, its tests, and the host
@@ -320,8 +322,8 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 
 1. First-run invalid config: flag-only accepted — no rules + footer flag;
    the trade-off is stated in §5.
-2. Rename: keep `guardian2` for now; revisit only after the v1 deletion
-   batch (P3) has landed.
+2. Rename: applied 2026-10-04 — the working name `guardian2` → `guardian`
+   (files, command, config/audit paths, this document).
 3. Pass-through calls stay unaudited (deny/ask decisions are logged).
 4. Session memory: no per-pattern memory; a single session-wide "stop
    asking" option rides every ask prompt (§3).
@@ -330,6 +332,11 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
    both forms); optional `tool` scoping for `write` / `edit` path rules.
 
 ## 10. Review log
+
+- rev 2.9 — renamed to `guardian` (2026-10-04): the extension file,
+  template, test file, this document, the `/guardian` command,
+  `~/.imp/guardian.json` / `~/.imp/guardian.log`, and every user-facing
+  string.
 
 - rev 2.8 — shipped: v0 merged (`5fb3a24`), friendly config merged
   (`bce6df2`), P2 cutover done 2026-10-04 (probes green, v1's log archived),

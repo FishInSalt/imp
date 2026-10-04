@@ -1,9 +1,9 @@
-// test/guardian2.test.ts — behavior pins for the minimal guardian2 example
-// extension (examples/extensions/guardian2.mjs). Binding spec:
-// docs/guardian2-design.md (rev 2.6).
+// test/guardian.test.ts — behavior pins for the minimal guardian example
+// extension (examples/extensions/guardian.mjs). Binding spec:
+// docs/guardian-design.md (rev 2.9).
 //
 // Pattern: the real example runs against a fake api — a confirm spy, captured
-// statuses, an audit-file reader, and the registered /guardian2 command
+// statuses, an audit-file reader, and the registered /guardian command
 // dispatched as the REPL would.
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -17,16 +17,16 @@ import type { CommandContext, SlashCommand } from "../src/repl/commands.js";
 let fakeHome = "";
 
 beforeEach(async () => {
-	fakeHome = await mkdtemp(path.join(os.tmpdir(), "imp-guardian2-"));
-	vi.stubEnv("HOME", fakeHome); // guardian2 computes config/log paths from homedir
+	fakeHome = await mkdtemp(path.join(os.tmpdir(), "imp-guardian-"));
+	vi.stubEnv("HOME", fakeHome); // guardian computes config/log paths from homedir
 });
 
 afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
-const configPath = (): string => path.join(fakeHome, ".imp", "guardian2.json");
-const auditPath = (): string => path.join(fakeHome, ".imp", "guardian2.log");
+const configPath = (): string => path.join(fakeHome, ".imp", "guardian.json");
+const auditPath = (): string => path.join(fakeHome, ".imp", "guardian.log");
 
 /** Audit file minus the ISO timestamp; one entry per line, in write order. */
 const auditBodies = (): string[] => {
@@ -82,7 +82,7 @@ function fakeApi(cwd: string): Wire {
 
 	const gate = async (event: Partial<ToolCallEvent> = {}): Promise<unknown> => {
 		const handler = handlers.get("tool_call");
-		if (handler === undefined) throw new Error("guardian2 did not register a tool_call handler");
+		if (handler === undefined) throw new Error("guardian did not register a tool_call handler");
 		return await (handler as (e: ToolCallEvent) => Promise<unknown>)({
 			type: "tool_call",
 			toolCallId: "t1",
@@ -93,8 +93,8 @@ function fakeApi(cwd: string): Wire {
 	};
 
 	const runCommand = async (args: string): Promise<string[]> => {
-		const command = commands.get("guardian2");
-		if (command === undefined) throw new Error("guardian2 did not register its command");
+		const command = commands.get("guardian");
+		if (command === undefined) throw new Error("guardian did not register its command");
 		const commandNotes: string[] = [];
 		await command.run(args, {
 			renderer: {
@@ -110,7 +110,7 @@ function fakeApi(cwd: string): Wire {
 }
 
 const loadFactory = async (): Promise<(api: ExtensionApi) => unknown> => {
-	const module = (await import(pathToFileURL(path.resolve("examples/extensions/guardian2.mjs")).href)) as {
+	const module = (await import(pathToFileURL(path.resolve("examples/extensions/guardian.mjs")).href)) as {
 		default: (api: ExtensionApi) => unknown;
 	};
 	return module.default;
@@ -146,7 +146,7 @@ const blockOf = (decision: unknown): { block?: boolean; reason?: string } =>
 
 /* ------------------------------- config --------------------------------- */
 
-describe("guardian2 config loading", () => {
+describe("guardian config loading", () => {
 	it("missing file → zero rules: everything passes, no confirm, no audit", async () => {
 		const w = await boot();
 		expect(await w.gate(bash("rm -rf /"))).toBeUndefined();
@@ -233,7 +233,7 @@ describe("guardian2 config loading", () => {
 
 /* -------------------------------- deny ---------------------------------- */
 
-describe("guardian2 deny", () => {
+describe("guardian deny", () => {
 	it("blocks with the custom reason; no confirm; audit line pinned", async () => {
 		const w = await boot({ config: { deny: [{ pattern: "rm -rf", reason: "do not delete here" }] } });
 		const result = blockOf(await w.gate(bash("rm -rf /tmp/x")));
@@ -245,7 +245,7 @@ describe("guardian2 deny", () => {
 
 	it("the default reason names the source", async () => {
 		const w = await boot({ config: { deny: ["rm -rf"] } });
-		expect(blockOf(await w.gate(bash("rm -rf /tmp/x"))).reason).toBe("blocked by guardian2 rule: rm -rf");
+		expect(blockOf(await w.gate(bash("rm -rf /tmp/x"))).reason).toBe("blocked by guardian rule: rm -rf");
 	});
 
 	it("first matching deny rule wins (config order)", async () => {
@@ -269,13 +269,13 @@ describe("guardian2 deny", () => {
 
 /* --------------------------------- ask ---------------------------------- */
 
-describe("guardian2 ask", () => {
+describe("guardian ask", () => {
 	it("confirm carries the reason, the shared sessionKey/rememberLabel, and the preview", async () => {
 		const w = await boot({ config: { ask: [{ pattern: "sudo", reason: "running as root" }] } });
 		await w.gate(bash("sudo ls"));
 		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "running as root", {
-			sessionKey: "guardian2:session",
-			rememberLabel: "all guardian2 ask prompts this session",
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
 			preview: { kind: "command", tool: "bash", text: "sudo ls" },
 		});
 	});
@@ -300,10 +300,10 @@ describe("guardian2 ask", () => {
 		const result = blockOf(await w.gate(bash("sudo ls")));
 		expect(w.confirm).toHaveBeenCalledWith(
 			"allow this bash command?",
-			"guardian2 ask rule: sudo",
+			"guardian ask rule: sudo",
 			expect.anything(),
 		);
-		expect(result.reason).toBe("blocked by guardian2 — the confirmation was declined");
+		expect(result.reason).toBe("blocked by guardian — the confirmation was declined");
 	});
 
 	it("first matching ask rule wins (config order)", async () => {
@@ -333,7 +333,7 @@ describe("guardian2 ask", () => {
 		expect(await w.gate(bash("ls"))).toBeUndefined();
 		expect(w.confirm).toHaveBeenCalledTimes(2);
 		const fallback = w.confirm.mock.calls[1] as unknown[];
-		expect(fallback[0]).toBe("guardian2 hit an internal error — allow this call?");
+		expect(fallback[0]).toBe("guardian hit an internal error — allow this call?");
 		expect(fallback[1]).toBe("ls");
 		expect(fallback[2]).toEqual({ preview: { kind: "command", tool: "bash", text: "ls" } });
 		expect(auditBodies()).toEqual(["[ask] internal error — ls — approved"]);
@@ -342,7 +342,7 @@ describe("guardian2 ask", () => {
 
 /* --------------------------- wildcard semantics -------------------------- */
 
-describe("guardian2 wildcard semantics", () => {
+describe("guardian wildcard semantics", () => {
 	it("plain text is literal: `a.b` does not match `axb`", async () => {
 		const w = await boot({ config: { ask: ["a.b"] } });
 		expect(await w.gate(bash("echo axb"))).toBeUndefined();
@@ -388,7 +388,7 @@ describe("guardian2 wildcard semantics", () => {
 
 /* ------------------------------ tool scoping ----------------------------- */
 
-describe("guardian2 tool scoping", () => {
+describe("guardian tool scoping", () => {
 	it("a bash rule never matches write/edit calls", async () => {
 		const w = await boot({ config: { deny: ["rm -rf"] } });
 		expect(await w.gate(fileCall("write", "rm -rf/x"))).toBeUndefined();
@@ -404,7 +404,7 @@ describe("guardian2 tool scoping", () => {
 		const w = await boot({ config: { deny: [{ tool: "write", pattern: "/etc/" }] } });
 		const result = blockOf(await w.gate(fileCall("write", "/etc/hosts")));
 		expect(result.block).toBe(true);
-		expect(result.reason).toBe("blocked by guardian2 rule: /etc/");
+		expect(result.reason).toBe("blocked by guardian rule: /etc/");
 		expect(auditBodies()).toEqual(["[deny] /etc/ — /etc/hosts — blocked"]);
 	});
 
@@ -426,8 +426,8 @@ describe("guardian2 tool scoping", () => {
 		w.confirm.mockResolvedValueOnce(true);
 		expect(await w.gate(fileCall("write", "/etc/hosts"))).toBeUndefined();
 		expect(w.confirm).toHaveBeenCalledWith("allow this write?", "/etc/hosts\nconfig dir", {
-			sessionKey: "guardian2:session",
-			rememberLabel: "all guardian2 ask prompts this session",
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
 		});
 		expect(auditBodies()).toEqual(["[ask] /etc/ — /etc/hosts — approved"]);
 
@@ -436,8 +436,8 @@ describe("guardian2 tool scoping", () => {
 		expect(declined.block).toBe(true);
 		expect(declined.reason).toBe("config dir");
 		expect(w.confirm).toHaveBeenCalledWith("allow this edit?", "/etc/hosts\nconfig dir", {
-			sessionKey: "guardian2:session",
-			rememberLabel: "all guardian2 ask prompts this session",
+			sessionKey: "guardian:session",
+			rememberLabel: "all guardian ask prompts this session",
 		});
 	});
 
@@ -446,7 +446,7 @@ describe("guardian2 tool scoping", () => {
 		w.confirm.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(true);
 		expect(await w.gate(fileCall("write", "/etc/hosts"))).toBeUndefined();
 		const fallback = w.confirm.mock.calls[1] as unknown[];
-		expect(fallback[0]).toBe("guardian2 hit an internal error — allow this call?");
+		expect(fallback[0]).toBe("guardian hit an internal error — allow this call?");
 		expect(fallback[1]).toBe("/etc/hosts");
 		expect(fallback[2]).toEqual({});
 		expect(auditBodies()).toEqual(["[ask] internal error — /etc/hosts — approved"]);
@@ -455,7 +455,7 @@ describe("guardian2 tool scoping", () => {
 
 /* ----------------------------- pass-through ------------------------------ */
 
-describe("guardian2 pass-through", () => {
+describe("guardian pass-through", () => {
 	it("unmatched calls pass: no confirm, no audit", async () => {
 		const w = await boot({ config: { ask: ["sudo"], deny: ["rm * ~"] } });
 		expect(await w.gate(bash("ls -la"))).toBeUndefined();
@@ -488,7 +488,7 @@ describe("guardian2 pass-through", () => {
 
 /* ---------------------------- audit + surfaces --------------------------- */
 
-describe("guardian2 audit formats", () => {
+describe("guardian audit formats", () => {
 	it("whitespace is flattened and the match text is capped at 160 chars including the ellipsis", async () => {
 		const short = await boot({ config: { ask: ["ls"] } });
 		await short.gate(bash("ls\nrm"));
@@ -515,7 +515,7 @@ describe("guardian2 audit formats", () => {
 	});
 });
 
-describe("guardian2 command", () => {
+describe("guardian command", () => {
 	it("status reports counts and the config path", async () => {
 		const w = await boot({ config: { deny: ["rm"], ask: ["sudo", "git push"] } });
 		const out = (await w.runCommand("status")).join("\n");
@@ -540,15 +540,15 @@ describe("guardian2 command", () => {
 
 	it("an unknown argument prints the usage", async () => {
 		const w = await boot();
-		expect((await w.runCommand("bogus")).join("\n")).toContain("/guardian2 [status|reload]");
+		expect((await w.runCommand("bogus")).join("\n")).toContain("/guardian [status|reload]");
 	});
 });
 
 /* -------------------------------- template ------------------------------- */
 
-describe("guardian2 template", () => {
+describe("guardian template", () => {
 	const template = JSON.parse(
-		readFileSync(path.resolve("examples/extensions/guardian2.template.json"), "utf8"),
+		readFileSync(path.resolve("examples/extensions/guardian.template.json"), "utf8"),
 	) as unknown;
 
 	it("validates cleanly and the shipped cases behave as documented", async () => {
@@ -574,9 +574,9 @@ describe("guardian2 template", () => {
 
 /* ------------------------------ static pin ------------------------------- */
 
-describe("guardian2 static pins", () => {
+describe("guardian static pins", () => {
 	it("no model or host-seam calls in the source", () => {
-		const src = readFileSync(path.resolve("examples/extensions/guardian2.mjs"), "utf8");
+		const src = readFileSync(path.resolve("examples/extensions/guardian.mjs"), "utf8");
 		for (const token of ["api.classify", "api.complete", "api.snapshot", "api.note"]) {
 			expect(src.includes(token)).toBe(false);
 		}

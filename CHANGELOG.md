@@ -9,18 +9,18 @@ All notable changes to imp are documented here. The format follows
 
 ### Added
 
-- **guardian2 — the config-driven permission gate (#guardian2).** The
-  shipped gate example is `examples/extensions/guardian2.mjs` now: rules are
+- **guardian — the config-driven permission gate (#guardian).** The
+  shipped gate example is `examples/extensions/guardian.mjs` now: rules are
   plain text with `*` wildcards that span anything including newlines (or
   `regex` for full regular expressions), split into ordered `deny` / `ask`
   lists (`deny` wins), with an optional `reason` shown to the human and
   optional `tool` scoping — `write` / `edit` rules match the resolved file
   path, bash rules match the command. Anything unmatched runs; there is no
   `allow` action. A broken config keeps the last good rules (footer hint,
-  `/guardian2 reload`); every deny/ask outcome is audited to
-  `~/.imp/guardian2.log`. Start from
-  `examples/extensions/guardian2.template.json`; design and review log:
-  `docs/guardian2-design.md`.
+  `/guardian reload`); every deny/ask outcome is audited to
+  `~/.imp/guardian.log`. Start from
+  `examples/extensions/guardian.template.json`; design and review log:
+  `docs/guardian-design.md`.
 
 - **Tool-name colors via extensions (#tool-name-colors).** Tool names in the
   TUI call header can carry a color now, through a new load-gated extension
@@ -207,7 +207,7 @@ All notable changes to imp are documented here. The format follows
   classify host `src/repl/classify.ts`, the call-context and
   user-input/gate-decision logs, the `verifiedUserContext` event field,
   `LLMRequest.temperature`) are gone; the `ExtensionApi` is back to eleven
-  members. guardian2 needs none of it (`on` + `confirm` + `setStatus` +
+  members. guardian needs none of it (`on` + `confirm` + `setStatus` +
   `registerCommand`). The v1 design record stays at
   `docs/guardian-auto-mode-design.md` with a superseded banner.
 

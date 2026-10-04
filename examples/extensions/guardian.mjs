@@ -1,9 +1,9 @@
-// examples/extensions/guardian2.mjs — a minimal config-driven permission gate.
+// examples/extensions/guardian.mjs — a minimal config-driven permission gate.
 //
 // Install: copy this file into <project>/.imp/extensions/ (or
-// ~/.imp/extensions/) and restart imp. guardian2 watches bash / write / edit
+// ~/.imp/extensions/) and restart imp. guardian watches bash / write / edit
 // tool calls and matches them against two rule lists in
-// ~/.imp/guardian2.json:
+// ~/.imp/guardian.json:
 //
 //   • deny rules block the call outright — the model receives the rule's
 //     reason as a teaching-style tool result and the run continues;
@@ -19,8 +19,8 @@
 //
 // A missing config file is valid (zero rules). An invalid one keeps the last
 // valid rules, shows a footer flag and an audit line, and is recoverable
-// with /guardian2 reload. One audit line per deny/ask decision goes to
-// ~/.imp/guardian2.log (created with mode 0600).
+// with /guardian reload. One audit line per deny/ask decision goes to
+// ~/.imp/guardian.log (created with mode 0600).
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -169,8 +169,8 @@ const parseConfig = (text) => {
 
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
-	const configFile = path.join(os.homedir(), ".imp", "guardian2.json");
-	const logFile = path.join(os.homedir(), ".imp", "guardian2.log");
+	const configFile = path.join(os.homedir(), ".imp", "guardian.json");
+	const logFile = path.join(os.homedir(), ".imp", "guardian.log");
 
 	/** The last valid rules (zero defaults before any valid load). */
 	let rules = { deny: [], ask: [] };
@@ -253,13 +253,13 @@ export default function (api) {
 				audit(`[deny] ${oneLine(hit.rule.source)} — ${subject} — blocked${who}`);
 				return {
 					block: true,
-					reason: hit.rule.reason === "" ? `blocked by guardian2 rule: ${hit.rule.source}` : hit.rule.reason,
+					reason: hit.rule.reason === "" ? `blocked by guardian rule: ${hit.rule.source}` : hit.rule.reason,
 				};
 			}
-			const detail = hit.rule.reason === "" ? `guardian2 ask rule: ${hit.rule.source}` : hit.rule.reason;
+			const detail = hit.rule.reason === "" ? `guardian ask rule: ${hit.rule.source}` : hit.rule.reason;
 			const options = {
-				sessionKey: "guardian2:session",
-				rememberLabel: "all guardian2 ask prompts this session",
+				sessionKey: "guardian:session",
+				rememberLabel: "all guardian ask prompts this session",
 			};
 			const approved =
 				tool === "bash"
@@ -269,33 +269,33 @@ export default function (api) {
 			if (approved) return undefined;
 			return {
 				block: true,
-				reason: hit.rule.reason === "" ? "blocked by guardian2 — the confirmation was declined" : hit.rule.reason,
+				reason: hit.rule.reason === "" ? "blocked by guardian — the confirmation was declined" : hit.rule.reason,
 			};
 		} catch {
 			try {
 				// Fail toward asking; deliberately no sessionKey (a session-wide
 				// "stop asking" grant must not auto-approve this fallback).
 				const approved = await api.confirm(
-					"guardian2 hit an internal error — allow this call?",
+					"guardian hit an internal error — allow this call?",
 					subject,
 					preview === undefined ? {} : { preview },
 				);
 				audit(`[ask] internal error — ${subject} — ${approved ? "approved" : "denied"}${who}`);
-				return approved ? undefined : { block: true, reason: "guardian2 internal error — the call was not allowed" };
+				return approved ? undefined : { block: true, reason: "guardian internal error — the call was not allowed" };
 			} catch {
-				return { block: true, reason: "guardian2 internal error — the call was not allowed" };
+				return { block: true, reason: "guardian internal error — the call was not allowed" };
 			}
 		}
 	});
 
 	api.registerCommand({
-		name: "guardian2",
-		usage: "/guardian2 [status|reload]",
-		summary: "guardian2: wildcard deny/ask gate for bash and file paths",
+		name: "guardian",
+		usage: "/guardian [status|reload]",
+		summary: "guardian: wildcard deny/ask gate for bash and file paths",
 		allowedDuringRun: true,
 		run: (args, ctx) => {
 			try {
-				const note = (line) => ctx.renderer.note(`▪ guardian2: ${line}`);
+				const note = (line) => ctx.renderer.note(`▪ guardian: ${line}`);
 				const arg = args.trim();
 				if (arg === "reload") {
 					const result = reload();
@@ -310,14 +310,14 @@ export default function (api) {
 				}
 				if (arg === "" || arg === "status") {
 					note(
-						`deny ${rules.deny.length}, ask ${rules.ask.length} — config ${configFile}${degraded ? " (config error — /guardian2 reload to recover)" : ""}`,
+						`deny ${rules.deny.length}, ask ${rules.ask.length} — config ${configFile}${degraded ? " (config error — /guardian reload to recover)" : ""}`,
 					);
 					return "handled";
 				}
-				note(`unknown argument "${arg}" — /guardian2 [status|reload]`);
+				note(`unknown argument "${arg}" — /guardian [status|reload]`);
 				return "handled";
 			} catch (err) {
-				ctx.renderer.note(`▪ guardian2: internal error — ${oneLine(String((err && err.message) || err))}`);
+				ctx.renderer.note(`▪ guardian: internal error — ${oneLine(String((err && err.message) || err))}`);
 				return "handled";
 			}
 		},

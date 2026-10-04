@@ -1,51 +1,57 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.4 — implementation-review findings folded.** Owner
-direction: minimal implementation; the port-based revisions are discarded
-as design input. Owner decisions are settled (§9); the design review is
-closed (R1/R2, rev 2.3); the implementation review (R3) is folded in
-rev 2.4 and in the code.
+Status: **rev 2.5 — config ergonomics + file-tool scope.** Owner direction:
+wildcard patterns by default with a `regex` escape hatch; optional `tool`
+scoping for `write` / `edit` paths; `reason` stays optional (the template
+demonstrates both forms). Design-delta review pending (R4).
 
-- Worktree / branch: `imp-guardian2` / `design/guardian2`, base `main` (846b263).
+- Worktree / branch: `imp-guardian2` / `feat/guardian2-friendly-config`,
+  base `main` (5fb3a24 — guardian2 v0 merged).
 - Replaces guardian v1 (modes + classifier). v1 is deleted only after cutover
   (phase P3, §6).
 
 ## 0. The model (owner direction)
 
-1. The user writes two regex rule lists in `~/.imp/guardian2.json`: **deny**
-   and **ask**.
+1. The user writes two rule lists in `~/.imp/guardian2.json`: **deny** and
+   **ask**. Patterns are plain text where `*` matches anything (a match is
+   "the text appears"); a `regex` entry is the escape hatch for full regular
+   expressions.
 2. A `bash` command matching a `deny` rule is blocked. Matching an `ask`
-   rule prompts the human: approved runs, declined blocks.
+   rule prompts the human: approved runs, declined blocks. Rules may target
+   `write` / `edit` instead, matching the target file's resolved path.
 3. A command matching neither runs — **the default is allow**.
 4. No modes, no model calls, no host changes.
 
 ## 1. Scope and non-goals
 
-In scope (v0):
+In scope:
 
-- `bash` tool calls; plain `RegExp.test()` against the raw command string.
+- `bash` tool calls: patterns match the raw command string; wildcard by
+  default, `regex` opt-in.
+- `write` / `edit` tool calls: patterns match the **resolved absolute path**
+  of the target file; rules opt in with `"tool"`.
 - `deny` / `ask` handling; deny evaluated before ask.
 - A minimal audit log; `/guardian2 status | reload`.
 - A shipped template (`examples/extensions/guardian2.template.json`).
 
-Deliberately out of scope (start much smaller than v1; add only if a real need
-appears):
+Deliberately out of scope (add only if a real need appears):
 
-- `write` / `edit` calls and any path facts (`protectedPaths`, `outsideCwd`);
-- `rm` parsing, quote / heredoc masking, over-cap analysis;
-- rule ids; per-rule tools; structured predicates;
+- file **content** inspection (path patterns only; no size/type checks);
+- `read` or other tools; rule ids; structured predicates (`protectedPaths`,
+  `outsideCwd`, `rm` parsing, quote / heredoc masking);
 - per-pattern session memory ("don't ask again for this command") — the only
-  memory in v0 is one session-wide "stop asking" option on the ask prompt
-  (§3);
+  memory is one session-wide "stop asking" option on the ask prompt (§3);
 - config file watching; project-level config; `init` / `explain` commands.
 
 Known limits, documented and accepted:
 
-- matching sees the raw string **including quoted text**: a command like
-  `git commit -m "fix rm -rf handling"` can match an `rm -rf` rule. This is a
-  heuristic gate, not an enforcement boundary; write precise regexes. It errs
-  toward over-matching (the safe direction) rather than masking regions.
-- user regexes are trusted config. A pathological pattern can stall the
+- matching sees the raw command string **including quoted text**: a command
+  like `git commit -m "fix rm -rf handling"` can match an `rm -rf` pattern.
+  This is a heuristic gate, not an enforcement boundary; it errs toward
+  over-matching (the safe direction) rather than masking regions.
+- `*` is the only wildcard; a literal `*` cannot be expressed in a wildcard
+  entry (use a `regex` entry if that ever matters).
+- user patterns are trusted config. A pathological `regex` can stall the
   synchronous match path — accepted (ReDoS); the input is **not** capped,
   because a cap would silently pass everything beyond it, including deny
   matches.
@@ -58,11 +64,12 @@ Known limits, documented and accepted:
 {
   "_comment": "keys starting with _ are ignored",
   "deny": [
-    { "pattern": "\\brm\\b[^\\n]*(~(/|\\s|$)|\\$\\{?HOME\\}?)", "reason": "deleting under the home directory is never allowed; hand it to the human" }
+    "rm * ~"                                   // wildcard: rm -rf ~, rm -fr ~, …
   ],
   "ask": [
-    "\\bsudo\\b",                                            // string shorthand
-    { "pattern": "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))", "reason": "force push rewrites shared history — push normally or coordinate first" }
+    "sudo",                                    // plain text: appears anywhere
+    { "regex": "git\\s+push\\b[^\\n]*(-f\\b|--force(?!-with-lease))" },
+    { "tool": ["write", "edit"], "pattern": "/etc/" }
   ]
 }
 ```
@@ -72,34 +79,51 @@ Schema and validation (strict, checked at load):
 - Top level must be a JSON object; allowed keys: `deny`, `ask`, and `_…`
   prefixed. Unknown keys are errors (catches typos such as `deni`).
 - `deny` / `ask` are arrays; missing arrays are empty.
-- An entry is either a string (the regex source) or an object
-  `{pattern: string, flags?: string, reason?: string}`; anything else is an
-  error.
-- `flags` must not contain `g` or `y` (stateful `lastIndex` would make
-  `test()` alternate between calls) — rejected with a clear load error.
-- Every regex is compiled at load; any failure fails the whole load (§5).
+- An entry is either a string (a wildcard pattern) or an object with:
+  - exactly one of `pattern` (wildcard) or `regex` (raw regular expression);
+  - `flags` (optional, string) — `regex` entries only; must not contain `g`
+    or `y` (stateful `lastIndex` would make `test()` alternate between
+    calls);
+  - `reason` (optional, string) — shown when blocking or asking;
+  - `tool` (optional) — one of `bash` / `write` / `edit`, or an array of
+    them; absent ⇒ `bash`.
+- Wildcard semantics: the pattern is escaped to literal text, `*` becomes
+  "any run of characters", and a match is "the text appears anywhere"
+  (unanchored). Wildcard patterns cannot fail compilation; empty /
+  whitespace patterns are rejected.
+- Every `regex` is compiled at load; any failure fails the whole load (§5).
 - Missing file = zero rules = the gate does nothing.
 
 ## 3. Behavior
 
-`tool_call` handler for `bash` (other tools, and calls whose `command` is not
-a string, pass through untouched):
+`tool_call` handler for `bash` / `write` / `edit` (other tools pass through
+untouched):
 
-1. No rules → pass.
-2. First `deny` rule whose regex matches → block: return
-   `{block: true, reason: <reason> or "blocked by guardian2 rule: <pattern>"}`.
+1. Compute the match text: `bash` → the command string (non-string ⇒ pass);
+   `write` / `edit` → the resolved absolute path (`path.resolve` against the
+   caller cwd: `event.cwd ?? api.cwd`; non-string `path` ⇒ pass).
+2. No rules whose `tool` covers this call → pass.
+3. First `deny` rule that matches → block: return
+   `{block: true, reason: <reason> or "blocked by guardian2 rule: <source>"}`.
    Audit.
-3. First `ask` rule whose regex matches → `confirm("allow this bash
-   command?", <reason>, { sessionKey: "guardian2:session", rememberLabel:
-   "all guardian2 ask prompts this session", preview: { kind: "command",
-   tool: "bash", text: command } })`; `false` → block with the reason (or
-   "blocked by guardian2 — the confirmation was declined"). Audit the outcome. The shared session key is
-   v0's only memory: choosing the prompt's remember option once stops every
-   further ask prompt for the rest of the session ("allow all this
-   session"); deny rules are unaffected. The `preview` shows the command in
-   the confirm picker — the human must see what they are approving.
-4. Otherwise → pass.
+4. First `ask` rule that matches → confirm:
+   - `bash`: message `"allow this bash command?"`; detail `<reason or
+     "guardian2 ask rule: <source>">`; options `{ sessionKey:
+     "guardian2:session", rememberLabel: "all guardian2 ask prompts this
+     session", preview: { kind: "command", tool: "bash", text: command } }`.
+   - `write` / `edit`: message `"allow this write?"` / `"allow this edit?"`;
+     detail `<resolved path>` + (`\n` + `<reason or "guardian2 ask rule:
+     <source>">`); options `{ sessionKey, rememberLabel }` (no preview — the
+     preview kind is command-only).
+   `false` → block with the reason (or "blocked by guardian2 — the
+   confirmation was declined"). Audit the outcome. The shared session key is
+   the only memory: choosing the prompt's remember option once stops every
+   further ask prompt for the rest of the session — bash and files alike
+   ("allow all this session"); deny rules are unaffected.
+5. Otherwise → pass.
 
+- `<source>` in messages and audits is the wildcard pattern or the regex
+  source, as written.
 - Precedence: **deny before ask**.
 - Subagent calls use the same rules; the audit line carries the v1-style
   child marker.
@@ -111,16 +135,16 @@ a string, pass through untouched):
 ## 4. Surfaces
 
 - **Audit** `~/.imp/guardian2.log`, one line per deny/ask decision plus load
-  errors (pass-through calls are not logged). Whitespace runs in the pattern
-  and command are flattened so the one-line invariant holds; the command is
-  capped at 160 chars including the trailing `…`:
+  errors (pass-through calls are not logged). Whitespace runs in the source
+  and the match text are flattened so the one-line invariant holds; the
+  match text is capped at 160 chars including the trailing `…`:
 
   ```
-  [deny] <pattern> — <command> — blocked
-  [deny] <pattern> — <command> — blocked (child:<agent>)
-  [ask] <pattern> — <command> — approved
-  [ask] <pattern> — <command> — denied
-  [ask] internal error — <command> — approved|denied
+  [deny] <source> — <command or resolved path> — blocked
+  [deny] <source> — <command or resolved path> — blocked (child:<agent>)
+  [ask] <source> — <command or resolved path> — approved
+  [ask] <source> — <command or resolved path> — denied
+  [ask] internal error — <command or path> — approved|denied
   [load] config error — <first line of the error>
   ```
 
@@ -131,7 +155,7 @@ a string, pass through untouched):
   per-call status).
 - **Commands**: `/guardian2 status` (config path, rule counts, error flag) and
   `/guardian2 reload` (re-read the file; report the outcome).
-- The log file is created with mode `0600` (command text may contain
+- The log file is created with mode `0600` (match text may contain
   secrets).
 
 ## 5. Failure posture
@@ -148,9 +172,9 @@ a string, pass through untouched):
 - An internal error during evaluation → fresh confirmation with **no
   sessionKey** (fail toward asking — evaluation, unlike config loading, has
   unknown state; a session-wide "stop asking" grant must not silently
-  auto-approve this fallback). It carries the command preview when the
-  command is known, and the outcome is audited as
-  `[ask] internal error — <command> — approved|denied`.
+  auto-approve this fallback). It carries the command preview when the match
+  text is a bash command, and the outcome is audited as
+  `[ask] internal error — <command or path> — approved|denied`.
 
 ## 6. Phases
 
@@ -198,46 +222,56 @@ a string, pass through untouched):
 ## 7. Tests (P1, red-first)
 
 1. Load: missing file (zero rules, gate lets everything through); valid file
-   (string and object entries, non-stateful flags accepted); invalid JSON;
-   unknown top-level key; bad entry type; invalid regex; empty / whitespace
-   patterns rejected; `g`/`y` flags rejected; one full load-error line
-   pinned byte-exact; reload recovers.
+   (string entries, object entries, wildcard by default, `regex` entries
+   with non-stateful flags); invalid JSON; unknown top-level key; bad entry
+   type; both `pattern` and `regex` given; `flags` on a wildcard entry;
+   empty / whitespace patterns rejected; invalid regex; `g`/`y` flags
+   rejected; bad `tool` values rejected; one full load-error line pinned
+   byte-exact; reload recovers.
 2. Deny: first matching rule blocks; no confirm call; reason text (custom and
    default).
-3. Ask: confirm called with the reason, the shared `sessionKey` /
+3. Ask (bash): confirm called with the reason, the shared `sessionKey` /
    `rememberLabel`, and the command `preview` (all pinned); approved → runs;
-   declined → blocks; string-shorthand rule works; non-stateful flags work.
-4. Pass: unmatched commands never confirm; non-bash tools pass untouched;
-   non-string `command` passes; a quoted-text match (`git commit -m "… rm -rf
-   …"`) **matches** (documents the raw-string limit, §1).
-5. Precedence: a command matching both deny and ask blocks (deny wins).
-6. Child / headless: audit child marker; headless ask becomes a block,
+   declined → blocks; string-shorthand rule works; `regex` flags work.
+4. Wildcard semantics: plain text is literal (`.ssh/` does not match
+   `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters;
+   `rm * ~` matches `rm -rf ~` and `rm -fr ~`.
+5. Tool scoping: a bash rule never matches `write`/`edit` and vice versa;
+   file rules match the resolved absolute path (a relative `args.path`
+   resolves against the caller cwd); `tool` arrays cover both file tools.
+6. Files: a denied write/edit blocks with the rule reason; an ask write/edit
+   prompts with the path in the detail and no preview; declined → blocks;
+   audit carries the resolved path as the match text.
+7. Pass: unmatched calls never confirm; other tools pass untouched;
+   non-string `command` / `path` passes; a quoted-text match (`git commit -m
+   "… rm -rf …"`) **matches** (documents the raw-string limit, §1).
+8. Precedence: a call matching both deny and ask blocks (deny wins).
+9. Child / headless: audit child marker; headless ask becomes a block,
    audited `denied`.
-7. Internal error: the fallback confirm is keyless and carries the preview;
-   the outcome is audited (`[ask] internal error — …`).
-8. Audit formats byte-exact (incl. the 160-char cap including the ellipsis,
-   whitespace flattening, and the ISO timestamp prefix); footer status
-   set/cleared.
-9. Template patterns: pin the doc's cases (`rm -fr ~`, `rm -r -f $HOME/x`,
-   `git push -f`, `git push --force-with-lease` miss) plus a plain
-   `rm -rf /tmp/x` miss.
-10. Commands: `status` counts; `reload` picks up an edited file.
-11. Static pin: no `classify` / `complete` / `snapshot` / `api.note` use.
+10. Internal error: the fallback confirm is keyless and (for bash) carries
+    the preview; the outcome is audited (`[ask] internal error — …`).
+11. Audit formats byte-exact (incl. the 160-char cap including the ellipsis,
+    whitespace flattening, and the ISO timestamp prefix); footer status
+    set/cleared.
+12. Template: pins the shipped cases (see the template test).
+13. Commands: `status` counts; `reload` picks up an edited file.
+14. Static pin: no `classify` / `complete` / `snapshot` / `api.note` use.
 
 ## 8. Claude Code reference (considered with a minimal lens)
 
-The rule-layer shape here already mirrors the good parts of CC's permission
-rules: two lists (`deny` / `ask`) with deny-before-ask precedence, regex /
-wildcard matching of commands, per-tool scoping, explicit validation.
-Considered and **not** borrowed for v0:
+The rule-layer shape here mirrors the good parts of CC's permission rules:
+two lists (`deny` / `ask`) with deny-before-ask precedence, wildcard patterns
+(`*`) over commands and file paths, per-tool scoping, explicit validation.
+Considered and **not** borrowed:
 
-- `Bash(prefix:*)` sugar (`src/utils/permissions/shellRuleMatching.ts`) —
-  regex covers prefixes; one syntax, not two.
+- CC's `exact / prefix(:*) / wildcard` triad
+  (`src/utils/permissions/shellRuleMatching.ts`) — one wildcard syntax plus
+  an optional `regex` entry instead of three forms.
 - compound-command splitting (`src/tools/BashTool/bashPermissions.ts`) — a
-  quote-aware splitter is the complexity v0 avoids; whole-string regex
-  matching errs toward over-matching, the safe direction for deny/ask rules.
+  quote-aware splitter is the complexity v0 avoids; whole-string matching
+  errs toward over-matching, the safe direction for deny/ask rules.
 - env-var / wrapper stripping before matching — only matters for anchored
-  patterns; unanchored user regexes do not need it.
+  patterns; unanchored user patterns do not need it.
 - skipping invalid rules with a warning (CC) — we fail the whole load and
   keep the last valid set; louder, simpler to reason about.
 - session "always allow" write-back and prompt suggestions — not borrowed;
@@ -247,7 +281,7 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 `src/utils/permissions/permissionRuleParser.ts`,
 `src/utils/settings/types.ts`, `src/utils/settings/permissionValidation.ts`.
 
-## 9. Owner decisions (rev 2.2, settled)
+## 9. Owner decisions (settled)
 
 1. First-run invalid config: flag-only accepted — no rules + footer flag;
    the trade-off is stated in §5.
@@ -256,9 +290,16 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 3. Pass-through calls stay unaudited (deny/ask decisions are logged).
 4. Session memory: no per-pattern memory; a single session-wide "stop
    asking" option rides every ask prompt (§3).
+5. Config ergonomics and file scope (rev 2.5): wildcard patterns by default
+   (`*`), `regex` as the escape hatch; `reason` optional (the template shows
+   both forms); optional `tool` scoping for `write` / `edit` path rules.
 
 ## 10. Review log
 
+- rev 2.5 — owner direction: friendlier config (wildcard patterns by
+  default with a `regex` escape hatch; `reason` optional) and `write` /
+  `edit` path rules via an optional `tool` field. Design-delta review
+  pending (R4); v0 rounds R1–R3 remain as folded below.
 - rev 0 / rev 1 (port-based) and the earlier approach documents are
   discarded as design input (owner direction, rev 2).
 - rev 2 — minimal redesign: no modes, no judge; two regex lists (deny /

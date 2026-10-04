@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 /**
- * The api-key side of imp's credential store (#login-repl, pi's /login).
+ * The api-key side of Ink's credential store (#login-repl, pi's /login).
  *
- * One file, ~/.imp/auth.json (0600), shared with the Codex OAuth tokens:
+ * One file, ~/.ink/auth.json (0600), shared with the Codex OAuth tokens:
  *
  *   { "version": 1,
  *     "codex":   { "provider": "openai-codex", "accessToken": ..., ... },
@@ -18,7 +18,7 @@ import path from "node:path";
  * Resolution order is pi's (packages/ai/src/auth/helpers.ts,
  * envApiKeyAuth.resolve): a STORED credential wins over the environment
  * variable; env is the fallback when nothing was stored. Deviation from pi,
- * documented: pi keeps credentials in the OS keychain; imp uses this plain
+ * documented: pi keeps credentials in the OS keychain; Ink uses this plain
  * 0600 file — the same trust model as the codex tokens beside it.
  */
 
@@ -41,9 +41,9 @@ export interface ResolvedApiKey {
 }
 
 export function authFilePath(authPath?: string): string {
-	// IMP_AUTH_PATH redirects the store (sandboxing / hermetic tests — family
+	// INK_AUTH_PATH redirects the store (sandboxing / hermetic tests — family
 	// checks must not depend on the host login). Same rule as codex-auth.
-	return authPath ?? process.env.IMP_AUTH_PATH ?? path.join(homedir(), ".imp", "auth.json");
+	return authPath ?? process.env.INK_AUTH_PATH ?? path.join(homedir(), ".ink", "auth.json");
 }
 
 /** Read the whole store, or null when absent/corrupt (behaves as empty). */

@@ -10,11 +10,11 @@ import { SessionError, type SessionHeader, type SessionStats, SessionStore } fro
 /**
  * Session discovery: where files live, listing, and `--continue`/`--resume`.
  *
- * Layout (mirrors pi): ~/.imp/sessions/<cwd-with-slashes-dashed>/<timestamp>-<uuid>.jsonl
+ * Layout (mirrors pi): ~/.ink/sessions/<cwd-with-slashes-dashed>/<timestamp>-<uuid>.jsonl
  */
 
 export function sessionsDirFor(cwd: string, baseDir?: string): string {
-	const base = baseDir ?? path.join(homedir(), ".imp", "sessions");
+	const base = baseDir ?? path.join(homedir(), ".ink", "sessions");
 	// Double existing dashes so "-" is an unambiguous path separator: /w/a-b and
 	// /w/a/b must not map to the same directory.
 	const safe = cwd

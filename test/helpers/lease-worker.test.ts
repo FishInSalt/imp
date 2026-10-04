@@ -2,7 +2,7 @@
  * Lease multiprocess worker (SA-07 acceptance round 2, finding 4).
  *
  * Driven by test/child-lease-multiprocess.test.ts, which spawns this file as
- * `npx vitest run test/helpers/lease-worker.test.ts` with the env
+ * `node node_modules/vitest/vitest.mjs run test/helpers/lease-worker.test.ts` with the env
  * `IMP_LEASE_WORKER=<dir>|<rounds>|<tag>`. Each worker acquires the same
  * child lease in a loop and appends `S tag round` / `E tag round` markers
  * around the critical section; the parent asserts no interleaving ever

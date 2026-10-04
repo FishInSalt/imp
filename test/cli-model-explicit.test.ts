@@ -39,7 +39,7 @@ const { outputText } = ts.transpileModule(program, {
 
 function parse(
 	argv: string[],
-	defaults: { env?: string; global?: string; project?: string } = {},
+	defaults: { env?: string; oldEnv?: string; global?: string; project?: string } = {},
 ): {
 	model: string;
 	modelSource: string;
@@ -56,7 +56,7 @@ function parse(
 		{
 			argv,
 			process: {
-				env: { IMP_MODEL: defaults.env },
+				env: { INK_MODEL: defaults.env, IMP_MODEL: defaults.oldEnv },
 				cwd: () => "/isolated-cli-test",
 				stderr: { write: () => undefined },
 				exit: (code: number) => {
@@ -86,6 +86,11 @@ function expectSelection(
 describe("CLI model provenance", () => {
 	it("builtin default is not explicit", () => {
 		expectSelection([], {}, "claude-sonnet-4-5", false);
+	});
+
+	it("obsolete IMP_MODEL neither selects a default nor overrides INK_MODEL", () => {
+		expectSelection([], { oldEnv: "openai/obsolete" }, "claude-sonnet-4-5", false);
+		expectSelection([], { env: "zai/current", oldEnv: "openai/obsolete" }, "zai/current", false);
 	});
 
 	it("environment selection is not explicit, including startup resume", () => {

@@ -60,11 +60,11 @@ export const HEALTH_DETAIL_MAX = 120;
 /** Call-preview sub-bound inside `detail`. */
 export const HEALTH_PREVIEW_MAX = 80;
 
-/** `IMP_HEALTH` is parsed by the call sites as a plain string — deliberately
+/** `INK_HEALTH` is parsed by the call sites as a plain string — deliberately
  *  NOT through `envInt`, whose `n <= 0` rule would classify "0" as invalid
  *  and fall back to enabled (design §4.1). */
 export function healthEnabled(): boolean {
-	return process.env.IMP_HEALTH !== "0";
+	return process.env.INK_HEALTH !== "0";
 }
 
 export interface LoopHealthMonitor {
@@ -140,10 +140,10 @@ export function createLoopHealth(options: LoopHealthOptions = {}): LoopHealthMon
 	const thresholds: HealthThresholds = {
 		repeatTurns:
 			options.thresholds?.repeatTurns ??
-			envInt("IMP_HEALTH_REPEAT_TURNS", DEFAULT_HEALTH_THRESHOLDS.repeatTurns),
+			envInt("INK_HEALTH_REPEAT_TURNS", DEFAULT_HEALTH_THRESHOLDS.repeatTurns),
 		mutationFailures:
 			options.thresholds?.mutationFailures ??
-			envInt("IMP_HEALTH_MUTATION_FAILURES", DEFAULT_HEALTH_THRESHOLDS.mutationFailures),
+			envInt("INK_HEALTH_MUTATION_FAILURES", DEFAULT_HEALTH_THRESHOLDS.mutationFailures),
 	};
 
 	let disposed = false;

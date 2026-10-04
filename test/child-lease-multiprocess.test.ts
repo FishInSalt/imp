@@ -5,25 +5,16 @@
  * records S/E markers around each critical section. Any overlapping pair is
  * a mutual-exclusion violation.
  */
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { runLeaseProcess } from "./helpers/lease-process.js";
 
 function runWorker(dir: string, tag: string): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("npx", ["vitest", "run", "test/helpers/lease-worker.test.ts", "--reporter=dot"], {
-			cwd: repoRoot,
-			env: { ...process.env, IMP_LEASE_WORKER: `${dir}|20|${tag}`, NO_COLOR: "1" },
-			stdio: ["ignore", "ignore", "ignore"],
-		});
-		child.on("error", reject);
-		child.on("close", (code) => resolve(code ?? -1));
-	});
+	return runLeaseProcess("test/helpers/lease-worker.test.ts", { IMP_LEASE_WORKER: `${dir}|20|${tag}` });
 }
 
 async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Promise<void> {

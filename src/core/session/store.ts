@@ -20,7 +20,7 @@ import { type AgentMessage, contentText, type Usage } from "../messages.js";
  * history, it just grows the tree, and the current position ("leaf") is the
  * last non-leaf entry appended. Context = walk from leaf to root.
  *
- * Format (adapted from pi's session format v3, heavily slimmed for imp):
+ * Format (adapted from pi's session format v3, heavily slimmed for Ink):
  *   {"type":"session","version":1,"id":<uuid>,"timestamp":<iso>,"cwd":<path>}
  *   {"type":"message","id":<8hex>,"parentId":<id|null>,"timestamp":<iso>,"message":{...}}
  *   {"type":"compaction","id":<8hex>,"parentId":<id>,"timestamp":<iso>,
@@ -429,7 +429,7 @@ export class SessionStore {
 				// interior corruption is still fatal — something is structurally wrong.
 				if (i === lines.length - 1 && err instanceof SessionError) {
 					droppedFinalLine = true;
-					process.stderr.write(`imp: dropping torn final line in ${filePath}\n`);
+					process.stderr.write(`ink: dropping torn final line in ${filePath}\n`);
 					break;
 				}
 				throw err;

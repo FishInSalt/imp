@@ -1,7 +1,7 @@
-// examples/extensions/notes.mjs — the imp extension API tour (M4 design §13.2).
+// examples/extensions/notes.mjs — the Ink extension API tour (M4 design §13.2).
 //
-// Install: copy this file into <project>/.imp/extensions/ (or ~/.imp/extensions/)
-// and restart imp. A startup line confirms it loaded:
+// Install: copy this file into <project>/.ink/extensions/ (or ~/.ink/extensions/)
+// and restart Ink. A startup line confirms it loaded:
 //
 //   ▪ extension notes [project] — 1 tool, 1 command, 1 context
 //
@@ -18,7 +18,7 @@ import path from "node:path";
 
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
-	const file = path.join(api.cwd, ".imp", "notes.json");
+	const file = path.join(api.cwd, ".ink", "notes.json");
 
 	/** @returns {{ notes: string[] }} */
 	const load = () => {

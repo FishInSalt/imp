@@ -1,4 +1,4 @@
-# imp — working agreements for coding agents
+# Ink — working agreements for repository changes
 
 - After any code change, consciously evaluate whether an independent code
   review is warranted before declaring the work done.

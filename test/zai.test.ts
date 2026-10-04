@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { discoverModels, familyConfigured } from "../src/provider/discover.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { discoverModels, familyConfigured, resetDiscoveryCacheForTest } from "../src/provider/discover.js";
 import { parseModelRef, resolveModel } from "../src/provider/resolve.js";
 import { type ThinkingLevel, thinkingMetaFor } from "../src/provider/thinking.js";
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
@@ -121,15 +121,27 @@ describe("zai provider (pi's GLM connection path)", () => {
 	it("discovery: unreachable /models falls back to the pi.dev seeds on the DEFAULT endpoint; a redirected base URL returns null (#gateway-truth)", async () => {
 		const prevKey = process.env.ZAI_API_KEY;
 		const prevUrl = process.env.ZAI_BASE_URL;
+		resetDiscoveryCacheForTest();
+		const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error("offline fixture"));
+		vi.stubGlobal("fetch", fetchMock);
 		try {
 			process.env.ZAI_API_KEY = "sk-test";
 			delete process.env.ZAI_BASE_URL; // default endpoint — seeds stay the floor
 			const ids = await discoverModels("zai");
 			expect(ids).toEqual([...ZAI_SEED_MODELS]);
+			expect(fetchMock).toHaveBeenNthCalledWith(
+				1,
+				`${ZAI_DEFAULT_BASE_URL}/models`,
+				expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer sk-test" }) }),
+			);
 			process.env.ZAI_BASE_URL = "http://127.0.0.1:1"; // redirected + unreachable
 			const redirected = await discoverModels("zai");
 			expect(redirected).toBeNull(); // no invented ids on a custom gateway
+			expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:1/models", expect.any(Object));
+			expect(fetchMock).toHaveBeenCalledTimes(2);
 		} finally {
+			vi.unstubAllGlobals();
+			resetDiscoveryCacheForTest();
 			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevKey;
 			if (prevUrl === undefined) delete process.env.ZAI_BASE_URL;

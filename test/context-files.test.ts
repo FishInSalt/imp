@@ -16,14 +16,14 @@ async function makeTree(): Promise<{ root: string; home: string }> {
 describe("context files", () => {
 	it("collects global + ancestor AGENTS.md, far to near", async () => {
 		const { root, home } = await makeTree();
-		await mkdir(path.join(home, ".imp"), { recursive: true });
-		await writeFile(path.join(home, ".imp", "AGENTS.md"), "global rules");
+		await mkdir(path.join(home, ".ink"), { recursive: true });
+		await writeFile(path.join(home, ".ink", "AGENTS.md"), "global rules");
 		await writeFile(path.join(root, "AGENTS.md"), "project rules");
 		await writeFile(path.join(root, "src", "AGENTS.md"), "src rules");
 
 		const files = findContextFiles(path.join(root, "src", "deep"), home);
 		expect(files).toEqual([
-			path.join(home, ".imp", "AGENTS.md"),
+			path.join(home, ".ink", "AGENTS.md"),
 			path.join(root, "AGENTS.md"),
 			path.join(root, "src", "AGENTS.md"),
 		]);
@@ -85,13 +85,13 @@ describe("candidates + first-match (prompt-audit P4)", () => {
 });
 
 describe("global tier stays AGENTS.md-only (impl review P2-1)", () => {
-	it("an unreadable global AGENTS.md does NOT fall through to ~/.imp/CLAUDE.md", async () => {
+	it("an unreadable global AGENTS.md does NOT fall through to ~/.ink/CLAUDE.md", async () => {
 		const { root, home } = await makeTree();
-		const imp = path.join(home, ".imp");
-		await mkdir(imp, { recursive: true });
-		await writeFile(path.join(imp, "CLAUDE.md"), "global claude must not load");
+		const ink = path.join(home, ".ink");
+		await mkdir(ink, { recursive: true });
+		await writeFile(path.join(ink, "CLAUDE.md"), "global claude must not load");
 		// AGENTS.md exists but is a directory → readFileSync throws
-		await mkdir(path.join(imp, "AGENTS.md"), { recursive: true });
+		await mkdir(path.join(ink, "AGENTS.md"), { recursive: true });
 		const loaded = loadContextFiles(root, home);
 		expect(loaded).toBeNull();
 	});

@@ -13,7 +13,7 @@
  * name collisions, the `.agents/skills` ancestor walk to the git root, and the
  * user-global `~/.agents/skills` carve-out. Precedence, first-wins: explicit
  * paths (CLI --skill, then settings) > project tiers > user tiers — explicit
- * intent outranks discovery, local outranks global (imp's md-commands rule;
+ * intent outranks discovery, local outranks global (Ink's md-commands rule;
  * pi loads project resources before user ones too).
  *
  * Deliberate divergences from pi (design Appendix A): no ignore-file scanning
@@ -173,13 +173,13 @@ function loadSkillFromFile(
 
 /**
  * Bare-.md discovery mode per root directory type (pi's SkillDiscoveryMode):
- * - "imp"     — `.imp/skills` and `~/.imp/skills` roots: root-level bare .md
+ * - "ink"     — `.ink/skills` and `~/.ink/skills` roots: root-level bare .md
  *               files ARE skills; nested .md only inside SKILL.md roots.
  * - "agents"  — `.agents/skills` roots: root-level bare .md is IGNORED;
  *               .md nested inside grouping subdirectories IS discovered.
- * Explicit paths (settings/CLI) behave like "imp" (root .md included).
+ * Explicit paths (settings/CLI) behave like "ink" (root .md included).
  */
-type DiscoveryMode = "imp" | "agents";
+type DiscoveryMode = "ink" | "agents";
 
 function scanSkillsDir(
 	dir: string,
@@ -241,7 +241,7 @@ function scanSkillsDir(
 		}
 		// Root-tier rule (pi: mode "pi" && dir===root, mode "agents" && dir!==root).
 		const atRoot = dir === rootDir;
-		const bareMdAllowed = mode === "imp" ? atRoot : !atRoot;
+		const bareMdAllowed = mode === "ink" ? atRoot : !atRoot;
 		if (isFile && bareMdAllowed && entry.name.endsWith(".md")) {
 			const result = loadSkillFromFile(full, source);
 			if (result.skill !== null) skills.push(result.skill);
@@ -342,7 +342,7 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	};
 
 	// Explicit paths FIRST — explicit intent outranks discovery (design §6
-	// revision note: imp's md-commands rule "explicit/local outranks discovered";
+	// revision note: Ink's md-commands rule "explicit/local outranks discovered";
 	// pi's own loadSkills, unlike its resource loader, adds defaults first).
 	for (const raw of explicitPaths) {
 		const expanded = raw.startsWith("~") ? join(home, raw.slice(1)) : raw;
@@ -361,7 +361,7 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		try {
 			const stats = statSync(resolved);
 			if (stats.isDirectory()) {
-				add(scanSkillsDir(resolved, "imp", "path", resolved));
+				add(scanSkillsDir(resolved, "ink", "path", resolved));
 			} else if (stats.isFile() && resolved.endsWith(".md")) {
 				const result = loadSkillFromFile(resolved, "path");
 				add({ skills: result.skill !== null ? [result.skill] : [], diagnostics: result.diagnostics });
@@ -384,12 +384,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 	if (!noSkills) {
 		if (projectTrusted) {
-			add(scanSkillsDir(join(cwd, ".imp", "skills"), "imp", "project", join(cwd, ".imp", "skills")));
+			add(scanSkillsDir(join(cwd, ".ink", "skills"), "ink", "project", join(cwd, ".ink", "skills")));
 			for (const dir of ancestorAgentsSkillDirs(cwd, home)) {
 				add(scanSkillsDir(dir, "agents", "project", dir));
 			}
 		}
-		add(scanSkillsDir(join(home, ".imp", "skills"), "imp", "user", join(home, ".imp", "skills")));
+		add(scanSkillsDir(join(home, ".ink", "skills"), "ink", "user", join(home, ".ink", "skills")));
 		add(scanSkillsDir(join(home, ".agents", "skills"), "agents", "user", join(home, ".agents", "skills")));
 	}
 
@@ -509,7 +509,7 @@ export function buildSkillCommands(
 		const name = `skill:${skill.name}`;
 		if (options.reserved.has(name)) {
 			options.onDiagnostic?.(
-				`imp: skill command /${name} skipped — a command with that name is already registered`,
+				`ink: skill command /${name} skipped — a command with that name is already registered`,
 			);
 			continue;
 		}
@@ -527,10 +527,10 @@ export function buildSkillCommands(
 						});
 					} catch (err) {
 						// Teaching error, nothing reaches the model (Appendix A:
-						// pi forwards the raw text instead — imp never sends
+						// pi forwards the raw text instead — Ink never sends
 						// unexpanded command lines).
 						const message = err instanceof Error ? err.message.split("\n")[0] : "failed to read";
-						ctx.renderer.error(`imp: /${name} failed to read ${skill.filePath}: ${message}`);
+						ctx.renderer.error(`ink: /${name} failed to read ${skill.filePath}: ${message}`);
 					}
 					return "handled";
 				},

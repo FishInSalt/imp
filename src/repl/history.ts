@@ -1,7 +1,7 @@
 /**
  * Cross-session input history (M11 #4) — the bash `~/.zsh_history` analog.
  *
- * One global JSONL file under the imp home: every accepted input line is
+ * One global JSONL file under the Ink home: every accepted input line is
  * appended (consecutive duplicates collapse), and the shell seeds the
  * editor's up-arrow recall from its tail on start. Sessions already persist
  * everything they receive; this file only makes RECALL survive restarts.
@@ -28,7 +28,7 @@ const MAX_LINES = 2000;
 const RECALL_LIMIT = 100;
 
 export function historyFilePath(home: string): string {
-	return `${home}/.imp/history.jsonl`;
+	return `${home}/.ink/history.jsonl`;
 }
 
 /** Newest-last, JSON lines, consecutive duplicates collapsed, corrupt lines skipped. */
@@ -81,7 +81,7 @@ export function appendInputHistory(path: string, text: string): void {
 	}
 }
 
-/** Same-file mutual exclusion for two imp processes appending at once —
+/** Same-file mutual exclusion for two Ink processes appending at once —
  *  mirrors core/trust.ts's withStoreLock (busy-wait + degrade-to-unlocked
  *  after ~1s rather than bricking on a stale lock file). */
 function withHistoryLock(path: string, fn: () => void): void {

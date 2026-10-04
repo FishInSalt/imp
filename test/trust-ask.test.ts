@@ -75,10 +75,10 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		const terminal = new AskTerminal();
 		const transcript = new TranscriptSink();
 		const dir = mkdtempSync(join(tmpdir(), "imp-ask-"));
-		const asked = askTrustViaTui({ transcript, cwd: dir, resources: [".imp/commands"], terminal });
+		const asked = askTrustViaTui({ transcript, cwd: dir, resources: [".ink/commands"], terminal });
 		await settle();
 		expect(stripAnsi(terminal.writes.join(""))).toContain("Yes — trust and remember");
-		expect(stripAnsi(terminal.writes.join(""))).toContain(".imp/commands");
+		expect(stripAnsi(terminal.writes.join(""))).toContain(".ink/commands");
 		terminal.data("\r");
 		await expect(asked).resolves.toBe("yes");
 		expect(transcript.completedLines()).toEqual([]); // the ask leaves no transcript trace
@@ -89,7 +89,7 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		const asked = askTrustViaTui({
 			transcript: new TranscriptSink(),
 			cwd: "/tmp/x",
-			resources: [".imp/extensions"],
+			resources: [".ink/extensions"],
 			terminal,
 		});
 		await settle();
@@ -108,7 +108,7 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		const asked = askTrustViaTui({
 			transcript: new TranscriptSink(),
 			cwd: "/tmp/x",
-			resources: [".imp/extensions"],
+			resources: [".ink/extensions"],
 			terminal,
 		});
 		await settle();
@@ -121,7 +121,7 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		const asked = askTrustViaTui({
 			transcript: new TranscriptSink(),
 			cwd: "/tmp/x",
-			resources: [".imp/agents"],
+			resources: [".ink/agents"],
 			terminal,
 		});
 		await settle();
@@ -134,7 +134,7 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 		const asked = askTrustViaTui({
 			transcript: new TranscriptSink(),
 			cwd: "/tmp/x",
-			resources: [".imp/extensions"],
+			resources: [".ink/extensions"],
 			terminal,
 		});
 		await settle();

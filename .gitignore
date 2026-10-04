@@ -26,5 +26,5 @@ coverage/
 .vscode/
 *.swp
 
-# imp runtime artifacts (sessions, debug logs — decide later whether to version)
-# .imp/
+# Ink runtime artifacts (sessions, debug logs — decide later whether to version)
+# .ink/

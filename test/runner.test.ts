@@ -66,7 +66,7 @@ async function makeRunner(args: MakeArgs): Promise<Runner> {
 type RunnerWithOutput = Runner & { capturedOutput(): string };
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0"); // keep createRunLogger silent and hermetic
+	vi.stubEnv("INK_LOG", "0"); // keep createRunLogger silent and hermetic
 });
 
 afterEach(() => {
@@ -86,9 +86,9 @@ describe("resolveRunMode", () => {
 describe("subagent event relay (M10 B)", () => {
 	it("child tool events reach runTurn.onEvent with agent info; top-level events carry none", async () => {
 		const { baseDir, cwd } = await setup();
-		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(baseDir, "agents-home", ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(baseDir, "agents-home", ".imp", "agents", "scout.md"),
+			path.join(baseDir, "agents-home", ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -372,7 +372,7 @@ describe("Runner.runTurn", () => {
 	});
 
 	it("auto-compaction fires inside runTurn (tiny keep window): banners + history splice", async () => {
-		vi.stubEnv("IMP_KEEP_RECENT", "1"); // retained tail as small as possible
+		vi.stubEnv("INK_KEEP_RECENT", "1"); // retained tail as small as possible
 		vi.resetModules();
 		const { createRunner: freshCreateRunner } = await import("../src/runner.js");
 		const { baseDir, cwd } = await setup();
@@ -473,7 +473,7 @@ describe("Runner.newSession", () => {
 		expect(existsSync(runner.session?.filePath as string)).toBe(false);
 		expect(runner.capturedOutput()).toContain("▪ new session");
 		expect(runner.capturedOutput()).not.toContain("saved");
-		expect(runner.capturedOutput()).not.toContain("imp -r");
+		expect(runner.capturedOutput()).not.toContain("ink -r");
 	});
 
 	it("swaps to a fresh store, empties history, keeps the old file on disk, prints the banner", async () => {
@@ -490,7 +490,7 @@ describe("Runner.newSession", () => {
 		expect(newId8).toBeDefined();
 		expect(newId8).not.toBe(oldId8);
 		expect(runner.capturedOutput()).toContain(
-			`▪ new session ${newId8} — previous ${oldId8} saved (imp -r ${oldId8})\n`,
+			`▪ new session ${newId8} — previous ${oldId8} saved (ink -r ${oldId8})\n`,
 		);
 		expect(runner.history).toHaveLength(0);
 		expect(runner.session?.isPersisted).toBe(false);
@@ -651,9 +651,9 @@ describe("run_start extension event (task-timer design §4.1/§4.6)", () => {
 
 	it("does not fire for subagent runs — top-level only, symmetric with run_end", async () => {
 		const { baseDir, cwd } = await setup();
-		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(baseDir, "agents-home", ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(baseDir, "agents-home", ".imp", "agents", "scout.md"),
+			path.join(baseDir, "agents-home", ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -772,9 +772,9 @@ describe("child model vision binding (SA-02)", () => {
 	}): Promise<{ text: string; hasImage: boolean }> {
 		const { baseDir, cwd } = await setup();
 		await mkdir(cwd, { recursive: true });
-		await mkdir(path.join(baseDir, "agents-home", ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(baseDir, "agents-home", ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(baseDir, "agents-home", ".imp", "agents", "visionless.md"),
+			path.join(baseDir, "agents-home", ".ink", "agents", "visionless.md"),
 			`---\nname: visionless\ndescription: test visionless\nmodel: ${args.childModel}\n---\nbody\n`,
 			"utf-8",
 		);
@@ -891,12 +891,12 @@ describe("#output-truncation D3 (per-run maxTokens resolution + stop note)", () 
 
 	function writeCatalog(models: Record<string, number>): void {
 		const dir = mkdtempSync(path.join(tmpdir(), "imp-trunc-catalog-"));
-		savedCatalogPath = process.env.IMP_CATALOG_PATH;
-		process.env.IMP_CATALOG_PATH = path.join(dir, "catalog.json");
+		savedCatalogPath = process.env.INK_CATALOG_PATH;
+		process.env.INK_CATALOG_PATH = path.join(dir, "catalog.json");
 		const entries: Record<string, unknown> = {};
 		for (const [id, maxTokens] of Object.entries(models)) entries[id] = { id, maxTokens };
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH,
+			process.env.INK_CATALOG_PATH,
 			JSON.stringify({ version: 1, providers: { anthropic: { checkedAt: Date.now(), models: entries } } }),
 			"utf-8",
 		);
@@ -904,8 +904,8 @@ describe("#output-truncation D3 (per-run maxTokens resolution + stop note)", () 
 	}
 
 	afterEach(() => {
-		if (savedCatalogPath === undefined) delete process.env.IMP_CATALOG_PATH;
-		else process.env.IMP_CATALOG_PATH = savedCatalogPath;
+		if (savedCatalogPath === undefined) delete process.env.INK_CATALOG_PATH;
+		else process.env.INK_CATALOG_PATH = savedCatalogPath;
 		savedCatalogPath = undefined;
 		resetCatalogForTest();
 	});

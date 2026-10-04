@@ -16,7 +16,7 @@ import { type Component, matchesKey, sliceByColumn, Text, truncateToWidth, visib
  * alt+←/→ run pi's fold-or-up / unfold-or-down over the nearest-VISIBLE-
  * ancestor structure, deep rows auto-pan horizontally (pi's viewport), and
  * ctrl+x copies the selected entry. Remaining deliberate cuts: `f` folds
- * anything (imp's own key — pi's alt-arrows gate on branch points), no
+ * anything (Ink's own key — pi's alt-arrows gate on branch points), no
  * label timestamps, no per-mode filter keys, single Tab cycle.
  */
 
@@ -451,7 +451,7 @@ export class TreeSelectorComponent implements Component {
 		}
 	}
 
-	/** pi's getEntryCopyText (896-920), imp's message shapes: user/assistant
+	/** pi's getEntryCopyText (896-920), Ink's message shapes: user/assistant
 	 *  text blocks, tool results' content, summaries. Trimmed-empty →
 	 *  undefined (pi signals "no text to copy" that way). */
 	private entryCopyText(entry: SessionEntry): string | undefined {
@@ -504,7 +504,7 @@ export class TreeSelectorComponent implements Component {
 			this.selected = Math.min(Math.max(0, this.rows().length - 1), this.selected + 1);
 		} else if (matchesKey(data, "left") || matchesKey(data, "pageUp")) {
 			// pi: left/PgUp page up — clamped, never wraps (arrows ↑↓ don't wrap
-			// in imp either; pi's do — recorded divergence, batch A).
+			// in Ink either; pi's do — recorded divergence, batch A).
 			this.selected = Math.max(0, this.selected - this.visibleLines);
 		} else if (matchesKey(data, "right") || matchesKey(data, "pageDown")) {
 			this.selected = Math.min(Math.max(0, this.rows().length - 1), this.selected + this.visibleLines);

@@ -11,7 +11,7 @@
  */
 
 // pi-tui's autocomplete command shape (name/description/argumentHint).
-// Aliased: imp's own SlashCommand (commands.ts) is the dispatch shape —
+// Aliased: Ink's own SlashCommand (commands.ts) is the dispatch shape —
 // the alias keeps the two from blurring at this boundary.
 export type { SlashCommand as AutocompleteSlashCommand } from "@earendil-works/pi-tui";
 // Splits stdin bursts into per-key sequences (escape-aware) — the fake
@@ -54,12 +54,12 @@ export type TuiInputListener = (data: string) => { consume?: boolean; data?: str
 /** The pre-interception hook TUI runs before the focused component sees keys. */
 export type AddInputListener = (listener: TuiInputListener) => () => void;
 
-/** Which interactive presentation shell to use (M9). IMP_REPL=legacy keeps
+/** Which interactive presentation shell to use (M9). INK_REPL=legacy keeps
  *  the pre-M9 readline path available as the documented escape hatch. */
 export type ShellKind = "tui" | "legacy";
 
 export function resolveShell(): ShellKind {
-	return process.env.IMP_REPL === "legacy" ? "legacy" : "tui";
+	return process.env.INK_REPL === "legacy" ? "legacy" : "tui";
 }
 
 /**

@@ -48,8 +48,8 @@ async function boot(options?: {
 		writeFileSync(globalPath, JSON.stringify(options.global), "utf-8");
 	}
 	if (options?.project !== undefined) {
-		mkdirSync(join(cwd, ".imp"), { recursive: true });
-		writeFileSync(join(cwd, ".imp", "settings.json"), JSON.stringify(options.project), "utf-8");
+		mkdirSync(join(cwd, ".ink"), { recursive: true });
+		writeFileSync(join(cwd, ".ink", "settings.json"), JSON.stringify(options.project), "utf-8");
 	}
 	const requests: LLMRequest[] = [];
 	const { renderer, output } = makeRenderer();
@@ -132,9 +132,9 @@ describe("M15 two-scope merge", () => {
 
 	it("untrusted project settings are invisible (trust gate)", () => {
 		const projDir = mkdtempSync(join(tmpdir(), "imp-untrusted-"));
-		mkdirSync(join(projDir, ".imp"), { recursive: true });
+		mkdirSync(join(projDir, ".ink"), { recursive: true });
 		writeFileSync(
-			join(projDir, ".imp", "settings.json"),
+			join(projDir, ".ink", "settings.json"),
 			JSON.stringify({ defaultModel: "attacker/model" }),
 			"utf-8",
 		);
@@ -145,12 +145,12 @@ describe("M15 two-scope merge", () => {
 		expect(loadProjectSettings(projDir, true).defaultModel).toBe("attacker/model");
 	});
 
-	it(".imp/settings.json presence triggers the trust gate", () => {
+	it(".ink/settings.json presence triggers the trust gate", () => {
 		const projDir = mkdtempSync(join(tmpdir(), "imp-gate-"));
-		expect(trustRequiringResources(projDir, homedir())).not.toContain(".imp/settings.json");
-		mkdirSync(join(projDir, ".imp"), { recursive: true });
-		writeFileSync(join(projDir, ".imp", "settings.json"), "{}", "utf-8");
-		expect(trustRequiringResources(projDir, homedir())).toContain(".imp/settings.json");
+		expect(trustRequiringResources(projDir, homedir())).not.toContain(".ink/settings.json");
+		mkdirSync(join(projDir, ".ink"), { recursive: true });
+		writeFileSync(join(projDir, ".ink", "settings.json"), "{}", "utf-8");
+		expect(trustRequiringResources(projDir, homedir())).toContain(".ink/settings.json");
 	});
 
 	it("unknown keys survive a read-modify-write (forward compat)", () => {
@@ -181,7 +181,7 @@ describe("M15 consumers", () => {
 		const globalOnly = await boot({ global: { autoCompact: false } });
 		expect(globalOnly.runner.autoCompactEnabled).toBe(false);
 
-		vi.stubEnv("IMP_AUTOCOMPACT", "0");
+		vi.stubEnv("INK_AUTOCOMPACT", "0");
 		const envWins = await boot({
 			projectAllowed: true,
 			project: { autoCompact: true },
@@ -267,11 +267,11 @@ describe("M15 /settings command", () => {
 	});
 
 	it("env shadows show in the table (env wins)", async () => {
-		vi.stubEnv("IMP_MODEL", "zai/glm-5.3");
+		vi.stubEnv("INK_MODEL", "zai/glm-5.3");
 		const booted = await boot();
 		await runSettings("", booted.ctx);
 		expect(booted.output()).toContain("defaultModel = zai/glm-5.3");
-		expect(booted.output()).toContain("env IMP_MODEL wins");
+		expect(booted.output()).toContain("env INK_MODEL wins");
 	});
 
 	it("TUI picker: cycle a boolean, pick the scope (injected select)", async () => {
@@ -344,7 +344,7 @@ describe("M15 review round pins", () => {
 
 describe("M15 startup default model", () => {
 	it("global settings defaultModel is honored (subprocess-free check of the read chain)", async () => {
-		// The cli chain (IMP_MODEL > global > trusted-project > builtin) is
+		// The cli chain (INK_MODEL > global > trusted-project > builtin) is
 		// exercised end-to-end in the dist smoke; here: the pieces.
 		const dir = mkdtempSync(join(tmpdir(), "imp-dm-"));
 		const file = join(dir, "settings.json");
@@ -354,7 +354,7 @@ describe("M15 startup default model", () => {
 });
 
 describe("M17 queue mode keys in /settings", () => {
-	it("no-arg table shows both keys with the imp defaults", async () => {
+	it("no-arg table shows both keys with the Ink defaults", async () => {
 		const booted = await boot({ projectAllowed: false });
 		await runSettings("", booted.ctx);
 		const text = booted.output();

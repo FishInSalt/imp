@@ -8,8 +8,8 @@ function tempProject(): { cwd: string; home: string; projectDir: string; homeDir
 	const root = mkdtempSync(path.join(tmpdir(), "imp-agents-"));
 	const cwd = path.join(root, "proj");
 	const home = path.join(root, "home");
-	const projectDir = path.join(cwd, ".imp", "agents");
-	const homeDir = path.join(home, ".imp", "agents");
+	const projectDir = path.join(cwd, ".ink", "agents");
+	const homeDir = path.join(home, ".ink", "agents");
 	mkdirSync(projectDir, { recursive: true });
 	mkdirSync(homeDir, { recursive: true });
 	return { cwd, home, projectDir, homeDir };

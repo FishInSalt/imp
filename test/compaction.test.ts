@@ -42,8 +42,8 @@ const toolResult: AgentMessage = {
 describe("settings env parsing", () => {
 	it("invalid env values fall back with a warning instead of NaN-disabling compaction", async () => {
 		const { vi } = await import("vitest");
-		vi.stubEnv("IMP_KEEP_RECENT", "20k");
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "128k");
+		vi.stubEnv("INK_KEEP_RECENT", "20k");
+		vi.stubEnv("INK_CONTEXT_WINDOW", "128k");
 		vi.resetModules();
 		const mod = await import("../src/core/compaction.js");
 		expect(mod.DEFAULT_COMPACTION_SETTINGS.keepRecentTokens).toBe(20000);

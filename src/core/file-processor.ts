@@ -1,6 +1,6 @@
 /**
  * @file CLI argument processing — M13 batch 2, ported from pi
- * `cli/file-processor.ts`. `imp @shot.png what is this` turns `@…`
+ * `cli/file-processor.ts`. `ink @shot.png what is this` turns `@…`
  * positionals into prompt text (`<file name="…">` blocks) plus image
  * attachments for the first user message. Images run through the same
  * processor the read tool uses; text files embed inline (BOM-stripped).

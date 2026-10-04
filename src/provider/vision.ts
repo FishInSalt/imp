@@ -1,5 +1,5 @@
 /**
- * Vision capability rules (M13 §5). imp has no model catalog, so — like
+ * Vision capability rules (M13 §5). Ink has no model catalog, so — like
  * thinking.ts's MODEL_RULES — capability is a prefix table. pi's equivalent
  * is the generated catalog's `input: ("text"|"image")[]`.
  *

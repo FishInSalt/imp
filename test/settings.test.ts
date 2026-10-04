@@ -25,14 +25,14 @@ describe("settings store (#thinking-levels persistence)", () => {
 		).not.toThrow();
 	});
 
-	it("IMP_SETTINGS_PATH overrides the home default (the hermetic seam)", () => {
-		const prev = process.env.IMP_SETTINGS_PATH;
+	it("INK_SETTINGS_PATH overrides the home default (the hermetic seam)", () => {
+		const prev = process.env.INK_SETTINGS_PATH;
 		try {
-			process.env.IMP_SETTINGS_PATH = "/tmp/imp-hermetic-settings.json";
+			process.env.INK_SETTINGS_PATH = "/tmp/imp-hermetic-settings.json";
 			expect(settingsFilePath()).toBe("/tmp/imp-hermetic-settings.json");
 		} finally {
-			if (prev === undefined) delete process.env.IMP_SETTINGS_PATH;
-			else process.env.IMP_SETTINGS_PATH = prev;
+			if (prev === undefined) delete process.env.INK_SETTINGS_PATH;
+			else process.env.INK_SETTINGS_PATH = prev;
 		}
 	});
 });
@@ -98,7 +98,7 @@ describe("#tree batch B settings", () => {
 	it("project scope overrides global for both keys (the deep merge)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-treeb-"));
 		const globalFile = join(dir, "global.json");
-		const projectFile = join(dir, "proj", ".imp", "settings.json");
+		const projectFile = join(dir, "proj", ".ink", "settings.json");
 		writeFileSync(globalFile, JSON.stringify({ treeFilterMode: "user-only" }), "utf-8");
 		mkdirSync(dirname(projectFile), { recursive: true });
 		writeFileSync(projectFile, JSON.stringify({ treeFilterMode: "labeled-only" }), "utf-8");

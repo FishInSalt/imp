@@ -14,7 +14,7 @@ import { authFilePath } from "./auth-store.js";
  * tokens → decode the chatgpt_account_id JWT claim (required by the
  * backend-api headers).
  *
- * Credentials live in ~/.imp/auth.json (0600), next to logs/ and trust.json.
+ * Credentials live in ~/.ink/auth.json (0600), next to logs/ and trust.json.
  * The auth base URL is injectable so tests run against a local fake server —
  * the production constants never touch the network in the test suite.
  */
@@ -49,7 +49,7 @@ export interface DeviceCodePrompt {
 
 export interface CodexAuthOptions {
 	authBaseUrl?: string;
-	/** Override for tests; defaults to ~/.imp/auth.json. */
+	/** Override for tests; defaults to ~/.ink/auth.json. */
 	authPath?: string;
 	/** Progress callback for the login UX (CLI print / REPL note). */
 	onDeviceCode?: (prompt: DeviceCodePrompt) => void;
@@ -126,7 +126,7 @@ function persistCredential(credential: CodexCredential, authPath?: string): void
 
 /** Remove the stored credential (logout). Missing file is a no-op.
  *  #login-repl: other families' stored api keys share the file — remove
- *  only the codex section and keep the rest (cli `imp logout`). */
+ *  only the codex section and keep the rest (cli `ink logout`). */
 export function logoutCodex(authPath?: string): void {
 	const file = authFilePath(authPath);
 	try {
@@ -317,7 +317,7 @@ export async function loginCodex(options: CodexAuthOptions = {}): Promise<CodexC
 		}
 		throw new Error(`Codex device auth failed (${poll.status}): ${body}`);
 	}
-	throw new Error("Codex device login timed out — run imp login again");
+	throw new Error("Codex device login timed out — run ink login again");
 }
 
 // Single-flight refresh: concurrent turns must not race two refreshes (the
@@ -332,7 +332,7 @@ export async function getCodexAccessToken(options: CodexAuthOptions = {}): Promi
 	const authBaseUrl = options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL;
 	const stored = loadCodexCredential(options.authPath);
 	if (stored === null) {
-		throw new Error("Not logged in to OpenAI (ChatGPT plan). Run:\n  imp login\nthen try again.");
+		throw new Error("Not logged in to OpenAI (ChatGPT plan). Run:\n  ink login\nthen try again.");
 	}
 	if (stored.expiresAt - REFRESH_MARGIN_MS > Date.now()) return stored;
 	if (refreshInFlight === null) {
@@ -350,7 +350,7 @@ export async function getCodexAccessToken(options: CodexAuthOptions = {}): Promi
 	} catch (err) {
 		// A failed refresh (rotated/revoked token) must not silently retry forever.
 		throw new Error(
-			`Codex login expired — run imp login again (${err instanceof Error ? err.message : String(err)})`,
+			`Codex login expired — run ink login again (${err instanceof Error ? err.message : String(err)})`,
 		);
 	}
 }

@@ -1,6 +1,6 @@
 /** #tool-name-colors: the owner's tool-name theme.
  *
- * Link or copy this file into `~/.imp/extensions/` to switch it on — with
+ * Link or copy this file into `~/.ink/extensions/` to switch it on — with
  * no theme extension nothing is colored (the pre-#tool-name-colors look).
  *
  * Two tiers exist (Amendment 3): a tool's own extension can *suggest* a

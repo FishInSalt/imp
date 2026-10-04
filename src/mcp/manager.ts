@@ -275,7 +275,7 @@ export class McpManager {
 		state.registeredNames = new Set();
 		for (const tool of state.tools) {
 			if (taken.has(tool.name)) {
-				this.options.renderer.note(`imp: mcp ${state.config.name} tool "${tool.name}" conflicts — skipped`);
+				this.options.renderer.note(`ink: mcp ${state.config.name} tool "${tool.name}" conflicts — skipped`);
 				continue;
 			}
 			shared.push(tool);
@@ -304,7 +304,7 @@ export class McpManager {
 	 *  bypass the cooldown — M19 D4). */
 	private async ensureClient(state: ServerState, options?: { bypassCooldown?: boolean }): Promise<McpClient> {
 		if (state.client?.isConnected) return state.client;
-		if (this.closed) throw new Error("imp is shutting down");
+		if (this.closed) throw new Error("Ink is shutting down");
 		if (state.reconnecting !== null) {
 			await state.reconnecting;
 		} else if (

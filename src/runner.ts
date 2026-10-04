@@ -19,7 +19,7 @@ import { type AgentMessage, contentText, type ImageBlock, type Usage } from "./c
 import type { SessionInfo } from "./core/session/manager.js";
 import { createSession, listSessions, resolveSession, SessionNotFoundError } from "./core/session/manager.js";
 import type { MessageEntry, SessionEntry, SessionStore } from "./core/session/store.js";
-import { effectiveSettings, type ImpSettings, saveSettings, settingsFilePath } from "./core/settings.js";
+import { effectiveSettings, type InkSettings, saveSettings, settingsFilePath } from "./core/settings.js";
 import {
 	priceUsageTotals,
 	type UsageTotals,
@@ -114,7 +114,7 @@ export function noModelText(hasConfiguredProviders: boolean, short = false): str
 
 /**
  * Print mode keeps today's behavior (a -p/positional prompt was given). Without
- * a prompt, imp runs the REPL — piped stdin included (scripted mode), because
+ * a prompt, Ink runs the REPL — piped stdin included (scripted mode), because
  * the readline REPL degrades naturally. Only a zero-line stdin degenerates to
  * HELP + exit 1 (detected by the REPL when EOF arrives before any line).
  * `stdinIsTty` is part of the dispatch question on purpose: a pipe is a
@@ -135,7 +135,7 @@ export interface RunnerOptions {
 	 *  explicitly — an explicit value beats the model catalog limit. */
 	maxTokensExplicit?: boolean;
 	/** Startup thinking level (#thinking-levels, pi parity): --thinking /
-	 *  IMP_THINKING. Clamped per model family on warmup; default "off". */
+	 *  INK_THINKING. Clamped per model family on warmup; default "off". */
 	thinking?: ThinkingLevel;
 	maxTurns: number;
 	noContextFiles: boolean;
@@ -143,21 +143,21 @@ export interface RunnerOptions {
 	resume?: string;
 	continueRecent?: boolean;
 	sessionBaseDir?: string; // hermetic tests (passed through to the session manager)
-	/** Hermetic tests: the settings file path (default ~/.imp/settings.json). */
+	/** Hermetic tests: the settings file path (default ~/.ink/settings.json). */
 	settingsPath?: string;
 	/** M15: project settings visibility (the M8 trust gate result for the
-	 *  session cwd — false keeps <cwd>/.imp/settings.json unread). */
+	 *  session cwd — false keeps <cwd>/.ink/settings.json unread). */
 	projectSettingsAllowed?: boolean;
-	/** Hermetic tests: overrides ~/.imp/agents for the agent registry (M5c). */
+	/** Hermetic tests: overrides ~/.ink/agents for the agent registry (M5c). */
 	agentsHomeDir?: string;
-	/** M8 trust gate: false skips `<cwd>/.imp/agents` (global agents still load). */
+	/** M8 trust gate: false skips `<cwd>/.ink/agents` (global agents still load). */
 	agentsProjectAllowed?: boolean;
 	/** #system-md: the session-resolved trust bit for project SYSTEM.md /
 	 *  APPEND_SYSTEM.md. The loader must NOT re-read the trust store — the
 	 *  "session" answer grants without recording (design review P1-1).
 	 *  Default false (conservative when not told). */
 	systemPromptProjectAllowed?: boolean;
-	/** Hermetic tests: overrides ~/.imp for SYSTEM.md/APPEND_SYSTEM.md
+	/** Hermetic tests: overrides ~/.ink for SYSTEM.md/APPEND_SYSTEM.md
 	 *  discovery (design review P1-2 — a real global file on the dev machine
 	 *  would replace the prompt and machine-break the suite). */
 	systemPromptHomeDir?: string;
@@ -184,7 +184,7 @@ export interface RunnerOptions {
 	extensions?: ExtensionRegistry;
 	/** M12 skills — loaded in cli.ts (like extensions), appended to the system
 	 *  prompt after extension sections. `read` must be available for the block
-	 *  (progressive disclosure's activation channel); imp's base set always has it. */
+	 *  (progressive disclosure's activation channel); Ink's base set always has it. */
 	skills?: readonly Skill[];
 	/** Extension load failures — logged once the run logger exists (run_error,
 	 *  source "extension"), so one line on screen stays debuggable on disk. */
@@ -235,8 +235,8 @@ export interface Runner {
 	readonly tools: Tool[];
 	/** The merged settings view (M15) — construction-time snapshot
 	 *  (global ← trust-gated project). */
-	effectiveSettings(): ImpSettings;
-	/** M15: whether <cwd>/.imp/settings.json participates this session. */
+	effectiveSettings(): InkSettings;
+	/** M15: whether <cwd>/.ink/settings.json participates this session. */
 	readonly projectSettingsAllowed: boolean;
 	/** M15: the working directory the settings scopes resolve against (the
 	 *  session cwd — /settings uses it instead of process.cwd()). */
@@ -397,15 +397,15 @@ class RunnerImpl implements Runner {
 	 *  per-turn wire request while execution's toolMap is rebuilt per run). */
 	readonly tools: Tool[];
 	private readonly autoCompact: boolean;
-	private effective: ImpSettings;
+	private effective: InkSettings;
 
 	/** Whether auto-compaction is on — the footer's "(auto)" indicator. */
 	/** The merged settings view (M15) — construction-time snapshot. */
-	effectiveSettings(): ImpSettings {
+	effectiveSettings(): InkSettings {
 		return this.effective;
 	}
 
-	/** M15: whether <cwd>/.imp/settings.json participates this session (the
+	/** M15: whether <cwd>/.ink/settings.json participates this session (the
 	 *  startup trust resolution — /settings uses the same gate for writes). */
 	get projectSettingsAllowed(): boolean {
 		return this.options.projectSettingsAllowed === true;
@@ -486,7 +486,7 @@ class RunnerImpl implements Runner {
 			globalPath: this.options.settingsPath,
 		});
 		this.lastRunModel = initialModel;
-		// #thinking-levels: startup level (--thinking / IMP_THINKING) > the
+		// #thinking-levels: startup level (--thinking / INK_THINKING) > the
 		// settings default (persisted by setThinkingLevel) > pi's
 		// DEFAULT_THINKING_LEVEL "medium" — clamped to the startup model's
 		// family (pi clamps on init the same way; knob-less models clamp to
@@ -631,8 +631,8 @@ class RunnerImpl implements Runner {
 		);
 		// M15: env override > project settings > global settings > default on
 		this.autoCompact =
-			process.env.IMP_AUTOCOMPACT === "0" ? false : (this.effectiveSettings().autoCompact ?? true);
-		this.branchSummaryEnabled = process.env.IMP_BRANCH_SUMMARY !== "0"; // #10: /tree keeps the left branch’s lessons
+			process.env.INK_AUTOCOMPACT === "0" ? false : (this.effectiveSettings().autoCompact ?? true);
+		this.branchSummaryEnabled = process.env.INK_BRANCH_SUMMARY !== "0"; // #10: /tree keeps the left branch’s lessons
 		this.systemText = "";
 		if (!options.deferInit) this.warmup();
 	}
@@ -684,7 +684,7 @@ class RunnerImpl implements Runner {
 		}
 		this.noteModelCredential(`${this.providerName}/${this.model}`, this.providerName);
 		for (const warning of this.agents.warnings) {
-			options.renderer.error(`imp: ${warning}`);
+			options.renderer.error(`ink: ${warning}`);
 		}
 		this.systemText = this.assembleSystem();
 		this.initialized = true;
@@ -779,7 +779,7 @@ class RunnerImpl implements Runner {
 			const rel = (p: string) => path.relative(this.options.cwd, p) || p;
 			for (const file of promptFiles.supersededByGlobal) {
 				this.options.renderer.note(
-					`▪ global ${path.basename(file)} active — project ${rel(file)} ignored (imp --trust to enable)`,
+					`▪ global ${path.basename(file)} active — project ${rel(file)} ignored (ink --trust to enable)`,
 				);
 			}
 			for (const file of promptFiles.unreadableProject) {
@@ -847,7 +847,7 @@ class RunnerImpl implements Runner {
 			const old8 = previous.header.id.slice(0, 8);
 			this.options.renderer.note(
 				previous.isPersisted
-					? `▪ new session ${id8} — previous ${old8} saved (imp -r ${old8})`
+					? `▪ new session ${id8} — previous ${old8} saved (ink -r ${old8})`
 					: `▪ new session ${id8}`,
 			);
 		} else {
@@ -911,7 +911,7 @@ class RunnerImpl implements Runner {
 	 *    path — splitBranches(targetId), exactly pi's
 	 *    collectEntriesForBranchSummary set, review P1-1) may be summarized
 	 *    into the new position first (branchSummary entry, disabled by
-	 *    IMP_BRANCH_SUMMARY=0). Abort of the summarizer aborts the WHOLE
+	 *    INK_BRANCH_SUMMARY=0). Abort of the summarizer aborts the WHOLE
 	 *    navigation — nothing moves (not a failure; review P1-3).
 	 *  Identity guard (review P2-2): if the live session was swapped while
 	 *  awaiting, the append and reload belong to whoever swapped it. */
@@ -959,7 +959,7 @@ class RunnerImpl implements Runner {
 		// allowedDuringRun:false. A mid-run gate change must snapshot instead.
 		const summaryReference = qualifiedReference(this.providerName, summaryModel);
 		if (opts?.summarize !== true || !this.branchSummaryEnabled) {
-			// no summary wanted or IMP_BRANCH_SUMMARY=0
+			// no summary wanted or INK_BRANCH_SUMMARY=0
 		} else {
 			const messages = abandoned
 				.filter((entry): entry is MessageEntry => entry.type === "message")
@@ -1051,7 +1051,7 @@ class RunnerImpl implements Runner {
 	 *  to "off" via the usual setModel-style clamp. Direct write: this is
 	 *  a REPLAY of an old decision, not a new one (no fresh session entry). */
 	private restoreThinkingFromSession(store: SessionStore): void {
-		// pi sdk.ts:222: an explicit startup level (--thinking/IMP_THINKING)
+		// pi sdk.ts:222: an explicit startup level (--thinking/INK_THINKING)
 		// outranks the session entry — restore only when the flag is absent.
 		if (this.options.thinking !== undefined) return;
 		const change = [...store.getEntries()]
@@ -1203,7 +1203,7 @@ class RunnerImpl implements Runner {
 		if (explicit) store.setModel(prepared.ref);
 		// #fresh-install-hint (D4, round-1 F2 — site 3/3): the resume path must
 		// not re-seed a dead default either — this is the line that made the
-		// warmup gate pointless one `imp -c` later. The in-memory model still
+		// warmup gate pointless one `ink -c` later. The in-memory model still
 		// applies (the turn can run and fail with the provider's key error);
 		// only the PERSISTENCE is gated. Round-2 review F2: probe the model
 		// BEING PERSISTED (prepared.ref.provider), not the pre-switch live
@@ -1308,7 +1308,7 @@ class RunnerImpl implements Runner {
 
 	/** #overflow-grace: a live "context window exceeded" provider error gets
 	 *  ONE compact-and-retry attempt (pi's overflow recovery, minus its
-	 *  stale-error same-model guard — imp only catches live request errors,
+	 *  stale-error same-model guard — Ink only catches live request errors,
 	 *  never persisted ones, so that scenario cannot arise). The user message
 	 *  is already in history from the failed attempt; the retry reruns with
 	 *  the prompt suppressed so it is not duplicated. Any second failure
@@ -1389,7 +1389,7 @@ class RunnerImpl implements Runner {
 		modelReference: string,
 		options: RunTurnOptions,
 		/** #loop-health: the run's monitor (hoisted in runTurn so it spans the
-		 *  overflow retry); undefined when IMP_HEALTH=0. */
+		 *  overflow retry); undefined when INK_HEALTH=0. */
 		health: LoopHealthMonitor | undefined,
 	): Promise<RunAgentLoopResult> {
 		// The task tool is built once at construction; its child-event relay

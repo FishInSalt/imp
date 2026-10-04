@@ -2,17 +2,17 @@
 
 A zero-dependency Node.js extension providing `web_search` (Tavily) and `url_read`
 (HTTP page text). Authentication and configuration belong to this extension, not
-imp's model provider registry or `/login` command. Requires imp's Node >=20 runtime.
+Ink's model provider registry or `/login` command. Requires Ink's Node >=20 runtime.
 
 ## Installation
 
 Copy this **entire directory**, including `_lib/`, into
-`~/.imp/extensions/web-search/`, or link this directory there. Project-local
-`.imp/extensions/web-search/` also works when the project is trusted.
+`~/.ink/extensions/web-search/`, or link this directory there. Project-local
+`.ink/extensions/web-search/` also works when the project is trusted.
 Alternatively use an explicit entry:
 
 ```sh
-imp -e /absolute/path/to/web-search/index.mjs
+ink -e /absolute/path/to/web-search/index.mjs
 ```
 
 Do not copy `index.mjs` alone. An explicit `-e` directory means a directory to
@@ -23,11 +23,11 @@ installed copies at different paths are not deduplicated.
 
 To upgrade, replace the installed package while keeping user configuration
 separate. To uninstall, remove its installed copy/link after checking the path.
-Uninstalling does not remove your private config. Restart imp after code updates;
+Uninstalling does not remove your private config. Restart Ink after code updates;
 credential changes are picked up at the next search.
 
 An agent must obtain approval before changing files outside its workspace, such
-as installing into `~/.imp/` or editing shell configuration.
+as installing into `~/.ink/` or editing shell configuration.
 
 ## Credentials
 
@@ -38,7 +38,7 @@ automatically retry or switch providers. Page reading does not require a Tavily 
 Resolution order:
 
 1. Nonblank `TAVILY_API_KEY` environment variable.
-2. `apiKey` in `~/.imp/web-search/config.json`.
+2. `apiKey` in `~/.ink/web-search/config.json`.
 3. Otherwise searches use Tavily's keyless access mode (`X-Tavily-Access-Mode:
    keyless`): free but rate-limited, no account required, same response schema
    as keyed access.
@@ -76,7 +76,7 @@ agent to execute it. It only writes config; it makes no network request.
 python3 - <<'PY'
 import getpass, json, os
 from pathlib import Path
-folder = Path.home() / '.imp' / 'web-search'
+folder = Path.home() / '.ink' / 'web-search'
 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
 if folder.is_symlink() or folder.stat().st_mode & 0o077:
     raise SystemExit('Use a private, user-controlled config directory (chmod 700).')
@@ -91,7 +91,7 @@ print('Configuration saved; no API request made.')
 PY
 ```
 
-`IMP_WEB_SEARCH_CONFIG` may point to another **absolute file path**. This is useful
+`INK_WEB_SEARCH_CONFIG` may point to another **absolute file path**. This is useful
 for isolated tests or user-managed configuration; it does not run commands or
 expand `~`/shell expressions. An environment API key bypasses file reading.
 
@@ -118,7 +118,7 @@ catch (error) { console.error(error.message); process.exitCode = 1; }
 '
 ```
 
-The usual imp startup extension diagnostic should list both tools. Local resolution
+The usual Ink startup extension diagnostic should list both tools. Local resolution
 checks presence and format, **not validity with Tavily**. A live search is the next
 step only with explicit approval (keyed searches consume credits; keyless searches
 are rate-limited). Do not run live searches in an unattended setup script.
@@ -220,7 +220,7 @@ are not reflected into model-visible diagnostics. This is deliberate redaction.
 
 ## Development
 
-From the imp repository root:
+From the Ink repository root:
 
 ```sh
 npm test -- test/web-search.test.ts test/web-search-config.test.ts test/web-search-io.test.ts test/web-search-discovery.test.ts test/extensions-contrib.test.ts

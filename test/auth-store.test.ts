@@ -12,8 +12,8 @@ import {
 } from "../src/provider/auth-store.js";
 import { loadCodexCredential, logoutCodex } from "../src/provider/codex-auth.js";
 
-// The store redirects through IMP_AUTH_PATH so tests never touch the host's
-// real ~/.imp/auth.json (same sandboxing rule as codex-auth's tests).
+// The store redirects through INK_AUTH_PATH so tests never touch the host's
+// real ~/.ink/auth.json (same sandboxing rule as codex-auth's tests).
 let dir = "";
 let file = "";
 const savedEnv: Record<string, string | undefined> = {};
@@ -21,16 +21,16 @@ const savedEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
 	dir = mkdtempSync(path.join(tmpdir(), "imp-auth-"));
 	file = path.join(dir, "auth.json");
-	savedEnv.IMP_AUTH_PATH = process.env.IMP_AUTH_PATH;
-	process.env.IMP_AUTH_PATH = file;
+	savedEnv.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
+	process.env.INK_AUTH_PATH = file;
 });
 
 afterEach(() => {
-	if (savedEnv.IMP_AUTH_PATH === undefined) delete process.env.IMP_AUTH_PATH;
-	else process.env.IMP_AUTH_PATH = savedEnv.IMP_AUTH_PATH;
+	if (savedEnv.INK_AUTH_PATH === undefined) delete process.env.INK_AUTH_PATH;
+	else process.env.INK_AUTH_PATH = savedEnv.INK_AUTH_PATH;
 });
 
-describe("auth-store (the api-key side of ~/.imp/auth.json)", () => {
+describe("auth-store (the api-key side of ~/.ink/auth.json)", () => {
 	it("save/load/clear one family; clear is a no-op on a missing key", () => {
 		expect(loadApiKey("zai")).toBeNull();
 		saveApiKey("zai", "sk-1");
@@ -170,7 +170,7 @@ describe("auth-store × codex section (legacy migration)", () => {
 		expect(existsSync(file)).toBe(false);
 	});
 
-	it("authFilePath honors explicit paths over IMP_AUTH_PATH", () => {
+	it("authFilePath honors explicit paths over INK_AUTH_PATH", () => {
 		expect(authFilePath()).toBe(file);
 		expect(authFilePath("/explicit.json")).toBe("/explicit.json");
 	});

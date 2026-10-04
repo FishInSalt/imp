@@ -42,7 +42,7 @@ const echo: Tool = {
 	},
 };
 
-const PARENT_SYSTEM = "You are imp (test). # Tools\n- bash: …";
+const PARENT_SYSTEM = "You are Ink (test). # Tools\n- bash: …";
 
 describe("finalAssistantText", () => {
 	it("returns the last assistant message's first non-empty text", () => {
@@ -207,9 +207,9 @@ describe("runSubagent", () => {
 		}
 	}, 20000);
 
-	it("IMP_HEALTH=0 disables the monitor entirely (no facts, no emits)", async () => {
-		const saved = process.env.IMP_HEALTH;
-		process.env.IMP_HEALTH = "0";
+	it("INK_HEALTH=0 disables the monitor entirely (no facts, no emits)", async () => {
+		const saved = process.env.INK_HEALTH;
+		process.env.INK_HEALTH = "0";
 		try {
 			const steps: ScriptStep[] = [];
 			for (let i = 0; i < 5; i++) {
@@ -231,8 +231,8 @@ describe("runSubagent", () => {
 			expect(outcome.health).toEqual([]);
 			expect(events.filter((event) => event.type === "health")).toHaveLength(0);
 		} finally {
-			if (saved === undefined) delete process.env.IMP_HEALTH;
-			else process.env.IMP_HEALTH = saved;
+			if (saved === undefined) delete process.env.INK_HEALTH;
+			else process.env.INK_HEALTH = saved;
 		}
 	}, 20000);
 
@@ -845,10 +845,10 @@ describe("SA-04 accounting (red evidence on baseline)", () => {
 describe("#output-truncation D3b (child request budget)", () => {
 	it("the child request carries the catalog limit for its canonical reference", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-child-budget-"));
-		const saved = process.env.IMP_CATALOG_PATH;
-		process.env.IMP_CATALOG_PATH = join(dir, "catalog.json");
+		const saved = process.env.INK_CATALOG_PATH;
+		process.env.INK_CATALOG_PATH = join(dir, "catalog.json");
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH,
+			process.env.INK_CATALOG_PATH,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -875,8 +875,8 @@ describe("#output-truncation D3b (child request budget)", () => {
 			expect(outcome.status).toBe("completed");
 			expect(sink[0]?.maxTokens).toBe(60000);
 		} finally {
-			if (saved === undefined) delete process.env.IMP_CATALOG_PATH;
-			else process.env.IMP_CATALOG_PATH = saved;
+			if (saved === undefined) delete process.env.INK_CATALOG_PATH;
+			else process.env.INK_CATALOG_PATH = saved;
 			resetCatalogForTest();
 		}
 	});

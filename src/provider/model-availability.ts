@@ -15,7 +15,7 @@ import type { ProviderName } from "./resolve.js";
  *
  * LIVE probe, not cached (design §3.1, round-1 F4): callers probe at
  * render time. `familyConfigured` reads one small JSON file (redirected
- * by IMP_AUTH_PATH in tests) plus `process.env`; after `/login` the next
+ * by INK_AUTH_PATH in tests) plus `process.env`; after `/login` the next
  * footer repaint is automatically correct — no invalidation hooks, no
  * cache coherency surface.
  *

@@ -24,11 +24,11 @@ describe("web-search packaging through the real extension loader", () => {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-web-discovery-"));
 		const cwd = path.join(base, "project");
 		const home = path.join(base, "home");
-		const installed = path.join(home, ".imp/extensions");
+		const installed = path.join(home, ".ink/extensions");
 		await mkdir(cwd, { recursive: true });
 		await mkdir(installed, { recursive: true });
 		vi.stubEnv("TAVILY_API_KEY", "");
-		vi.stubEnv("IMP_WEB_SEARCH_CONFIG", path.join(base, "missing-config.json"));
+		vi.stubEnv("INK_WEB_SEARCH_CONFIG", path.join(base, "missing-config.json"));
 
 		// Verify the shipped entry resolves; old web_search.mjs no longer exists.
 		const entry = path.join(examples, "web_search.mjs");

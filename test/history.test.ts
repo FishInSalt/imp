@@ -44,7 +44,7 @@ describe("input history persistence (M11 #4)", () => {
 		expect(loaded[99]).toBe("line-129");
 	});
 
-	it("historyFilePath lands under ~/.imp", () => {
-		expect(historyFilePath("/home/z")).toBe("/home/z/.imp/history.jsonl");
+	it("historyFilePath lands under ~/.ink", () => {
+		expect(historyFilePath("/home/z")).toBe("/home/z/.ink/history.jsonl");
 	});
 });

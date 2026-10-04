@@ -159,7 +159,7 @@ describe("codex-auth (device-code OAuth)", () => {
 	it("not logged in: the error teaches the fix; logout clears the file", async () => {
 		unlinkSync(authFile);
 		await expect(getCodexAccessToken({ authBaseUrl: baseUrl, authPath: authFile })).rejects.toThrow(
-			/imp login/,
+			/ink login/,
 		);
 		writeStored({});
 		chmodSync(authFile, 0o600);

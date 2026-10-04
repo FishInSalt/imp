@@ -179,7 +179,7 @@ async function startTuiRepl(scripts: ScriptStep[], model = "test-model"): Promis
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -190,7 +190,7 @@ afterEach(() => {
 
 describe("footer context percentage", () => {
 	it("appends ctx {p}% from the live history; startup reads 0%, rounding is half-up", async () => {
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "30");
+		vi.stubEnv("INK_CONTEXT_WINDOW", "30");
 		const env = await startTuiRepl([reply("ok", { inputTokens: 5, outputTokens: 0 })]);
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("0.0%/30 (auto)"); // empty history at startup
@@ -202,7 +202,7 @@ describe("footer context percentage", () => {
 	});
 
 	it("p ≥ 80 appends the low hint and notes ONCE per crossing; /new drops it and re-arms the latch", async () => {
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "100");
+		vi.stubEnv("INK_CONTEXT_WINDOW", "100");
 		const env = await startTuiRepl([reply("ok", { inputTokens: 80, outputTokens: 0 })]);
 		await settle();
 		env.terminal.data("hi\r");
@@ -237,8 +237,8 @@ describe("footer context percentage", () => {
 		await env.repl;
 	});
 
-	it("IMP_CONTEXT_WINDOW falls back to 131072 on an invalid value", async () => {
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "abc");
+	it("INK_CONTEXT_WINDOW falls back to 131072 on an invalid value", async () => {
+		vi.stubEnv("INK_CONTEXT_WINDOW", "abc");
 		const env = await startTuiRepl([reply("ok", { inputTokens: 80, outputTokens: 0 })]);
 		await settle();
 		env.terminal.data("hi\r");
@@ -324,9 +324,9 @@ describe("footer usage segments", () => {
 		await env.repl;
 	});
 
-	it("IMP_AUTOCOMPACT=0 drops the (auto) tag", async () => {
-		vi.stubEnv("IMP_AUTOCOMPACT", "0");
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "30");
+	it("INK_AUTOCOMPACT=0 drops the (auto) tag", async () => {
+		vi.stubEnv("INK_AUTOCOMPACT", "0");
+		vi.stubEnv("INK_CONTEXT_WINDOW", "30");
 		const env = await startTuiRepl([reply("ok", { inputTokens: 5, outputTokens: 0 })]);
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("0.0%/30");
@@ -344,10 +344,10 @@ describe("terminal title", () => {
 		await settle();
 		// The machine's constructor-time setTitle arrives BEFORE start();
 		// start() must paint the buffered title.
-		expect(env.terminal.writes.join("")).toContain("\x1b]2;imp — test-model\x07");
+		expect(env.terminal.writes.join("")).toContain("\x1b]2;Ink — test-model\x07");
 
 		env.terminal.data("/model glm-4.6\r");
-		await waitUntil(() => env.terminal.writes.join("").includes("\x1b]2;imp — glm-4.6\x07"));
+		await waitUntil(() => env.terminal.writes.join("").includes("\x1b]2;Ink — glm-4.6\x07"));
 
 		env.terminal.data("/exit\r");
 		await env.repl;

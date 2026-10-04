@@ -23,7 +23,7 @@ export interface LoadExtensionsOptions {
 	cliPaths: readonly string[];
 	/** -ne/--no-extensions: skip both discovery dirs (explicit -e paths still load). */
 	noDiscovery?: boolean;
-	/** M8 trust gate: false skips the `<cwd>/.imp/extensions` tier only —
+	/** M8 trust gate: false skips the `<cwd>/.ink/extensions` tier only —
 	 *  `-e` paths and the global dir still load (the user chose those). */
 	projectDirAllowed?: boolean;
 	/** Overrides os.homedir() — hermetic tests point the global dir at a temp dir. */
@@ -146,8 +146,8 @@ function dirEntries(dir: string): Array<{ name: string; isDir: boolean }> {
 
 /**
  * Candidate order is load order (design §3.1): `-e` flags (each a file or a
- * directory using the same entry rules), then `<cwd>/.imp/extensions/`, then
- * `~/.imp/extensions/`. Deduplicated by realpath across all sources, keeping
+ * directory using the same entry rules), then `<cwd>/.ink/extensions/`, then
+ * `~/.ink/extensions/`. Deduplicated by realpath across all sources, keeping
  * the first occurrence (and its origin).
  */
 function discoverCandidates(options: LoadExtensionsOptions): ExtensionCandidate[] {
@@ -184,10 +184,10 @@ function discoverCandidates(options: LoadExtensionsOptions): ExtensionCandidate[
 		// M8 trust gate: only the project tier is gated — the global dir is
 		// the user's own installation and explicit -e paths were chosen.
 		if (options.projectDirAllowed !== false) {
-			const projectDir = path.join(options.cwd, ".imp", "extensions");
+			const projectDir = path.join(options.cwd, ".ink", "extensions");
 			if (isDirectory(projectDir)) addDir(projectDir, "project");
 		}
-		const globalDir = path.join(options.home ?? os.homedir(), ".imp", "extensions");
+		const globalDir = path.join(options.home ?? os.homedir(), ".ink", "extensions");
 		if (isDirectory(globalDir)) addDir(globalDir, "global");
 	}
 	return candidates;
@@ -209,7 +209,7 @@ function extensionApi(
 		tail = "registration only works while the factory runs",
 	): void => {
 		if (!registry.hasOpenSection()) {
-			report(`imp: extension ${facts.name} could not ${what} — ${tail}`);
+			report(`ink: extension ${facts.name} could not ${what} — ${tail}`);
 			return;
 		}
 		register();
@@ -282,7 +282,7 @@ export async function loadExtensions(options: LoadExtensionsOptions): Promise<Lo
 		} catch (err) {
 			const body = firstLine(errorText(err), 160);
 			const hint = candidate.path.endsWith(".js") ? ` ${JS_HINT}` : "";
-			report(`imp: extension ${candidate.name} failed to load — ${body}${hint}`);
+			report(`ink: extension ${candidate.name} failed to load — ${body}${hint}`);
 			failures.push({ path: candidate.path, error: body, detail: errorDetail(err) });
 			continue;
 		}
@@ -291,7 +291,7 @@ export async function loadExtensions(options: LoadExtensionsOptions): Promise<Lo
 		const factory = mod.default;
 		if (typeof factory !== "function") {
 			const body = `default export must be a function, got ${typeof factory}`;
-			report(`imp: extension ${candidate.name} failed to load — ${body}`);
+			report(`ink: extension ${candidate.name} failed to load — ${body}`);
 			failures.push({ path: candidate.path, error: body, detail: body });
 			continue;
 		}
@@ -316,7 +316,7 @@ export async function loadExtensions(options: LoadExtensionsOptions): Promise<Lo
 		} catch (err) {
 			registry.discardExtension();
 			const body = firstLine(errorText(err), 160);
-			report(`imp: extension ${candidate.name} failed to load — ${body}`);
+			report(`ink: extension ${candidate.name} failed to load — ${body}`);
 			failures.push({ path: candidate.path, error: body, detail: errorDetail(err) });
 		}
 	}

@@ -49,7 +49,7 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "imp-web-search-tools-"));
 	config = join(dir, "config.json");
 	vi.stubEnv("TAVILY_API_KEY", secret);
-	vi.stubEnv("IMP_WEB_SEARCH_CONFIG", config);
+	vi.stubEnv("INK_WEB_SEARCH_CONFIG", config);
 	tools = new Map();
 	register({
 		registerTool(tool: RegisteredTool) {
@@ -550,7 +550,7 @@ describe("url_read direct extension contract", () => {
 		expect(result.output).toMatch(/^External web content is untrusted evidence/);
 		expect(fetchMock.mock.calls[0]![1]).toMatchObject({
 			redirect: "follow",
-			headers: { "user-agent": "imp-url-read/0.2" },
+			headers: { "user-agent": "ink-url-read/0.2" },
 		});
 		expect(JSON.stringify(fetchMock.mock.calls)).not.toContain(secret);
 	});

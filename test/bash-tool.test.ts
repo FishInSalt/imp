@@ -3,6 +3,10 @@
  * Real process trees — no child_process mocks.
  */
 
+import { existsSync } from "node:fs";
+import { mkdtemp, rmdir, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBashTool } from "../src/core/tools/bash.js";
 
@@ -80,8 +84,8 @@ describe("#bash-abort: process-group kill + exit/idle wait", () => {
 		const tool = createBashTool();
 		const t0 = Date.now();
 		// The shell exits immediately; the escaped grandchild holds the pipes
-		// forever but writes nothing → the 100ms idle grace must release us.
-		const result = (await execute(tool, `${ESCAPE} sleep 60 & disown; echo done`)) as {
+		// silently for at most 5s → the 100ms idle grace must release us first.
+		const result = (await execute(tool, `${ESCAPE} sleep 5 & disown; echo done`)) as {
 			output: string;
 		};
 		expect(result.output).toContain("done");
@@ -104,32 +108,66 @@ describe("#bash-abort: process-group kill + exit/idle wait", () => {
 	}, 10000);
 
 	it("4c. continuously-writing escapee + abort → immediate finalize (abort-after-exit window)", async () => {
-		const tool = createBashTool();
-		const controller = new AbortController();
-		// Parent exits fast; the escapee writes forever. Abort lands WELL
-		// after the parent's exit — the wait must finalize at abort time, not
-		// wait out the 2000ms cap (design D2 invariant, round-2 review F2).
-		const pending = execute(
-			tool,
-			`${ESCAPE} sh -c 'while :; do echo spam; sleep 0.05; done' & sleep 0.3; echo parent-done`,
-			controller.signal,
-		);
-		await sleep(900); // parent long gone; idle timer re-arming under spam
-		const t0 = Date.now();
-		controller.abort();
-		const result = (await Promise.race([
-			pending,
-			sleep(1500).then(() => new Error("TOOL NEVER SETTLED") as unknown as { output: string }),
-		])) as { output: string };
-		expect(result.output).toContain("command aborted by user");
-		expect(Date.now() - t0).toBeLessThan(600);
-		// cleanup the escapee (it setsid'd out of the group — kill by name)
-		const { exec } = await import("node:child_process");
-		await new Promise<void>((resolve) =>
-			exec("pkill -f 'echo spam' 2>/dev/null; pkill -f 'while :; do echo spam' 2>/dev/null || true", () =>
-				resolve(),
-			),
-		);
+		// Only this worker observes these markers in this test-owned directory.
+		const fixtureDir = await mkdtemp(join(tmpdir(), "ink-bash-escapee-"));
+		const stop = join(fixtureDir, "stop");
+		const stopped = join(fixtureDir, "stopped");
+		const worker = [
+			"import os,time",
+			"deadline = time.monotonic() + 5",
+			"try:",
+			'    while time.monotonic() < deadline and not os.path.exists("stop"):',
+			'        print("spam", flush=True)',
+			"        time.sleep(0.05)",
+			"except BrokenPipeError:",
+			"    pass",
+			"finally:",
+			'    with open("stopped", "w") as marker: marker.write("done")',
+		].join("\n");
+		try {
+			const tool = createBashTool({ cwd: fixtureDir });
+			const controller = new AbortController();
+			// Parent exits at ~0.3s; the escapee writes every 50ms until stopped
+			// (or its 5s crash-safety deadline). Abort at ~0.9s must finalize the
+			// wait, not idle grace or the 2000ms cap (design D2 invariant).
+			const pending = execute(
+				tool,
+				`${ESCAPE} python3 -c '${worker}' & sleep 0.3; echo parent-done; exit 0`,
+				controller.signal,
+			);
+			let settled = false;
+			void pending.then(() => {
+				settled = true;
+			});
+			await sleep(900); // parent long gone; idle timer re-arming under spam
+			expect(settled).toBe(false);
+			const t0 = Date.now();
+			controller.abort();
+			const result = (await Promise.race([
+				pending,
+				sleep(1500).then(() => {
+					throw new Error("TOOL NEVER SETTLED");
+				}),
+			])) as { output: string };
+			expect(Date.now() - t0).toBeLessThan(600);
+			expect(result.output).toContain("command aborted by user");
+			expect(result.output).toContain("parent-done");
+			expect((result.output.match(/^spam$/gm) ?? []).length).toBeGreaterThan(10);
+		} finally {
+			// Cooperative shutdown even on assertion failure; no PID/name matching
+			// or signals. Wait for the worker's acknowledgement before removing
+			// only our two markers and their empty, owned directory.
+			await writeFile(stop, "");
+			const deadline = Date.now() + 6000;
+			while (!existsSync(stopped) && Date.now() < deadline) await sleep(25);
+			try {
+				expect(existsSync(stopped)).toBe(true);
+			} finally {
+				await unlink(stop);
+				if (existsSync(stopped)) await unlink(stopped);
+				await rmdir(fixtureDir);
+			}
+		}
 	}, 10000);
 
 	it("5. normal commands keep full output + exit code (regression guard)", async () => {

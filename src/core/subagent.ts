@@ -208,13 +208,13 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 
 	// Between-turn auto-compaction, mirroring the main loop's onBeforeTurn hook
 	// (runner.runTurnInner): estimate -> shouldCompact -> compact -> splice.
-	// IMP_AUTOCOMPACT=0 disables it exactly like the main loop. Compaction does
+	// INK_AUTOCOMPACT=0 disables it exactly like the main loop. Compaction does
 	// NOT reset the loop's turn counter — it buys context room, not extra
 	// turns. (Overflow recovery below is the deliberate exception: it is a
 	// SECOND runAgentLoop call, so its loop counter starts fresh — #loop-health
 	// removed the child turn wall, so neither counter is bounded; the monitor's
 	// counts span both launches.)
-	const autoCompact = options.autoCompact ?? process.env.IMP_AUTOCOMPACT !== "0";
+	const autoCompact = options.autoCompact ?? process.env.INK_AUTOCOMPACT !== "0";
 	// Summarizer-failure backstop: after 3 consecutive failures compaction is
 	// disabled for the rest of the run (one stderr note) — a persistent auth
 	// failure must not buy 40 silent paid retry calls.
@@ -315,7 +315,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 				compactionDisabled = true;
 				health?.note("compaction-failures", 3, "3 consecutive summarizer failures");
 				process.stderr.write(
-					"imp: child compaction failed 3 times in a row — giving up for this task; the run continues un-compacted\n",
+					"ink: child compaction failed 3 times in a row — giving up for this task; the run continues un-compacted\n",
 				);
 			}
 			return { compacted: false, error: err instanceof Error ? err.message : String(err) };

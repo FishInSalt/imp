@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type AgentMessage, type AssistantBlock, emptyUsage } from "../src/core/messages.js";
 import { clearApiKey, saveApiKey } from "../src/provider/auth-store.js";
 import { CATALOG_FAMILIES, loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
@@ -95,7 +95,7 @@ afterAll(async () => {
 });
 
 const envBackup: Array<[string, string | undefined]> = [];
-const savedCatalogPath = process.env.IMP_CATALOG_PATH;
+const savedCatalogPath = process.env.INK_CATALOG_PATH;
 function setEnv(name: string, value: string | undefined): void {
 	envBackup.push([name, process.env[name]]);
 	if (value === undefined) delete process.env[name];
@@ -106,10 +106,11 @@ afterEach(() => {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
 	}
-	if (savedCatalogPath === undefined) delete process.env.IMP_CATALOG_PATH;
-	else process.env.IMP_CATALOG_PATH = savedCatalogPath;
+	if (savedCatalogPath === undefined) delete process.env.INK_CATALOG_PATH;
+	else process.env.INK_CATALOG_PATH = savedCatalogPath;
 	resetCatalogForTest(); // the disk overlay must not leak into the next test
 	resetDiscoveryCacheForTest();
+	vi.unstubAllGlobals();
 	nextFrames = null;
 	nextStatus = null;
 	nextModels = null;
@@ -119,12 +120,12 @@ afterEach(() => {
 /** Disk-inject a catalog overlay for one family (the model-catalog.test.ts
  *  pattern — there is no direct overlay API by design). */
 function overlayCatalog(family: string, models: Record<string, object>): void {
-	if (process.env.IMP_CATALOG_PATH === undefined) {
-		process.env.IMP_CATALOG_PATH = path.join(tmpdir(), `imp-ms-catalog-${Date.now()}.json`);
-		envBackup.push(["IMP_CATALOG_PATH", undefined]);
+	if (process.env.INK_CATALOG_PATH === undefined) {
+		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `imp-ms-catalog-${Date.now()}.json`);
+		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(
-		process.env.IMP_CATALOG_PATH as string,
+		process.env.INK_CATALOG_PATH as string,
 		JSON.stringify({ version: 1, providers: { [family]: { models, checkedAt: Date.now() } } }),
 		"utf-8",
 	);
@@ -203,7 +204,7 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 	it("2. key resolution: stored > env, per-family isolation, one env configures both; no-key names MOONSHOT_API_KEY only", async () => {
 		const dir = await mkdtemp(path.join(tmpdir(), "imp-ms-"));
 		const authPath = path.join(dir, "auth.json");
-		setEnv("IMP_AUTH_PATH", authPath);
+		setEnv("INK_AUTH_PATH", authPath);
 		setEnv("MOONSHOT_API_KEY", "sk-env-moonshot");
 		setEnv("OPENAI_API_KEY", "sk-env-openai");
 		expect(moonshotApiKey()).toBe("sk-env-moonshot");
@@ -279,7 +280,7 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 		expect(captured.at(-1)?.thinking).toEqual({ type: "enabled" });
 		expect(captured.at(-1)?.reasoning_effort).toBeUndefined();
 		// off:null — "off" clamps to minimal (never a disabled attempt, the
-		// docs forbid it and imp never silently disables)
+		// docs forbid it and Ink never silently disables)
 		await collect(provider.stream(REQ("kimi-k2.7-code", "off")));
 		expect(captured.at(-1)?.thinking).toEqual({ type: "enabled" });
 		// negative space: no level at all → neither field (pi else-if fall-through)
@@ -489,17 +490,37 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 	});
 
 	it("5. discovery: unreachable/401 default → seeds; redirect + unreachable → null; success parses the OpenAI shape", async () => {
+		resetDiscoveryCacheForTest();
+		const fetchMock = vi
+			.fn<typeof fetch>()
+			.mockRejectedValue(new Error("offline fixture"))
+			.mockRejectedValueOnce(new Error("offline fixture"))
+			.mockResolvedValueOnce(new Response('{"error":{"message":"bad key"}}', { status: 401 }));
+		vi.stubGlobal("fetch", fetchMock);
 		setEnv("MOONSHOT_API_KEY", "sk-test");
 		delete process.env.MOONSHOT_BASE_URL;
 		delete process.env.MOONSHOT_CN_BASE_URL;
-		// default endpoints reject the bogus key (or are unreachable) — seeds are the floor
+		// Simulated offline .ai endpoint — seeds are the floor without any real network access.
 		expect(await discoverModels("moonshotai")).toEqual([...MOONSHOT_SEED_MODELS]);
+		expect(fetchMock).toHaveBeenNthCalledWith(
+			1,
+			`${MOONSHOT_DEFAULT_BASE_URL}/models`,
+			expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer sk-test" }) }),
+		);
 		// P2-7: the shared env var marks BOTH configured; a key that belongs
 		// to the other platform 401s into the seeds — never an error
 		expect(await discoverModels("moonshotai-cn")).toEqual([...MOONSHOT_SEED_MODELS]);
+		expect(fetchMock).toHaveBeenNthCalledWith(
+			2,
+			`${MOONSHOT_CN_DEFAULT_BASE_URL}/models`,
+			expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer sk-test" }) }),
+		);
 		setEnv("MOONSHOT_BASE_URL", "http://127.0.0.1:1"); // redirected + unreachable
 		expect(await discoverModels("moonshotai")).toBeNull(); // no invented ids
-		// success path against the local server
+		expect(fetchMock).toHaveBeenNthCalledWith(3, "http://127.0.0.1:1/models", expect.any(Object));
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		// Restore the guarded fetch for the success path against the local server.
+		vi.unstubAllGlobals();
 		resetDiscoveryCacheForTest();
 		setEnv("MOONSHOT_BASE_URL", baseUrl);
 		nextModels = ["kimi-k3", "kimi-k2.6"];

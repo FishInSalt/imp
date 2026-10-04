@@ -10,11 +10,11 @@ import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 let base: string;
 beforeEach(async () => {
 	base = mkdtempSync(join(tmpdir(), "imp-compaction-wiring-"));
-	vi.stubEnv("IMP_LOG", "0");
-	vi.stubEnv("IMP_CONTEXT_WINDOW", undefined);
-	vi.stubEnv("IMP_KEEP_RECENT", "1");
-	vi.stubEnv("IMP_AUTOCOMPACT", "1");
-	vi.stubEnv("IMP_CATALOG_PATH", join(base, "catalog.json"));
+	vi.stubEnv("INK_LOG", "0");
+	vi.stubEnv("INK_CONTEXT_WINDOW", undefined);
+	vi.stubEnv("INK_KEEP_RECENT", "1");
+	vi.stubEnv("INK_AUTOCOMPACT", "1");
+	vi.stubEnv("INK_CATALOG_PATH", join(base, "catalog.json"));
 	vi.resetModules();
 	writeFileSync(
 		join(base, "catalog.json"),

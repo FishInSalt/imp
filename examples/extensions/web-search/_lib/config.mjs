@@ -25,11 +25,11 @@ export function resolveApiKey() {
 	const envKey = process.env.TAVILY_API_KEY?.trim();
 	if (envKey) return envKey;
 
-	const override = process.env.IMP_WEB_SEARCH_CONFIG;
+	const override = process.env.INK_WEB_SEARCH_CONFIG;
 	if (override !== undefined && (!isAbsolute(override) || override.includes("\0"))) {
-		throw failure("IMP_WEB_SEARCH_CONFIG must be an absolute file path without shell expansion");
+		throw failure("INK_WEB_SEARCH_CONFIG must be an absolute file path without shell expansion");
 	}
-	const path = override ?? join(homedir(), ".imp", "web-search", "config.json");
+	const path = override ?? join(homedir(), ".ink", "web-search", "config.json");
 	if (typeof constants.O_NOFOLLOW !== "number" || constants.O_NOFOLLOW === 0) {
 		throw failure("safe config-file access is unavailable on this platform; use TAVILY_API_KEY");
 	}

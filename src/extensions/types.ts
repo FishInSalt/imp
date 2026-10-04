@@ -102,9 +102,9 @@ export interface ConfirmOptions {
  * Anything an extension cannot do with this, it cannot do.
  */
 export interface ExtensionApi {
-	/** Absolute working directory imp was started in. */
+	/** Absolute working directory Ink was started in. */
 	readonly cwd: string;
-	/** imp version string (format.ts VERSION). */
+	/** Ink version string (format.ts VERSION). */
 	readonly version: string;
 	/** Where this extension was discovered: explicit flag, project dir, or global dir. */
 	readonly origin: ExtensionOrigin;

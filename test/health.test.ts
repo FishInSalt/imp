@@ -37,10 +37,11 @@ function end(toolCallId: string, toolName: string, isError = false): AgentEvent 
 }
 
 const envNames = [
-	"IMP_HEALTH",
-	"IMP_HEALTH_REPEAT_TURNS",
-	"IMP_HEALTH_MUTATION_FAILURES",
+	"INK_HEALTH",
+	"INK_HEALTH_REPEAT_TURNS",
+	"INK_HEALTH_MUTATION_FAILURES",
 	"IMP_HEALTH_TOOL_OPEN_MS",
+	"INK_HEALTH_TOOL_OPEN_MS",
 ];
 const savedEnv = new Map<string, string | undefined>();
 
@@ -256,7 +257,7 @@ describe("facts contract and lifecycle", () => {
 
 describe("thresholds and env", () => {
 	it("explicit thresholds win; env overrides apply when no explicit value is given", () => {
-		process.env.IMP_HEALTH_REPEAT_TURNS = "2";
+		process.env.INK_HEALTH_REPEAT_TURNS = "2";
 		const fromEnv = createLoopHealth();
 		fromEnv.observe(turn(0, [{ name: "bash", args: { command: "x" } }]));
 		fromEnv.observe(turn(1, [{ name: "bash", args: { command: "x" } }]));
@@ -265,37 +266,40 @@ describe("thresholds and env", () => {
 		const explicit = createLoopHealth({ thresholds: { repeatTurns: 4 } });
 		for (let i = 0; i < 3; i++) explicit.observe(turn(i, [{ name: "bash", args: { command: "x" } }]));
 		expect(explicit.signals()).toHaveLength(0);
-		delete process.env.IMP_HEALTH_REPEAT_TURNS;
+		delete process.env.INK_HEALTH_REPEAT_TURNS;
 	});
 
-	it("malformed env values fall back with the envInt warning; IMP_HEALTH=0 disables at the call site", () => {
+	it("malformed env values fall back with the envInt warning; INK_HEALTH=0 disables at the call site", () => {
 		const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		process.env.IMP_HEALTH_REPEAT_TURNS = "not-a-number";
+		process.env.INK_HEALTH_REPEAT_TURNS = "not-a-number";
 		const monitor = createLoopHealth();
 		for (let i = 0; i < 4; i++) monitor.observe(turn(i, [{ name: "bash", args: { command: "x" } }]));
 		expect(monitor.signals()).toHaveLength(0); // default 5 not reached
-		expect(warning).toHaveBeenCalledWith(expect.stringContaining("IMP_HEALTH_REPEAT_TURNS"));
+		expect(warning).toHaveBeenCalledWith(expect.stringContaining("INK_HEALTH_REPEAT_TURNS"));
 		warning.mockRestore();
 
-		process.env.IMP_HEALTH = "0";
+		process.env.INK_HEALTH = "0";
 		expect(healthEnabled()).toBe(false);
-		delete process.env.IMP_HEALTH;
+		delete process.env.INK_HEALTH;
 		expect(healthEnabled()).toBe(true);
 	});
 
-	it("the removed IMP_HEALTH_TOOL_OPEN_MS is ignored (no env read, no warning)", () => {
-		const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		process.env.IMP_HEALTH_TOOL_OPEN_MS = "not-a-number";
-		try {
-			const monitor = createLoopHealth();
-			monitor.note("compaction-failures", 3, "x");
-			expect(monitor.signals()).toHaveLength(1);
-			expect(warning).not.toHaveBeenCalled();
-			expect("toolOpenMs" in DEFAULT_HEALTH_THRESHOLDS).toBe(false);
-		} finally {
-			warning.mockRestore();
-		}
-	});
+	it.each(["IMP_HEALTH_TOOL_OPEN_MS", "INK_HEALTH_TOOL_OPEN_MS"])(
+		"the removed %s is ignored (no env read, no warning)",
+		(name) => {
+			const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			process.env[name] = "not-a-number";
+			try {
+				const monitor = createLoopHealth();
+				monitor.note("compaction-failures", 3, "x");
+				expect(monitor.signals()).toHaveLength(1);
+				expect(warning).not.toHaveBeenCalled();
+				expect("toolOpenMs" in DEFAULT_HEALTH_THRESHOLDS).toBe(false);
+			} finally {
+				warning.mockRestore();
+			}
+		},
+	);
 
 	it("healthSignalText renders the pinned human shapes", () => {
 		expect(
@@ -362,7 +366,13 @@ describe("removal sweep (design §6 item 16)", () => {
 		const { readdirSync, readFileSync } = await import("node:fs");
 		// Producer tokens only — the string "tool-open" itself stays legal in the
 		// legacy read-only arms (HealthCode, healthSignalText).
-		const tokens = ["toolOpenMs", "onToolStart", "openTimers", "IMP_HEALTH_TOOL_OPEN_MS"];
+		const tokens = [
+			"toolOpenMs",
+			"onToolStart",
+			"openTimers",
+			"IMP_HEALTH_TOOL_OPEN_MS",
+			"INK_HEALTH_TOOL_OPEN_MS",
+		];
 		const hits: string[] = [];
 		const walk = (dir: URL): void => {
 			for (const entry of readdirSync(dir, { withFileTypes: true })) {

@@ -52,7 +52,7 @@ export function checkResumeArgs(args: {
 	if (!args.childSessions) {
 		return {
 			ok: false,
-			message: "child sessions are disabled (IMP_CHILD_SESSIONS=0) — resume needs a persisted transcript",
+			message: "child sessions are disabled (INK_CHILD_SESSIONS=0) — resume needs a persisted transcript",
 		};
 	}
 	if (!args.hasParentSession) {
@@ -129,7 +129,7 @@ export function lifetimeUsageLine(
 
 /** §6.3 synthetic-result text. Never claims completion; isError is true. */
 export const REPAIR_RESULT_MARKER =
-	"[imp] this tool call was interrupted before a result was recorded — the outcome is unknown; it may have partially executed. Re-inspect or re-run it before relying on its effects.";
+	"[ink] this tool call was interrupted before a result was recorded — the outcome is unknown; it may have partially executed. Re-inspect or re-run it before relying on its effects.";
 
 export type ContinuationHistory =
 	| { ok: true; messages: AgentMessage[]; compactionBoundary: number; repairs: string[] }

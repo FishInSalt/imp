@@ -1,9 +1,9 @@
 /**
  * Settings (#thinking-levels → M15 #settings-panel): two scopes with deep
- * merge, keyed to the settings imp actually consumes.
+ * merge, keyed to the settings Ink actually consumes.
  *
- *   global  ~/.imp/settings.json
- *   project <cwd>/.imp/settings.json   (loads ONLY when the project passes
+ *   global  ~/.ink/settings.json
+ *   project <cwd>/.ink/settings.json   (loads ONLY when the project passes
  *                                       the M8 trust gate — a cloned repo
  *                                       must not grow settings that
  *                                       redirect the model)
@@ -24,12 +24,12 @@ import type { ThinkingLevel } from "../provider/thinking.js";
 
 export type QueueMode = "all" | "one-at-a-time";
 
-export interface ImpSettings {
-	/** Startup model when -m/IMP_MODEL is absent (M15; env still wins). */
+export interface InkSettings {
+	/** Startup model when -m/INK_MODEL is absent (M15; env still wins). */
 	defaultModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
 	hideThinkingBlock?: boolean;
-	/** Auto-compaction gate (M15; IMP_AUTOCOMPACT=0 still wins). Default true. */
+	/** Auto-compaction gate (M15; INK_AUTOCOMPACT=0 still wins). Default true. */
 	autoCompact?: boolean;
 	/** M12 skills: extra skill files/directories, settings tier (a bare string
 	 *  is coerced to a one-element array; non-string entries are dropped
@@ -65,30 +65,30 @@ export interface ImpSettings {
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	/** /tree batch B: skip the "summarize the left branch?" ask — the picker
 	 *  flow navigates straight to no-summary (pi's branchSummary.skipPrompt,
-	 *  default false). Orthogonal to IMP_BRANCH_SUMMARY=0: the env var is the
+	 *  default false). Orthogonal to INK_BRANCH_SUMMARY=0: the env var is the
 	 *  hard off (no summary code path at all, numbered path included);
 	 *  skipPrompt only removes one interaction. */
 	branchSummary?: { skipPrompt?: boolean };
 }
 
-/** The global settings file path (IMP_SETTINGS_PATH overrides — hermetic tests). */
+/** The global settings file path (INK_SETTINGS_PATH overrides — hermetic tests). */
 export function settingsFilePath(override?: string): string {
-	return override ?? process.env.IMP_SETTINGS_PATH ?? join(homedir(), ".imp", "settings.json");
+	return override ?? process.env.INK_SETTINGS_PATH ?? join(homedir(), ".ink", "settings.json");
 }
 
 /** The project settings file path for a working directory. */
 export function projectSettingsPath(cwd: string): string {
-	return join(cwd, ".imp", "settings.json");
+	return join(cwd, ".ink", "settings.json");
 }
 
-/** Coerce one parsed JSON object into ImpSettings; unknown keys are
+/** Coerce one parsed JSON object into InkSettings; unknown keys are
  *  DROPPED from this view (they survive in the file — see readRaw). */
 function coerceQueueMode(value: unknown): QueueMode | undefined {
 	return value === "all" || value === "one-at-a-time" ? value : undefined;
 }
 
-function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
-	const out: ImpSettings = {};
+function coerceSettings(parsed: Record<string, unknown>): InkSettings {
+	const out: InkSettings = {};
 	if (typeof parsed.defaultModel === "string" && parsed.defaultModel !== "")
 		out.defaultModel = parsed.defaultModel;
 	if (typeof parsed.defaultThinkingLevel === "string") {
@@ -140,7 +140,7 @@ function coerceSettings(parsed: Record<string, unknown>): ImpSettings {
 }
 
 /** Parse one file into a coerced view; missing/malformed reads as empty. */
-function loadFrom(file: string): ImpSettings {
+function loadFrom(file: string): InkSettings {
 	try {
 		const raw = readFileSync(file, "utf-8");
 		const parsed: unknown = JSON.parse(raw);
@@ -152,21 +152,21 @@ function loadFrom(file: string): ImpSettings {
 }
 
 /** Read the GLOBAL settings; a missing or malformed file reads as empty. */
-export function loadSettings(path?: string): ImpSettings {
+export function loadSettings(path?: string): InkSettings {
 	return loadFrom(settingsFilePath(path));
 }
 
 /** Read the PROJECT settings for a cwd. `allowed` false (trust gate) reads
  *  as empty WITHOUT touching the file — an untrusted repo's settings are
  *  invisible, not merely overridden. */
-export function loadProjectSettings(cwd: string, allowed: boolean, pathOverride?: string): ImpSettings {
+export function loadProjectSettings(cwd: string, allowed: boolean, pathOverride?: string): InkSettings {
 	if (!allowed) return {};
 	return loadFrom(pathOverride ?? projectSettingsPath(cwd));
 }
 
 /** pi's deep merge: project wins, nested objects merge recursively, arrays
  *  replace (never concatenate). */
-function deepMergeSettings(base: ImpSettings, override: ImpSettings): ImpSettings {
+function deepMergeSettings(base: InkSettings, override: InkSettings): InkSettings {
 	const out: Record<string, unknown> = { ...base };
 	for (const [key, value] of Object.entries(override)) {
 		const current = out[key];
@@ -178,12 +178,12 @@ function deepMergeSettings(base: ImpSettings, override: ImpSettings): ImpSetting
 			typeof current === "object" &&
 			!Array.isArray(current)
 		) {
-			out[key] = deepMergeSettings(current as ImpSettings, value);
+			out[key] = deepMergeSettings(current as InkSettings, value);
 		} else {
 			out[key] = value;
 		}
 	}
-	return out as ImpSettings;
+	return out as InkSettings;
 }
 
 /** The merged view both scopes feed: global ← project. */
@@ -192,7 +192,7 @@ export function effectiveSettings(options: {
 	projectAllowed: boolean;
 	globalPath?: string;
 	projectPath?: string;
-}): ImpSettings {
+}): InkSettings {
 	const globalSettings = loadSettings(options.globalPath);
 	const projectSettings = loadProjectSettings(options.cwd, options.projectAllowed, options.projectPath);
 	return deepMergeSettings(globalSettings, projectSettings);
@@ -210,7 +210,7 @@ function readRaw(file: string): Record<string, unknown> {
 }
 
 /** Read-modify-write one scope. Raw merge keeps unknown keys (forward
- *  compat, pi parity — a future imp version reading this file loses
+ *  compat, pi parity — a future Ink version reading this file loses
  *  nothing). Atomic (tmp+rename) + mkdir; best-effort: a write failure
  *  must never take the session down. */
 function saveScope(patch: Record<string, unknown>, file: string): boolean {
@@ -250,14 +250,14 @@ function saveScope(patch: Record<string, unknown>, file: string): boolean {
 
 /** Patch the GLOBAL scope (programmatic persistence target — D18).
  *  Returns false when the write failed (review P2-2). */
-export function saveSettings(patch: Partial<ImpSettings>, path?: string): boolean {
+export function saveSettings(patch: Partial<InkSettings>, path?: string): boolean {
 	return saveScope(patch as Record<string, unknown>, settingsFilePath(path));
 }
 
 /** Patch the PROJECT scope (the /settings command's project writes).
  *  Returns false when the write failed. */
 export function saveProjectSettings(
-	patch: Partial<ImpSettings>,
+	patch: Partial<InkSettings>,
 	cwd: string,
 	pathOverride?: string,
 ): boolean {

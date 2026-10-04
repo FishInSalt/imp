@@ -9,11 +9,11 @@ actually matches. That is *progressive disclosure*: zero-cost until used.
 ## Layout
 
 ```
-<cwd>/.imp/skills/ledger/SKILL.md     project tier (this repo, trust-gated)
+<cwd>/.ink/skills/ledger/SKILL.md     project tier (this repo, trust-gated)
 <cwd>/.agents/skills/…                shared tier (this repo, trust-gated;
                                        also found in ancestor dirs up to the
                                        git root)
-~/.imp/skills/…                       user tier (all your projects)
+~/.ink/skills/…                       user tier (all your projects)
 ~/.agents/skills/…                    user shared tier (all your projects)
 --skill path / settings "skills"      explicit tier (always loads)
 ```
@@ -32,7 +32,7 @@ Body — instructions, optionally referencing files in the same directory.
 Discovery rules (pi parity): a directory containing `SKILL.md` is a skill
 root — its subdirectories are not scanned further (nest them by placing
 each `SKILL.md` in its own leaf). Loose `.md` files count as skills in
-`.imp/skills` roots but not at `.agents/skills` roots (they nest there).
+`.ink/skills` roots but not at `.agents/skills` roots (they nest there).
 Name collisions resolve first-wins; duplicates via symlinks are deduped.
 A skill without a description is skipped with a warning — the description
 is what the model sees, so it is not optional.
@@ -55,19 +55,19 @@ Two ways, by design:
   replays collapse it back to the summary line.
 
 `/help` lists registered skills tagged `[skill]`. Set
-`"enableSkillCommands": false` in `~/.imp/settings.json` to skip command
+`"enableSkillCommands": false` in `~/.ink/settings.json` to skip command
 registration (the catalog stays).
 
 ## CLI
 
 ```
-imp --skill path/to/SKILL.md     # explicit skill (repeatable)
-imp --skill path/to/skills-dir   # scan a tree per the rules above
-imp --no-skills                  # skip discovered + settings skills
+ink --skill path/to/SKILL.md     # explicit skill (repeatable)
+ink --skill path/to/skills-dir   # scan a tree per the rules above
+ink --no-skills                  # skip discovered + settings skills
                                   # (explicit --skill paths still load)
 ```
 
-Settings (`~/.imp/settings.json`): `"skills": ["/abs/or/~/path", …]`,
+Settings (`~/.ink/settings.json`): `"skills": ["/abs/or/~/path", …]`,
 `"enableSkillCommands": true|false`.
 
 ## The example
@@ -77,5 +77,5 @@ with a `references/` subdirectory, demonstrating the
 read-on-demand pattern for supporting material:
 
 ```
-cd examples && imp -p --skill skills/ledger "summarize the entry rules"
+cd examples && ink -p --skill skills/ledger "summarize the entry rules"
 ```

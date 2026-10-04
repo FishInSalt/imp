@@ -6,7 +6,7 @@ import path from "node:path";
  *  parity): override beats the agent-native names, agent-native beats the
  *  Claude-compat names. Uppercase .MD variants ride along for
  *  case-insensitive filesystems (Windows checkouts). The GLOBAL file below
- *  deliberately stays AGENTS.md-only — loading ~/.imp/CLAUDE.md too would be
+ *  deliberately stays AGENTS.md-only — loading ~/.ink/CLAUDE.md too would be
  *  a behavior change this batch does not make (design review P3-3). */
 const CONTEXT_FILE_NAMES = [
 	"AGENTS.override.md",
@@ -19,7 +19,7 @@ const CONTEXT_FILE_NAMES = [
 /**
  * Discover context files, pi-style:
  *
- *   1. ~/.imp/AGENTS.md                      (global, first)
+ *   1. ~/.ink/AGENTS.md                      (global, first)
  *   2. every ancestor of cwd, root → cwd     (far to near; nearest wins visually)
  *
  * Each directory contributes AT MOST ONE file — the first candidate that
@@ -29,7 +29,7 @@ const CONTEXT_FILE_NAMES = [
 export function findContextFiles(cwd: string, home: string = os.homedir()): string[] {
 	const files: string[] = [];
 
-	const global = path.join(home, ".imp", "AGENTS.md");
+	const global = path.join(home, ".ink", "AGENTS.md");
 	if (existsSync(global)) files.push(global);
 
 	const ancestors: string[] = [];
@@ -64,13 +64,13 @@ export function loadContextFiles(cwd: string, home: string = os.homedir()): Load
 	if (files.length === 0) return null;
 
 	const sections: Array<{ path: string; content: string }> = [];
-	const globalFile = path.join(home, ".imp", "AGENTS.md");
+	const globalFile = path.join(home, ".ink", "AGENTS.md");
 	for (const file of files) {
 		// Read-failure fall-through (design review P3-4, pi parity): an
 		// unreadable AGENTS.md must not shadow a readable CLAUDE.md — walk the
 		// remaining candidates of the same directory before giving up on it.
 		// The GLOBAL file is exempt (impl review P2-1): its tier is pinned to
-		// AGENTS.md exactly — ~/.imp/CLAUDE.md must not load via the back door.
+		// AGENTS.md exactly — ~/.ink/CLAUDE.md must not load via the back door.
 		const candidates = file === globalFile ? [file] : [file, ...fallbackCandidates(file)];
 		for (const candidate of candidates) {
 			let content: string;

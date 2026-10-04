@@ -41,13 +41,13 @@ import { createRunner, type Runner, type RunnerOptions, resolveRunMode } from ".
 import { resolveShell } from "./tui.js";
 
 // The help text is a single string kept here (top of file); VERSION comes from format.ts.
-// Read lazily (not at module top level) so loadDotEnv() can supply IMP_MODEL first.
+// Read lazily (not at module top level) so loadDotEnv() can supply INK_MODEL first.
 /** #startup-model-resolution (P7): the builtin rung's id — the only rung
  *  that means "nobody asked"; D2 may resolve it (provider/startup-model.ts).
  *  Removing this rung is a separate, budgeted milestone (design §8). */
 const BUILTIN_MODEL = "claude-sonnet-4-5";
 
-// M15 precedence: IMP_MODEL > global settings defaultModel > project settings
+// M15 precedence: INK_MODEL > global settings defaultModel > project settings
 // defaultModel (ONLY when the trust store already says trusted — parse time
 // precedes the interactive trust resolution, and "unknown" must be the
 // conservative skip) > builtin.
@@ -55,9 +55,9 @@ const BUILTIN_MODEL = "claude-sonnet-4-5";
 // `builtin` tolerates resolution; every configured rung is a user decision
 // (P5: explicit sources are never overridden).
 const requestedModel = (argv: string[] = []): { model: string; source: ModelSource } => {
-	const env = process.env.IMP_MODEL;
+	const env = process.env.INK_MODEL;
 	if (env !== undefined) return { model: env, source: "env" };
-	// --no-trust refuses this directory's .imp/ resources (review P1-3): the
+	// --no-trust refuses this directory's .ink/ resources (review P1-3): the
 	// project settings file must not seed the model the flag just refused —
 	// the parse-time default runs before trustDecision is known, so the flag
 	// is pre-scanned from raw argv.
@@ -87,14 +87,14 @@ function projectDefaultModelIfTrusted(): string | undefined {
 	}
 }
 
-/** IMP_THINKING startup level; invalid values are ignored with a notice
+/** INK_THINKING startup level; invalid values are ignored with a notice
  *  (unlike --thinking, which errors — a typo in a shell profile should not
  *  block the session). */
 function envThinking(): import("./provider/thinking.js").ThinkingLevel | undefined {
-	const raw = process.env.IMP_THINKING;
+	const raw = process.env.INK_THINKING;
 	if (raw === undefined) return undefined;
 	if ((THINKING_LEVELS as readonly string[]).includes(raw)) return raw as CliOptions["thinking"];
-	process.stderr.write(`imp: ignoring invalid IMP_THINKING="${raw}" (not a thinking level)\n`);
+	process.stderr.write(`ink: ignoring invalid INK_THINKING="${raw}" (not a thinking level)\n`);
 	return undefined;
 }
 
@@ -108,7 +108,7 @@ interface CliOptions {
 	modelSource: ModelSource;
 	/** True only for -m/--model; defaults must not override a saved session model. */
 	modelExplicit: boolean;
-	/** --thinking <level> / IMP_THINKING (#thinking-levels, pi parity).
+	/** --thinking <level> / INK_THINKING (#thinking-levels, pi parity).
 	 *  UNDEFINED when neither is set — the runner then applies the settings
 	 *  default, then pi's "medium" (a defined "off" sentinel here would make
 	 *  those unreachable; pi's main.ts:422 likewise only sets on --thinking). */
@@ -137,27 +137,27 @@ interface CliOptions {
 	version: boolean;
 }
 
-const HELP = `imp ${VERSION} — a small coding agent
+const HELP = `Ink ${VERSION} — an open-source AI assistant and agent harness for the terminal
 
 Usage:
-  imp -p "<prompt>"        Run a task in print mode (streams the response, then exits)
-  imp "<prompt>"           Same as -p
-  imp @file.png "prompt"   Attach files to the prompt: text files embed as
+  ink -p "<prompt>"        Run a task in print mode (streams the response, then exits)
+  ink "<prompt>"           Same as -p
+  ink @file.png "prompt"   Attach files to the prompt: text files embed as
                            <file> blocks, images attach to the first message
-  imp                     Start an interactive session (REPL)
-  imp sessions             List saved sessions for this directory
-  imp login                Log in to OpenAI (ChatGPT plan) — device-code OAuth
-  imp logout               Remove the stored OpenAI (ChatGPT plan) credential;
+  ink                     Start an interactive session (REPL)
+  ink sessions             List saved sessions for this directory
+  ink login                Log in to OpenAI (ChatGPT plan) — device-code OAuth
+  ink logout               Remove the stored OpenAI (ChatGPT plan) credential;
                            keys saved by /login stay
 
 Options:
   -p, --print <prompt>     Prompt to run
-  -m, --model <id>         Model id (default: $IMP_MODEL or claude-sonnet-4-5)
+  -m, --model <id>         Model id (default: $INK_MODEL or claude-sonnet-4-5)
       --max-tokens <n>     Max output tokens per turn (default: model catalog limit; ${DEFAULT_MAX_TOKENS} when unknown)
       --max-turns <n>      Max agent turns per run (default: 100 for print/piped runs; interactive TTY sessions are uncapped)
   -nc, --no-context-files  Skip AGENTS.md discovery
   -c, --continue           Continue the most recent session in this directory
-  -r, --resume <id>        Resume a session by id (prefix ok) — see \`imp sessions\`
+  -r, --resume <id>        Resume a session by id (prefix ok) — see \`ink sessions\`
       --no-session         Do not persist this run (also disables auto-compaction)
   -e, --extension <path>   Load an extension (.mjs file, or a dir with index.mjs; repeatable;
                            explicit -e paths load regardless of the trust gate)
@@ -166,8 +166,8 @@ Options:
                            tree; repeatable; explicit --skill paths load regardless of --no-skills)
       --no-skills          Skip skill discovery (user + project + settings) — explicit
                            --skill paths still load
-      --trust              Trust this directory's .imp/ resources, when present, and record it
-      --no-trust           Refuse this directory's .imp/ resources, when present, and record it
+      --trust              Trust this directory's .ink/ resources, when present, and record it
+      --no-trust           Refuse this directory's .ink/ resources, when present, and record it
   -h, --help               Show this help
   -v, --version            Show version
 
@@ -175,53 +175,53 @@ Environment:
   ANTHROPIC_API_KEY          Anthropic API key
   ANTHROPIC_AUTH_TOKEN       Bearer token for Anthropic-compatible services
   ANTHROPIC_BASE_URL         Endpoint override (Anthropic-compatible services)
-  IMP_MODEL                  Default model id
-  IMP_CONTEXT_WINDOW         Model context window for auto-compaction (default: 131072)
-  IMP_AUTOCOMPACT=0          Disable auto-compaction
+  INK_MODEL                  Default model id
+  INK_CONTEXT_WINDOW         Model context window for auto-compaction (default: 131072)
+  INK_AUTOCOMPACT=0          Disable auto-compaction
 
   Z.ai GLM Coding Plan example (the official GLM path, pi parity):
     export ZAI_API_KEY=<your z.ai key>
-    export IMP_MODEL=zai/glm-5.3
-  (A bare glm-* id routes there unconditionally; without a credential imp
+    export INK_MODEL=zai/glm-5.3
+  (A bare glm-* id routes there unconditionally; without a credential Ink
   prints a sign-in pointer — /login zai — instead of silently connecting
   elsewhere. anthropic/glm-* forces the compat endpoint explicitly.)
 
   DeepSeek official API:
     export DEEPSEEK_API_KEY=<your deepseek key>
-    export IMP_MODEL=deepseek/deepseek-v4-pro
+    export INK_MODEL=deepseek/deepseek-v4-pro
   (or /login deepseek in the REPL — the stored key wins over the env var)
 
   Moonshot / Kimi official API (open platform):
     export MOONSHOT_API_KEY=<your kimi key>
-    export IMP_MODEL=moonshotai/kimi-k3       # overseas: api.moonshot.ai/v1
-    export IMP_MODEL=moonshotai-cn/kimi-k3    # China: api.moonshot.cn/v1
+    export INK_MODEL=moonshotai/kimi-k3       # overseas: api.moonshot.ai/v1
+    export INK_MODEL=moonshotai-cn/kimi-k3    # China: api.moonshot.cn/v1
   (or /login moonshotai / /login moonshotai-cn in the REPL — a stored key
   wins; both families read MOONSHOT_API_KEY)
 
   OpenAI ChatGPT (Codex) subscription plan — OAuth login, then:
-    imp login
-    imp -m openai-codex/gpt-5.5
+    ink login
+    ink -m openai-codex/gpt-5.5
 
   OpenAI and OpenAI-compatible providers (model id prefix routes):
     export OPENAI_API_KEY=<key>
-    export IMP_MODEL=openai/gpt-5.2
+    export INK_MODEL=openai/gpt-5.2
     # any compatible endpoint (OpenRouter, MiniMax, ...; DeepSeek and
     # Moonshot/Kimi have their own families above):
     export OPENAI_BASE_URL=<your compat endpoint>/v1
-    export IMP_MODEL=openai/<model id>
+    export INK_MODEL=openai/<model id>
     # Z.ai via its OpenAI-mode endpoint:
     export OPENAI_API_KEY=<your z.ai key>
     export OPENAI_BASE_URL=https://api.z.ai/api/paas/v4
-    export IMP_MODEL=openai/glm-4.6
+    export INK_MODEL=openai/glm-4.6
 
 Examples:
-  imp -p "List the .ts files here and count their total lines"
-  imp -p "Read src/cli.ts and fix the bug in argument parsing"
-  imp -p "..." -m glm-4.6 --thinking medium
+  ink -p "List the .ts files here and count their total lines"
+  ink -p "Read src/cli.ts and fix the bug in argument parsing"
+  ink -p "..." -m glm-4.6 --thinking medium
 
 Thinking levels (#thinking-levels): off, minimal, low, medium, high on
 models with a thinking knob (claude budget, gpt-5*/o-series effort, GLM
-on/off, codex effort). Set with --thinking <level> or IMP_THINKING, in
+on/off, codex effort). Set with --thinking <level> or INK_THINKING, in
 a session with /think <level> (bare /think or Shift+Tab cycles).
 `;
 function parseArgs(argv: string[]): CliOptions {
@@ -356,7 +356,7 @@ function parseArgs(argv: string[]): CliOptions {
 		}
 	}
 	// M13 batch 2: @path positionals peel off BEFORE prompt assembly (pi
-	// args.ts) — `imp @shot.png what is this` attaches the image and keeps
+	// args.ts) — `ink @shot.png what is this` attaches the image and keeps
 	// the question as the prompt. A bare `@file` with no message is still a
 	// defined prompt (promptDefined).
 	const rest: string[] = [];
@@ -372,7 +372,7 @@ function parseArgs(argv: string[]): CliOptions {
 	return opts;
 }
 
-/** `imp login` — device-code OAuth for the OpenAI (ChatGPT plan) credential. */
+/** `ink login` — device-code OAuth for the OpenAI (ChatGPT plan) credential. */
 async function runLogin(): Promise<void> {
 	const controller = new AbortController();
 	process.on("SIGINT", () => controller.abort());
@@ -389,16 +389,16 @@ async function runLogin(): Promise<void> {
 			},
 		});
 		process.stdout.write(
-			`Logged in. The credential is stored in ~/.imp/auth.json\n` +
-				`Use OpenAI models with:  imp -m openai-codex/gpt-5.5\n`,
+			`Logged in. The credential is stored in ~/.ink/auth.json\n` +
+				`Use OpenAI models with:  ink -m openai-codex/gpt-5.5\n`,
 		);
 	} catch (err) {
-		process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+		process.stderr.write(red(`ink: ${err instanceof Error ? err.message : String(err)}\n`));
 		process.exitCode = 1;
 	}
 }
 
-/** `imp sessions` — list saved sessions for this directory. */
+/** `ink sessions` — list saved sessions for this directory. */
 function printSessionList(): void {
 	const sessions = listSessions(process.cwd());
 	if (sessions.length === 0) {
@@ -412,7 +412,7 @@ function printSessionList(): void {
 		);
 	}
 	process.stdout.write(
-		dim(`\nResume with: imp -c            (most recent)\n             imp -r <id>       (specific)\n`),
+		dim(`\nResume with: ink -c            (most recent)\n             ink -r <id>       (specific)\n`),
 	);
 }
 
@@ -429,10 +429,10 @@ async function main(): Promise<void> {
 			process.exit(128 + (sig === "SIGTERM" ? 15 : 1));
 		});
 	}
-	await loadDotEnv(); // loads .env from the imp installation root; real env wins
+	await loadDotEnv(); // loads .env from the Ink installation root; real env wins
 	// M14 (#model-catalog): the pi.dev disk cache loads BEFORE any model
 	// resolution (the Runner constructor reads contextWindowFor) and after
-	// .env (IMP_CATALOG_BASE_URL/IMP_CATALOG_PATH may live there). Quick-exit
+	// .env (INK_CATALOG_BASE_URL/INK_CATALOG_PATH may live there). Quick-exit
 	// paths below never touch the network; the stale-cache refresh kick lives
 	// in the run modes.
 	loadCatalogCache();
@@ -452,7 +452,7 @@ async function main(): Promise<void> {
 	}
 	const opts = parseArgs(argv);
 	if (opts.version) {
-		process.stdout.write(`imp ${VERSION}\n`);
+		process.stdout.write(`Ink ${VERSION}\n`);
 		return;
 	}
 	if (opts.help) {
@@ -478,7 +478,7 @@ async function main(): Promise<void> {
 		// #no-turn-cap (interactive TTY only): a supervised REPL — the user
 		// can Ctrl+C at any time and auto-compaction bounds context growth, so
 		// a turn cap only kills honest long tasks mid-flight (pi parity: pi's
-		// loop has no turn counter at all). Piped/scripted stdin (`imp < f.txt`)
+		// loop has no turn counter at all). Piped/scripted stdin (`ink < f.txt`)
 		// is UNsupervised — it keeps the default cap like print mode (review
 		// P1). An EXPLICIT --max-turns still wins everywhere — a user decision.
 		const interactiveTty = process.stdin.isTTY === true;
@@ -535,7 +535,7 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
 	// M9: interactive sessions render through the pi-tui shell — the
 	// Renderer's bytes feed a TranscriptSink component instead of stdout.
-	// IMP_REPL=legacy selects the pre-M9 readline path byte-for-byte.
+	// INK_REPL=legacy selects the pre-M9 readline path byte-for-byte.
 	const shell = interactive ? resolveShell() : "legacy";
 	const transcript = shell === "tui" ? new TranscriptSink() : undefined;
 	const renderer = new Renderer({
@@ -702,10 +702,10 @@ async function runInteractive(opts: CliOptions, argv: string[]): Promise<void> {
  *  unconfigured — callers treat that as "module inert" (D4).
  *  M19 batch 0: project-tier config rides the M8 trust gate (the same
  *  session-resolved `projectSettingsAllowed` bit as extensions/settings).
- *  IMP_MCP=0 is the env escape hatch (mirrors IMP_AUTOCOMPACT) for CI and
+ *  INK_MCP=0 is the env escape hatch (mirrors INK_AUTOCOMPACT) for CI and
  *  quick diagnostics. */
 function createMcpSetup(renderer: Renderer, runner: Runner): McpManager | undefined {
-	if (process.env.IMP_MCP === "0") return undefined;
+	if (process.env.INK_MCP === "0") return undefined;
 	const settings = runner.effectiveSettings();
 	if (settings.mcp?.enabled === false) return undefined;
 	const discovered = discoverMcpConfig({
@@ -756,10 +756,10 @@ function loadSkillSetup(
 	});
 	const max = 5;
 	for (const diagnostic of result.diagnostics.slice(0, max)) {
-		renderer.error(`imp: ${diagnostic.message}`);
+		renderer.error(`ink: ${diagnostic.message}`);
 	}
 	if (result.diagnostics.length > max) {
-		renderer.error(`imp: … +${result.diagnostics.length - max} more skill warnings`);
+		renderer.error(`ink: … +${result.diagnostics.length - max} more skill warnings`);
 	}
 	if (result.skills.length > 0) renderer.note(`▪ skills: ${result.skills.length} loaded`);
 	return { skills: result.skills, enableSkillCommands: settings.enableSkillCommands !== false };
@@ -809,11 +809,11 @@ function printNoModelText(): string {
 	// zai + env-only-moonshot machine would lose the pair from the list.
 	const families = configuredFamilies();
 	if (families.length === 0) {
-		return "no model configured — export <FAMILY>_API_KEY (see `imp --help`) or run /login in an interactive session";
+		return "no model configured — export <FAMILY>_API_KEY (see `ink --help`) or run /login in an interactive session";
 	}
 	const first = LOGIN_TARGETS.find((target) => families.some((family) => family === target.family));
 	const escapeRef = first?.switchHint ?? "<provider/model>";
-	return `no startup model — configured: ${families.join(", ")} — pass -m ${escapeRef} (see \`imp --help\`), or set /settings defaultModel`;
+	return `no startup model — configured: ${families.join(", ")} — pass -m ${escapeRef} (see \`ink --help\`), or set /settings defaultModel`;
 }
 
 /** #fresh-install-hint (D3) + #startup-model-resolution (D2/D6): print-mode
@@ -843,13 +843,13 @@ function printModelUnusable(opts: CliOptions): string | undefined {
 	const target = LOGIN_TARGETS.find((t) => t.family === ref.provider);
 	if (ref.provider === "openai-codex") {
 		return (
-			`${opts.model} (openai-codex) has no credential — run \`imp login\` (ChatGPT plan OAuth), ` +
+			`${opts.model} (openai-codex) has no credential — run \`ink login\` (ChatGPT plan OAuth), ` +
 			`then re-run with -m ${opts.model}`
 		);
 	}
 	if (target === undefined) return undefined; // unknown family — the provider's own error teaches
 	return (
-		`${opts.model} (${ref.provider}) has no credential — export ${target.envVar} (see \`imp --help\`), ` +
+		`${opts.model} (${ref.provider}) has no credential — export ${target.envVar} (see \`ink --help\`), ` +
 		`or start an interactive session and run /login`
 	);
 }
@@ -875,7 +875,7 @@ function runnerOptions(opts: CliOptions, argv: string[], renderer: Renderer): Ru
 }
 
 function reportStartupError(err: unknown): void {
-	process.stderr.write(red(`imp: ${err instanceof Error ? err.message : String(err)}\n`));
+	process.stderr.write(red(`ink: ${err instanceof Error ? err.message : String(err)}\n`));
 	process.exitCode = 1;
 }
 
@@ -910,10 +910,10 @@ async function resolveProjectTrust(
 	const cwd = process.cwd();
 	const resources = trustRequiringResources(cwd, homedir()).filter(
 		(r) =>
-			!(opts.noExtensions && r === ".imp/extensions") && // -ne already refuses that tier
+			!(opts.noExtensions && r === ".ink/extensions") && // -ne already refuses that tier
 			// --no-skills likewise (review A8: "." is the degenerate ancestor entry
 			// when cwd itself sits inside a .agents/skills chain)
-			!(opts.noSkills && (r === ".imp/skills" || r.endsWith(".agents/skills") || r === ".")),
+			!(opts.noSkills && (r === ".ink/skills" || r.endsWith(".agents/skills") || r === ".")),
 	);
 	if (resources.length === 0) return true; // zero friction for plain repos
 	const store = defaultTrustStorePath(homedir());
@@ -960,7 +960,7 @@ async function resolveProjectTrust(
 		if (!trusted) {
 			renderer.note(
 				dim(
-					`▪ trust: recorded “do not trust” for ${cwd} — skipping ${resources.join(", ")} (re-enable with: imp --trust)`,
+					`▪ trust: recorded “do not trust” for ${cwd} — skipping ${resources.join(", ")} (re-enable with: ink --trust)`,
 				),
 			);
 		}
@@ -969,8 +969,8 @@ async function resolveProjectTrust(
 	// print mode / pipes: deny without recording, with the teaching line
 	process.stderr.write(
 		dim(
-			`imp: ${resources.join(", ")} found in an untrusted directory — not loaded. ` +
-				`Review them, then run: imp --trust\n`,
+			`ink: ${resources.join(", ")} found in an untrusted directory — not loaded. ` +
+				`Review them, then run: ink --trust\n`,
 		),
 	);
 	return false;
@@ -1020,7 +1020,7 @@ async function runPrint(opts: CliOptions, argv: string[]): Promise<void> {
 	}
 	const unavailable = printModelUnusable(opts);
 	if (unavailable !== undefined) {
-		process.stderr.write(red(`imp: ${unavailable}\n`));
+		process.stderr.write(red(`ink: ${unavailable}\n`));
 		process.exitCode = 1;
 		return;
 	}

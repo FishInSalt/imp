@@ -2,7 +2,7 @@
 
 - Date: 2026-10-04
 - Revision: r3
-- Status: **APPROVED DESIGN (r3)** — both independent reviewers approved; findings closed. Owner confirmed `ink-agent@0.2.0` and workspace implementation on 2026-10-04. Global migration, installation and publication remain separately gated.
+- Status: **WORKSPACE IMPLEMENTATION VERIFIED** — approved design r3; runtime, isolation, packaging and synthetic cutover helper code reviews closed. Owner confirmed `ink-agent@0.2.0` on 2026-10-04. Acceptance recorded on 2026-10-05. Global migration, installation, live integration and publication remain separately gated.
 - Design branch: `design/ink-rename`
 - Inspected base: `d43f09234bcd40413bca122c4ae1e1412b232242`
 - Product decision: The owner selected **Ink**, with target command **`ink`**.
@@ -209,3 +209,27 @@ Success is a single usable Ink installation with preserved ordinary history and 
 - Documentation verification: 14/14 r2 structure/safety checks and 7/7 r3 sequencing checks passed; `git diff --check` passed. No runtime test/build was run for this documentation-only change.
 
 Owner package/version decisions and external approvals are not replaceable by reviewer approval.
+
+## 10. Workspace implementation acceptance — 2026-10-05
+
+Implementation worktree: `/Users/z/Z/Agent_demo/ink-rename-implementation`, branch `feature/ink-rename`, based on approved design commit `20dad07`. The live checkout remains on `design/ink-rename`, with `imp-agent@0.1.0`; no live source integration or home/global migration was performed.
+
+Independent code-review closures:
+
+- Runtime and compatibility: `52c8f9b8-afe8-4ca1-a020-44997fe33937`, **APPROVE**; preserved schemas/hashes, trust, ordinary history and child refusal.
+- Isolation: `eda83f73-f132-4f38-9ef8-e980befeb198`, **APPROVE** after fixing falsey socket paths, custom DNS/UDP lookup, subprocess package lookup and exit-status masking.
+- Package/release: `44983187-dfda-44c4-b4d8-71aad92f2ec3`, **APPROVE** after exact version-contract and complete tar-stream validation fixes.
+- Concrete runbook design: `e412d5f2-8fdb-4ecf-88d9-d3a7fa0e2641`, r2 **APPROVE** before helper implementation.
+- Synthetic cutover helpers: `d055e038-b5e6-49ab-b23a-7de8f7a749c4`, **APPROVE** after target-ID, group metadata, filesystem link traversal and external file/sidecar fixes.
+- Adjacent test safety: `07d56e76-7cd0-4b1e-b22d-50820186c586`, **APPROVE**; removed pre-existing pattern-based `pkill` cleanup in `test/bash-tool.test.ts`, replacing it with cooperative test-owned markers and a bounded worker lifetime.
+
+Final commands/results on Darwin arm64, Node **25.5.0**, npm **11.8.0**:
+
+- `npm run typecheck`, `npm run lint`, `npm run build`: passed; Biome checked **262 files**.
+- `node test/helpers/check-isolation.mjs`: passed; **0 checkJs diagnostics**, **2 files** checked.
+- `/usr/bin/clang -std=c11 -Wall -Wextra -Werror -fsyntax-only test/helpers/exclusive-directory-rename.c`: passed.
+- `npm test`: **141 test files passed; 3064 tests passed, 1 skipped**. The skip is Linux native filesystem execution unavailable on this Darwin host.
+- `node scripts/package-smoke.mjs --cache-source "$HOME/.npm"`: passed offline, **340 allowed artifact files**, modes, isolated local installation, exact help/version and local npm-exec inference. Existing cache was read-only; writes remained in private scratch.
+- `git diff --check`: passed. `.ink/settings.json` matches the original **26 bytes**; non-root lockfile dependency entries are unchanged. Remaining legacy identifiers are deliberate schema/lease/protocol/history references, not runtime aliases.
+
+Evidence limits: Node 20/24 were not installed locally and CI was not triggered. The existing `@earendil-works/pi-tui@0.82.0` dependency declares a newer Node floor than the package's retained `>=20`; this pre-existing support discrepancy needs actual target-runtime verification, not a compatibility claim from Node 25. Linux, cross-mount, unsupported native-operation and production-path evidence remain unavailable. Synthetic quiescence/activation ledgers do not prove real process shutdown. No model/provider quota, global installation, GitHub/account changes, push or npm publication occurred. See [cutover runbook](ink-cutover-runbook.md) for remaining real-operation approvals.

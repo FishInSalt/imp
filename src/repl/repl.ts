@@ -62,7 +62,7 @@ export interface ReplOptions {
 	interactive?: boolean; // default: stdin && stdout TTY
 	exit?: (code: number) => never; // default process.exit; injected in tests
 	/** Presentation shell for interactive mode. Default: resolveShell()
-	 *  (IMP_REPL=legacy escape hatch); non-interactive is always "legacy". */
+	 *  (INK_REPL=legacy escape hatch); non-interactive is always "legacy". */
 	shell?: ReplShell;
 	/** Required with shell "tui": the sink the Renderer feeds (cli.ts owns it
 	 *  because the Renderer is constructed before runRepl). */
@@ -70,7 +70,7 @@ export interface ReplOptions {
 	/** Test seam: inject a fake Terminal for the TUI shell. */
 	terminal?: Terminal;
 	/** Cross-session input history file for the TUI shell (M11 #4); cli.ts
-	 *  resolves the real ~/.imp path, hermetic runs omit it. */
+	 *  resolves the real ~/.ink path, hermetic runs omit it. */
 	inputHistoryPath?: string;
 	/** Interactive confirm host for extension gates (api.confirm): created by
 	 *  cli.ts before extension loading (which precedes this call) and bound
@@ -112,19 +112,15 @@ export { NO_MODEL_SEGMENT, NO_MODEL_SHORT } from "../runner.js";
  *  quick-reference of the commands people actually reach for, and the
  *  session's identity. Resumed sessions keep the compact banner — the
  *  panel is the "new conversation" moment, not a constant. */
-/** Pixel-block "imp" — glyphs verbatim from the ANSI Shadow FIGlet font
- *  (xero/figlet-fonts "ANSI Shadow.flf", full-width layout; extraction
- *  validated char-for-char against the canonical "hello" render). This
- *  font's lowercase i has NO tittle and no trailing gap (unlike l), and p's
- *  bowl closes one row above the bare descender stem. ██ cells read as
- *  solid pixels; the gradient paints per column. */
-const IMP_LOGO = [
-	"██╗███╗   ███╗██████╗",
-	"██║████╗ ████║██╔══██╗",
-	"██║██╔████╔██║██████╔╝",
-	"██║██║╚██╔╝██║██╔═══╝",
-	"██║██║ ╚═╝ ██║██║",
-	"╚═╝╚═╝     ╚═╝╚═╝",
+/** Pixel-block "INK" in the ANSI Shadow FIGlet style. ██ cells read as
+ *  solid pixels; the existing gradient paints per column. */
+const INK_LOGO = [
+	"██╗███╗   ██╗██╗  ██╗",
+	"██║████╗  ██║██║ ██╔╝",
+	"██║██╔██╗ ██║█████╔╝",
+	"██║██║╚██╗██║██╔═██╗",
+	"██║██║ ╚████║██║  ██╗",
+	"╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝",
 ];
 
 /** Gemini-style horizontal gradient stops: blue → purple → pink. */
@@ -165,14 +161,14 @@ function gradientLine(line: string, ansi: boolean): string {
  *  the session's model. */
 export function welcomeLines(sessionId: string, modelReference: string, ansi: boolean): string[] {
 	return [
-		...IMP_LOGO.map((line) => gradientLine(line, ansi)),
+		...INK_LOGO.map((line) => gradientLine(line, ansi)),
 		"",
 		"Tips for getting started:",
 		"1. Ask questions, edit files, or run commands.",
 		"2. Be specific for the best results.",
 		"3. /help for more information.",
 		"",
-		`imp ${VERSION} · session ${sessionId} · ${modelReference}`,
+		`Ink ${VERSION} · session ${sessionId} · ${modelReference}`,
 	];
 }
 
@@ -182,7 +178,7 @@ function isBangLine(line: string): boolean {
 	return line[0] === "!" && line.slice(1).trim() !== "";
 }
 
-/** imp's COMMANDS + extension commands → pi-tui's autocomplete shape; the
+/** Ink's COMMANDS + extension commands → pi-tui's autocomplete shape; the
  *  panel's description line is "usage — summary" (pi-tui composes them). */
 function autocompleteCommands(
 	extraCommands: readonly RegisteredExtensionCommand[],
@@ -844,7 +840,7 @@ class ReplMachine {
 		// Only steer-mode TYPED lines steer (follow-up lines, md prompts, and
 		// bang entries all hold for the flush — that is the whole point of
 		// alt+enter routing).
-		// M17: the drain mode is read once per run (submitTurn). "all" (imp's
+		// M17: the drain mode is read once per run (submitTurn). "all" (Ink's
 		// default) takes every steer entry at this boundary — batched
 		// supplementary info, delivered complete at the earliest moment;
 		// "one-at-a-time" (pi's default) keeps the old first-entry-only drain.
@@ -875,7 +871,7 @@ class ReplMachine {
 	 *  (runner.runTurn getFollowUpMessages → loop.ts), so queued follow-ups
 	 *  continue the SAME run instead of settling into independent turns.
 	 *  Echo is a full user block, as with steering in the TUI.
-	 *  "one-at-a-time" (imp default, pi parity): one entry per boundary —
+	 *  "one-at-a-time" (Ink default, pi parity): one entry per boundary —
 	 *  the esc+p revision window between
 	 *  boundaries is the point (design §2). */
 	private followUpMessages(): AgentMessage[] {
@@ -1054,7 +1050,7 @@ class ReplMachine {
 			usable || this.runner.modelSelectedExplicitly()
 				? this.runner.model
 				: noModelText(this.runner.hasConfiguredProviders(), true);
-		this.input.setTitle?.(`imp — ${titleModel}`);
+		this.input.setTitle?.(`Ink — ${titleModel}`);
 	}
 
 	private async settleSuccess(result: RunAgentLoopResult): Promise<void> {
@@ -1157,7 +1153,7 @@ class ReplMachine {
 		if (this.isExiting) return;
 		const bash = this.runner.getTool("bash");
 		if (bash === undefined) {
-			this.renderer.error("imp: ! needs the bash tool, which this session's tool set does not include");
+			this.renderer.error("ink: ! needs the bash tool, which this session's tool set does not include");
 			return;
 		}
 		this.state = "running";
@@ -1475,7 +1471,7 @@ class ReplMachine {
 		const session = this.runner.session;
 		const note =
 			session?.isPersisted === true
-				? `▪ session ${session.header.id.slice(0, 8)} saved — resume with: imp -r ${session.header.id.slice(0, 8)}`
+				? `▪ session ${session.header.id.slice(0, 8)} saved — resume with: ink -r ${session.header.id.slice(0, 8)}`
 				: "▪ bye";
 		void this.closeMcpThenFinish(code, note);
 	}
@@ -1515,7 +1511,7 @@ class ReplMachine {
 	}
 
 	private reportError(err: unknown): void {
-		this.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+		this.renderer.error(`ink: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
 	private commandContext(authorizedStateful = false, authorizedDialog = false): CommandContext {
@@ -1627,7 +1623,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 	// Narrowed once for every later use (guards don't carry into closures).
 	const tuiSink: TranscriptSink | null = useTui && transcript !== undefined ? transcript : null;
 	tuiSink?.toolSink.setResolver((name) => runner.getTool(name)?.presentation);
-	// Autocomplete config for the TUI shell (M10): imp's commands + extension
+	// Autocomplete config for the TUI shell (M10): Ink's commands + extension
 	// commands, the process cwd for @ paths, and fd — probed once (cached per
 	// process); a PATH-resolvable name is all the provider's spawn needs.
 	// Without fd only the @ fuzzy search is dropped; slash completion stays.
@@ -1744,7 +1740,7 @@ export async function runRepl(options: ReplOptions): Promise<number> {
 			const identity = welcome[welcome.length - 1];
 			if (identity !== undefined) renderer.writeLine(renderer.dim(identity));
 		} else {
-			renderer.writeLine(`imp ${VERSION} — /help for commands · Ctrl+D exits`);
+			renderer.writeLine(`Ink ${VERSION} — /help for commands · Ctrl+D exits`);
 		}
 		// the greeting (or the resumed banner) owns the top of the screen;
 		// deferred environment notes (extensions, context, trust) follow it

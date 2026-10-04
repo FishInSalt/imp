@@ -119,14 +119,14 @@ export interface TaskToolOptions {
 	getLaunchEnvironment?: () => LaunchEnvironmentFacts;
 	/** The parent's tool array; task itself is filtered out of the child pool. */
 	getTools: () => Tool[];
-	/** Project `.imp/agents` exists but was skipped by the trust gate — the
+	/** Project `.ink/agents` exists but was skipped by the trust gate — the
 	 *  roster must say so instead of "no agents are defined" (M8 review). */
 	agentsProjectGated?: boolean;
 	/** Current parent session — children link to it and live beside it. Null when sessions are disabled. */
 	getSession: () => SessionStore | null;
 	/** Hermetic tests: session base dir override (passed through to the session manager). */
 	sessionBaseDir?: string;
-	/** Transcript opt-out (IMP_CHILD_SESSIONS=0). Default: env, read once. */
+	/** Transcript opt-out (INK_CHILD_SESSIONS=0). Default: env, read once. */
 	childSessions?: boolean;
 	/** Injectable wall clock for tests. */
 	timeoutMs?: number;
@@ -163,7 +163,7 @@ export interface TaskToolOptions {
 		cwd: string,
 		binding: { providerName: ProviderName; modelId: string },
 	) => Tool[] | undefined;
-	/** Test seam: worktree base dir override (IMP_WORKTREE_DIR in production). */
+	/** Test seam: worktree base dir override (INK_WORKTREE_DIR in production). */
 	worktreeBaseDir?: string;
 	/** Registered agents (M5c); the runner loads them from disk, tests inject. */
 	agents?: readonly AgentDefinition[];
@@ -344,7 +344,7 @@ function lastWorktreeDisposition(
 }
 
 export function createTaskTool(options: TaskToolOptions): Tool {
-	const childSessions = options.childSessions ?? process.env.IMP_CHILD_SESSIONS !== "0";
+	const childSessions = options.childSessions ?? process.env.INK_CHILD_SESSIONS !== "0";
 	const timeoutMs = options.timeoutMs;
 	const agents = options.agents ?? [];
 	const agentsByName = new Map(agents.map((a) => [a.name, a] as const));
@@ -710,10 +710,10 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 
 			if (wanted !== undefined && agent === undefined) {
 				const available = agents.length
-					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .imp/agents/ and ~/.imp/agents/).`
+					? `Available agents: ${agents.map((a) => a.name).join(", ")} (defined in .ink/agents/ and ~/.ink/agents/).`
 					: options.agentsProjectGated === true
-						? "No agents are loaded — this directory's .imp/agents was skipped because the directory is not trusted (review it, then restart with: imp --trust)."
-						: "No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).";
+						? "No agents are loaded — this directory's .ink/agents was skipped because the directory is not trusted (review it, then restart with: ink --trust)."
+						: "No agents are defined (create .ink/agents/*.md or ~/.ink/agents/*.md).";
 				const output = `unknown agent "${wanted}". ${available}`;
 				return finish({ output, isError: true }, rejectTerminal(output));
 			}
@@ -986,7 +986,7 @@ export function taskResult(
 	const continueLine =
 		where === undefined || session === null
 			? undefined
-			: `child session id: ${session.header.id} — continue it later with task({resume: "${session.header.id}", prompt: "…"}) (resumable only while imp version, system/agent/tools, provider and the recorded cwd/worktree are unchanged)`;
+			: `child session id: ${session.header.id} — continue it later with task({resume: "${session.header.id}", prompt: "…"}) (resumable only while Ink version, system/agent/tools, provider and the recorded cwd/worktree are unchanged)`;
 	const handoff = () => {
 		if (where === undefined) {
 			// No transcript to hand off: say so plainly (never a dangling

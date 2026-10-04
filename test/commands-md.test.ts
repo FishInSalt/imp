@@ -62,8 +62,8 @@ describe("renderMdPrompt", () => {
 describe("loadMdCommands", () => {
 	it("loads the global tier; the project tier requires the trust gate", async () => {
 		const { home, cwd, reserved } = await scaffold();
-		await put(path.join(home, ".imp", "commands"), "fix.md", "---\ndescription: fix things\n---\nfix it");
-		await put(path.join(cwd, ".imp", "commands"), "review.md", "review it");
+		await put(path.join(home, ".ink", "commands"), "fix.md", "---\ndescription: fix things\n---\nfix it");
+		await put(path.join(cwd, ".ink", "commands"), "review.md", "review it");
 		const gated = await loadMdCommands({ cwd, home, projectAllowed: false, reserved });
 		expect(gated.commands.map((c) => c.command.name)).toEqual(["fix"]);
 		expect(gated.commands[0]?.source).toBe("md:global");
@@ -73,8 +73,8 @@ describe("loadMdCommands", () => {
 
 	it("a project file overrides a global file with the same name", async () => {
 		const { home, cwd, reserved } = await scaffold();
-		await put(path.join(home, ".imp", "commands"), "fix.md", "global body");
-		await put(path.join(cwd, ".imp", "commands"), "fix.md", "project body");
+		await put(path.join(home, ".ink", "commands"), "fix.md", "global body");
+		await put(path.join(cwd, ".ink", "commands"), "fix.md", "project body");
 		const loaded = await loadMdCommands({ cwd, home, projectAllowed: true, reserved });
 		expect(loaded.commands).toHaveLength(1);
 		expect(loaded.commands[0]?.source).toBe("md:project");
@@ -92,7 +92,7 @@ describe("loadMdCommands", () => {
 
 	it("uppercase filenames are rejected — dispatch is case-sensitive (review)", async () => {
 		const { home, reserved } = await scaffold();
-		const dir = path.join(home, ".imp", "commands");
+		const dir = path.join(home, ".ink", "commands");
 		await put(dir, "Fix.md", "nope");
 		const diags: string[] = [];
 		const loaded = await loadMdCommands({
@@ -108,7 +108,7 @@ describe("loadMdCommands", () => {
 
 	it("extension command names join the reserved set — no silent shadowing (review)", async () => {
 		const { home, reserved } = await scaffold();
-		const dir = path.join(home, ".imp", "commands");
+		const dir = path.join(home, ".ink", "commands");
 		await put(dir, "deploy.md", "deploy it");
 		const diags: string[] = [];
 		const withExt = new Set([...reserved, "deploy"]);
@@ -125,7 +125,7 @@ describe("loadMdCommands", () => {
 
 	it("reserved and malformed names are rejected with diagnostics; empty bodies are rejected", async () => {
 		const { home, reserved } = await scaffold();
-		const dir = path.join(home, ".imp", "commands");
+		const dir = path.join(home, ".ink", "commands");
 		await put(dir, "help.md", "nope");
 		await put(dir, "bad name.md", "nope");
 		await put(dir, "empty.md", "---\ndescription: nothing\n---\n");

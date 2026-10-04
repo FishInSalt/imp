@@ -12,7 +12,7 @@
  *            requires it on tool-call continuations — pi
  *            openai-completions.ts:1357-1361).
  *
- * The wire itself is imp's openai-completions provider — this module fixes
+ * The wire itself is Ink's openai-completions provider — this module fixes
  * the defaults (endpoint, family key resolution) and the provider NAME,
  * which the thinking catalog keys off (deepseek-* rules).
  */

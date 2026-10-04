@@ -146,7 +146,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions = {}):
 					"No API key found. Set one of:\n" +
 						"  export ANTHROPIC_API_KEY=sk-ant-...    (Anthropic)\n" +
 						"  export ANTHROPIC_AUTH_TOKEN=... ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic  (Z.ai GLM Coding Plan)\n" +
-						"  /login anthropic  (interactive — stores the key in ~/.imp/auth.json)", // #fresh-install-hint D5
+						"  /login anthropic  (interactive — stores the key in ~/.ink/auth.json)", // #fresh-install-hint D5
 				);
 			}
 

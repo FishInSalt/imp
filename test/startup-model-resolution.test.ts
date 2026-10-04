@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRunner } from "../src/runner.js";
+import {
+	type CliFixture,
+	collectCliOutput,
+	createCliFixture,
+	startRejectingProvider,
+} from "./helpers/cli-fixture.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 /**
@@ -11,7 +17,7 @@ import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
  * D1 credential-source uniqueness, D2 startup resolution, D3 restore-path
  * resolution, D4 login-time selection, D5 the /settings defaultModel hint,
  * and the D6 print copy variants. Hermetic: credential env scrubbed +
- * IMP_AUTH_PATH pointed at a temp file per test (fresh-install precedent).
+ * INK_AUTH_PATH pointed at a temp file per test (fresh-install precedent).
  */
 
 const CREDENTIAL_ENV = [
@@ -21,28 +27,40 @@ const CREDENTIAL_ENV = [
 	"ZAI_API_KEY",
 	"DEEPSEEK_API_KEY",
 	"MOONSHOT_API_KEY",
-	"IMP_MODEL",
+	"INK_MODEL",
 ] as const;
 
 describe("#startup-model-resolution", () => {
 	const saved: Record<string, string | undefined> = {};
+	const fixtures: CliFixture[] = [];
+	let provider: Awaited<ReturnType<typeof startRejectingProvider>>;
+	function cli(): CliFixture {
+		const fixture = createCliFixture({ model: null }); // startup selection is the subject under test
+		fixtures.push(fixture);
+		return fixture;
+	}
 	let seq = 0;
-	beforeEach(() => {
+	beforeEach(async () => {
+		provider = await startRejectingProvider();
+		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
 		for (const key of CREDENTIAL_ENV) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(
+		process.env.INK_AUTH_PATH = path.join(
 			tmpdir(),
 			`imp-smr-auth-${process.pid}-${Date.now()}-${seq++}.json`,
 		);
 	});
-	afterEach(() => {
+	afterEach(async () => {
+		await provider.close();
+		for (const fixture of fixtures.splice(0)) fixture.cleanup();
 		for (const key of CREDENTIAL_ENV) {
 			if (saved[key] === undefined) delete process.env[key];
 			else process.env[key] = saved[key];
 		}
-		delete process.env.IMP_AUTH_PATH;
+		if (saved.INK_AUTH_PATH === undefined) delete process.env.INK_AUTH_PATH;
+		else process.env.INK_AUTH_PATH = saved.INK_AUTH_PATH;
 	});
 
 	// ---- D1: credential-source uniqueness ----
@@ -185,38 +203,21 @@ describe("#startup-model-resolution", () => {
 
 	it("D2 interactive (pipe): the resolution note prints, no dead-model pointer", async () => {
 		const { spawn } = await import("node:child_process");
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const child = spawn(process.execPath, [BIN], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "dummy",
-				// Fail the actual call at the transport layer — the point is the
-				// startup note; the run itself must not reach the network beyond this.
-				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
-			},
+				// Reject the actual call on the local fixture provider.
+				ZAI_BASE_URL: provider.url,
+			}),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
-		let stdout = "";
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stdin.end("hello\n");
-		await new Promise<void>((resolve) => {
-			const timer = setTimeout(() => {
-				child.kill("SIGKILL");
-				resolve();
-			}, 20_000);
-			timer.unref();
-			child.on("close", () => {
-				clearTimeout(timer);
-				resolve();
-			});
-		});
+		const { stdout } = await collectCliOutput(child, "hello\n");
 		expect(stdout).toContain("no startup model configured — using zai/glm-5.3");
 		expect(stdout).not.toContain("no model available — run /login to connect one");
 	});
@@ -227,27 +228,29 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "dummy",
-				// Fail the actual call at the transport layer so the test stays
-				// offline — the point is that the PRE-FLIGHT did not block.
-				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
-			},
+				// Local rejection proves that the PRE-FLIGHT did not block.
+				ZAI_BASE_URL: provider.url,
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("401");
+		expect(provider.requests.length).toBe(1);
 		expect(err.stderr).not.toContain("has no credential");
 		expect(err.stderr).not.toContain("no model configured");
 		expect(err.stderr).not.toContain("no startup model");
 		// the runner ran: it wrote a session (fail-fast writes nothing)
-		const sessionsDir = path.join(home, ".imp", "sessions");
+		const sessionsDir = path.join(home, ".ink", "sessions");
 		const files: string[] = [];
 		const walk = (dir: string): void => {
 			if (!existsSync(dir)) return;
@@ -265,12 +268,14 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") },
+			env: fixture.env({ INK_AUTH_PATH: path.join(home, "auth.json") }),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.code).toBe(1);
@@ -286,7 +291,7 @@ describe("#startup-model-resolution", () => {
 				else written.push(full);
 			}
 		};
-		walk(path.join(home, ".imp"));
+		walk(path.join(home, ".ink"));
 		expect(written.filter((f) => f.includes("/sessions/") || f.includes("/logs/"))).toEqual([]);
 	});
 
@@ -294,18 +299,18 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "k",
 				DEEPSEEK_API_KEY: "k",
-			},
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.code).toBe(1);
@@ -317,17 +322,17 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				MOONSHOT_API_KEY: "k",
-			},
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.code).toBe(1);
@@ -472,7 +477,7 @@ describe("#startup-model-resolution", () => {
 		expect(output()).not.toContain("keeps this model for new sessions");
 	});
 
-	it("D5 suppression: IMP_MODEL pin and gated-off project settings silence the hint", async () => {
+	it("D5 suppression: INK_MODEL pin and gated-off project settings silence the hint", async () => {
 		process.env.ZAI_API_KEY = "k";
 		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
 		const { renderer, output } = makeRenderer();
@@ -499,15 +504,15 @@ describe("#startup-model-resolution", () => {
 			submitPrompt: () => {},
 			hintState: { defaultModelHintShown: false },
 		};
-		process.env.IMP_MODEL = "zai/glm-4.6"; // env pins the startup default
+		process.env.INK_MODEL = "zai/glm-4.6"; // env pins the startup default
 		await model?.run("zai/glm-4.7", ctx);
 		expect(output()).not.toContain("keeps this model for new sessions");
-		delete process.env.IMP_MODEL;
+		delete process.env.INK_MODEL;
 		// a project settings file exists but the directory is NOT trusted —
 		// its defaultModel is invisible, so the hint must stay silent too.
 		const gatedCwd = path.join(root, "gated");
-		await mkdir(path.join(gatedCwd, ".imp"), { recursive: true });
-		await writeFile(path.join(gatedCwd, ".imp", "settings.json"), JSON.stringify({ defaultModel: "x" }));
+		await mkdir(path.join(gatedCwd, ".ink"), { recursive: true });
+		await writeFile(path.join(gatedCwd, ".ink", "settings.json"), JSON.stringify({ defaultModel: "x" }));
 		const gated = await createRunner({
 			cwd: gatedCwd,
 			argv: [],
@@ -531,8 +536,8 @@ describe("#startup-model-resolution", () => {
 		// impl-review round-2 N1: a gated-off file WITHOUT defaultModel must NOT
 		// silence the hint (the F2 fix's actual direction).
 		const bareCwd = path.join(root, "gated-bare");
-		await mkdir(path.join(bareCwd, ".imp"), { recursive: true });
-		await writeFile(path.join(bareCwd, ".imp", "settings.json"), JSON.stringify({ autoCompact: false }));
+		await mkdir(path.join(bareCwd, ".ink"), { recursive: true });
+		await writeFile(path.join(bareCwd, ".ink", "settings.json"), JSON.stringify({ autoCompact: false }));
 		const bare = await createRunner({
 			cwd: bareCwd,
 			argv: [],
@@ -689,20 +694,23 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-c", "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "dummy",
-				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
-			},
+				ZAI_BASE_URL: provider.url,
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("401");
+		expect(provider.requests.length).toBe(1);
 		// the pre-flight resolved instead of skipping (-c had no session to restore)
 		expect(err.stderr).not.toContain("No API key found");
 		expect(err.stderr).not.toContain("ANTHROPIC_API_KEY");
@@ -715,67 +723,54 @@ describe("#startup-model-resolution", () => {
 				else files.push(full);
 			}
 		};
-		walk(path.join(home, ".imp", "sessions"));
+		walk(path.join(home, ".ink", "sessions"));
 		expect(files.length).toBeGreaterThan(0); // the run proceeded
 	});
 
 	it("user-review 2: -c with no session resolves in the interactive (pipe) path too", async () => {
 		const { spawn } = await import("node:child_process");
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const child = spawn(process.execPath, [BIN, "-c"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "dummy",
-				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
-			},
+				ZAI_BASE_URL: provider.url,
+			}),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
-		let stdout = "";
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stdin.end("hello\n");
-		await new Promise<void>((resolve) => {
-			const timer = setTimeout(() => {
-				child.kill("SIGKILL");
-				resolve();
-			}, 20_000);
-			timer.unref();
-			child.on("close", () => {
-				clearTimeout(timer);
-				resolve();
-			});
-		});
+		const { stdout } = await collectCliOutput(child, "hello\n");
 		expect(stdout).toContain("no startup model configured — using zai/glm-5.3");
 		expect(stdout).not.toContain("no model available — run /login to connect one");
 	});
 
-	it("D2 e2e: a stored key (IMP_AUTH_PATH) resolves like the env variant", async () => {
+	it("D2 e2e: a stored key (INK_AUTH_PATH) resolves like the env variant", async () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-"));
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
 		await writeFile(
 			path.join(home, "auth.json"),
 			JSON.stringify({ version: 1, apiKeys: { zai: "stored-key" } }),
 		);
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
-				ZAI_BASE_URL: "http://127.0.0.1:1/api/coding/paas/v4",
-			},
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
+				ZAI_BASE_URL: provider.url,
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("401");
+		expect(provider.requests.length).toBe(1);
 		expect(err.stderr).not.toContain("has no credential");
 		expect(err.stderr).not.toContain("no model configured");
 	});
@@ -784,26 +779,29 @@ describe("#startup-model-resolution", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
+		const fixture = cli();
+		const home = fixture.home;
 		// realpath: the child's process.cwd() is canonical (/private/var vs /var
 		// on macOS) and the session-dir slug is derived from it.
-		const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-")));
+		const cwd = await realpath(fixture.cwd);
 		const { createSession } = await import("../src/core/session/manager.js");
-		const session = createSession(cwd, path.join(home, ".imp", "sessions"));
+		const session = createSession(cwd, path.join(home, ".ink", "sessions"));
 		session.appendMessage({ role: "user", content: "old" });
 		session.setModel({ provider: "zai", modelId: "glm-4.7" });
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-c", "-p", "hello"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				DEEPSEEK_API_KEY: "dummy",
-				DEEPSEEK_BASE_URL: "http://127.0.0.1:1/v1",
-			},
+				DEEPSEEK_BASE_URL: provider.url,
+			}),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
+		expect(err.code).toBe(1);
+		expect(err.stderr).toContain("401");
+		expect(provider.requests.length).toBe(1);
 		expect(err.stdout).toContain(
 			"▪ restored model zai/glm-4.7 has no credential — using deepseek/deepseek-v4-pro",
 		);
@@ -847,44 +845,28 @@ describe("#startup-model-resolution", () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		expect(noModelText(true)).toBe(NO_MODEL_SELECTED_SEGMENT);
 		const lines = welcomeLines("deadbeef", noModelText(true), false);
-		expect(lines[lines.length - 1]).toBe(`imp 0.1.0 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
 	});
 
 	it("D6 surfaces: the resumed line shows the /model pointer in the multi state", async () => {
 		const { spawn } = await import("node:child_process");
-		const home = await mkdtemp(path.join(tmpdir(), "imp-smr-home-"));
-		const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "imp-smr-cwd-")));
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = await realpath(fixture.cwd);
 		const { createSession } = await import("../src/core/session/manager.js");
-		const session = createSession(cwd, path.join(home, ".imp", "sessions"));
+		const session = createSession(cwd, path.join(home, ".ink", "sessions"));
 		session.appendMessage({ role: "user", content: "old" }); // model-less
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const BIN = fixture.bin;
 		const child = spawn(process.execPath, [BIN, "-c"], {
 			cwd,
-			env: {
-				PATH: process.env.PATH,
-				HOME: home,
-				IMP_AUTH_PATH: path.join(home, "auth.json"),
+			env: fixture.env({
+				INK_AUTH_PATH: path.join(home, "auth.json"),
 				ZAI_API_KEY: "k",
 				DEEPSEEK_API_KEY: "k",
-			},
+			}),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
-		let stdout = "";
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stdin.end("hello\n");
-		await new Promise<void>((resolve) => {
-			const timer = setTimeout(() => {
-				child.kill("SIGKILL");
-				resolve();
-			}, 20_000);
-			timer.unref();
-			child.on("close", () => {
-				clearTimeout(timer);
-				resolve();
-			});
-		});
+		const { stdout } = await collectCliOutput(child, "hello\n");
 		expect(stdout).toContain("no model — /model");
 		expect(stdout).not.toContain("no model — /login");
 	});

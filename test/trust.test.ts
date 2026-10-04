@@ -77,7 +77,7 @@ describe("trust store round-trip", () => {
 	});
 
 	it("setTrust rebuildOnCorrupt replaces an unreadable store (the --trust recovery path, M8 review)", () => {
-		mkdirSync(join(home, ".imp"), { recursive: true });
+		mkdirSync(join(home, ".ink"), { recursive: true });
 		writeFileSync(store, "{oops", "utf8");
 		expect(() => setTrust(store, "/x", true)).toThrow(); // default: propagate
 		setTrust(store, "/x", true, true); // flag path: rebuild
@@ -95,7 +95,7 @@ describe("trust store round-trip", () => {
 	});
 
 	it("a malformed store is a hard teaching error, not silent reinterpretation", () => {
-		mkdirSync(join(home, ".imp"), { recursive: true });
+		mkdirSync(join(home, ".ink"), { recursive: true });
 		writeFileSync(store, "{ not json", "utf8");
 		expect(() => readTrustFile(store)).toThrow(/failed to read the trust store/);
 		writeFileSync(store, '{"a": "yes"}', "utf8");
@@ -113,42 +113,42 @@ describe("nearest-ancestor inheritance (monorepo ergonomics)", () => {
 });
 
 describe("trustRequiringResources", () => {
-	it("a commands-only repo gates too — .imp/commands is model-directed content (M11 #6 review P1)", () => {
+	it("a commands-only repo gates too — .ink/commands is model-directed content (M11 #6 review P1)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-cmds-"));
 		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home4-"));
-		mkdirSync(join(dir, ".imp", "commands"), { recursive: true });
-		writeFileSync(join(dir, ".imp", "commands", "review.md"), "inject me\n");
-		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/commands"]);
+		mkdirSync(join(dir, ".ink", "commands"), { recursive: true });
+		writeFileSync(join(dir, ".ink", "commands", "review.md"), "inject me\n");
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".ink/commands"]);
 	});
 
 	it("#trust-home-fix: a directory UNDER $HOME gates normally — only $HOME itself is exempt (pi parity)", () => {
 		const home = mkdtempSync(join(tmpdir(), "imp-trust-home6-"));
 		const proj = join(home, "code", "proj"); // under home, like every macOS path
-		mkdirSync(join(proj, ".imp", "agents"), { recursive: true });
+		mkdirSync(join(proj, ".ink", "agents"), { recursive: true });
 		// the fix's regression pin: this used to return [] (blanket home exemption)
-		expect(trustRequiringResources(proj, home)).toEqual([".imp/agents"]);
-		// $HOME itself stays exempt — there `.imp/*` is the user's own global installation
-		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
+		expect(trustRequiringResources(proj, home)).toEqual([".ink/agents"]);
+		// $HOME itself stays exempt — there `.ink/*` is the user's own global installation
+		mkdirSync(join(home, ".ink", "extensions"), { recursive: true });
 		expect(trustRequiringResources(home, home)).toEqual([]);
 	});
 
-	it("only .imp extensions and agents count; AGENTS.md never does", () => {
+	it("only .ink extensions and agents count; AGENTS.md never does", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-proj-"));
 		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home-"));
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 		writeFileSync(join(dir, "AGENTS.md"), "# untrusted but prompt-level — not gated\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
-		mkdirSync(join(dir, ".imp", "agents"), { recursive: true });
-		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/agents"]);
-		mkdirSync(join(dir, ".imp", "extensions"), { recursive: true });
-		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/extensions", ".imp/agents"]);
+		mkdirSync(join(dir, ".ink", "agents"), { recursive: true });
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".ink/agents"]);
+		mkdirSync(join(dir, ".ink", "extensions"), { recursive: true });
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".ink/extensions", ".ink/agents"]);
 	});
 
-	it("a plain FILE named .imp/extensions gates nothing (directories only)", () => {
+	it("a plain FILE named .ink/extensions gates nothing (directories only)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-file-"));
 		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home2-"));
-		mkdirSync(join(dir, ".imp"), { recursive: true });
-		writeFileSync(join(dir, ".imp", "extensions"), "not a directory\n");
+		mkdirSync(join(dir, ".ink"), { recursive: true });
+		writeFileSync(join(dir, ".ink", "extensions"), "not a directory\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 	});
 
@@ -168,12 +168,12 @@ describe("trustRequiringResources", () => {
 
 	it("cwd AT the home dir gates nothing — the user's own installation (M8 review; #trust-home-fix narrowed the tree exemption)", () => {
 		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
-		mkdirSync(join(home, ".imp", "extensions"), { recursive: true });
-		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && imp
+		mkdirSync(join(home, ".ink", "extensions"), { recursive: true });
+		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && ink
 		// a genuinely foreign cwd still gates
 		const foreign = mkdtempSync(join(tmpdir(), "imp-trust-foreign-"));
-		mkdirSync(join(foreign, ".imp", "extensions"), { recursive: true });
-		expect(trustRequiringResources(foreign, home)).toEqual([".imp/extensions"]);
+		mkdirSync(join(foreign, ".ink", "extensions"), { recursive: true });
+		expect(trustRequiringResources(foreign, home)).toEqual([".ink/extensions"]);
 	});
 });
 
@@ -195,11 +195,11 @@ describe("askTrustOnce (the interactive one-time ask)", () => {
 		const answer = askTrustOnce(
 			io.stdin,
 			io.stdout,
-			"trust the files in /x? it wants to load: .imp/extensions (2 files) [y/N] ",
+			"trust the files in /x? it wants to load: .ink/extensions (2 files) [y/N] ",
 		);
 		await new Promise((r) => setTimeout(r, 10));
 		expect(io.output()).toContain("trust the files in /x?");
-		expect(io.output()).toContain(".imp/extensions (2 files)");
+		expect(io.output()).toContain(".ink/extensions (2 files)");
 		io.stdin.write("y\n");
 		expect(await answer).toBe(true);
 	});
@@ -226,17 +226,17 @@ describe("askTrustOnce (the interactive one-time ask)", () => {
 describe("trustRequiringResources #system-md", () => {
 	it("SYSTEM.md and APPEND_SYSTEM.md files gate like settings.json", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-sysmd-"));
-		mkdirSync(join(dir, ".imp"), { recursive: true });
-		writeFileSync(join(dir, ".imp", "SYSTEM.md"), "persona");
-		writeFileSync(join(dir, ".imp", "APPEND_SYSTEM.md"), "extra");
+		mkdirSync(join(dir, ".ink"), { recursive: true });
+		writeFileSync(join(dir, ".ink", "SYSTEM.md"), "persona");
+		writeFileSync(join(dir, ".ink", "APPEND_SYSTEM.md"), "extra");
 		const resources = trustRequiringResources(dir, home);
-		expect(resources).toContain(".imp/SYSTEM.md");
-		expect(resources).toContain(".imp/APPEND_SYSTEM.md");
+		expect(resources).toContain(".ink/SYSTEM.md");
+		expect(resources).toContain(".ink/APPEND_SYSTEM.md");
 	});
 
 	it("a directory shadowing the name does not trigger the ask (isFile)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imp-trust-shadow-"));
-		mkdirSync(join(dir, ".imp", "SYSTEM.md"), { recursive: true });
+		mkdirSync(join(dir, ".ink", "SYSTEM.md"), { recursive: true });
 		expect(trustRequiringResources(dir, home)).toEqual([]);
 	});
 });

@@ -7,7 +7,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CATALOG_FRESH_WINDOW_MS,
 	type CatalogFetcher,
@@ -84,8 +84,10 @@ function fixtureFetcher(
 	};
 }
 
-const piZaiUrl = "https://pi.dev/api/models/providers/zai";
-const piCodexUrl = "https://pi.dev/api/models/providers/openai-codex";
+// Only the injected fetcher handles these URLs; no network requests are made.
+const catalogBaseUrl = "https://catalog.example";
+const piZaiUrl = `${catalogBaseUrl}/api/models/providers/zai`;
+const piCodexUrl = `${catalogBaseUrl}/api/models/providers/openai-codex`;
 
 describe("M14 catalog refresh", () => {
 	let tmpDir: string;
@@ -96,9 +98,10 @@ describe("M14 catalog refresh", () => {
 		resetDiscoveredWindowsForTest();
 		clockMs = 1_000_000;
 		setCatalogClockForTest(clock);
+		vi.stubEnv("INK_CATALOG_BASE_URL", catalogBaseUrl);
 		tmpDir = mkdtempSync(join(tmpdir(), "imp-catalog-test-"));
-		savedPath = process.env.IMP_CATALOG_PATH;
-		process.env.IMP_CATALOG_PATH = join(tmpDir, "models-catalog.json");
+		savedPath = process.env.INK_CATALOG_PATH;
+		process.env.INK_CATALOG_PATH = join(tmpDir, "models-catalog.json");
 	});
 
 	afterEach(() => {
@@ -106,14 +109,16 @@ describe("M14 catalog refresh", () => {
 		resetDiscoveredWindowsForTest();
 		setCatalogClockForTest(Date.now);
 		setCatalogFetcherForTest(async (url, headers, signal) => fetch(url, { headers, signal }));
-		if (savedPath === undefined) delete process.env.IMP_CATALOG_PATH;
-		else process.env.IMP_CATALOG_PATH = savedPath;
+		vi.unstubAllEnvs();
+		if (savedPath === undefined) delete process.env.INK_CATALOG_PATH;
+		else process.env.INK_CATALOG_PATH = savedPath;
 	});
 
 	it("parses the record-keyed shape pi.dev serves and persists to disk", async () => {
-		const { fetcher } = fixtureFetcher({ [piZaiUrl]: jsonResponse(200, zaiCatalog, { etag: '"a1"' }) });
+		const { fetcher, logs } = fixtureFetcher({ [piZaiUrl]: jsonResponse(200, zaiCatalog, { etag: '"a1"' }) });
 		setCatalogFetcherForTest(fetcher);
 		const summary = await refreshCatalog({ families: ["zai"], force: true });
+		expect(logs.map((log) => log.url)).toEqual([piZaiUrl]);
 		expect(summary.fetched).toEqual(["zai"]);
 		expect(catalogModelIds("zai")).toEqual(["glm-5.3", "glm-5.3-flash"]);
 
@@ -261,7 +266,7 @@ describe("M14 catalog refresh", () => {
 		setCatalogFetcherForTest(fetcher);
 		// seed the cache so the no-persist-on-abort path has a body to protect
 		await refreshCatalog({ families: ["zai"], force: true });
-		const before = JSON.parse(readFileSync(process.env.IMP_CATALOG_PATH as string, "utf-8"));
+		const before = JSON.parse(readFileSync(process.env.INK_CATALOG_PATH as string, "utf-8"));
 		expect(before.providers.zai.checkedAt).toBe(1_000_000);
 
 		const controller = new AbortController();
@@ -285,14 +290,14 @@ describe("M14 catalog refresh", () => {
 		release?.();
 		const summary = await pending;
 		expect(summary.failed).toEqual(["zai"]);
-		const after = JSON.parse(readFileSync(process.env.IMP_CATALOG_PATH as string, "utf-8"));
+		const after = JSON.parse(readFileSync(process.env.INK_CATALOG_PATH as string, "utf-8"));
 		expect(after.providers.zai.checkedAt).toBe(1_000_000); // NOT bumped
 		expect(logs.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it("load path sanitizes like the fetch path (review P2-1)", () => {
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -334,14 +339,14 @@ describe("M14 catalog refresh", () => {
 	});
 
 	it("corrupt cache file → static floor, load returns false", () => {
-		writeFileSync(process.env.IMP_CATALOG_PATH as string, "{ not json", "utf-8");
+		writeFileSync(process.env.INK_CATALOG_PATH as string, "{ not json", "utf-8");
 		expect(loadCatalogCache()).toBe(false);
 		expect(catalogModelIds("zai")).toBeNull();
 	});
 
-	it("IMP_CATALOG_BASE_URL redirects the fetch", async () => {
-		const saved = process.env.IMP_CATALOG_BASE_URL;
-		process.env.IMP_CATALOG_BASE_URL = "https://mirror.example/";
+	it("INK_CATALOG_BASE_URL redirects the fetch", async () => {
+		const saved = process.env.INK_CATALOG_BASE_URL;
+		process.env.INK_CATALOG_BASE_URL = "https://mirror.example/";
 		try {
 			const { fetcher, logs } = fixtureFetcher({
 				"https://mirror.example/api/models/providers/zai": jsonResponse(200, zaiCatalog),
@@ -350,8 +355,8 @@ describe("M14 catalog refresh", () => {
 			await refreshCatalog({ families: ["zai"], force: true });
 			expect(logs[0]?.url).toBe("https://mirror.example/api/models/providers/zai");
 		} finally {
-			if (saved === undefined) delete process.env.IMP_CATALOG_BASE_URL;
-			else process.env.IMP_CATALOG_BASE_URL = saved;
+			if (saved === undefined) delete process.env.INK_CATALOG_BASE_URL;
+			else process.env.INK_CATALOG_BASE_URL = saved;
 		}
 	});
 });
@@ -363,14 +368,14 @@ describe("M14 consult wiring", () => {
 		resetDiscoveredWindowsForTest();
 		setCatalogClockForTest(() => 1_000_000);
 		const tmp = mkdtempSync(join(tmpdir(), "imp-catalog-consult-"));
-		savedPath = process.env.IMP_CATALOG_PATH;
-		process.env.IMP_CATALOG_PATH = join(tmp, "models-catalog.json");
+		savedPath = process.env.INK_CATALOG_PATH;
+		process.env.INK_CATALOG_PATH = join(tmp, "models-catalog.json");
 	});
 	afterEach(() => {
 		resetCatalogForTest();
 		resetDiscoveredWindowsForTest();
-		if (savedPath === undefined) delete process.env.IMP_CATALOG_PATH;
-		else process.env.IMP_CATALOG_PATH = savedPath;
+		if (savedPath === undefined) delete process.env.INK_CATALOG_PATH;
+		else process.env.INK_CATALOG_PATH = savedPath;
 	});
 
 	it("catalog window beats discovery and the static table", () => {
@@ -379,7 +384,7 @@ describe("M14 consult wiring", () => {
 		expect(contextWindowFor("glm-5.3")).toBe(200_000); // pre-overlay truth
 		// overlay via disk: catalog says 512_000
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -396,19 +401,19 @@ describe("M14 consult wiring", () => {
 		expect(contextWindowFor("zai/glm-5.3")).toBe(512_000); // prefixed form too
 		// unknown id keeps the static floor
 		expect(contextWindowFor("glm-5.2")).toBe(1_000_000);
-		// IMP_CONTEXT_WINDOW still wins over everything (review P2-4: this
+		// INK_CONTEXT_WINDOW still wins over everything (review P2-4: this
 		// was a dead set-and-delete; now actually asserted)
-		process.env.IMP_CONTEXT_WINDOW = "65536";
+		process.env.INK_CONTEXT_WINDOW = "65536";
 		try {
 			expect(contextWindowFor("glm-5.3")).toBe(65536);
 		} finally {
-			delete process.env.IMP_CONTEXT_WINDOW;
+			delete process.env.INK_CONTEXT_WINDOW;
 		}
 	});
 
 	it("catalog cost + family subscription annotation; anthropic stays unflagged", () => {
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -451,7 +456,7 @@ describe("M14 consult wiring", () => {
 
 	it("catalog thinking map beats MODEL_RULES; reasoning:false means no knob", () => {
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -495,7 +500,7 @@ describe("M14 consult wiring", () => {
 
 	it("adaptive style derives from compat.forceAdaptiveThinking", () => {
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {
@@ -524,7 +529,7 @@ describe("M14 consult wiring", () => {
 
 	it("catalog input array decides vision; the prefix table is the floor", () => {
 		writeFileSync(
-			process.env.IMP_CATALOG_PATH as string,
+			process.env.INK_CATALOG_PATH as string,
 			JSON.stringify({
 				version: 1,
 				providers: {

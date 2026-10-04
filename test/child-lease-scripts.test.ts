@@ -4,29 +4,16 @@
  * that broke the single-file protocol, against the intent + verify protocol
  * (design §7.3).
  */
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { runLeaseProcess } from "./helpers/lease-process.js";
 
 function runRole(dir: string, role: string): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(
-			"npx",
-			["vitest", "run", "test/helpers/lease-script-worker.test.ts", "--reporter=dot"],
-			{
-				cwd: repoRoot,
-				env: { ...process.env, IMP_LEASE_SCRIPT: `${dir}|${role}`, NO_COLOR: "1" },
-				stdio: ["ignore", "ignore", "ignore"],
-			},
-		);
-		child.on("error", reject);
-		child.on("close", (code) => resolve(code ?? -1));
-	});
+	return runLeaseProcess("test/helpers/lease-script-worker.test.ts", { IMP_LEASE_SCRIPT: `${dir}|${role}` });
 }
 
 interface RoleResult {

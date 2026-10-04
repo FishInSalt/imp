@@ -1,14 +1,14 @@
 // examples/extensions/notify.mjs — macOS completion notification: sound + popup.
 //
-// Install: copy into <project>/.imp/extensions/ (or ~/.imp/extensions/) and
-// restart imp. When a run finishes you get a Glass sound and a notification
-// popup with the turn count — useful when you context-switch away while imp
+// Install: copy into <project>/.ink/extensions/ (or ~/.ink/extensions/) and
+// restart Ink. When a run finishes you get a Glass sound and a notification
+// popup with the turn count — useful when you context-switch away while Ink
 // grinds through a long task.
 //
 // Env:
-//   IMP_NOTIFY_MIN_SEC  only notify for runs lasting at least this many
+//   INK_NOTIFY_MIN_SEC  only notify for runs lasting at least this many
 //                       seconds (default 5 — quick Q&A stays silent)
-//   IMP_NOTIFY_DRY      test hook: a file path; when set, notification
+//   INK_NOTIFY_DRY      test hook: a file path; when set, notification
 //                       payloads are appended as JSON lines instead of
 //                       spawning osascript/afplay (no popups, no sound)
 //
@@ -20,8 +20,8 @@ import { spawn } from "node:child_process";
 
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
-	const minSec = Number(process.env.IMP_NOTIFY_MIN_SEC ?? "5") || 0;
-	const dryPath = process.env.IMP_NOTIFY_DRY ?? "";
+	const minSec = Number(process.env.INK_NOTIFY_MIN_SEC ?? "5") || 0;
+	const dryPath = process.env.INK_NOTIFY_DRY ?? "";
 	let startedAt = null; // first message_end of the run currently in flight
 
 	api.on("message_end", () => {
@@ -34,7 +34,7 @@ export default function (api) {
 		if (start === null) return; // no assistant message this run — skip
 		if ((Date.now() - start) / 1000 < minSec) return;
 
-		const title = `imp — ${event.stopReason}`;
+		const title = `Ink — ${event.stopReason}`;
 		const body = `${event.turns} turns · out ${event.usage.outputTokens} tokens`;
 		if (dryPath) {
 			appendFileSync(dryPath, `${JSON.stringify({ title, body })}\n`);

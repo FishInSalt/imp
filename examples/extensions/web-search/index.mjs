@@ -158,7 +158,7 @@ export default function (api) {
 			try {
 				const res = await fetch(url, {
 					signal: AbortSignal.any([signal, timeout]), redirect: "follow",
-					headers: { "user-agent": "imp-url-read/0.2" },
+					headers: { "user-agent": "ink-url-read/0.2" },
 				});
 				if (!res.ok) { await cancelBody(res); return error(`url_read HTTP ${res.status}: page request failed`); }
 				const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();

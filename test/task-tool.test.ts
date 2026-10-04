@@ -435,7 +435,7 @@ describe("named agents (M5c)", () => {
 		const result = await task.execute({ prompt: "go", agent: "ghost" }, new AbortController().signal);
 		expect(result.isError).toBe(true);
 		expect(result.output).toBe(
-			'unknown agent "ghost". Available agents: scout, reviewer (defined in .imp/agents/ and ~/.imp/agents/).',
+			'unknown agent "ghost". Available agents: scout, reviewer (defined in .ink/agents/ and ~/.ink/agents/).',
 		);
 		expect(sink).toHaveLength(0);
 	});
@@ -444,7 +444,7 @@ describe("named agents (M5c)", () => {
 		const { task, sink } = agentTask([]);
 		const result = await task.execute({ prompt: "go", agent: "ghost" }, new AbortController().signal);
 		expect(result.output).toBe(
-			'unknown agent "ghost". No agents are defined (create .imp/agents/*.md or ~/.imp/agents/*.md).',
+			'unknown agent "ghost". No agents are defined (create .ink/agents/*.md or ~/.ink/agents/*.md).',
 		);
 		expect(sink).toHaveLength(0);
 	});
@@ -764,18 +764,18 @@ describe("runner integration (default set)", () => {
 		expect(readdirSync(childrenDir).filter((f) => f.endsWith(".jsonl"))).toHaveLength(1);
 	}, 20000);
 
-	it("M5c: runner discovers .imp/agents from cwd, warns on bad files, named agent reaches the child", async () => {
+	it("M5c: runner discovers .ink/agents from cwd, warns on bad files, named agent reaches the child", async () => {
 		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
 		const cwd = path.join(baseDir, "proj");
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-home-"));
 		const { mkdirSync, writeFileSync } = await import("node:fs");
-		mkdirSync(path.join(cwd, ".imp", "agents"), { recursive: true });
+		mkdirSync(path.join(cwd, ".ink", "agents"), { recursive: true });
 		writeFileSync(
-			path.join(cwd, ".imp", "agents", "scout.md"),
+			path.join(cwd, ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: explores\nmodel: glm-4.6\n---\nAGENT-BODY-RUNNER",
 			"utf8",
 		);
-		writeFileSync(path.join(cwd, ".imp", "agents", "broken.md"), "---\nname: broken\n---\n", "utf8");
+		writeFileSync(path.join(cwd, ".ink", "agents", "broken.md"), "---\nname: broken\n---\n", "utf8");
 
 		const sink: LLMRequest[] = [];
 		// one shared provider: parent (task call) → child (final text) → parent (final text)
@@ -887,7 +887,7 @@ describe("worktree isolation (M6b)", () => {
 		);
 		expect(result.isError ?? false).toBe(false);
 		const wtPath = childCwds[0] as string;
-		expect(wtPath).toContain("imp-worktree-");
+		expect(wtPath).toContain("ink-worktree-");
 		expect(gateCalls).toEqual([{ name: "write", cwd: wtPath }]); // the worktree, not the repo root
 	});
 
@@ -919,12 +919,12 @@ describe("worktree isolation (M6b)", () => {
 		expect(childPrompt).toContain("[worktree]");
 		expect(childPrompt).toContain("isolated git worktree");
 		const wtPath = childCwds[0] as string;
-		expect(wtPath).toContain("imp-worktree-");
+		expect(wtPath).toContain("ink-worktree-");
 		expect(existsSync(path.join(wtPath, "child-note.txt"))).toBe(true);
 		expect(existsSync(path.join(root, "child-note.txt"))).toBe(false);
 		expect(result.output).toContain("wrote the note");
 		expect(result.output).toContain("[task] changes kept in worktree");
-		expect(result.output).toContain("git merge imp/task-");
+		expect(result.output).toContain("git merge ink/task-");
 		expect(result.output).toContain("untracked: child-note.txt");
 	});
 
@@ -937,8 +937,8 @@ describe("worktree isolation (M6b)", () => {
 		expect(result.output).toContain("just looked around");
 		expect(result.output).not.toContain("changes kept in worktree");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("ink-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).toBe("");
 	});
 
@@ -971,7 +971,7 @@ describe("worktree isolation (M6b)", () => {
 		expect(sink).toHaveLength(0);
 		// the half-created worktree was rolled back
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
+		expect(listed.stdout).not.toContain("ink-worktree-");
 	});
 
 	it("non-git cwd → teaching error, provider never called", async () => {
@@ -1053,7 +1053,7 @@ describe("worktree isolation (M6b)", () => {
 		expect(result.output).toContain("[task] changes kept in worktree");
 		const wtLine = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" })
 			.stdout.split("\n")
-			.find((l) => l.startsWith("worktree ") && l.includes("imp-worktree-"));
+			.find((l) => l.startsWith("worktree ") && l.includes("ink-worktree-"));
 		const wtPath = wtLine?.slice("worktree ".length).trim() ?? "";
 		expect(existsSync(path.join(wtPath, "crash-work.txt"))).toBe(true);
 	});
@@ -1106,8 +1106,8 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("unknown tools: nonexistent_tool");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("ink-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).toBe("");
 	});
 
@@ -1145,7 +1145,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		expect(result.output).not.toContain("changes kept in worktree");
 		// the main-root worktree listing shows no leaked child worktree
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
+		expect(listed.stdout).not.toContain("ink-worktree-");
 	});
 
 	it("committed child work shows in the trailer stat (diff vs base, not HEAD)", async () => {
@@ -1233,7 +1233,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("aborted");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
+		expect(listed.stdout).not.toContain("ink-worktree-");
 	});
 
 	it("two parallel worktree tasks: distinct branches, concurrent creation, no cross-talk", async () => {
@@ -1268,8 +1268,8 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		expect(new Set(childCwds).size).toBe(2);
 		// both cleaned up (no changes): nothing left, and prune left no stale refs
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).not.toContain("ink-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).toBe("");
 	});
 
@@ -1295,7 +1295,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		expect(result.output).toContain("idle");
 		expect(result.output).not.toContain("changes kept in worktree");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).not.toContain("imp-worktree-");
+		expect(listed.stdout).not.toContain("ink-worktree-");
 	});
 
 	/** A test tool that shells out to git in the child's cwd — lets scripted
@@ -1328,17 +1328,17 @@ describe("task tool roster under the trust gate (M8 review tierScope F1)", () =>
 			getSystem: () => "PARENT-SYSTEM",
 			getTools: () => [],
 			getSession: () => null,
-			agents: [], // the post-gate state: .imp/agents exists but was skipped
+			agents: [], // the post-gate state: .ink/agents exists but was skipped
 			agentsProjectGated: true,
 		});
 		const result = await task.execute({ prompt: "x", agent: "scout" }, new AbortController().signal);
 		if (!("output" in result)) throw new Error("expected tool result");
 		expect(result.output).toContain("No agents are loaded");
 		expect(result.output).toContain("not trusted");
-		expect(result.output).toContain("imp --trust");
+		expect(result.output).toContain("ink --trust");
 		// the old falsehood must be gone — the model would otherwise "helpfully"
-		// create .imp/agents files in the untrusted repo
-		expect(result.output).not.toContain("create .imp/agents");
+		// create .ink/agents files in the untrusted repo
+		expect(result.output).not.toContain("create .ink/agents");
 	});
 });
 
@@ -1535,8 +1535,8 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		);
 		expect(result.output).toContain("[task] changes kept in worktree");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).toContain("imp-worktree-");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		expect(listed.stdout).toContain("ink-worktree-");
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).not.toBe("");
 	});
 
@@ -1570,7 +1570,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		const result = await task.execute({ prompt: "break it", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree kept for safety");
 		expect(result.output).toContain("Nothing was deleted");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).not.toBe("");
 	});
 
@@ -1594,7 +1594,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree cleanup failed");
 		expect(result.output).toContain("may still exist");
-		const branches = spawnSync("git", ["branch", "--list", "imp/task-*"], { cwd: root, encoding: "utf8" });
+		const branches = spawnSync("git", ["branch", "--list", "ink/task-*"], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout.trim()).not.toBe("");
 	});
 
@@ -1755,7 +1755,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 		expect(result.output).toContain("worktree kept for safety");
 		expect(result.output).toContain("not the runtime-created synthetic link");
 		const listed = spawnSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" });
-		expect(listed.stdout).toContain("imp-worktree-");
+		expect(listed.stdout).toContain("ink-worktree-");
 	});
 });
 

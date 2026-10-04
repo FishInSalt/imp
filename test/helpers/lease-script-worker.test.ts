@@ -2,7 +2,7 @@
  * Deterministic lease script worker (SA-07, T30b).
  *
  * Spawned by test/child-lease-scripts.test.ts as
- * `npx vitest run test/helpers/lease-script-worker.test.ts` with
+ * `node node_modules/vitest/vitest.mjs run test/helpers/lease-script-worker.test.ts` with
  * `IMP_LEASE_SCRIPT=<dir>|<role>`. Each role runs REAL acquire calls with
  * marker-file rendezvous controlling the interleaving, then appends
  * `R <role> <ok|code> <attemptId>` to `<dir>/results`. Without the env this

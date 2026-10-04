@@ -53,7 +53,7 @@ describe("bash tool", () => {
 	it("saves truncated full output to a temp file and names it", async () => {
 		const tool = createBashTool();
 		const result = await tool.execute({ command: "seq 1 5000" }, noSignal);
-		expect(result.output).toMatch(/Full output saved to \/.*imp-output-.*\.log/);
+		expect(result.output).toMatch(/Full output saved to \/.*ink-output-.*\.log/);
 		// the temp file actually contains the beginning that was cut from the tail
 		const match = result.output.match(/Full output saved to (\S+)/);
 		const full = await readFile(match![1]!, "utf8");

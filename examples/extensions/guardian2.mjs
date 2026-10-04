@@ -1,8 +1,8 @@
 // examples/extensions/guardian2.mjs — a minimal config-driven permission gate.
 //
 // Install: copy this file into <project>/.imp/extensions/ (or
-// ~/.imp/extensions/) and restart imp. guardian2 watches bash tool calls and
-// matches the raw command string against two regex rule lists in
+// ~/.imp/extensions/) and restart imp. guardian2 watches bash / write / edit
+// tool calls and matches them against two rule lists in
 // ~/.imp/guardian2.json:
 //
 //   • deny rules block the call outright — the model receives the rule's
@@ -10,12 +10,17 @@
 //   • ask rules ask the human first (approved runs, declined blocks); the
 //     prompt offers "don't ask again this session" once, which stops every
 //     further ask prompt for the rest of the session;
-//   • a command matching neither rule runs — the default is allow.
+//   • a call matching neither rule runs — the default is allow.
 //
-// No modes, no model calls. A missing config file is valid (zero rules). An
-// invalid one keeps the last valid rules, shows a footer flag and an audit
-// line, and is recoverable with /guardian2 reload. One audit line per
-// deny/ask decision goes to ~/.imp/guardian2.log (created with mode 0600).
+// Patterns are plain text where `*` matches anything (including newlines);
+// a `regex` entry is the escape hatch for full regular expressions. Entries
+// target bash by default; add "tool" (write/edit) to guard file paths — the
+// resolved absolute path is matched. No modes, no model calls.
+//
+// A missing config file is valid (zero rules). An invalid one keeps the last
+// valid rules, shows a footer flag and an audit line, and is recoverable
+// with /guardian2 reload. One audit line per deny/ask decision goes to
+// ~/.imp/guardian2.log (created with mode 0600).
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,47 +37,107 @@ const oneLine = (text, cap = 160) => {
 
 const plainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 
+const TOOL_NAMES = ["bash", "write", "edit"];
+
+/** Linear wildcard match: `*` spans any run of characters (newlines
+ *  included), no backtracking. The text may match anywhere. */
+const wildcardMatch = (pattern, text) => {
+	let position = 0;
+	for (const segment of pattern.split("*")) {
+		if (segment === "") continue;
+		const index = text.indexOf(segment, position);
+		if (index === -1) return false;
+		position = index + segment.length;
+	}
+	return true;
+};
+
 /** Compile one rule entry; returns `{rule}` or `{error}`. */
 const compileEntry = (entry, where) => {
-	let pattern;
+	let wildcard;
+	let regexSource;
 	let flags = "";
 	let reason;
+	let toolValue;
 	if (typeof entry === "string") {
 		if (entry.trim() === "") {
-			return { error: `${where}: entry must be a non-empty string or {pattern, flags?, reason?}` };
+			return { error: `${where}: entry must be a non-empty pattern or an object` };
 		}
-		pattern = entry;
+		wildcard = entry;
 	} else if (plainObject(entry)) {
 		for (const key of Object.keys(entry)) {
-			if (key !== "pattern" && key !== "flags" && key !== "reason") {
+			if (!["pattern", "regex", "flags", "reason", "tool"].includes(key)) {
 				return { error: `${where}: unknown key "${key}"` };
 			}
 		}
-		pattern = entry.pattern;
-		if (typeof pattern !== "string" || pattern.trim() === "") {
-			return { error: `${where}: pattern must be a non-empty string` };
+		if (entry.pattern !== undefined && entry.regex !== undefined) {
+			return { error: `${where}: give "pattern" or "regex", not both` };
 		}
-		if (entry.flags !== undefined) {
-			if (typeof entry.flags !== "string") return { error: `${where}: flags must be a string` };
-			flags = entry.flags;
+		if (entry.pattern === undefined && entry.regex === undefined) {
+			return { error: `${where}: one of "pattern" or "regex" is required` };
+		}
+		if (entry.pattern !== undefined) {
+			if (typeof entry.pattern !== "string" || entry.pattern.trim() === "") {
+				return { error: `${where}: pattern must be a non-empty string` };
+			}
+			if (entry.flags !== undefined) {
+				return { error: `${where}: flags only apply to regex entries` };
+			}
+			wildcard = entry.pattern;
+		} else {
+			if (typeof entry.regex !== "string" || entry.regex.trim() === "") {
+				return { error: `${where}: regex must be a non-empty string` };
+			}
+			if (entry.flags !== undefined) {
+				if (typeof entry.flags !== "string") return { error: `${where}: flags must be a string` };
+				flags = entry.flags;
+			}
+			regexSource = entry.regex;
 		}
 		if (entry.reason !== undefined && typeof entry.reason !== "string") {
 			return { error: `${where}: reason must be a string` };
 		}
 		reason = entry.reason;
+		toolValue = entry.tool;
 	} else {
-		return { error: `${where}: entry must be a string or {pattern, flags?, reason?}` };
+		return { error: `${where}: entry must be a string or an object` };
 	}
 	if (flags.includes("g") || flags.includes("y")) {
 		return { error: `${where}: flags must not contain "g" or "y" (stateful regex)` };
 	}
-	let regex;
-	try {
-		regex = new RegExp(pattern, flags);
-	} catch (err) {
-		return { error: `${where}: invalid regex (${oneLine(err && err.message ? err.message : err)})` };
+	let tools = ["bash"];
+	if (toolValue !== undefined) {
+		const names = typeof toolValue === "string" ? [toolValue] : toolValue;
+		if (!Array.isArray(names) || names.length === 0) {
+			return { error: `${where}: tool must be a tool name or a non-empty array of them` };
+		}
+		for (const name of names) {
+			if (typeof name !== "string" || !TOOL_NAMES.includes(name)) {
+				return { error: `${where}: unknown tool ${JSON.stringify(name)} (use bash, write, or edit)` };
+			}
+		}
+		tools = [...new Set(names)];
 	}
-	return { rule: { pattern, regex, reason: reason ?? "" } };
+	let test;
+	if (wildcard !== undefined) {
+		test = (text) => wildcardMatch(wildcard, text);
+	} else {
+		let regex;
+		try {
+			regex = new RegExp(regexSource, flags);
+		} catch (err) {
+			return { error: `${where}: invalid regex (${oneLine(err && err.message ? err.message : err)})` };
+		}
+		test = (text) => regex.test(text);
+	}
+	return {
+		rule: {
+			source: wildcard !== undefined ? wildcard : regexSource,
+			test,
+			reason: reason ?? "",
+			tools: new Set(tools),
+		},
+	};
 };
 
 /** Validate the whole file; returns `{rules}` or `{error}`. */
@@ -155,12 +220,12 @@ export default function (api) {
 		return { ok: true };
 	};
 
-	const match = (command) => {
+	const match = (tool, text) => {
 		for (const rule of rules.deny) {
-			if (rule.regex.test(command)) return { kind: "deny", rule };
+			if (rule.tools.has(tool) && rule.test(text)) return { kind: "deny", rule };
 		}
 		for (const rule of rules.ask) {
-			if (rule.regex.test(command)) return { kind: "ask", rule };
+			if (rule.tools.has(tool) && rule.test(text)) return { kind: "ask", rule };
 		}
 		return undefined;
 	};
@@ -168,30 +233,39 @@ export default function (api) {
 	reload();
 
 	api.on("tool_call", async (event) => {
-		const command = typeof event.args?.command === "string" ? event.args.command : undefined;
+		const tool = event?.name;
+		let text;
+		if (tool === "bash") {
+			text = typeof event.args?.command === "string" ? event.args.command : undefined;
+		} else if (tool === "write" || tool === "edit") {
+			const target = typeof event.args?.path === "string" ? event.args.path : undefined;
+			const base = typeof event.cwd === "string" ? event.cwd : api.cwd;
+			text = target === undefined ? undefined : path.resolve(base, target);
+		}
 		const who = event.subagent === true ? ` (child${event.agent ? `:${event.agent}` : ""})` : "";
-		const subject = command === undefined ? "?" : oneLine(command);
+		const subject = text === undefined ? "?" : oneLine(text);
+		const preview = tool === "bash" && text !== undefined ? { kind: "command", tool: "bash", text } : undefined;
 		try {
-			if (event.name !== "bash" || command === undefined) return undefined;
-			const hit = match(command);
+			if ((tool !== "bash" && tool !== "write" && tool !== "edit") || text === undefined) return undefined;
+			const hit = match(tool, text);
 			if (hit === undefined) return undefined;
 			if (hit.kind === "deny") {
-				audit(`[deny] ${oneLine(hit.rule.pattern)} — ${subject} — blocked${who}`);
+				audit(`[deny] ${oneLine(hit.rule.source)} — ${subject} — blocked${who}`);
 				return {
 					block: true,
-					reason: hit.rule.reason === "" ? `blocked by guardian2 rule: ${hit.rule.pattern}` : hit.rule.reason,
+					reason: hit.rule.reason === "" ? `blocked by guardian2 rule: ${hit.rule.source}` : hit.rule.reason,
 				};
 			}
-			const approved = await api.confirm(
-				"allow this bash command?",
-				hit.rule.reason === "" ? `guardian2 ask rule: ${hit.rule.pattern}` : hit.rule.reason,
-				{
-					sessionKey: "guardian2:session",
-					rememberLabel: "all guardian2 ask prompts this session",
-					preview: { kind: "command", tool: "bash", text: command },
-				},
-			);
-			audit(`[ask] ${oneLine(hit.rule.pattern)} — ${subject} — ${approved ? "approved" : "denied"}${who}`);
+			const detail = hit.rule.reason === "" ? `guardian2 ask rule: ${hit.rule.source}` : hit.rule.reason;
+			const options = {
+				sessionKey: "guardian2:session",
+				rememberLabel: "all guardian2 ask prompts this session",
+			};
+			const approved =
+				tool === "bash"
+					? await api.confirm("allow this bash command?", detail, { ...options, preview })
+					: await api.confirm(`allow this ${tool}?`, `${text}\n${detail}`, options);
+			audit(`[ask] ${oneLine(hit.rule.source)} — ${subject} — ${approved ? "approved" : "denied"}${who}`);
 			if (approved) return undefined;
 			return {
 				block: true,
@@ -203,8 +277,8 @@ export default function (api) {
 				// "stop asking" grant must not auto-approve this fallback).
 				const approved = await api.confirm(
 					"guardian2 hit an internal error — allow this call?",
-					undefined,
-					command === undefined ? {} : { preview: { kind: "command", tool: "bash", text: command } },
+					subject,
+					preview === undefined ? {} : { preview },
 				);
 				audit(`[ask] internal error — ${subject} — ${approved ? "approved" : "denied"}${who}`);
 				return approved ? undefined : { block: true, reason: "guardian2 internal error — the call was not allowed" };
@@ -217,7 +291,7 @@ export default function (api) {
 	api.registerCommand({
 		name: "guardian2",
 		usage: "/guardian2 [status|reload]",
-		summary: "guardian2: regex deny/ask gate for bash commands",
+		summary: "guardian2: wildcard deny/ask gate for bash and file paths",
 		allowedDuringRun: true,
 		run: (args, ctx) => {
 			try {

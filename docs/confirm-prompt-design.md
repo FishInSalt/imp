@@ -6,6 +6,11 @@ CONFIRMED); every fold is recorded in §13. **Phase 1 and Phase 2 are both
 implemented** (§7 and §8 record the implementation facts, deviations and gate
 results); Phase 2 awaits its independent implementation check.
 
+> **Note (2026-10-04).** The guardian v1 example this document cites as its
+> call-site source (and `test/guardian.test.ts`) was removed together with
+> guardian v1; the shipped gate example is `examples/extensions/guardian2.mjs`
+> now. Citations below are kept as the historical design record.
+
 Workspace: `/Users/z/Z/Agent_demo/imp-confirm-design` (a dedicated git worktree, so
 this design does not disturb the shared checkout; node_modules is symlinked to
 the main checkout for the test runs cited below).

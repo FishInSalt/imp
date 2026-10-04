@@ -5,6 +5,13 @@ Branch `m4-extensions`. Stage M4 per PROJECT_PLAN.md, re-scoped into three sub-m
 contract: module layout, signatures, exact diagnostics strings, conflict policy, trust decision,
 test plan, and per-sub-milestone acceptance criteria.
 
+> **Note (2026-10-04).** guardian v1 (the §13 case study, `guardian.mjs`)
+> and its host classify seam were removed when guardian2 replaced it — the
+> case study below is historical. The shipped gate example is
+> `examples/extensions/guardian2.mjs` (`docs/guardian2-design.md`), and the
+> live `ExtensionApi` no longer carries `classify`
+> (`src/extensions/types.ts`).
+
 Reference: pi's extension system was studied via two research reports. Every pi citation and
 every imp `file:line` seam below was spot-checked against the actual sources
 (`/Users/z/Z/Agent_demo/pi`, this repo at `main`); corrections in Appendix B — nothing
@@ -227,9 +234,10 @@ no legacy stored args to upgrade — pi needed it for pre-1.0 sessions, docs/ext
 Seven members total at M4: three read-only facts, three registration methods,
 one subscriber. This is the **entire** API; anything an extension cannot do
 with this, it cannot do in M4. *(Later milestones grew it deliberately:
-`setStatus` (task-timer), and `classify` — #guardian-auto-mode Phase A, whose
-design §0 D6 records the "one purpose-built member" decision — bring the live
-surface to ten; `src/extensions/types.ts` is the normative list.)*
+`setStatus` (task-timer), `confirm` (#confirm-prompt), and the color pair
+(#tool-name-colors); `classify` — #guardian-auto-mode Phase A — was
+withdrawn with guardian v1. `src/extensions/types.ts` is the normative
+list.)*
 
 ```ts
 // src/extensions/types.ts

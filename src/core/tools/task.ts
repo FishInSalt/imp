@@ -139,7 +139,7 @@ export interface TaskToolOptions {
 	 * (M6b) — the caller marks the event as subagent-sourced. */
 	onToolCall?: (
 		call: { toolCallId: string; name: string; args: Record<string, unknown> },
-		info: { agent?: string; cwd?: string; workOrder?: string },
+		info: { agent?: string; cwd?: string },
 		// biome-ignore lint/suspicious/noConfusingVoidType: mirrors the loop's gate contract — a gate may return a decision, nothing (void), or undefined
 	) => Promise<ToolCallDecision | void | undefined> | ToolCallDecision | void | undefined;
 	/** Observes the child's tool events (tool_start/tool_end) with the same
@@ -640,7 +640,6 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 									options.onToolCall?.(call, {
 										agent: launch.agent?.name,
 										cwd: launch.cwd,
-										workOrder: String(args.prompt),
 									})
 							: undefined,
 						onEvent: options.onEvent
@@ -883,7 +882,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 					session: session ?? undefined,
 					onMessage: session ? (message: AgentMessage) => session?.appendMessage(message) : undefined,
 					onToolCall: options.onToolCall
-						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd, workOrder: prompt })
+						? (call) => options.onToolCall?.(call, { agent: agent?.name, cwd: childCwd })
 						: undefined,
 					onEvent: options.onEvent
 						? (event) =>

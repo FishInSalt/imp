@@ -187,6 +187,12 @@ const PLACEHOLDER_HINT = dim(
  *  reach for it, and "typing queues" advertises steering. */
 const INTERRUPT_HINT = dim("(esc to interrupt · typed lines queue · alt+enter follow-up)", true);
 
+/** #ask-timeout: setTimeout's platform ceiling (2^31 - 1 ms ≈ 24.85 days).
+ *  Node fires delays above it after ~1 ms (TimeoutOverflowWarning) — a
+ *  caller's "very long" deadline would otherwise refuse every ask
+ *  instantly, so deadlines clamp here instead of overflowing. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** #confirm-prompt (Phase 1 D2): the picker's key affordance, drawn inside the
  *  picker box because the editor hint row is blanked while a selector owns
  *  focus. The digit range is computed from the item count (D3 caps it at 9);
@@ -1061,7 +1067,9 @@ export class TuiShell implements LineInput {
 			// the process alive by itself.
 			const timeoutMs = options.timeoutMs;
 			if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-				timer = setTimeout(() => finish("timeout"), timeoutMs);
+				// Clamp, never overflow: above the platform ceiling Node fires after
+				// ~1 ms, which would refuse every ask instantly.
+				timer = setTimeout(() => finish("timeout"), Math.min(timeoutMs, MAX_TIMER_MS));
 				timer.unref?.();
 			}
 		});

@@ -114,7 +114,9 @@ Schema and validation (strict, checked at load):
   patterns now; a v0 regex string must move to a `regex` entry.
 - Every `regex` is compiled at load; any failure fails the whole load (§5).
 - Missing file = zero rules = the gate does nothing.
-- `askTimeoutMs` (optional) — a positive safe integer, milliseconds. Bounds
+- `askTimeoutMs` (optional) — a positive safe integer of milliseconds, at
+  most 2147483647 (the platform timer ceiling; anything larger is a config
+  error). Bounds
   how long an ask question may wait **once visible**: queued questions do
   not count down (the host's picker queue re-opens the question when its
   turn comes, so the timer starts at that opening). On expiry the question
@@ -380,7 +382,11 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
   optional top-level `askTimeoutMs` (positive safe integer; rules and
   deadline swap atomically on reload), submits it on ask confirms, audits
   `timeout` as a third outcome, and blocks timed-out calls with the
-  dedicated wording. The shipped template was rebuilt around portable
+  dedicated wording. Oversized deadlines clamp at the platform ceiling
+  (host-side) and are a config error above it (guardian-side); a
+  contract-violating host that reports `timeout` without a configured
+  deadline degrades the wording to "the confirmation timed out — the call
+  was not approved". The shipped template was rebuilt around portable
   catastrophe-only rules: home wipes (`~` / `$HOME` spellings), filesystem
   root, `diskutil erase*` / `apfs delete*`, raw-device `dd`, and the `.ssh`
   folder (`~` / `$HOME` spellings) — absolute paths stay out (a `_comment`

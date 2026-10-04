@@ -32,19 +32,19 @@ guardian 的 ask 弹窗目前会**无限等待**。owner 要求：
 - **S5** 无交互面（print / no-handler / `ask === null`）路径不变：立即 `false`，忽略 `timeoutMs`。
 - **S6** readline（legacy `IMP_REPL=legacy`）路径本次**不做**超时（§10 范围外；**此限制必须写进 `ConfirmOptions.timeoutMs` 的 JSDoc**——宿主不保证 legacy 面生效）。
 - **S7** 多问题并行：各自独立计时；每个问题打开时启动各自的定时器。
-- **S8** `timeoutMs` 宿主侧校验宽松：非有限数/≤0/非数字 → 视为未传（扩展侧 guardian 自己从严校验配置）。
+- **S8** `timeoutMs` 宿主侧校验宽松：非有限数/≤0/非数字 → 视为未传（扩展侧 guardian 自己从严校验配置）；**超过平台计时上限（2147483647 ms）→ 钳位到上限**——Node 对超上限的 `setTimeout` 延时会在 ~1 ms 后触发，不钳位会把"很久以后"变成"瞬间超时"（实现评审 P2#1）。
 - **S9** 返回联合类型对既有调用方无破坏的**准确表述**：仅新增 `=== "timeout"` 分支；`"timeout"` 是**真值**——凡通过 `timeoutMs` 启用超时的调用方，批准判断必须写 `=== true`，不能写 `if (ok)`（JSDoc 必须写明；§9 扫描全库 `if (ok)` 式示例）。
 
 ## 4. API 变更（宿主）——r2 完整清单（r1 评审判定原表不完整，tsc 已复现 TS2322/TS7015）
 
 | 位置 | 现状 | 变更 |
 |---|---|---|
-| `src/extensions/types.ts` `ConfirmOptions`（~62） | `sessionKey? / warnSpans? / rememberLabel? / preview?` | 增 `timeoutMs?: number`（注释：TUI picker 可见期计时、排队不计、非法忽略、S6 legacy 忽略） |
+| `src/extensions/types.ts` `ConfirmOptions`（~62） | `sessionKey? / warnSpans? / rememberLabel? / preview?` | 增 `timeoutMs?: number`（注释：TUI picker 可见期计时、排队不计、非法忽略、**超上限钳位**、S6 legacy 忽略） |
 | `src/extensions/types.ts` `api.confirm`（~158） | `Promise<boolean>` | `Promise<boolean \| "timeout">`；JSDoc 重写：**批准要求值恰为 `true`**；`"timeout"` 属非批准；"never hangs" 的兜底归因于调用方期限，且**仅限能承载超时的宿主界面**（legacy/无交互面不生效，见 S6） |
 | `src/extensions/registry.ts`（字段 ~122、`confirm()` ~466、**Options ~94**） | `Promise<boolean>` ×3 | 同步加宽联合 |
 | `src/extensions/loader.ts`（`ExtensionLoaderOptions.confirm` ~36；接线 ~255, ~267） | `Promise<boolean>` | 同步加宽 |
 | `src/cli.ts`（`loadExtensionSetup` 的 confirm 参数 ~505-508；使用 ~607） | `Promise<boolean>` | 同步加宽 |
-| `src/repl/line-input.ts` `SelectOptions`（~32） | — | 增 `timeoutMs?: number`（注释同 S2/S8/S6） |
+| `src/repl/line-input.ts` `SelectOptions`（~32） | — | 增 `timeoutMs?: number`（注释同 S2/S8/S6，含超上限钳位） |
 | `src/repl/line-input.ts` `LineInput.select?`（~133） | `Promise<number \| null>` | `Promise<number \| null \| "timeout">` |
 | `src/repl/repl.ts` `bindSelect`（~348）+ confirm 包装（~279-346） | `(options) => Promise<number \| null>`；包装 `Promise<boolean>` | 签名与返回加宽；**分支顺序定稿**：`if (choice === "timeout")` 必须紧跟在 `await select(...)` 之后、早于 `choice === null` 与 sessionKey 逻辑（否则 `"timeout" !== 2` 会走成 `approved = true`——r1 评审 P1#1）；该分支写 S4 的 note 后返回 `"timeout"`、**不**写 `sessionAllowed` |
 | `src/repl/repl.ts` select 选项装配（~309-316） | 无 `timeoutMs` | **转发**：仅当 `options?.timeoutMs !== undefined` 时携带 `timeoutMs`（保持既有精确断言不被 undefined 键扰动） |
@@ -57,13 +57,13 @@ guardian 的 ask 弹窗目前会**无限等待**。owner 要求：
 ## 5. 宿主实现点（TUI picker）
 
 - `TuiShell.select`（`src/repl/shell.ts`）：排队分支（~886-893）不做计时——晋级时重新调用 `this.select(options)`，定时器因此天然从"真正打开"起算（D7）。
-- 打开路径：picker 渲染/`this.selector` 置位后启动 `setTimeout(...).unref?.()`；回调走 `finish` 漏斗新分支（结算值 `"timeout"`），拆除动作与取消完全一致（清 selector、移除 box、聚焦编辑器、晋级后续排队问题——含 `askLine` 与 `pendingSelects`）。
+- 打开路径：picker 渲染/`this.selector` 置位后启动 `setTimeout(...).unref?.()`（延时 `Math.min(timeoutMs, 2^31-1)` 钳位，见 S8）；回调走 `finish` 漏斗新分支（结算值 `"timeout"`），拆除动作与取消完全一致（清 selector、移除 box、聚焦编辑器、晋级后续排队问题——含 `askLine` 与 `pendingSelects`）。
 - `finish` 内 `clearTimeout`；保持 `settled` 一次性守卫。
 - 关闭路径复用现状（不动）：`close()`（~1223-1229）、SIGINT（~505-509）、stdin end（~511-518）均按取消结算；armed 定时器由 `finish` 清理。
 
 ## 6. guardian 扩展侧
 
-- **配置解析**：接受顶层 `askTimeoutMs`；校验 `typeof === "number" && Number.isSafeInteger && > 0`，否则整文件配置错误。**reload 生命周期**：与 rules 原子存储——成功加载（含文件不存在 ENOENT）即整体替换（ENOENT → 无超时）；加载失败保留上次有效。`_` 前缀忽略规则不变。
+- **配置解析**：接受顶层 `askTimeoutMs`；校验 `typeof === "number" && Number.isSafeInteger && > 0 && ≤ 2147483647`（后者为平台计时上限，超上限 = 配置错误），否则整文件配置错误。**reload 生命周期**：与 rules 原子存储——成功加载（含文件不存在 ENOENT）即整体替换（ENOENT → 无超时）；加载失败保留上次有效。`_` 前缀忽略规则不变。
 - **调用**：ask 命中时 options **仅在配置存在时**携带 `timeoutMs`（同 §4 转发约定）。
 - **结果三分支（严格比较）**：
 
@@ -74,7 +74,7 @@ outcome === "timeout"  → 审计 — timeout；block reason：
 否则（false）           → 拒绝：现行「the user declined this call」路径
 ```
 
-- **`humanDuration` 算法定稿**：`ms >= 60000` → `n = max(1, round(ms/60000))` → `` `${n} minute${n === 1 ? "" : "s"}` ``；`ms < 60000` → `n = max(1, round(ms/1000))` → `` `${n} second${n === 1 ? "" : "s"}` ``。边界：999→"1 second"、1000→"1 second"、59999→"60 seconds"、60000→"1 minute"、90000→"2 minutes"、600000→"10 minutes"（配 §8 边界单测）。
+- **`humanDuration` 算法定稿**：`ms >= 60000` → `n = max(1, round(ms/60000))` → `` `${n} minute${n === 1 ? "" : "s"}` ``；`ms < 60000` → `n = max(1, round(ms/1000))` → `` `${n} second${n === 1 ? "" : "s"}` ``。边界：999→"1 second"、1000→"1 second"、59999→"60 seconds"、60000→"1 minute"、90000→"2 minutes"、600000→"10 minutes"（配 §8 边界单测）。**契约外兜底**：宿主违反契约在无配置期限时报 `timeout` 时，文案退化为 `the confirmation timed out — the call was not approved`（`humanDuration(undefined)` 不得产生 "NaN seconds"；实现评审 P3#7）。
 - **内部错误回退路径**：同样携带 `timeoutMs`；超时结果 → 审计 `[ask] internal error — <subject> — timeout`；block reason 保持 `guardian internal error — the call was not allowed`（历史串不动）。
 
 ## 7. 模板与本机配置（在本功能落地后执行）
@@ -109,6 +109,8 @@ outcome === "timeout"  → 审计 — timeout；block reason：
 
 **门禁**：`npm run build`、`npm run typecheck`（双配置）、`npm run lint`、`npm run test`（全量）。
 
+**r3 折叠补充（实现评审 2026-10-04）**：超上限钳位（S8；repl-tui 测"不瞬发、手动答复仍胜出"）；guardian 上限 2147483647 接受 / 2147483648 配置错误；ENOENT 重载连期限一起清（guardian 测试）；契约外宿主 `timeout` + 无配置期限 → 退化文案（guardian 测试）；非法值循环补字符串 `"500"`；stdin end + armed 定时器 → `null`（repl-tui 测试）。
+
 ## 9. 文档与变更记录
 
 - `docs/guardian-design.md`：配置 schema（`askTimeoutMs` + reload 语义）、ask 流程（三分支、审计第三态、超时文案）+ rev 递增。
@@ -142,3 +144,12 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **N1（P2 残余）** → §4 补 `trust-ask.ts:64` 独立站点（直用 `TuiShell.select`，与 ctx.select 决策无关）+ `test/repl-tui.test.ts` 三处回调签名；删除原"trust-ask 属于被拒方案后果"的错误归因。
   - **N2（P3）** → §4 `api.confirm` 行："never hangs" 兜底限定为"能承载超时的宿主界面"（与 S6 对齐）。
   - **N3（P3）** → §8-16 注明与 §7 同批执行。
+- **r3 实现评审（独立，只读；commit 5d8a9c8）：NEEDS-FIXES** → 已折叠：
+  - **P2#1（计时上限）** → 宿主 `Math.min(timeoutMs, 2^31-1)` 钳位（S8/§5）+ guardian 配置拒绝 `> 2147483647`（§6）；测试：超上限不瞬发、手动答复仍胜（repl-tui）、上限接受 / 超界报错（guardian）。
+  - **P3#2（stdin end 缺口）** → repl-tui 补测（armed + `process.stdin.emit("end")` → `null`）。
+  - **P3#3（ENOENT 清期限未钉）** → guardian 补测（ENOENT → 重载 → 新配置无期限 → confirm 不带键）。
+  - **P3#4（字符串非法值缺口）** → 非法值循环补 `"500"`。
+  - **P3#5（真实计时器 flake 风险）** → 记录在案；沿用本文件既有 real-timer 风格（settle 等待），边界余量经重复运行 + 全量验证（非阻断）。
+  - **P3#6（两处过时陈述）** → `docs/guardian-auto-mode-design.md` D16/§11 补 superseded 注释。
+  - **P3#7（humanDuration(undefined) 防御）** → 退化文案分支 + 测试（§6）。
+  - 核心路径（P0 类分支顺序、定时器生命周期、类型加宽、guardian 三分支）逐行核实无 P0/P1。

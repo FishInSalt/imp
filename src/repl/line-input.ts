@@ -59,7 +59,8 @@ export interface SelectOptions {
 	 *  only when the picker actually opens — a queued pick re-enters select()
 	 *  on promotion, so time spent behind another picker does not count — and
 	 *  resolves "timeout" when the deadline passes unanswered. Positive
-	 *  finite numbers only; anything else means no deadline. Only the confirm
+	 *  finite numbers only; anything else means no deadline (values beyond
+	 *  the platform timer ceiling clamp to it). Only the confirm
 	 *  path sets it. */
 	timeoutMs?: number;
 	items: SelectItemOption[];

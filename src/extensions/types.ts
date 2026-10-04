@@ -88,9 +88,11 @@ export interface ConfirmOptions {
 	 *  host starts the clock when the question becomes actually visible — a
 	 *  queued question (blocked behind another picker) does not count down —
 	 *  and resolves it as "timeout" when the deadline passes unanswered.
-	 *  Positive finite numbers only; anything else is ignored. Capability-
-	 *  gated like every interactive affordance: hosts without a picker
-	 *  (print mode, the legacy readline shell) ignore the deadline entirely. */
+	 *  Positive finite numbers only; anything else is ignored, and values
+	 *  beyond the platform timer ceiling wait the ceiling — a huge deadline
+	 *  clamps, it never overflows into an instant fire. Capability-gated like
+	 *  every interactive affordance: hosts without a picker (print mode, the
+	 *  legacy readline shell) ignore the deadline entirely. */
 	timeoutMs?: number;
 }
 

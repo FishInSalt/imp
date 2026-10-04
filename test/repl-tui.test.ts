@@ -1250,7 +1250,7 @@ describe("M9-2 review regressions", () => {
 		const { terminal, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		for (const value of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+		for (const value of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, "500" as unknown as number]) {
 			const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: value });
 			await settle(0);
 			terminal.data("\r");
@@ -1304,6 +1304,32 @@ describe("M9-2 review regressions", () => {
 		process.emit("SIGINT");
 		await expect(pick).resolves.toBe(null);
 		expect(events).toEqual(["interrupt"]);
+		shell.close();
+	});
+
+	it("#ask-timeout: an over-ceiling deadline clamps instead of overflowing into an instant fire", async () => {
+		const { terminal, shell } = makeShell();
+		shell.start();
+		await settle(0);
+		// 2^31 + 5000: an unclamped setTimeout fires oversized delays after ~1 ms,
+		// so the picker would already have resolved "timeout" before the answer.
+		// With the clamp the manual answer must still win.
+		const chosen = shell.select({ items: [{ label: "a" }], timeoutMs: 2 ** 31 + 5000 });
+		await settle();
+		terminal.data("\r");
+		await expect(chosen).resolves.toBe(0);
+		shell.close();
+	});
+
+	it("#ask-timeout: stdin end with an armed deadline cancels (null), it does not time out", async () => {
+		const { shell, events } = makeShell();
+		shell.start();
+		await settle(0);
+		const pick = shell.select({ items: [{ label: "a" }], timeoutMs: 60 });
+		await settle(0);
+		process.stdin.emit("end");
+		await expect(pick).resolves.toBe(null);
+		expect(events).toEqual(["eof"]);
 		shell.close();
 	});
 

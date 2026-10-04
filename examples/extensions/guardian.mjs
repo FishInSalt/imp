@@ -180,8 +180,8 @@ const parseConfig = (text) => {
 		if (key.startsWith("_")) continue; // top-level `_`-prefixed keys ignored
 		if (key === "askTimeoutMs") {
 			const value = root[key];
-			if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-				return { error: "askTimeoutMs must be a positive integer of milliseconds" };
+			if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 2147483647) {
+				return { error: "askTimeoutMs must be a positive integer of milliseconds (at most 2147483647)" };
 			}
 			askTimeoutMs = value;
 			continue;
@@ -322,7 +322,9 @@ export default function (api) {
 			if (outcome === true) return undefined;
 			const declined =
 				outcome === "timeout"
-					? `the confirmation timed out after ${humanDuration(askTimeoutMs)} — the call was not approved`
+					? askTimeoutMs === undefined
+						? "the confirmation timed out — the call was not approved" // contract-violating host; unreachable otherwise
+						: `the confirmation timed out after ${humanDuration(askTimeoutMs)} — the call was not approved`
 					: "the user declined this call";
 			return {
 				block: true,

@@ -662,7 +662,7 @@ describe("guardian #ask-timeout", () => {
 	});
 
 	it("an invalid askTimeoutMs is a config error (no rules active, flag set, audited)", async () => {
-		for (const bad of ["600000", 0, -5, 1.5, true]) {
+		for (const bad of ["600000", 0, -5, 1.5, true, 2147483648]) {
 			const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: bad } });
 			expect(w.statuses.get("config")).toBe("config error");
 			expect(await w.gate(bash("sudo ls"))).toBeUndefined(); // no rules active
@@ -687,6 +687,33 @@ describe("guardian #ask-timeout", () => {
 		const options = (w.confirm.mock.calls.at(-1) as unknown[])[2] as Record<string, unknown>;
 		expect("timeoutMs" in options).toBe(false);
 		expect(w.statuses.get("config")).toBeUndefined();
+	});
+
+	it("the platform timer ceiling (2147483647 ms) is the accepted maximum", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 2147483647 } });
+		expect(w.statuses.get("config")).toBeUndefined();
+		await w.gate(bash("sudo ls"));
+		expect((w.confirm.mock.calls[0] as unknown[])[2]).toMatchObject({ timeoutMs: 2147483647 });
+	});
+
+	it("an ENOENT reload clears the deadline together with the rules", async () => {
+		const w = await boot({ config: { ask: ["sudo"], askTimeoutMs: 600000 } });
+		await rm(configPath());
+		await w.runCommand("reload"); // missing file: rules AND deadline reset
+		await writeConfig({ ask: ["sudo"] }); // a fresh config without the field
+		await w.runCommand("reload");
+		await w.gate(bash("sudo ls"));
+		const options = (w.confirm.mock.calls.at(-1) as unknown[])[2] as Record<string, unknown>;
+		expect("timeoutMs" in options).toBe(false);
+		expect(w.statuses.get("config")).toBeUndefined();
+	});
+
+	it("a host reporting timeout without a configured deadline gets the fallback wording", async () => {
+		const w = await boot({ config: { ask: ["sudo"] } }); // no askTimeoutMs
+		w.confirm.mockResolvedValueOnce("timeout"); // a contract-violating host
+		const result = blockOf(await w.gate(bash("sudo ls")));
+		expect(result.reason).toBe("the confirmation timed out — the call was not approved");
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — timeout"]);
 	});
 
 	it("the internal-error fallback carries the deadline; a fallback timeout keeps the historical reason", async () => {

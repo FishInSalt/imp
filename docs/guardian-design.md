@@ -1,10 +1,10 @@
 # guardian — a minimal config-driven permission gate (design)
 
-Status: **rev 2.9 — renamed to `guardian`.** Merged to `main` (`5fb3a24`
-v0, `bce6df2` friendly config), cut over on 2026-10-04 (P2), guardian v1
-removed (P3/P4, `chore/remove-guardian-v1`), and the working name guardian2
-retired — files, command, config/audit paths, and this document are
-`guardian` now.
+Status: **rev 3.0 — the ask picker red-highlights the rule-matched span.**
+Renamed to `guardian` (rev 2.9); merged to `main` (`5fb3a24` v0, `bce6df2`
+friendly config), cut over on 2026-10-04 (P2), guardian v1 removed (P3/P4,
+`chore/remove-guardian-v1`), and the working name guardian2 retired —
+files, command, config/audit paths, and this document are `guardian` now.
 Owner direction: wildcard patterns by default with a `regex` escape hatch;
 optional `tool` scoping for `write` / `edit` paths; `reason` stays optional
 (the template demonstrates both forms).
@@ -125,7 +125,11 @@ untouched):
    - `bash`: message `"allow this bash command?"`; detail `<reason or
      "guardian ask rule: <source>">`; options `{ sessionKey:
      "guardian:session", rememberLabel: "all guardian ask prompts this
-     session", preview: { kind: "command", tool: "bash", text: command } }`.
+     session", preview: { kind: "command", tool: "bash", text: command,
+     warnSpans: [[start, end]] } }` — `warnSpans` is the span the rule
+     matched (wildcard: first segment start … last segment end; regex: the
+     `exec` match span), which the picker styles with its alert color;
+     omitted when empty (an all-`*` pattern).
    - `write` / `edit`: message `"allow this write?"` / `"allow this edit?"`;
      detail `<resolved path>` + (`\n` + `<reason or "guardian ask rule:
      <source>">`); options `{ sessionKey, rememberLabel }` (no preview — the
@@ -263,8 +267,10 @@ untouched):
 2. Deny: first matching rule blocks; no confirm call; reason text (custom and
    default).
 3. Ask (bash): confirm called with the reason, the shared `sessionKey` /
-   `rememberLabel`, and the command `preview` (all pinned); approved → runs;
-   declined → blocks; string-shorthand rule works; `regex` flags work.
+   `rememberLabel`, and the command `preview` (all pinned); the preview's
+   `warnSpans` carry the matched span (wildcard covered region / regex
+   `exec` span; omitted when empty); approved → runs; declined → blocks;
+   string-shorthand rule works; `regex` flags work.
 4. Wildcard semantics: plain text is literal (`.ssh/` does not match
    `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters
    including newlines (`a*c` matches `a\nb\nc`); `rm * ~` matches
@@ -332,6 +338,14 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
    both forms); optional `tool` scoping for `write` / `edit` path rules.
 
 ## 10. Review log
+
+- rev 3.0 — matched-span highlight: the bash ask preview carries
+  `warnSpans` = `[[start, end]]` of the region the rule matched (wildcard:
+  first segment start … last segment end; regex: the `exec` span; empty
+  spans omitted). The picker styles it with the alert color (bold red); the
+  deny path has no display surface for spans (no prompt, no preview). Tests
+  pin the covered region, a leading `*`, a regex span, middle segments, and
+  the empty-span omission.
 
 - rev 2.9 — renamed to `guardian` (2026-10-04): the extension file,
   template, test file, this document, the `/guardian` command,

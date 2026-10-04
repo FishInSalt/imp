@@ -1,9 +1,9 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.5 — config ergonomics + file-tool scope.** Owner direction:
-wildcard patterns by default with a `regex` escape hatch; optional `tool`
-scoping for `write` / `edit` paths; `reason` stays optional (the template
-demonstrates both forms). Design-delta review pending (R4).
+Status: **rev 2.6 — R4 folds applied; design-delta review closed.** Owner
+direction: wildcard patterns by default with a `regex` escape hatch;
+optional `tool` scoping for `write` / `edit` paths; `reason` stays optional
+(the template demonstrates both forms). Implementation next.
 
 - Worktree / branch: `imp-guardian2` / `feat/guardian2-friendly-config`,
   base `main` (5fb3a24 — guardian2 v0 merged).
@@ -51,6 +51,10 @@ Known limits, documented and accepted:
   over-matching (the safe direction) rather than masking regions.
 - `*` is the only wildcard; a literal `*` cannot be expressed in a wildcard
   entry (use a `regex` entry if that ever matters).
+- file-path matching is lexical (`path.resolve`, no realpath) and
+  case-sensitive: a symlinked path can bypass a path rule, and a case
+  variant can miss one on a case-insensitive filesystem (a `regex` entry
+  with the `i` flag is the escape hatch).
 - user patterns are trusted config. A pathological `regex` can stall the
   synchronous match path — accepted (ReDoS); the input is **not** capped,
   because a cap would silently pass everything beyond it, including deny
@@ -88,9 +92,15 @@ Schema and validation (strict, checked at load):
   - `tool` (optional) — one of `bash` / `write` / `edit`, or an array of
     them; absent ⇒ `bash`.
 - Wildcard semantics: the pattern is escaped to literal text, `*` becomes
-  "any run of characters", and a match is "the text appears anywhere"
-  (unanchored). Wildcard patterns cannot fail compilation; empty /
-  whitespace patterns are rejected.
+  "any run of characters" spanning newlines (compiled as `[\s\S]*`), and a
+  match is "the text appears anywhere" (unanchored, case-sensitive).
+  Wildcard patterns cannot fail compilation; empty / whitespace patterns are
+  rejected.
+- An empty `regex` (`""`) is rejected like an empty pattern (an empty
+  regex matches everything); `tool` must name at least one tool (an empty
+  array is an error).
+- Breaking change vs v0 (never deployed): string entries are wildcard
+  patterns now; a v0 regex string must move to a `regex` entry.
 - Every `regex` is compiled at load; any failure fails the whole load (§5).
 - Missing file = zero rules = the gate does nothing.
 
@@ -148,8 +158,9 @@ untouched):
   [load] config error — <first line of the error>
   ```
 
-  Formats pinned byte-exact in tests. `denied` covers declines and hosts
-  with no interactive prompt (§3).
+  Formats pinned byte-exact in tests; every line carries an ISO-8601
+  timestamp prefix (`new Date().toISOString()` + space). `denied` covers
+  declines and hosts with no interactive prompt (§3).
 - **Footer**: `setStatus("config", "config error")` while the last load
   failed; cleared on a successful load. Nothing else (no rule count, no
   per-call status).
@@ -172,8 +183,9 @@ untouched):
 - An internal error during evaluation → fresh confirmation with **no
   sessionKey** (fail toward asking — evaluation, unlike config loading, has
   unknown state; a session-wide "stop asking" grant must not silently
-  auto-approve this fallback). It carries the command preview when the match
-  text is a bash command, and the outcome is audited as
+  auto-approve this fallback). The confirm's detail is the match text
+  (command or path); the command preview rides along when the match is a
+  bash command; the outcome is audited as
   `[ask] internal error — <command or path> — approved|denied`.
 
 ## 6. Phases
@@ -234,11 +246,13 @@ untouched):
    `rememberLabel`, and the command `preview` (all pinned); approved → runs;
    declined → blocks; string-shorthand rule works; `regex` flags work.
 4. Wildcard semantics: plain text is literal (`.ssh/` does not match
-   `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters;
-   `rm * ~` matches `rm -rf ~` and `rm -fr ~`.
+   `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters
+   including newlines (`a * c` matches `a\nb\nc`); `rm * ~` matches
+   `rm -rf ~` and `rm -fr ~`.
 5. Tool scoping: a bash rule never matches `write`/`edit` and vice versa;
    file rules match the resolved absolute path (a relative `args.path`
-   resolves against the caller cwd); `tool` arrays cover both file tools.
+   resolves against the caller cwd — an `event.cwd` different from
+   `api.cwd` wins); `tool` arrays cover both file tools.
 6. Files: a denied write/edit blocks with the rule reason; an ask write/edit
    prompts with the path in the detail and no preview; declined → blocks;
    audit carries the resolved path as the match text.
@@ -248,8 +262,9 @@ untouched):
 8. Precedence: a call matching both deny and ask blocks (deny wins).
 9. Child / headless: audit child marker; headless ask becomes a block,
    audited `denied`.
-10. Internal error: the fallback confirm is keyless and (for bash) carries
-    the preview; the outcome is audited (`[ask] internal error — …`).
+10. Internal error: the fallback confirm is keyless, carries the match text
+    as its detail, and (for bash) the preview; the outcome is audited
+    (`[ask] internal error — …`).
 11. Audit formats byte-exact (incl. the 160-char cap including the ellipsis,
     whitespace flattening, and the ISO timestamp prefix); footer status
     set/cleared.
@@ -296,6 +311,13 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 
 ## 10. Review log
 
+- rev 2.6 — R4 folds: `*` spans newlines (`[\s\S]*`); the template regains
+  the `$HOME` / `${HOME}` deny variants; a worktree-cwd test; known limits
+  for lexical, case-sensitive path matching; validation edges (empty
+  `regex`, empty `tool`); the file internal-error fallback detail; the audit
+  timestamp sentence; a breaking-change note vs the unreleased v0 (string
+  entries are wildcards now — v0 regex strings must move to `regex`).
+  Design-delta review closed.
 - rev 2.5 — owner direction: friendlier config (wildcard patterns by
   default with a `regex` escape hatch; `reason` optional) and `write` /
   `edit` path rules via an optional `tool` field. Design-delta review

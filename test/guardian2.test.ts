@@ -1,6 +1,6 @@
 // test/guardian2.test.ts — behavior pins for the minimal guardian2 example
 // extension (examples/extensions/guardian2.mjs). Binding spec:
-// docs/guardian2-design.md (rev 2.3).
+// docs/guardian2-design.md (rev 2.6).
 //
 // Pattern: the real example runs against a fake api — a confirm spy, captured
 // statuses, an audit-file reader, and the registered /guardian2 command
@@ -131,6 +131,16 @@ const bash = (command: string, extra: Partial<ToolCallEvent> = {}): Partial<Tool
 	...extra,
 });
 
+const fileCall = (
+	name: "write" | "edit",
+	target: string,
+	extra: Partial<ToolCallEvent> = {},
+): Partial<ToolCallEvent> => ({
+	name,
+	args: { path: target },
+	...extra,
+});
+
 const blockOf = (decision: unknown): { block?: boolean; reason?: string } =>
 	decision as { block?: boolean; reason?: string };
 
@@ -153,20 +163,27 @@ describe("guardian2 config loading", () => {
 		expect(w.confirm).not.toHaveBeenCalled();
 	});
 
-	it("validation failures degrade: unknown keys, bad entries, invalid regex, g/y flags, empty patterns", async () => {
+	it("validation failures degrade: unknown keys, bad entries, bad regex/tool/flag combinations", async () => {
 		const cases: unknown[] = [
 			{ deny: [], ask: [], extra: [] },
 			{ deny: [42] },
-			{ deny: [{ pattern: "(" }] },
-			{ ask: [{ pattern: "x", flags: "gi" }] },
+			{ deny: [{ regex: "(" }] }, // invalid regex
+			{ deny: [{ pattern: "x", regex: "y" }] }, // both forms
+			{ deny: [{}] }, // neither form
+			{ deny: [{ pattern: "x", flags: "i" }] }, // flags only apply to regex
+			{ ask: [{ regex: "x", flags: "gi" }] }, // g/y rejected
 			{ deny: [""] },
 			{ ask: ["   "] },
 			{ deny: [{ pattern: "" }] },
+			{ deny: [{ regex: "" }] },
 			{ deny: "not-an-array" },
 			{ deny: [null] },
 			{ deny: [["nested"]] },
 			{ deny: [{ pattern: "x", extra: true }] },
-			{ ask: [{ pattern: "x", flags: 5 }] },
+			{ ask: [{ regex: "x", flags: 5 }] },
+			{ deny: [{ pattern: "x", tool: [] }] },
+			{ deny: [{ pattern: "x", tool: "read" }] },
+			{ deny: [{ pattern: "x", tool: 5 }] },
 		];
 		for (const config of cases) {
 			const w = await boot({ config });
@@ -226,7 +243,7 @@ describe("guardian2 deny", () => {
 		expect(auditBodies()).toEqual(["[deny] rm -rf — rm -rf /tmp/x — blocked"]);
 	});
 
-	it("the default reason names the pattern", async () => {
+	it("the default reason names the source", async () => {
 		const w = await boot({ config: { deny: ["rm -rf"] } });
 		expect(blockOf(await w.gate(bash("rm -rf /tmp/x"))).reason).toBe("blocked by guardian2 rule: rm -rf");
 	});
@@ -254,7 +271,7 @@ describe("guardian2 deny", () => {
 
 describe("guardian2 ask", () => {
 	it("confirm carries the reason, the shared sessionKey/rememberLabel, and the preview", async () => {
-		const w = await boot({ config: { ask: [{ pattern: "\\bsudo\\b", reason: "running as root" }] } });
+		const w = await boot({ config: { ask: [{ pattern: "sudo", reason: "running as root" }] } });
 		await w.gate(bash("sudo ls"));
 		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "running as root", {
 			sessionKey: "guardian2:session",
@@ -264,26 +281,26 @@ describe("guardian2 ask", () => {
 	});
 
 	it("approved → runs; audit approved", async () => {
-		const w = await boot({ config: { ask: ["\\bsudo\\b"] } });
+		const w = await boot({ config: { ask: ["sudo"] } });
 		w.confirm.mockResolvedValueOnce(true);
 		expect(await w.gate(bash("sudo ls"))).toBeUndefined();
-		expect(auditBodies()).toEqual(["[ask] \\bsudo\\b — sudo ls — approved"]);
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — approved"]);
 	});
 
 	it("declined → blocks with the rule reason; audit denied", async () => {
-		const w = await boot({ config: { ask: [{ pattern: "\\bsudo\\b", reason: "running as root" }] } });
+		const w = await boot({ config: { ask: [{ pattern: "sudo", reason: "running as root" }] } });
 		const result = blockOf(await w.gate(bash("sudo ls")));
 		expect(result.block).toBe(true);
 		expect(result.reason).toBe("running as root");
-		expect(auditBodies()).toEqual(["[ask] \\bsudo\\b — sudo ls — denied"]);
+		expect(auditBodies()).toEqual(["[ask] sudo — sudo ls — denied"]);
 	});
 
 	it("string shorthand + the default ask reason", async () => {
-		const w = await boot({ config: { ask: ["\\bsudo\\b"] } });
+		const w = await boot({ config: { ask: ["sudo"] } });
 		const result = blockOf(await w.gate(bash("sudo ls")));
 		expect(w.confirm).toHaveBeenCalledWith(
 			"allow this bash command?",
-			"guardian2 ask rule: \\bsudo\\b",
+			"guardian2 ask rule: sudo",
 			expect.anything(),
 		);
 		expect(result.reason).toBe("blocked by guardian2 — the confirmation was declined");
@@ -303,39 +320,131 @@ describe("guardian2 ask", () => {
 		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "first", expect.anything());
 	});
 
-	it("accepts non-stateful flags", async () => {
-		const w = await boot({ config: { ask: [{ pattern: "sudo", flags: "i" }] } });
+	it("regex entries accept non-stateful flags", async () => {
+		const w = await boot({ config: { ask: [{ regex: "sudo", flags: "i" }] } });
 		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(bash("SUDO ls"));
 		expect(w.confirm).toHaveBeenCalledTimes(1);
 	});
 
-	it("an internal error falls back to a keyless confirm with the preview, and is audited", async () => {
+	it("an internal error falls back to a keyless confirm with detail and preview, and is audited", async () => {
 		const w = await boot({ config: { ask: ["ls"] } });
 		w.confirm.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(true);
 		expect(await w.gate(bash("ls"))).toBeUndefined();
 		expect(w.confirm).toHaveBeenCalledTimes(2);
 		const fallback = w.confirm.mock.calls[1] as unknown[];
 		expect(fallback[0]).toBe("guardian2 hit an internal error — allow this call?");
-		expect(fallback[1]).toBeUndefined();
+		expect(fallback[1]).toBe("ls");
 		expect(fallback[2]).toEqual({ preview: { kind: "command", tool: "bash", text: "ls" } });
 		expect(auditBodies()).toEqual(["[ask] internal error — ls — approved"]);
+	});
+});
+
+/* --------------------------- wildcard semantics -------------------------- */
+
+describe("guardian2 wildcard semantics", () => {
+	it("plain text is literal: `a.b` does not match `axb`", async () => {
+		const w = await boot({ config: { ask: ["a.b"] } });
+		expect(await w.gate(bash("echo axb"))).toBeUndefined();
+		expect(w.confirm).not.toHaveBeenCalled();
+		await w.gate(bash("echo a.b"));
+		expect(w.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("`*` spans any run of characters, including newlines", async () => {
+		const w = await boot({ config: { ask: ["a*c"] } });
+		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(bash("a\nb\nc"));
+		expect(w.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("`rm * ~` covers the flag variants; a plain path misses", async () => {
+		const w = await boot({ config: { deny: ["rm * ~"] } });
+		expect(blockOf(await w.gate(bash("rm -rf ~"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("rm -fr ~"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash("rm -r -f ~"))).block).toBe(true);
+		expect(await w.gate(bash("rm -rf /tmp/x"))).toBeUndefined();
+	});
+
+	it("matching is contains-style: `sudo` anywhere in the command fires", async () => {
+		const w = await boot({ config: { ask: ["sudo"] } });
+		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(bash("echo pre sudo post"));
+		expect(w.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("a v0 regex string is inert now (breaking change, documented)", async () => {
+		const w = await boot({ config: { ask: ["\\bsudo\\b"] } });
+		expect(await w.gate(bash("sudo ls"))).toBeUndefined();
+		expect(w.confirm).not.toHaveBeenCalled();
+	});
+});
+
+/* ------------------------------ tool scoping ----------------------------- */
+
+describe("guardian2 tool scoping", () => {
+	it("a bash rule never matches write/edit calls", async () => {
+		const w = await boot({ config: { deny: ["rm -rf"] } });
+		expect(await w.gate(fileCall("write", "rm -rf/x"))).toBeUndefined();
+		expect(auditBodies()).toEqual([]);
+	});
+
+	it("write rules match the resolved path; the audit carries it", async () => {
+		const w = await boot({ config: { deny: [{ tool: "write", pattern: "/etc/" }] } });
+		const result = blockOf(await w.gate(fileCall("write", "/etc/hosts")));
+		expect(result.block).toBe(true);
+		expect(result.reason).toBe("blocked by guardian2 rule: /etc/");
+		expect(auditBodies()).toEqual(["[deny] /etc/ — /etc/hosts — blocked"]);
+	});
+
+	it("tool arrays cover both file tools; relative paths resolve against the caller cwd", async () => {
+		const w = await boot({ config: { deny: [{ tool: ["write", "edit"], pattern: "secrets/" }] } });
+		expect(blockOf(await w.gate(fileCall("edit", "secrets/key.pem"))).block).toBe(true);
+		expect(blockOf(await w.gate(fileCall("write", "./secrets/key.pem"))).block).toBe(true);
+	});
+
+	it("an event.cwd different from api.cwd wins the resolution", async () => {
+		const w = await boot({ config: { deny: [{ tool: "write", pattern: "/tmp/other/" }] }, cwd: "/base" });
+		expect(blockOf(await w.gate(fileCall("write", "x.txt", { cwd: "/tmp/other" }))).block).toBe(true);
+	});
+
+	it("ask file flow: message, detail, no preview; declined blocks", async () => {
+		const w = await boot({
+			config: { ask: [{ tool: ["write", "edit"], pattern: "/etc/", reason: "config dir" }] },
+		});
+		w.confirm.mockResolvedValueOnce(true);
+		expect(await w.gate(fileCall("write", "/etc/hosts"))).toBeUndefined();
+		expect(w.confirm).toHaveBeenCalledWith("allow this write?", "/etc/hosts\nconfig dir", {
+			sessionKey: "guardian2:session",
+			rememberLabel: "all guardian2 ask prompts this session",
+		});
+		expect(auditBodies()).toEqual(["[ask] /etc/ — /etc/hosts — approved"]);
+
+		w.confirm.mockClear();
+		const declined = blockOf(await w.gate(fileCall("edit", "/etc/hosts")));
+		expect(declined.block).toBe(true);
+		expect(declined.reason).toBe("config dir");
+		expect(w.confirm).toHaveBeenCalledWith("allow this edit?", "/etc/hosts\nconfig dir", {
+			sessionKey: "guardian2:session",
+			rememberLabel: "all guardian2 ask prompts this session",
+		});
 	});
 });
 
 /* ----------------------------- pass-through ------------------------------ */
 
 describe("guardian2 pass-through", () => {
-	it("unmatched commands pass: no confirm, no audit", async () => {
-		const w = await boot({ config: { ask: ["\\bsudo\\b"], deny: ["rm -rf"] } });
+	it("unmatched calls pass: no confirm, no audit", async () => {
+		const w = await boot({ config: { ask: ["sudo"], deny: ["rm * ~"] } });
 		expect(await w.gate(bash("ls -la"))).toBeUndefined();
 		expect(w.confirm).not.toHaveBeenCalled();
 		expect(auditBodies()).toEqual([]);
 	});
 
-	it("non-bash tools and non-string commands pass untouched", async () => {
+	it("unsupported tools and non-string args pass untouched", async () => {
 		const w = await boot({ config: { deny: ["."] } });
-		expect(await w.gate({ name: "write", args: { path: "/etc/hosts", content: "x" } })).toBeUndefined();
+		expect(await w.gate({ name: "read", args: { path: "/etc/hosts" } })).toBeUndefined();
+		expect(await w.gate({ name: "write", args: { path: 123 } })).toBeUndefined();
 		expect(await w.gate({ name: "bash", args: { command: 123 } })).toBeUndefined();
 		expect(w.confirm).not.toHaveBeenCalled();
 		expect(auditBodies()).toEqual([]);
@@ -358,7 +467,7 @@ describe("guardian2 pass-through", () => {
 /* ---------------------------- audit + surfaces --------------------------- */
 
 describe("guardian2 audit formats", () => {
-	it("whitespace is flattened and the command is capped at 160 chars including the ellipsis", async () => {
+	it("whitespace is flattened and the match text is capped at 160 chars including the ellipsis", async () => {
 		const short = await boot({ config: { ask: ["ls"] } });
 		await short.gate(bash("ls\nrm"));
 		expect(auditBodies()).toEqual(["[ask] ls — ls rm — denied"]);
@@ -423,13 +532,17 @@ describe("guardian2 template", () => {
 	it("validates cleanly and the shipped cases behave as documented", async () => {
 		const w = await boot({ config: template });
 		expect(w.statuses.get("config")).toBeUndefined();
+		expect(blockOf(await w.gate(bash("rm -rf ~"))).block).toBe(true);
 		expect(blockOf(await w.gate(bash("rm -fr ~"))).block).toBe(true);
 		expect(blockOf(await w.gate(bash("rm -r -f $HOME/x"))).block).toBe(true);
+		expect(blockOf(await w.gate(bash(`rm -rf \${HOME}/y`))).block).toBe(true);
 		expect(await w.gate(bash("rm -rf /tmp/x"))).toBeUndefined();
 		expect(await w.gate(bash("git push --force-with-lease"))).toBeUndefined();
 		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(bash("git push -f origin main"));
-		expect(w.confirm).toHaveBeenCalledTimes(1);
+		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(fileCall("write", "/etc/hosts"));
+		expect(w.confirm).toHaveBeenCalledTimes(2);
 	});
 });
 

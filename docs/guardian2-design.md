@@ -247,7 +247,7 @@ untouched):
    declined → blocks; string-shorthand rule works; `regex` flags work.
 4. Wildcard semantics: plain text is literal (`.ssh/` does not match
    `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters
-   including newlines (`a * c` matches `a\nb\nc`); `rm * ~` matches
+   including newlines (`a*c` matches `a\nb\nc`); `rm * ~` matches
    `rm -rf ~` and `rm -fr ~`.
 5. Tool scoping: a bash rule never matches `write`/`edit` and vice versa;
    file rules match the resolved absolute path (a relative `args.path`

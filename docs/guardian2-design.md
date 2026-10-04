@@ -92,10 +92,10 @@ Schema and validation (strict, checked at load):
   - `tool` (optional) — one of `bash` / `write` / `edit`, or an array of
     them; absent ⇒ `bash`.
 - Wildcard semantics: the pattern is escaped to literal text, `*` becomes
-  "any run of characters" spanning newlines (compiled as `[\s\S]*`), and a
-  match is "the text appears anywhere" (unanchored, case-sensitive).
-  Wildcard patterns cannot fail compilation; empty / whitespace patterns are
-  rejected.
+  "any run of characters" spanning newlines — matched with a linear segment
+  matcher, so wildcard patterns cannot backtrack — and a match is "the text
+  appears anywhere" (unanchored, case-sensitive). Wildcard patterns cannot
+  fail compilation; empty / whitespace patterns are rejected.
 - An empty `regex` (`""`) is rejected like an empty pattern (an empty
   regex matches everything); `tool` must name at least one tool (an empty
   array is an error).
@@ -146,8 +146,8 @@ untouched):
 
 - **Audit** `~/.imp/guardian2.log`, one line per deny/ask decision plus load
   errors (pass-through calls are not logged). Whitespace runs in the source
-  and the match text are flattened so the one-line invariant holds; the
-  match text is capped at 160 chars including the trailing `…`:
+  and the match text are flattened, and both are capped at 160 chars
+  including the trailing `…`, so the one-line invariant holds:
 
   ```
   [deny] <source> — <command or resolved path> — blocked
@@ -184,16 +184,16 @@ untouched):
   sessionKey** (fail toward asking — evaluation, unlike config loading, has
   unknown state; a session-wide "stop asking" grant must not silently
   auto-approve this fallback). The confirm's detail is the match text
-  (command or path); the command preview rides along when the match is a
-  bash command; the outcome is audited as
-  `[ask] internal error — <command or path> — approved|denied`.
+  (command or path), flattened and capped like the audit text; the command
+  preview rides along when the match is a bash command; the outcome is
+  audited as `[ask] internal error — <command or path> — approved|denied`.
 
 ## 6. Phases
 
 - **P0 (now)**: owner review of this doc → independent adversarial review →
   fold → review closed.
 - **P1 (this branch)**: implement `examples/extensions/guardian2.mjs`
-  (target: ~150-250 lines including comments) + `guardian2.template.json`;
+  (target: ~150-350 lines including comments) + `guardian2.template.json`;
   `test/guardian2.test.ts` (fake-api pattern, like v1's example tests); full
   suite; implementation review per the working agreement. Create an
   `imp-main` worktree (`git worktree add ../imp-main main`) for the merge
@@ -248,7 +248,8 @@ untouched):
 4. Wildcard semantics: plain text is literal (`.ssh/` does not match
    `xssh/`; `a.b` does not match `axb`); `*` spans any run of characters
    including newlines (`a*c` matches `a\nb\nc`); `rm * ~` matches
-   `rm -rf ~` and `rm -fr ~`.
+   `rm -rf ~` and `rm -fr ~`; a many-star pattern against a long miss
+   completes instantly (linear matcher).
 5. Tool scoping: a bash rule never matches `write`/`edit` and vice versa;
    file rules match the resolved absolute path (a relative `args.path`
    resolves against the caller cwd — an `event.cwd` different from
@@ -263,7 +264,8 @@ untouched):
 9. Child / headless: audit child marker; headless ask becomes a block,
    audited `denied`.
 10. Internal error: the fallback confirm is keyless, carries the match text
-    as its detail, and (for bash) the preview; the outcome is audited
+    as its detail, and (for bash) the preview; the file variant carries the
+    path as detail and no preview; the outcome is audited
     (`[ask] internal error — …`).
 11. Audit formats byte-exact (incl. the 160-char cap including the ellipsis,
     whitespace flattening, and the ISO timestamp prefix); footer status
@@ -311,7 +313,14 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 
 ## 10. Review log
 
-- rev 2.6 — R4 folds: `*` spans newlines (`[\s\S]*`); the template regains
+- rev 2.7 — R5 folds: wildcard matching is a linear segment matcher now
+  (no catastrophic backtracking; the `regex` escape hatch keeps the accepted
+  ReDoS risk); the write/edit base directory is type-guarded; the audit caps
+  source and match text (spec aligned); the fallback-detail wording aligned;
+  tests added (vice-versa tool scoping, file fallback, template `sudo` /
+  `--force`, a many-star pattern); size target adjusted. Verification
+  pending.
+- rev 2.6 — R4 folds: `*` spans newlines; the template regains
   the `$HOME` / `${HOME}` deny variants; a worktree-cwd test; known limits
   for lexical, case-sensitive path matching; validation edges (empty
   `regex`, empty `tool`); the file internal-error fallback detail; the audit

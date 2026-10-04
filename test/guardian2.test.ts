@@ -358,6 +358,12 @@ describe("guardian2 wildcard semantics", () => {
 		expect(w.confirm).toHaveBeenCalledTimes(1);
 	});
 
+	it("matching is linear: a many-star pattern against a long miss completes instantly", async () => {
+		const w = await boot({ config: { ask: ["*a*a*a*a*a*a*a*a*a*a*b"] } });
+		expect(await w.gate(bash("a".repeat(80)))).toBeUndefined();
+		expect(w.confirm).not.toHaveBeenCalled();
+	});
+
 	it("`rm * ~` covers the flag variants; a plain path misses", async () => {
 		const w = await boot({ config: { deny: ["rm * ~"] } });
 		expect(blockOf(await w.gate(bash("rm -rf ~"))).block).toBe(true);
@@ -387,6 +393,11 @@ describe("guardian2 tool scoping", () => {
 		const w = await boot({ config: { deny: ["rm -rf"] } });
 		expect(await w.gate(fileCall("write", "rm -rf/x"))).toBeUndefined();
 		expect(auditBodies()).toEqual([]);
+	});
+
+	it("a file rule never matches bash calls", async () => {
+		const w = await boot({ config: { deny: [{ tool: "write", pattern: "/etc/" }] } });
+		expect(await w.gate(bash("cat /etc/hosts"))).toBeUndefined();
 	});
 
 	it("write rules match the resolved path; the audit carries it", async () => {
@@ -428,6 +439,17 @@ describe("guardian2 tool scoping", () => {
 			sessionKey: "guardian2:session",
 			rememberLabel: "all guardian2 ask prompts this session",
 		});
+	});
+
+	it("the internal-error fallback works for file calls: detail is the path, no preview", async () => {
+		const w = await boot({ config: { ask: [{ tool: "write", pattern: "/etc/" }] } });
+		w.confirm.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(true);
+		expect(await w.gate(fileCall("write", "/etc/hosts"))).toBeUndefined();
+		const fallback = w.confirm.mock.calls[1] as unknown[];
+		expect(fallback[0]).toBe("guardian2 hit an internal error — allow this call?");
+		expect(fallback[1]).toBe("/etc/hosts");
+		expect(fallback[2]).toEqual({});
+		expect(auditBodies()).toEqual(["[ask] internal error — /etc/hosts — approved"]);
 	});
 });
 
@@ -539,10 +561,14 @@ describe("guardian2 template", () => {
 		expect(await w.gate(bash("rm -rf /tmp/x"))).toBeUndefined();
 		expect(await w.gate(bash("git push --force-with-lease"))).toBeUndefined();
 		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(bash("sudo ls"));
+		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(bash("git push -f origin main"));
 		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(bash("git push --force origin main"));
+		w.confirm.mockResolvedValueOnce(true);
 		await w.gate(fileCall("write", "/etc/hosts"));
-		expect(w.confirm).toHaveBeenCalledTimes(2);
+		expect(w.confirm).toHaveBeenCalledTimes(4);
 	});
 });
 

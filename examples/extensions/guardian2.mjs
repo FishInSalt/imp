@@ -39,10 +39,17 @@ const plainObject = (value) => typeof value === "object" && value !== null && !A
 
 const TOOL_NAMES = ["bash", "write", "edit"];
 
-/** Wildcard → RegExp: `*` spans any run of characters (newlines included). */
-const wildcardToRegExp = (pattern) => {
-	const escaped = pattern.replace(/[.+?^${}()|[\]\\]/gu, "\\$&");
-	return new RegExp(escaped.replaceAll("*", "[\\s\\S]*"));
+/** Linear wildcard match: `*` spans any run of characters (newlines
+ *  included), no backtracking. The text may match anywhere. */
+const wildcardMatch = (pattern, text) => {
+	let position = 0;
+	for (const segment of pattern.split("*")) {
+		if (segment === "") continue;
+		const index = text.indexOf(segment, position);
+		if (index === -1) return false;
+		position = index + segment.length;
+	}
+	return true;
 };
 
 /** Compile one rule entry; returns `{rule}` or `{error}`. */
@@ -111,16 +118,22 @@ const compileEntry = (entry, where) => {
 		}
 		tools = [...new Set(names)];
 	}
-	let regex;
-	try {
-		regex = wildcard !== undefined ? wildcardToRegExp(wildcard) : new RegExp(regexSource, flags);
-	} catch (err) {
-		return { error: `${where}: invalid regex (${oneLine(err && err.message ? err.message : err)})` };
+	let test;
+	if (wildcard !== undefined) {
+		test = (text) => wildcardMatch(wildcard, text);
+	} else {
+		let regex;
+		try {
+			regex = new RegExp(regexSource, flags);
+		} catch (err) {
+			return { error: `${where}: invalid regex (${oneLine(err && err.message ? err.message : err)})` };
+		}
+		test = (text) => regex.test(text);
 	}
 	return {
 		rule: {
 			source: wildcard !== undefined ? wildcard : regexSource,
-			regex,
+			test,
 			reason: reason ?? "",
 			tools: new Set(tools),
 		},
@@ -209,10 +222,10 @@ export default function (api) {
 
 	const match = (tool, text) => {
 		for (const rule of rules.deny) {
-			if (rule.tools.has(tool) && rule.regex.test(text)) return { kind: "deny", rule };
+			if (rule.tools.has(tool) && rule.test(text)) return { kind: "deny", rule };
 		}
 		for (const rule of rules.ask) {
-			if (rule.tools.has(tool) && rule.regex.test(text)) return { kind: "ask", rule };
+			if (rule.tools.has(tool) && rule.test(text)) return { kind: "ask", rule };
 		}
 		return undefined;
 	};
@@ -226,7 +239,8 @@ export default function (api) {
 			text = typeof event.args?.command === "string" ? event.args.command : undefined;
 		} else if (tool === "write" || tool === "edit") {
 			const target = typeof event.args?.path === "string" ? event.args.path : undefined;
-			text = target === undefined ? undefined : path.resolve(event.cwd ?? api.cwd, target);
+			const base = typeof event.cwd === "string" ? event.cwd : api.cwd;
+			text = target === undefined ? undefined : path.resolve(base, target);
 		}
 		const who = event.subagent === true ? ` (child${event.agent ? `:${event.agent}` : ""})` : "";
 		const subject = text === undefined ? "?" : oneLine(text);

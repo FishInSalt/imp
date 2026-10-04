@@ -1,9 +1,10 @@
 # guardian2 — a minimal config-driven permission gate (design)
 
-Status: **rev 2.3 — review closed; ready for implementation.** Owner
+Status: **rev 2.4 — implementation-review findings folded.** Owner
 direction: minimal implementation; the port-based revisions are discarded
-as design input. Owner decisions are settled (§9); R1 findings are folded
-(rev 2.1) and R2 confirmed the folds with two notes, applied in rev 2.3.
+as design input. Owner decisions are settled (§9); the design review is
+closed (R1/R2, rev 2.3); the implementation review (R3) is folded in
+rev 2.4 and in the code.
 
 - Worktree / branch: `imp-guardian2` / `design/guardian2`, base `main` (846b263).
 - Replaces guardian v1 (modes + classifier). v1 is deleted only after cutover
@@ -92,7 +93,7 @@ a string, pass through untouched):
    command?", <reason>, { sessionKey: "guardian2:session", rememberLabel:
    "all guardian2 ask prompts this session", preview: { kind: "command",
    tool: "bash", text: command } })`; `false` → block with the reason (or
-   "confirmation declined"). Audit the outcome. The shared session key is
+   "blocked by guardian2 — the confirmation was declined"). Audit the outcome. The shared session key is
    v0's only memory: choosing the prompt's remember option once stops every
    further ask prompt for the rest of the session ("allow all this
    session"); deny rules are unaffected. The `preview` shows the command in
@@ -110,21 +111,22 @@ a string, pass through untouched):
 ## 4. Surfaces
 
 - **Audit** `~/.imp/guardian2.log`, one line per deny/ask decision plus load
-  errors (pass-through calls are not logged). Newlines in the pattern,
-  reason, and command are flattened so the one-line invariant holds; the
-  command is capped at 160 chars with a trailing `…` (v1's cap):
+  errors (pass-through calls are not logged). Whitespace runs in the pattern
+  and command are flattened so the one-line invariant holds; the command is
+  capped at 160 chars including the trailing `…`:
 
   ```
   [deny] <pattern> — <command> — blocked
   [deny] <pattern> — <command> — blocked (child:<agent>)
-  [ask]  <pattern> — <command> — approved
-  [ask]  <pattern> — <command> — denied
+  [ask] <pattern> — <command> — approved
+  [ask] <pattern> — <command> — denied
+  [ask] internal error — <command> — approved|denied
   [load] config error — <first line of the error>
   ```
 
   Formats pinned byte-exact in tests. `denied` covers declines and hosts
   with no interactive prompt (§3).
-- **Footer**: `setStatus("guardian2", "config error")` while the last load
+- **Footer**: `setStatus("config", "config error")` while the last load
   failed; cleared on a successful load. Nothing else (no rule count, no
   per-call status).
 - **Commands**: `/guardian2 status` (config path, rule counts, error flag) and
@@ -146,14 +148,16 @@ a string, pass through untouched):
 - An internal error during evaluation → fresh confirmation with **no
   sessionKey** (fail toward asking — evaluation, unlike config loading, has
   unknown state; a session-wide "stop asking" grant must not silently
-  auto-approve this fallback).
+  auto-approve this fallback). It carries the command preview when the
+  command is known, and the outcome is audited as
+  `[ask] internal error — <command> — approved|denied`.
 
 ## 6. Phases
 
 - **P0 (now)**: owner review of this doc → independent adversarial review →
   fold → review closed.
 - **P1 (this branch)**: implement `examples/extensions/guardian2.mjs`
-  (target: ~150-200 lines) + `guardian2.template.json`;
+  (target: ~150-250 lines including comments) + `guardian2.template.json`;
   `test/guardian2.test.ts` (fake-api pattern, like v1's example tests); full
   suite; implementation review per the working agreement. Create an
   `imp-main` worktree (`git worktree add ../imp-main main`) for the merge
@@ -194,26 +198,31 @@ a string, pass through untouched):
 ## 7. Tests (P1, red-first)
 
 1. Load: missing file (zero rules, gate lets everything through); valid file
-   (string and object entries, flags); invalid JSON; unknown top-level key;
-   bad entry type; invalid regex; `g`/`y` flags rejected; reload recovers.
+   (string and object entries, non-stateful flags accepted); invalid JSON;
+   unknown top-level key; bad entry type; invalid regex; empty / whitespace
+   patterns rejected; `g`/`y` flags rejected; one full load-error line
+   pinned byte-exact; reload recovers.
 2. Deny: first matching rule blocks; no confirm call; reason text (custom and
    default).
 3. Ask: confirm called with the reason, the shared `sessionKey` /
    `rememberLabel`, and the command `preview` (all pinned); approved → runs;
-   declined → blocks; string-shorthand rule works.
+   declined → blocks; string-shorthand rule works; non-stateful flags work.
 4. Pass: unmatched commands never confirm; non-bash tools pass untouched;
    non-string `command` passes; a quoted-text match (`git commit -m "… rm -rf
    …"`) **matches** (documents the raw-string limit, §1).
 5. Precedence: a command matching both deny and ask blocks (deny wins).
 6. Child / headless: audit child marker; headless ask becomes a block,
    audited `denied`.
-7. Audit formats byte-exact (incl. the 160-char cap and newline flattening);
-   load-error line; footer status set/cleared.
-8. Template patterns: pin the doc's cases (`rm -fr ~`, `rm -r -f $HOME/x`,
+7. Internal error: the fallback confirm is keyless and carries the preview;
+   the outcome is audited (`[ask] internal error — …`).
+8. Audit formats byte-exact (incl. the 160-char cap including the ellipsis,
+   whitespace flattening, and the ISO timestamp prefix); footer status
+   set/cleared.
+9. Template patterns: pin the doc's cases (`rm -fr ~`, `rm -r -f $HOME/x`,
    `git push -f`, `git push --force-with-lease` miss) plus a plain
    `rm -rf /tmp/x` miss.
-9. Commands: `status` counts; `reload` picks up an edited file.
-10. Static pin: no `classify` / `complete` / `snapshot` / `api.note` use.
+10. Commands: `status` counts; `reload` picks up an edited file.
+11. Static pin: no `classify` / `complete` / `snapshot` / `api.note` use.
 
 ## 8. Claude Code reference (considered with a minimal lens)
 
@@ -250,17 +259,19 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 
 ## 10. Review log
 
+- rev 0 / rev 1 (port-based) and the earlier approach documents are
+  discarded as design input (owner direction, rev 2).
+- rev 2 — minimal redesign: no modes, no judge; two regex lists (deny /
+  ask), default allow.
 - rev 2.1 — folds the completed adversarial review (R1) of rev 2: posture
   wording and the first-run trade-off (§5), audit pinning — cap value, child
   marker, headless token, newline flattening (§4), `g`/`y` flag rejection
   (§2), corrected template patterns (§2), merge mechanics and `imp-main`
   worktree (§6 P1), explicit model-access discard (§6 P3), test additions
   (§7), install details (§6 P2), doc-sweep additions (§6 P3). The R1
-  reviewer's headless-token suggestion is adapted: the confirm contract
+  reviewer's headless-token suggestion was adapted: the confirm contract
   cannot distinguish headless from a decline, so the audited token remains
   `denied` (documented).
-- rev 2 — minimal redesign per owner direction; rev 0/1 (port-based) and
-  the earlier approach documents are discarded as design input.
 - rev 2.2 — owner answers folded: first-run posture accepted; rename
   deferred until after P3; pass-through stays unaudited; the session-wide
   "stop asking" option added to ask prompts (shared sessionKey /
@@ -268,6 +279,16 @@ Other CC files for reference: `src/utils/permissions/permissions.ts`,
 - rev 2.3 — R2 notes folded: the ask confirm carries the command `preview`
   (the human must see what they approve); the internal-error fallback
   confirm is keyless (a session-wide grant must not auto-approve it).
-  Review closed.
+  Design review closed.
+- rev 2.4 — implementation-review (R3) findings folded: empty/whitespace
+  patterns rejected (a match-everything rule cannot be armed); the
+  internal-error fallback carries the command preview and an audit line;
+  audit wording/cap/flattening clarified (single-space `[ask]`, 160 chars
+  including the ellipsis, whitespace-run flattening, the `setStatus("config",
+  …)` key); the test suite extended (flags accepted, empty patterns, one
+  full load-error line, ISO timestamp prefix, fallback flow).
 - Owner decisions: settled (§9).
-- R2 (verification): CONFIRMED WITH NOTES — folded in rev 2.3.
+- R2 (design verification): CONFIRMED WITH NOTES — folded in rev 2.3.
+- R3 (implementation review, commit `77f9e20`): 1 P1 + 4 P2 + 7 P3 — folded
+  in rev 2.4 and the follow-up fix commit; `examples/**` is outside biome's
+  includes (pre-existing convention, noted only).

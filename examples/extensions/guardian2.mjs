@@ -38,6 +38,9 @@ const compileEntry = (entry, where) => {
 	let flags = "";
 	let reason;
 	if (typeof entry === "string") {
+		if (entry.trim() === "") {
+			return { error: `${where}: entry must be a non-empty string or {pattern, flags?, reason?}` };
+		}
 		pattern = entry;
 	} else if (plainObject(entry)) {
 		for (const key of Object.keys(entry)) {
@@ -46,7 +49,7 @@ const compileEntry = (entry, where) => {
 			}
 		}
 		pattern = entry.pattern;
-		if (typeof pattern !== "string" || pattern === "") {
+		if (typeof pattern !== "string" || pattern.trim() === "") {
 			return { error: `${where}: pattern must be a non-empty string` };
 		}
 		if (entry.flags !== undefined) {
@@ -165,13 +168,13 @@ export default function (api) {
 	reload();
 
 	api.on("tool_call", async (event) => {
+		const command = typeof event.args?.command === "string" ? event.args.command : undefined;
+		const who = event.subagent === true ? ` (child${event.agent ? `:${event.agent}` : ""})` : "";
+		const subject = command === undefined ? "?" : oneLine(command);
 		try {
-			if (event.name !== "bash" || typeof event.args.command !== "string") return undefined;
-			const command = event.args.command;
+			if (event.name !== "bash" || command === undefined) return undefined;
 			const hit = match(command);
 			if (hit === undefined) return undefined;
-			const who = event.subagent === true ? ` (child${event.agent ? `:${event.agent}` : ""})` : "";
-			const subject = oneLine(command);
 			if (hit.kind === "deny") {
 				audit(`[deny] ${oneLine(hit.rule.pattern)} — ${subject} — blocked${who}`);
 				return {
@@ -198,7 +201,12 @@ export default function (api) {
 			try {
 				// Fail toward asking; deliberately no sessionKey (a session-wide
 				// "stop asking" grant must not auto-approve this fallback).
-				const approved = await api.confirm("guardian2 hit an internal error — allow this call?", undefined, {});
+				const approved = await api.confirm(
+					"guardian2 hit an internal error — allow this call?",
+					undefined,
+					command === undefined ? {} : { preview: { kind: "command", tool: "bash", text: command } },
+				);
+				audit(`[ask] internal error — ${subject} — ${approved ? "approved" : "denied"}${who}`);
 				return approved ? undefined : { block: true, reason: "guardian2 internal error — the call was not allowed" };
 			} catch {
 				return { block: true, reason: "guardian2 internal error — the call was not allowed" };

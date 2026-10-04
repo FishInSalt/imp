@@ -153,12 +153,20 @@ describe("guardian2 config loading", () => {
 		expect(w.confirm).not.toHaveBeenCalled();
 	});
 
-	it("validation failures degrade: unknown key, bad entry, invalid regex, g/y flags", async () => {
+	it("validation failures degrade: unknown keys, bad entries, invalid regex, g/y flags, empty patterns", async () => {
 		const cases: unknown[] = [
 			{ deny: [], ask: [], extra: [] },
 			{ deny: [42] },
 			{ deny: [{ pattern: "(" }] },
 			{ ask: [{ pattern: "x", flags: "gi" }] },
+			{ deny: [""] },
+			{ ask: ["   "] },
+			{ deny: [{ pattern: "" }] },
+			{ deny: "not-an-array" },
+			{ deny: [null] },
+			{ deny: [["nested"]] },
+			{ deny: [{ pattern: "x", extra: true }] },
+			{ ask: [{ pattern: "x", flags: 5 }] },
 		];
 		for (const config of cases) {
 			const w = await boot({ config });
@@ -166,6 +174,19 @@ describe("guardian2 config loading", () => {
 			expect(auditBodies().at(-1)).toMatch(/^\[load\] config error — /u);
 			expect(await w.gate(bash("x"))).toBeUndefined();
 		}
+	});
+
+	it("an empty pattern can never arm a match-everything rule", async () => {
+		const w = await boot({ config: { deny: [""] } });
+		expect(w.statuses.get("config")).toBe("config error");
+		expect(await w.gate(bash("ls -la"))).toBeUndefined();
+		expect(w.confirm).not.toHaveBeenCalled();
+	});
+
+	it("pins a full load-error line", async () => {
+		const w = await boot({ config: { extra: [] } });
+		expect(w.statuses.get("config")).toBe("config error");
+		expect(auditBodies()).toEqual(['[load] config error — unknown key "extra"']);
 	});
 
 	it("an invalid reload keeps the last valid rules; a fixed reload recovers", async () => {
@@ -281,6 +302,25 @@ describe("guardian2 ask", () => {
 		await w.gate(bash("sudo ls"));
 		expect(w.confirm).toHaveBeenCalledWith("allow this bash command?", "first", expect.anything());
 	});
+
+	it("accepts non-stateful flags", async () => {
+		const w = await boot({ config: { ask: [{ pattern: "sudo", flags: "i" }] } });
+		w.confirm.mockResolvedValueOnce(true);
+		await w.gate(bash("SUDO ls"));
+		expect(w.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("an internal error falls back to a keyless confirm with the preview, and is audited", async () => {
+		const w = await boot({ config: { ask: ["ls"] } });
+		w.confirm.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(true);
+		expect(await w.gate(bash("ls"))).toBeUndefined();
+		expect(w.confirm).toHaveBeenCalledTimes(2);
+		const fallback = w.confirm.mock.calls[1] as unknown[];
+		expect(fallback[0]).toBe("guardian2 hit an internal error — allow this call?");
+		expect(fallback[1]).toBeUndefined();
+		expect(fallback[2]).toEqual({ preview: { kind: "command", tool: "bash", text: "ls" } });
+		expect(auditBodies()).toEqual(["[ask] internal error — ls — approved"]);
+	});
 });
 
 /* ----------------------------- pass-through ------------------------------ */
@@ -318,12 +358,23 @@ describe("guardian2 pass-through", () => {
 /* ---------------------------- audit + surfaces --------------------------- */
 
 describe("guardian2 audit formats", () => {
-	it("the command is capped at 160 chars and newlines are flattened", async () => {
-		const w = await boot({ config: { ask: ["echo"] } });
-		await w.gate(bash(`echo ${"a".repeat(300)}\nrm`));
-		const body = auditBodies()[0] ?? "";
+	it("whitespace is flattened and the command is capped at 160 chars including the ellipsis", async () => {
+		const short = await boot({ config: { ask: ["ls"] } });
+		await short.gate(bash("ls\nrm"));
+		expect(auditBodies()).toEqual(["[ask] ls — ls rm — denied"]);
+
+		const long = await boot({ config: { ask: ["echo"] } });
+		await long.gate(bash(`echo ${"a".repeat(300)}\nrm`));
+		const body = auditBodies().at(-1) ?? "";
 		expect(body).toMatch(/^\[ask\] echo — .{160} — denied$/u);
 		expect(body).toContain("…");
+	});
+
+	it("audit lines carry an ISO timestamp prefix", async () => {
+		const w = await boot({ config: { deny: ["rm -rf"] } });
+		await w.gate(bash("rm -rf /tmp/x"));
+		const raw = readFileSync(auditPath(), "utf8").trimEnd().split("\n")[0] ?? "";
+		expect(raw).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z /u);
 	});
 
 	it("the log file is created 0600", async () => {

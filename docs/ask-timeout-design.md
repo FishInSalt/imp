@@ -1,7 +1,7 @@
 # #ask-timeout — 交互确认超时（设计 r4）
 
 - 日期：2026-10-04
-- 状态：**r4 — 追加 §12（confirm 倒计时，#ask-timeout-countdown），待独立短评审**；r3 实现已合并、机器侧验收通过（见 PROJECT_PLAN）
+- 状态：**r4.1 — §12 短评审（NEEDS-FIXES）已全折；待复核**；r3 实现已合并、机器侧验收通过（见 PROJECT_PLAN）
 - 关联：`#guardian`（驱动方）、`#confirm-prompt`（承载界面）
 
 ## 1. 背景与目标
@@ -154,18 +154,24 @@ outcome === "timeout"  → 审计 — timeout；block reason：
   - **P3#7（humanDuration(undefined) 防御）** → 退化文案分支 + 测试（§6）。
   - 核心路径（P0 类分支顺序、定时器生命周期、类型加宽、guardian 三分支）逐行核实无 P0/P1。
 
-## 12. 追加：confirm 窗口的超时倒计时（#ask-timeout-countdown，r4）
+## 12. 追加：confirm 窗口的超时倒计时（#ask-timeout-countdown，r4.1）
 
 owner 需求（2026-10-04）：配置了超时的 confirm 弹窗要能看到剩余时间提醒。
 **纯宿主展示层**——guardian / 扩展 API / 配置格式零变更（`timeoutMs` 已在 §2 定义）。
 
-- **D9 展示条件**：仅当 select 收到合法 `timeoutMs`（正值有限）才显示；显示值必须与计时器共用**同一个钳位后的期限**（单一来源，防止"显示的"与"计时的"分岔）。无期限 = 无此行（无期限 picker 的字节钉全部不变）。
-- **D10 位置**：dim 单行，置于 preview 行之后、列表之前（filterable picker 的列表必须保持最后一个子元素——`applyFilter` 会 remove+append 列表，列表之后的行会被重排到上方；既有 D5 同一理由）。排队中的问题没有倒计时（未打开，与 D7 一致）。
-- **D11 文本定稿**：`times out in <剩余>`。剩余秒数 `s = ceil((deadline - now) / 1000)`（下限 0）：
-  - `s < 3600` → `M:SS`（`10:00`、`0:59`）；
-  - `s < 86400` → `Hh MMm`（`1h 05m`）；
-  - 否则 → `Dd HHh`（`24d 20h`）。
-  打开瞬间显示完整期限（向上取整：600000 → `10:00`）。
-- **D12 更新机制**：1s interval（`unref?.()`），每 tick 重算文本；文本与上次相同则跳过 `setText`/重绘（≥1h 的格式每分钟才变一次）；`finish` 漏斗（既有唯一结算点）同时清 interval 与 timeout 定时器——答复/取消/超时/close/SIGINT/stdin-end 全部路径自动覆盖。
-- **D13 边界**：到期时最后一帧不早于 `0:01`（timeout 定时器先于 interval 同刻触发并拆除；format 仍对 ≤0 钳 `0:00` 兜底）；拆除后无后续重绘；readline/print 无 select 面，天然无倒计时。
-- **D14 测试**：无 `timeoutMs` → 无该行（既有字节钉回归）；`600000` → 帧含 `times out in 10:00`，约 1 秒后含 `9:59`；格式帧钉（`61000` → `1:01`；`3661000` → `1h 01m`；钳位上限 → `24d 20h`）；答复 / 超时 / close 拆除后（write-mark 之后）帧无该行。
+- **D9 展示条件与单一来源**：仅当 `timeoutMs` 为合法正值（有限、> 0）才显示；实现为**一个** helper `effectiveTimeoutMs(options.timeoutMs): number | null`（含 `Math.min(…, 2^31-1)` 钳位），行可见性、初始文本、deadline、timeout 定时器全部取自它——显示的与计时的不可能公式分岔。helper 用 §8-7 的非法值清单（0 / 负 / NaN / `"500"` / Infinity / 2^31+5000）单测。无期限 = 无此行（无期限 picker 的字节钉全部不变）。
+- **D10 位置**：dim 单行（`dim(text, true)`），置于 preview 行之后、filter 查询行 / 编号 Spacer(1) / 列表**之前**（`shell.ts` 装箱点：preview ~:948 → 本行 → 查询行 ~:951 / Spacer ~:959 → List ~:960）。filterable picker 的列表必须保持最后一个子元素（`applyFilter` remove+append，列表之后的行会被重排到上方）；编号 picker 的 query 为 null、affordance 在列表后不受影响。**修订 `docs/confirm-prompt-design.md` 的 D5 位置规则**：timeout picker 在 preview 与空行之间多一行倒计时，空行仍紧贴 items 上方（向该文档回加一行指向本节）。排队中的问题没有倒计时（未打开，与 D7 一致）。`SelectOptions.timeoutMs` JSDoc 补一句"设置了就在 picker 里显示倒计时行"。
+- **D11 文本与算法定稿**：`times out in <剩余>`。`s = max(1, ceil((deadline - now) / 1000))`（**下限 1 秒**，见 D13），然后：
+  - `s < 3600` → `m = floor(s/60)`, `ss = s % 60` → `M:SS`（`10:00`、`0:59`）；
+  - `s < 86400` → `Hh MMm`（`mm = floor((s % 3600)/60)`；`1h 00m`、`23h 59m`）；
+  - 否则 → `Dd HHh`（`hh = floor((s % 86400)/3600)`；`1d 00h`、`24d 20h`）。
+  floor/余数写法杜绝 `0:60`；打开瞬间显示完整期限（ceil 吸收打开延迟：600000 → `10:00`）。**时钟锚用 `performance.now()`**（单调；与相对 `setTimeout` 同语义——`Date.now()` 的墙钟跳变会与计时器分岔）。
+- **D12 更新机制与装载顺序（规范性）**：1s interval，`unref?.()`；每 tick 重算文本，文本与上次相同则跳过 `setText`/重绘（≥1h 的格式每分钟才变）。**顺序硬约束**：① `effectiveTimeoutMs` 只算一次；② timeout 定时器先于 interval 创建；③ 初始行文本在**构建行时即携带**（空 Text 渲染零行；等首 tick 会晚 1 秒才出现）；④ `finish` 漏斗（唯一结算点）同时清 interval 与定时器——答复/取消/超时/close/SIGINT/stdin-end 全路径覆盖。
+- **D13 边界**：**`times out in 0:00` 结构性不可达**——formatter 下限恒 1 秒（剩余 ≤ 0 也只输出 `0:01`），**不依赖**"同刻回调谁先触发"（Node 对同到期定时器无顺序保证；pi-tui 延迟渲染只是额外兜底，契约写在格式化层）。拆除后无后续重绘；readline/print 无 select 面天然无倒计时；颜色**不**随临近变化（保持 dim；未来若做临近变色，需重审"文本不变跳过重绘"的检查）。
+- **D14 测试（r4.1 补全）**：
+  - 负例：无 `timeoutMs` 的普通 picker（渲染后）帧历史**不含** `times out in`；§8-7 非法值循环后同样断言不含；
+  - 开局帧即含 `times out in 10:00`（timeoutMs 600000）；约 1 秒后含 `9:59`（用 `frameContains` 轮询，勿固定 settle 单次）；
+  - 格式纯函数单测（导出 `countdownText`）：600000→`10:00`、59999→`1:00`、60000→`1:00`、61000→`1:01`、3599999→`1h 00m`、3600000→`1h 00m`、3661000→`1h 01m`、86399000→`23h 59m`、86400000→`1d 00h`、钳位上限 2147483647→`24d 20h`、0/负数→`0:01`（下限）；
+  - `effectiveTimeoutMs` 单测：非法值清单 → null；2147483648 → 2147483647；正常值原样；
+  - 生命周期：答复 / 超时（短期限如 1200ms） / close 拆除后（write-mark 之后）帧无该行；**整个 picker 生命周期内任何帧都不含 `times out in 0:00`**（frameSince(0) 历史检查）；
+  - filterable + timeoutMs：行在列表上方；输入过滤字符重排后仍在列表上方（扩展既有 :906-931 用例）。

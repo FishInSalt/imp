@@ -1,7 +1,7 @@
 # Local independent Ink installation
 
-Status: INSTALLED AND ISOLATED ACCEPTANCE PASSED; configuration and global command
-switching not performed. Independent reviewer
+Status: INSTALLED AND ISOLATED ACCEPTANCE PASSED; selected private configuration
+copied with owner approval. Global commands and normal startup remain untouched. Independent reviewer
 `64e1e447-c51b-4cab-822b-92d9f2ecb99e` approved this bounded procedure; private
 configuration, normal startup and command switching remain separately gated.
 Application: `b1deda4da7c4dd524bacde8f0a6070d5d3f11591`.
@@ -64,18 +64,44 @@ The failed/unfinished custom runtime builder is not involved in this installatio
 The installed runtime stays unregistered and must not be started with real HOME
 until selected private configuration and startup effects receive separate approval.
 
-## Separate approvals / remaining steps
+## Approved selected configuration copy — 2026-10-05
 
-No credential/session/configuration content is read, copied or modified here.
-No HOME/global registration, old source/dist/examples/node_modules, main or remote
-change is authorized. Runtime tests use fake configuration and do not start REPL,
-providers, MCP, notifications or extension factories.
+The owner separately approved read-only inventory, then exact selected copying to
+`/Users/z/.ink`; copying was performed after that approval. Seven selected files
+were copied byte-for-byte: `auth.json`, `settings.json`, `guardian.json`,
+`trust.json`, `models-catalog.json`, `AGENTS.md`, `web-search/config.json`.
+Neither credential file was parsed, printed, used for login or submitted anywhere.
+No private contents/digests enter this repository record.
 
-After isolated installation succeeds, request a specific private resource scope
-for config inventory/copy. Keep old state/history intact, migrate necessary
-credentials/model/extension/guardian configuration only. Additive project .ink
-resources require specific approval. Final session exit and command-link switch
-need complete bounded terminal instructions and recovery steps. Normal Ink startup
-requires side-effect approval; OAuth/shared data effects can prevent automatic
-old-runtime restart. Acceptance precedes main --no-ff integration and separately
-approved push. Local install does not prove the unfinished general tools correct.
+- New root, extensions and web-search directories: **0700**, current owner, no ACL
+  entries reported by `ls -lde`. Credential files: **0600**; file UID/GID/modes
+  equal their originals. Old timestamps/macOS provenance are not promised for these
+  fresh copies, as disclosed in the owner's approved copy scope.
+- **5 new symlinks**: guardian, notify, task-timer, tool-colors, web-search point
+  exclusively at the independent runtime's matching public assets. No extension
+  was imported or started. Old extensions and their old source links remain intact.
+- Settings have no active old-name path references; guardian has **10 deny/2 ask**
+  entries, no old-name pattern references. Original rule bytes remain unchanged;
+  no regex transformation was needed or attempted.
+- Selected JSON configuration parsed without duplicate keys. Settings/policy/trust/
+  catalog are objects; this is structural validation, not production startup.
+- Original selected bytes and full pre/post file signatures stayed identical
+  during copying. Old history/session/log content was not read/copied. New history,
+  sessions and logs remain absent.
+- Original safety instruction bytes retained. The new AGENTS still names old
+  configuration paths in examples; new-name wording requires a separate explicit
+  edit approval, never an implied change to safety protections.
+- Original imp global links remain present/unchanged; new ink links remain absent.
+  Active old checkout remains clean on its original revision.
+
+## Remaining separate approvals
+
+No global registration, old source/dist/examples/node_modules, main or remote change
+ran. Additive project .ink resources, new safety-instruction wording, final copied
+configuration freshness and each command-link operation require specific approval.
+Current imp continues to run; do not start real Ink concurrently. Before current
+session exit deliver bounded terminal switching and recovery steps. Normal Ink
+startup requires side-effect approval: catalog/MCP/extensions/notifications/provider
+refresh may occur. OAuth/shared effects can prevent automatic old-runtime restart.
+Ink acceptance precedes main --no-ff integration and separately approved push.
+Local install does not prove the unfinished general tools correct.

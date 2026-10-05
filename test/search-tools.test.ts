@@ -12,6 +12,12 @@ const signal = new AbortController().signal;
 // Top-level await: describe.skipIf is evaluated at collection time, before beforeAll.
 const hasRg = await detectBinary("rg");
 const hasFd = await detectBinary("fd");
+if (process.env.CI_REQUIRE_SEARCH_TOOLS === "1") {
+	const missing = [!hasRg && "rg", !hasFd && "fd"].filter(Boolean);
+	if (missing.length > 0) {
+		throw new Error(`Required search test binaries missing: ${missing.join(", ")}`);
+	}
+}
 
 let dir: string;
 

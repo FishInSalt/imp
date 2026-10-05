@@ -19,11 +19,15 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
 	repository: { url: string };
 	homepage: string;
 	bugs: { url: string };
+	engines: { node: string };
 };
 const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
 	name: string;
 	version: string;
-	packages: Record<string, { name: string; version: string; bin: Record<string, string> }>;
+	packages: Record<
+		string,
+		{ name: string; version: string; bin: Record<string, string>; engines?: { node: string } }
+	>;
 };
 
 describe("package metadata (release identity)", () => {
@@ -36,6 +40,12 @@ describe("package metadata (release identity)", () => {
 		expect(lock.packages[""]?.name).toBe(pkg.name);
 		expect(lock.packages[""]?.version).toBe(pkg.version);
 		expect(lock.packages[""]?.bin).toEqual(pkg.bin);
+	});
+
+	it("matches the supported Node minimum to the pinned TUI dependency", () => {
+		expect(pkg.engines.node).toBe(">=22.19.0");
+		expect(lock.packages[""]?.engines).toEqual(pkg.engines);
+		expect(lock.packages["node_modules/@earendil-works/pi-tui"]?.engines).toEqual(pkg.engines);
 	});
 
 	it("the controlled CLI emits the exact capitalized version accepted by the artifact smoke", async () => {

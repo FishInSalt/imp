@@ -16,11 +16,13 @@ concurrency:
 
 jobs:
   verify:
+    env:
+      CI_REQUIRE_SEARCH_TOOLS: "1"
     strategy:
       fail-fast: false
       matrix:
-        # engines: node >=20; check the floor and a current major
-        node: [20, 24]
+        # Test the exact supported floor and a current major.
+        node: ["22.19.0", 24]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -29,6 +31,17 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: install search test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep fd-find
+          mkdir "$RUNNER_TEMP/ink-test-tools"
+          ln -s "$(command -v fdfind)" "$RUNNER_TEMP/ink-test-tools/fd"
+          echo "$RUNNER_TEMP/ink-test-tools" >> "$GITHUB_PATH"
+      - name: verify search test prerequisites
+        run: |
+          rg --version
+          fd --version
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint

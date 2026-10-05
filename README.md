@@ -33,7 +33,8 @@ sessions, and extensible tools. Roadmap and historical implementation ledger:
 
 ## Setup
 
-Requires Node 20 or newer. The selected package is `ink-agent@0.2.0`.
+Requires Node 22.19.0 or newer, matching the pinned TUI dependency.
+The selected package is `ink-agent@0.2.0`.
 Publication and local state cutover are separate approval-gated operations;
 this checkout does not imply that the package is available on npm yet.
 Once published, install it to provide the `ink` command:
@@ -151,7 +152,8 @@ prefer the env pair above.
 
 - **macOS** — the development platform; features are exercised here first.
 - **Linux** — supported: CI runs the full gate (typecheck, lint, build,
-  tests) on `ubuntu-latest` with Node 20 and 24.
+  tests) on `ubuntu-latest` with the exact Node 22.19.0 minimum and Node 24.
+  CI requires `rg` and `fd` so search-tool tests cannot silently skip.
 - **Windows** — not supported yet. Native Windows has known blockers (the
   `bash` tool spawns `/bin/bash`, and MCP servers spawn without `.cmd` /
   shell resolution) and no CI coverage. WSL does work — inside it Ink is

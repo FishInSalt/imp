@@ -61,9 +61,8 @@ The final fresh run above, not those partial attempts, supports the PASS result.
 
 ## Remaining limitation
 
-This establishes functioning installed CLI/TUI and agent interaction, not whether
-the owner's actual provider account accepts a request or copied model/extension
-configuration works in normal operation. Real-provider acceptance needs separate
-explicit scope for credential use, potential quota/OAuth effects and isolation
-from concurrent old-session refresh. Do not describe this result as a completed
-real-account or unrestricted-default-environment acceptance.
+This synthetic run establishes installed CLI/TUI and agent interaction, not real
+account authentication or normal copied extension configuration. A later separately
+approved [real-provider run](ink-real-interaction-acceptance.md) establishes one
+DeepSeek interaction with migrated auth/settings. Do not describe the synthetic
+run, or either scoped run, as unrestricted-default-environment acceptance.

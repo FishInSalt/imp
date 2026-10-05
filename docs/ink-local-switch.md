@@ -35,8 +35,10 @@ and module links remain unchanged for current-session operation and recovery.
 Subsequent registered-command isolated help/version passed with fake HOME and
 zero recorded network attempts, evidence `/tmp/ink-registered-check.7wXuxu`.
 Subsequent PTY interactive acceptance also passed; see the separate
-[interaction record](ink-interaction-acceptance.md). Real-provider authentication,
-normal user extension execution and real HOME startup remain unverified.
+[interaction record](ink-interaction-acceptance.md). Subsequently one separately
+approved real-model PTY interaction passed with migrated DeepSeek auth/settings;
+see [real-provider acceptance](ink-real-interaction-acceptance.md). Normal user
+extension execution and unrestricted real HOME startup remain unverified.
 
 ## Order
 

@@ -28,7 +28,6 @@ import {
 	setTrust,
 	trustRequiringResources,
 } from "../src/core/trust.js";
-import { usageTotalsTracker } from "../src/core/usage-totals.js";
 import { createChildWorktree, listChildWorktrees, resolveRepoState } from "../src/core/worktree.js";
 import { loadExtensions } from "../src/extensions/loader.js";
 import { VERSION } from "../src/format.js";
@@ -37,9 +36,8 @@ import { catalogPath } from "../src/provider/catalog.js";
 import { contextWindowFor } from "../src/provider/models.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import { historyFilePath } from "../src/repl/history.js";
-import { createRunner } from "../src/runner.js";
 import { resolveShell } from "../src/tui.js";
-import { assistant, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
+import { assistant, scriptedProvider, user } from "./helpers/fakes.js";
 
 // Keep the real filesystem, but observe trust's gate-before-read contract.
 vi.mock("node:fs", async (importOriginal) => {
@@ -284,164 +282,6 @@ describe("resource-only .ink project trust", () => {
 				}
 			}
 		}
-	});
-});
-
-describe("ordinary v1 session copy and restoration", () => {
-	it("preserves source bytes/cwd/IDs/mtime and restores branches, compaction, model, thinking, name and usage", async () => {
-		// The project path stays unchanged. Only its home state root is copied.
-		const oldBase = resource(home, ".imp", "sessions");
-		const newBase = resource(home, ".ink", "sessions");
-		// Handwritten historical v1 records, not a current-writer round trip.
-		const timestamp = "2026-09-28T09:00:00.000Z";
-		const oldFile = path.join(sessionsDirFor(cwd, oldBase), "historical-ordinary.jsonl");
-		const records = [
-			{
-				type: "session",
-				version: 1,
-				id: "00000000-0000-4000-8000-000000000001",
-				timestamp,
-				cwd,
-				model: { provider: "anthropic", modelId: "claude-sonnet-4-6" },
-			},
-			{
-				type: "message",
-				id: "00000001",
-				parentId: null,
-				timestamp,
-				message: user("Historical imp task; do not rewrite /old/.imp or IMP_MODEL"),
-			},
-			{
-				type: "message",
-				id: "00000002",
-				parentId: "00000001",
-				timestamp,
-				message: assistant([{ type: "text", text: "Abandoned branch" }]),
-			},
-			{ type: "position", leafId: "00000001" },
-			{
-				type: "message",
-				id: "00000003",
-				parentId: "00000001",
-				timestamp,
-				message: assistant([{ type: "text", text: "Kept branch" }]),
-			},
-			{
-				type: "compaction",
-				id: "00000004",
-				parentId: "00000003",
-				timestamp,
-				summary: "Historical imp summary",
-				retainedTail: [user("Retained tail")],
-				tokensBefore: 1234,
-				usage: { inputTokens: 7, outputTokens: 3 },
-			},
-			{ type: "thinkingLevelChange", id: "00000005", parentId: "00000004", timestamp, thinkingLevel: "high" },
-			{
-				type: "session_info",
-				id: "00000006",
-				parentId: "00000005",
-				timestamp,
-				name: "Historical imp investigation",
-			},
-			{
-				type: "message",
-				id: "00000007",
-				parentId: "00000006",
-				timestamp,
-				message: user("Before restoration"),
-			},
-			{
-				type: "message",
-				id: "00000008",
-				parentId: "00000007",
-				timestamp,
-				message: assistant([{ type: "text", text: "Saved answer" }]),
-			},
-		];
-		write(oldFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-		const old = SessionStore.open(oldFile);
-		expect(old.header.id).toBe("00000000-0000-4000-8000-000000000001");
-		expect(old.stats()).toMatchObject({ inputTokens: 20, outputTokens: 10 });
-		expect(usageTotalsTracker(old.getEntries()).view().total).toMatchObject({
-			inputTokens: 37,
-			outputTokens: 18,
-		});
-		const abandoned = "00000002";
-		const older = createSession(cwd, oldBase);
-		older.appendMessage(user("Older conversation"));
-		const children = path.join(path.dirname(old.filePath), "children");
-		const childFile = path.join(children, "historical-child.jsonl");
-		fs.mkdirSync(children);
-		SessionStore.create(childFile, cwd, "historical-child", old.header.id).appendMessage(user("child"));
-		const fixedTime = new Date("2026-09-28T10:00:00Z");
-		fs.utimesSync(old.filePath, fixedTime, fixedTime);
-		fs.utimesSync(childFile, fixedTime, fixedTime);
-		fs.utimesSync(
-			older.filePath,
-			new Date(fixedTime.getTime() - 10000),
-			new Date(fixedTime.getTime() - 10000),
-		);
-		const sourceFiles = [old.filePath, older.filePath, childFile];
-		const originals = sourceFiles.map((file) => ({
-			file,
-			bytes: fs.readFileSync(file),
-			mtime: fs.statSync(file).mtimeMs,
-		}));
-		fs.cpSync(resource(home, ".imp", "sessions"), newBase, { recursive: true, preserveTimestamps: true });
-		for (const original of originals) {
-			const copied = path.join(newBase, path.relative(oldBase, original.file));
-			expect(fs.readFileSync(copied)).toEqual(original.bytes);
-			expect(fs.statSync(copied).mtimeMs).toBe(original.mtime);
-		}
-		const copiedPath = path.join(newBase, path.relative(oldBase, old.filePath));
-		const listing = listSessions(cwd);
-		expect(listing.map((info) => info.id)).toEqual([old.header.id, older.header.id]);
-		expect(listing[0]).toMatchObject({ cwd, title: "Historical imp investigation", filePath: copiedPath });
-		expect(resolveSession(cwd, { continueRecent: true })?.header).toEqual(old.header);
-		expect(resolveSession(cwd, { resume: old.header.id.slice(0, 8) })?.header).toEqual(old.header);
-		const sink: LLMRequest[] = [];
-		const { renderer } = makeRenderer();
-		const runner = await createRunner({
-			cwd,
-			argv: [],
-			model: "anthropic/claude-sonnet-4-6",
-			maxTokens: 1024,
-			maxTurns: 3,
-			noContextFiles: true,
-			noSession: false,
-			continueRecent: true,
-			renderer,
-			provider: scriptedProvider(
-				[assistant([{ type: "text", text: "Restored offline" }])],
-				sink,
-				"anthropic",
-			),
-			tools: [],
-		});
-		expect(runner.session?.header).toEqual(old.header);
-		expect(runner.session?.header.version).toBe(1);
-		expect(runner.session?.getEntries()).toEqual(old.getEntries());
-		expect(runner.session?.otherBranchTips().map((tip) => tip.id)).toContain(abandoned);
-		expect(runner.session?.getSessionName()).toBe("Historical imp investigation");
-		expect(runner.session?.getModel()).toEqual(old.getModel());
-		expect(runner.thinkingLevel).toBe("high");
-		expect(runner.modelReference()).toBe("claude-sonnet-4-6");
-		expect(runner.usageTotals()).toEqual(usageTotalsTracker(old.getEntries()).view());
-		expect(runner.history).toEqual(old.buildContext().messages);
-		expect(JSON.stringify(runner.history)).toContain("Historical imp summary");
-		expect(JSON.stringify(runner.history)).toContain("Retained tail");
-		expect(fs.readFileSync(copiedPath)).toEqual(originals[0]?.bytes);
-		await runner.runTurn({ userMessage: "Continue offline" });
-		expect(sink).toHaveLength(1);
-		expect(JSON.stringify(sink[0]?.messages)).toContain("Saved answer");
-		expect(SessionStore.open(copiedPath).header.cwd).toBe(cwd);
-		expect(fs.readFileSync(copiedPath).subarray(0, originals[0]?.bytes.length)).toEqual(originals[0]?.bytes);
-		for (const original of originals) {
-			expect(fs.readFileSync(original.file)).toEqual(original.bytes);
-			expect(fs.statSync(original.file).mtimeMs).toBe(original.mtime);
-		}
-		runner.close();
 	});
 });
 

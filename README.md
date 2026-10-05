@@ -80,17 +80,19 @@ npm start     # launches the interactive REPL
 Ink reads `~/.ink`, project `.ink`, and `INK_*` configuration only. It does
 not discover, merge, or automatically migrate `.imp` state or `IMP_*`
 settings. Standard `AGENTS.md`, `.agents/skills`, and MCP configuration
-filenames are unchanged. Existing ordinary sessions can be preserved through
-a separately approved migration with the original project cwd unchanged;
-historical child sessions remain inspectable but cannot resume under Ink.
+filenames are unchanged. This cutover uses an independent installation and
+selected configuration only; old sessions, logs and history stay in `.imp`
+and are not migrated. Start new Ink sessions. Historical child sessions
+cannot resume across the version change.
 The public source type `ImpSettings` is now `InkSettings`, a breaking change
 for deep imports. Historical `impVersion` launch fields, `.imp-machine-id`
 lease storage, and the Codex `originator: "imp"` compatibility identifier
 remain intentionally unchanged.
 
-See the reviewed [rename design](docs/ink-rename-design.md),
-[operator cutover runbook](docs/ink-cutover-runbook.md), and
-[release instructions](RELEASING.md) before changing an existing installation.
+See the [local installation and acceptance record](docs/ink-local-install.md)
+and [release instructions](RELEASING.md). The original
+[rename design](docs/ink-rename-design.md) is historical; its full-state
+migration and source-linked activation proposal was superseded.
 Do not copy credentials, install globally, migrate state, or publish as part
 of an ordinary checkout update. The actual repository URLs still refer to
 `FishInSalt/imp`; a repository rename requires separate approval.

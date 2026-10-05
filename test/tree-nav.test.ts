@@ -138,8 +138,8 @@ describe("runner.navigateTree (#tree)", () => {
 		expect(requests).toHaveLength(0);
 	});
 
-	it("IMP_BRANCH_SUMMARY=0 → disabled even when asked", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+	it("INK_BRANCH_SUMMARY=0 → disabled even when asked", async () => {
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		try {
 			const { runner, store, ids, requests } = await navEnv();
 			store.appendMessage(user("q3-new"));

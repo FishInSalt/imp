@@ -1,20 +1,25 @@
-# imp 👹
+# Ink
 
-A small coding agent that runs in your terminal. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
+An open-source AI assistant and agent harness for the terminal. Use Ink for
+research, writing, analysis, software development, and other tool-assisted
+tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
-> An imp is a little goblin that runs errands for its master — eager, fast, and best kept behind a permission gate.
+The repository remains [FishInSalt/imp](https://github.com/FishInSalt/imp).
+Ink is the current product name; historical release and design records keep
+their original names.
 
 ## Status
 
-A working coding agent, built milestone by milestone (roadmap and history:
-`PROJECT_PLAN.md`). At a glance:
+A working assistant with an interactive terminal interface, persistent
+sessions, and extensible tools. Roadmap and historical implementation ledger:
+`PROJECT_PLAN.md`. At a glance:
 
 - Interactive TUI (streaming, one-line tool status, queued steering and
-  follow-up runs) plus print mode (`imp -p "..."`) and piped stdin
+  follow-up runs) plus print mode (`ink -p "..."`) and piped stdin
 - Agent loop: streaming LLM calls + tool execution, with abort, validation,
   error feedback, steering hooks, and a compaction hook
-- Sessions: append-only JSONL message trees (`~/.imp/sessions/`), `--continue`
-  / `--resume <id>` / `imp sessions`, the `/tree` navigator, `/fork`
+- Sessions: append-only JSONL message trees (`~/.ink/sessions/`), `--continue`
+  / `--resume <id>` / `ink sessions`, the `/tree` navigator, `/fork`
 - Auto-compaction: near the context window, older turns are LLM-summarized
   into a checkpoint; recent turns and the full history on disk are preserved
 - Tools: `bash` (timeout, truncation), `read` (offset/limit, images), `edit`
@@ -28,19 +33,25 @@ A working coding agent, built milestone by milestone (roadmap and history:
 
 ## Setup
 
-Requires Node 20 or newer. Install from npm — this provides the `imp`
-command:
+Requires Node 20 or newer. The selected package is `ink-agent@0.2.0`.
+Publication and local state cutover are separate approval-gated operations;
+this checkout does not imply that the package is available on npm yet.
+Once published, install it to provide the `ink` command:
 
 ```bash
-npm install -g imp-agent
-imp
+npm install -g ink-agent@0.2.0
+ink
 ```
 
-Or try it without installing:
+Or, once published, let npm infer the single `ink` executable from the
+explicit package:
 
 ```bash
-npx imp-agent
+npm exec -- ink-agent@0.2.0 --help
 ```
+
+Do not use `npx ink`: plain `ink` is an unrelated npm package. There is no
+`imp` executable alias.
 
 Then sign in with an API key (or `/login` inside a session):
 
@@ -48,11 +59,11 @@ Then sign in with an API key (or `/login` inside a session):
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-No credentials yet? imp says so instead of pretending a default model
+No credentials yet? Ink says so instead of pretending a default model
 is in use: fresh sessions show `no model available — run /login to
 connect one`, print mode fails fast with the family's env-var hint, and
 no unusable model is ever written into a session file. Once exactly one
-provider is configured, imp resolves it for you — a new session starts on
+provider is configured, Ink resolves it for you — a new session starts on
 that family's recommended model (`zai/glm-5.3`, `deepseek/deepseek-v4-pro`,
 …) with a one-line note; `/model` changes it and `/settings defaultModel
 <id>` pins it as the startup default.
@@ -64,9 +75,29 @@ npm install   # installs dependencies and builds (prepare script)
 npm start     # launches the interactive REPL
 ```
 
+### Breaking rename and existing installations
+
+Ink reads `~/.ink`, project `.ink`, and `INK_*` configuration only. It does
+not discover, merge, or automatically migrate `.imp` state or `IMP_*`
+settings. Standard `AGENTS.md`, `.agents/skills`, and MCP configuration
+filenames are unchanged. Existing ordinary sessions can be preserved through
+a separately approved migration with the original project cwd unchanged;
+historical child sessions remain inspectable but cannot resume under Ink.
+The public source type `ImpSettings` is now `InkSettings`, a breaking change
+for deep imports. Historical `impVersion` launch fields, `.imp-machine-id`
+lease storage, and the Codex `originator: "imp"` compatibility identifier
+remain intentionally unchanged.
+
+See the reviewed [rename design](docs/ink-rename-design.md),
+[operator cutover runbook](docs/ink-cutover-runbook.md), and
+[release instructions](RELEASING.md) before changing an existing installation.
+Do not copy credentials, install globally, migrate state, or publish as part
+of an ordinary checkout update. The actual repository URLs still refer to
+`FishInSalt/imp`; a repository rename requires separate approval.
+
 ### Signing in (/login)
 
-`/login` in the REPL stores credentials in `~/.imp/auth.json` (0600) — a
+`/login` in the REPL stores credentials in `~/.ink/auth.json` (0600) — a
 stored key beats the environment variable, and a bare `glm-*` model id
 routes to the zai family (pi parity: zai is the one official GLM path;
 a missing credential gets a sign-in pointer, never a silent fallback):
@@ -80,11 +111,11 @@ a missing credential gets a sign-in pointer, never a silent fallback):
 ```
 
 The OpenAI (ChatGPT plan) row runs the device-code OAuth flow in the
-REPL: imp prints the verification URL and code, polls in the background,
+REPL: Ink prints the verification URL and code, polls in the background,
 and Ctrl+C cancels (the prompt stays usable — no force quit). Rows show
 each provider's status (`signed in — stored key`, `env: ZAI_API_KEY`,
-`not signed in`), and after a login from a different family imp points
-at the matching `/model` switch. `imp logout` (CLI) removes only the
+`not signed in`), and after a login from a different family Ink points
+at the matching `/model` switch. `ink logout` (CLI) removes only the
 ChatGPT-plan credential; `/logout` (REPL) removes any stored one.
 
 ### Using Z.ai GLM Coding Plan
@@ -94,11 +125,11 @@ or:
 
 ```bash
 export ZAI_API_KEY=<your z.ai api key>
-export IMP_MODEL=glm-5.3   # or glm-5.2, glm-4.7, ... per your plan
+export INK_MODEL=glm-5.3   # or glm-5.2, glm-4.7, ... per your plan
 ```
 
 The pre-zai anthropic-compat setup (`ANTHROPIC_BASE_URL` pointing at
-z.ai) still works when forced explicitly (`imp -m anthropic/glm-5.3`),
+z.ai) still works when forced explicitly (`ink -m anthropic/glm-5.3`),
 but bare `glm-*` ids no longer fall back to it. Prefer `/login` — the
 compat endpoint carries the binary thinking knob only.
 
@@ -107,7 +138,7 @@ compat endpoint carries the binary thinking knob only.
 ```bash
 export ANTHROPIC_AUTH_TOKEN=<token>          # or ANTHROPIC_API_KEY
 export ANTHROPIC_BASE_URL=<your endpoint>
-export IMP_MODEL=<id the endpoint serves>
+export INK_MODEL=<id the endpoint serves>
 ```
 
 Note: `/login anthropic` stores a key that overrides `ANTHROPIC_AUTH_TOKEN`
@@ -121,12 +152,12 @@ prefer the env pair above.
   tests) on `ubuntu-latest` with Node 20 and 24.
 - **Windows** — not supported yet. Native Windows has known blockers (the
   `bash` tool spawns `/bin/bash`, and MCP servers spawn without `.cmd` /
-  shell resolution) and no CI coverage. WSL does work — inside it imp is
+  shell resolution) and no CI coverage. WSL does work — inside it Ink is
   plain Linux.
 
 External tools are optional and platform-dependent: `rg` / `fd` back the
 `grep` / `find` tools (missing binaries are reported with install hints; the
-rest of imp works without them), and clipboard image paste uses `osascript`
+rest of Ink works without them), and clipboard image paste uses `osascript`
 on macOS and `wl-paste` / `xclip` on Linux.
 
 ## Usage
@@ -136,13 +167,13 @@ on macOS and `wl-paste` / `xclip` on Linux.
 npm run dev -- -p "List the .ts files here and count their total lines"
 
 # installed bin
-./bin/imp.js -p "Read src/cli.ts and summarize what it does"
+./bin/ink.js -p "Read src/cli.ts and summarize what it does"
 
 # options
-imp -p "..." -m claude-sonnet-4-5 --max-turns 20
+ink -p "..." -m claude-sonnet-4-5 --max-turns 20
 ```
 
-`imp --help` lists every option — sessions (`-c`, `-r`, `--no-session`), model
+`ink --help` lists every option — sessions (`-c`, `-r`, `--no-session`), model
 and thinking (`-m`, `--thinking`), limits (`--max-turns`, `--max-tokens`;
 print/piped runs default to 100 turns, interactive TTY sessions are uncapped),
 and resource loading (`-e` / `-ne`, `--skill` / `--no-skills`, `-nc`,
@@ -153,25 +184,25 @@ and resource loading (`-e` / `-ne`, `--skill` / `--no-skills`, `-nc`,
 Model metadata — context windows, cost rates, thinking ladders, vision
 capability, family model lists — comes from the public catalog service at
 `pi.dev` (the same source the reference project consumes). A disk cache
-(`~/.imp/models-catalog.json`) makes it offline-safe: at startup imp loads
+(`~/.ink/models-catalog.json`) makes it offline-safe: at startup Ink loads
 the cache synchronously (the bundled static tables are the frozen last-resort
 floor) and kicks a non-blocking refresh when the cache is older than 4 hours;
 opening `/model` re-checks the same window. No periodic polling. On a
 successful fetch the catalog always wins over the bundled tables, so new
-models and price changes arrive without an imp release.
+models and price changes arrive without an Ink release.
 
 ```bash
-IMP_CATALOG_BASE_URL=https://mirror.example  # redirect the catalog source
-IMP_CATALOG_PATH=/path/to/models-catalog.json # relocate the cache (tests)
+INK_CATALOG_BASE_URL=https://mirror.example  # redirect the catalog source
+INK_CATALOG_PATH=/path/to/models-catalog.json # relocate the cache (tests)
 ```
 
 ## Interactive mode
 
-Run `imp` with no arguments to start an interactive session (REPL) over one
+Run `ink` with no arguments to start an interactive session (REPL) over one
 shared conversation and session:
 
 ```bash
-imp            # interactive REPL (streaming, one-line tool status)
+ink            # interactive REPL (streaming, one-line tool status)
 ```
 
 - Tool calls render as one-line transcript rows: while a call runs, its
@@ -184,7 +215,7 @@ imp            # interactive REPL (streaming, one-line tool status)
   structured calls to their raw arguments. Interrupted calls and replayed
   history carry no marker. Concurrent `task` calls each keep their own entry
   and update as they settle (see Subagents).
-- Plain lines are sent to the model. Lines typed while imp is working are
+- Plain lines are sent to the model. Lines typed while Ink is working are
   queued — each queued row shows its route: `steer:` lines (plain Enter)
   inject into the running turn before the next model call (default mode
   `all`: every queued steer line joins the next boundary at once),
@@ -205,7 +236,7 @@ imp            # interactive REPL (streaming, one-line tool status)
   not, absent terminal support).
 - `Ctrl+C` aborts the running turn (press twice to force quit; at an empty
   prompt, press twice to exit). `Ctrl+D` exits. The exit line shows how to
-  resume: `imp -r <id>`.
+  resume: `ink -r <id>`.
 - Slash commands: `/help`, `/exit`, `/new` (fresh session, old one stays on
   disk), `/fork` (branch the conversation before an earlier message — pick
   one from the filterable list or `/fork <n>`), `/tree` (navigate the
@@ -223,7 +254,7 @@ imp            # interactive REPL (streaming, one-line tool status)
   Summarize / custom prompt; `/settings branchSummary.skipPrompt true` skips
   the ask); jumping to a USER message puts its text back in the input for
   re-editing — `/fork` does exactly this from a user-message list, and seeds
-  the editor the same way; disable summaries with `IMP_BRANCH_SUMMARY=0`;
+  the editor the same way; disable summaries with `INK_BRANCH_SUMMARY=0`;
   `/settings treeFilterMode <mode>` remembers your default filter. The
   readline shell renders the same tree as a numbered list — `/tree <n>` jumps
   to row n), `/sessions` (list
@@ -244,19 +275,19 @@ imp            # interactive REPL (streaming, one-line tool status)
   (worktrees kept for a manual merge), `/login` / `/logout`, `/mcp`, and
   `/settings`. Unknown commands get a hint instead of reaching the
   model; prefix a line with a space to send a literal leading `/`.
-- Thinking levels can also start a session: `imp --thinking medium` or
-  `IMP_THINKING=medium` (invalid env values are ignored with a notice).
+- Thinking levels can also start a session: `ink --thinking medium` or
+  `INK_THINKING=medium` (invalid env values are ignored with a notice).
   The default is pi's `medium` on models with a thinking knob, and the
-  level you choose persists in `~/.imp/settings.json` as the next
+  level you choose persists in `~/.ink/settings.json` as the next
   session's default. **Ctrl+T** hides/shows reasoning traces (replaced by
   a dim `Thinking...` label; also persisted); on Anthropic traces are
   kept in context as the API requires.
 - Z.ai GLM connects the way pi does — the coding endpoint over the
   OpenAI protocol is the ONE official GLM path:
-  `ZAI_API_KEY=... imp -m zai/glm-5.3`, or `/login` → Z.AI in the REPL
+  `ZAI_API_KEY=... ink -m zai/glm-5.3`, or `/login` → Z.AI in the REPL
   (`ZAI_BASE_URL` overrides, e.g. the CN mirror
   `https://open.bigmodel.cn/api/coding/paas/v4`). A bare `glm-*` id
-  routes there unconditionally; without a credential imp prints a
+  routes there unconditionally; without a credential Ink prints a
   one-line sign-in pointer instead of silently connecting elsewhere.
   glm-5.2 = off/high/max; glm-5.3 = low/high/max (thinking cannot be
   disabled on that model). The old env-only anthropic-compat fallback
@@ -264,11 +295,11 @@ imp            # interactive REPL (streaming, one-line tool status)
   (generic compat passthrough, binary thinking knob only), and the
   footer and `/model` always show `zai/glm-…` for the coding path.
 - DeepSeek connects through the official API:
-  `DEEPSEEK_API_KEY=... imp -m deepseek/deepseek-v4-pro` (or
+  `DEEPSEEK_API_KEY=... ink -m deepseek/deepseek-v4-pro` (or
   `deepseek/deepseek-flash`), or `/login` → DeepSeek. `DEEPSEEK_BASE_URL`
   overrides the endpoint; a stored key wins over the environment variable.
 - Moonshot / Kimi connects through the official open platform:
-  `MOONSHOT_API_KEY=... imp -m moonshotai-cn/kimi-k3` (China,
+  `MOONSHOT_API_KEY=... ink -m moonshotai-cn/kimi-k3` (China,
   `api.moonshot.cn/v1`) or `moonshotai/kimi-k3` (overseas,
   `api.moonshot.ai/v1`), or `/login` → Moonshot AI / Moonshot AI CN.
   Both read `MOONSHOT_API_KEY` with per-family stored keys;
@@ -277,7 +308,7 @@ imp            # interactive REPL (streaming, one-line tool status)
   `reasoning_effort` low/high/max — the `medium` startup level maps to
   `high`).
 - `-c`, `-r`, `-m`, `--no-session`, … all work as in print mode.
-- Piping works too: `echo "fix the typo in foo.ts" | imp` runs one turn and
+- Piping works too: `echo "fix the typo in foo.ts" | ink` runs one turn and
   exits at EOF (a zero-line pipe still prints help and exits 1).
 
 Known limits (declared, not bugs):
@@ -289,14 +320,14 @@ Known limits (declared, not bugs):
 
 ## Markdown quick commands
 
-Drop a `.md` file into `~/.imp/commands/` (global) or `<project>/.imp/commands/`
+Drop a `.md` file into `~/.ink/commands/` (global) or `<project>/.ink/commands/`
 (project — behind the same trust gate as extensions and agents: a cloned repo
 must not grow commands that talk to the model) and its filename becomes a
 slash command:
 
 ```bash
-mkdir -p ~/.imp/commands
-cat > ~/.imp/commands/review.md <<'EOF'
+mkdir -p ~/.ink/commands
+cat > ~/.ink/commands/review.md <<'EOF'
 ---
 description: review the current diff against the plan
 allowedDuringRun: false
@@ -319,15 +350,15 @@ EOF
 
 Replace the default system prompt with your own file, or append to it:
 
-- `.imp/SYSTEM.md` (project, requires trust) or `~/.imp/SYSTEM.md` (global) —
+- `.ink/SYSTEM.md` (project, requires trust) or `~/.ink/SYSTEM.md` (global) —
   the file's content replaces the default prompt body (identity, core rules,
   tool catalog). The working directory line, project context files
   (AGENTS.md/CLAUDE.md), skills, the agent roster, and extension context
   sections still load — those are routing facts, not persona.
-- `.imp/APPEND_SYSTEM.md` / `~/.imp/APPEND_SYSTEM.md` — appended after the
+- `.ink/APPEND_SYSTEM.md` / `~/.ink/APPEND_SYSTEM.md` — appended after the
   prompt body in both modes (e.g. "Answer in Chinese").
 
-Project files need the directory trusted (`imp --trust`); the project tier
+Project files need the directory trusted (`ink --trust`); the project tier
 wins over the global one per file. An empty file disables the custom prompt
 for that pair (the default prompt stays).
 
@@ -339,8 +370,8 @@ entry enters the system prompt; the model reads the full body with the `read`
 tool when a task matches — zero context cost until then:
 
 ```bash
-mkdir -p .imp/skills/ledger
-cat > .imp/skills/ledger/SKILL.md <<'EOF'
+mkdir -p .ink/skills/ledger
+cat > .ink/skills/ledger/SKILL.md <<'EOF'
 ---
 description: keep PROJECT_PLAN.md as an append-only ledger
 ---
@@ -348,8 +379,8 @@ Append dated entries above the anchor, newest first…
 EOF
 ```
 
-- Discovery: `<project>/.imp/skills` + `.agents/skills` (project tiers,
-  trust-gated; the ancestor walk goes up to the git root), `~/.imp/skills` +
+- Discovery: `<project>/.ink/skills` + `.agents/skills` (project tiers,
+  trust-gated; the ancestor walk goes up to the git root), `~/.ink/skills` +
   `~/.agents/skills` (user tiers), plus `--skill <path>` / settings
   `"skills"` (explicit, always load; `--no-skills` skips discovery).
 - `/skill:ledger <args>` force-loads: expands to the full body as the user
@@ -372,11 +403,11 @@ sees it. Detection is by content (magic bytes), never by file extension.
   photon (Rust/WASM) ladder — 2000×2000 cap, PNG/JPEG candidates, quality
   steps, dimension decay — with a coordinate-mapping note telling the model
   how to map back to original pixels. Set `images.autoResize: false` in
-  `~/.imp/settings.json` to ship original bytes (oversize then gets a
+  `~/.ink/settings.json` to ship original bytes (oversize then gets a
   teaching note instead).
 - BMP converts to PNG (EXIF orientation baked in); jpg/jpeg mime labels
   normalize.
-- Attach files to a print-mode prompt: `imp @shot.png @notes.txt "what is
+- Attach files to a print-mode prompt: `ink @shot.png @notes.txt "what is
   this"` — text files embed as `<file>` blocks, images attach to the first
   message through the same processor.
 - In the TUI, Ctrl+V pastes a clipboard image as a tmp-file path at the
@@ -401,11 +432,11 @@ uncapped (the 60-turn backup wall was removed in `#loop-health`; budget
 decisions stay with the parent). A shared loop-health monitor (same signals
 for the main loop and children) reports degenerate patterns — repeated
 identical tool calls, repeated failed edits — as honest task-result lines,
-a task-record field, and one dim REPL note per signal (`IMP_HEALTH=0`
+a task-record field, and one dim REPL note per signal (`INK_HEALTH=0`
 disables it); it never injects anything into a child.
 Every child transcript is persisted as a session file in
 a `children/` directory next to the parent's (opt out with
-`IMP_CHILD_SESSIONS=0`). Wall-clock: no clock in the REPL (Ctrl+C is the
+`INK_CHILD_SESSIONS=0`). Wall-clock: no clock in the REPL (Ctrl+C is the
 backstop), a 60-minute hang guard in print/headless runs; a call's `timeoutMs`
 or an agent file's `timeout:` (seconds) always wins. Several `task` calls in
 one turn run concurrently (waves of up to 5). Results keep a deterministic,
@@ -419,7 +450,7 @@ Named agents live as markdown files with hand-parsed frontmatter — no YAML
 dependency, no builtins; the project directory wins on name collisions:
 
 ```
-.imp/agents/scout.md        # or ~/.imp/agents/ for user-global agents
+.ink/agents/scout.md        # or ~/.ink/agents/ for user-global agents
 ---
 name: scout
 description: Explores a codebase to answer research questions
@@ -461,7 +492,7 @@ separate checkout of the committed state under the system temp dir — with the
 builtin tools rebuilt at that path, so it physically cannot touch the parent's
 files. The child prompt is told to translate paths and to commit its work; the
 result names the branch and change summary, and the parent merges with
-`git merge <branch>` when it wants the work. A worktree with no changes is
+`git merge --no-ff <branch>` after review. A worktree with no changes is
 removed (branch and all); preserved work is never discarded. Extension tools
 are excluded from worktree children (their registered cwd cannot move).
 Isolation is by default working directory — a child's `bash` could still
@@ -479,7 +510,7 @@ the shared surface entirely (see above).
 
 ## MCP (Model Context Protocol)
 
-imp consumes tools from MCP servers over **stdio** (`command`) or
+Ink consumes tools from MCP servers over **stdio** (`command`) or
 **Streamable HTTP** (`url`), so existing setups work unchanged:
 
 ```jsonc
@@ -524,7 +555,7 @@ Connections start asynchronously at startup (npx cold starts can take a
 while); tools that connect while a run is in flight join at the next run
 boundary. A server that dies mid-session reconnects transparently on the next
 tool call; an HTTP session that expires is re-initialized and the call
-retried once. `/mcp` shows per-server status; `IMP_MCP=0` or
+retried once. `/mcp` shows per-server status; `INK_MCP=0` or
 `"mcp": {"enabled": false}` in settings disables the module entirely
 (no config found = zero cost, nothing spawns, no requests are made).
 
@@ -538,19 +569,19 @@ registration until a server with ≥10 tools shows up). Design + trigger table:
 
 ## Extensions
 
-imp loads **extensions** — plain ESM modules (`.mjs`, or `.js` under a
+Ink loads **extensions** — plain ESM modules (`.mjs`, or `.js` under a
 module-typed package) whose default export is a factory receiving one thin
 `api` object — from three places, in this order:
 
 1. `-e <path>` / `--extension <path>` flags (repeatable; file or directory)
-2. `<project>/.imp/extensions/`
-3. `~/.imp/extensions/`
+2. `<project>/.ink/extensions/`
+3. `~/.ink/extensions/`
 
 ```js
-// .imp/extensions/hello.mjs — an extension is a plain ESM module.
+// .ink/extensions/hello.mjs — an extension is a plain ESM module.
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
-	api.registerTool({ /* …an imp Tool — name, description, parameters, execute… */ });
+	api.registerTool({ /* …an Ink Tool — name, description, parameters, execute… */ });
 	api.registerCommand({ /* …a /slash command, listed in /help… */ });
 	api.registerContext("hello", "…a system-prompt section, appended after AGENTS.md…");
 	api.on("tool_call", (event) => {
@@ -559,8 +590,8 @@ export default function (api) {
 }
 ```
 
-- Three read-only facts ride along: `cwd` (absolute working directory imp
-  started in), `version` (imp version string), and `origin` (`"cli" |
+- Three read-only facts ride along: `cwd` (absolute working directory Ink
+  started in), `version` (Ink version string), and `origin` (`"cli" |
   "project" | "global"` — where the extension was discovered).
 - `registerTool` adds an LLM-callable tool; `registerCommand` adds a REPL slash
   command (tagged `[source]` in `/help`); `registerContext(id, text)` appends a
@@ -603,21 +634,21 @@ export default function (api) {
   built-ins keep the plain bold look; opt in by linking or copying the
   theme `examples/extensions/tool-colors.mjs` (built-ins Claude-orange,
   `task` bright cyan; the web-search tools take their beige from the
-  web-search extension's own suggestion) into `~/.imp/extensions/` and
+  web-search extension's own suggestion) into `~/.ink/extensions/` and
   editing it to taste.
-- A bad extension never kills imp: load failures, registration conflicts, and
-  handler throws each become one `imp:` teaching line; a throwing `tool_call`
+- A bad extension never kills Ink: load failures, registration conflicts, and
+  handler throws each become one `ink:` teaching line; a throwing `tool_call`
   handler fails **safe** (the call is blocked).
 - `--no-extensions` skips both discovery directories (explicit `-e` paths still
   load).
 
 **Security**: extensions are code and run with your full permissions — the same
-posture as the agent itself. Check `.imp/extensions/` in repositories you
+posture as the agent itself. Check `.ink/extensions/` in repositories you
 didn't write, or run with `--no-extensions`. Case studies ship in
 `examples/extensions/`: `notes.mjs` (the API tour), `guardian.mjs` (a
 config-driven permission gate — wildcard/regex rules that deny or ask
 before a call runs, with file-scoped `write`/`edit` rules; config at
-`~/.imp/guardian.json`, audited to `~/.imp/guardian.log`), `notify.mjs`
+`~/.ink/guardian.json`, audited to `~/.ink/guardian.log`), `notify.mjs`
 (a macOS completion notification with sound), `task-timer.mjs` (a live
 per-run timer in the TUI footer, built on
 `run_start`/`run_end` + `setStatus`), `tool-colors.mjs` (a name-color theme
@@ -633,7 +664,23 @@ npm run typecheck # tsc --noEmit
 npm run dev       # run CLI from source via tsx
 ```
 
-See `PROJECT_PLAN.md` for the roadmap.
+For isolated offline artifact verification after a build:
+
+```bash
+node scripts/release-guards.mjs identity
+node scripts/package-smoke.mjs --cache-source "$HOME/.npm"
+```
+
+The cache source is read-only; only production dependency cache entries are
+copied into a temporary private cache, without credentials. The smoke test
+captures `npm pack --json`'s filename, validates every packed path and mode,
+and checks help, exact version, and local artifact npm-exec inference from
+a neutral cwd. HOME, cache, and install prefix are temporary; network access
+and install scripts are blocked. Missing cached dependencies fail rather
+than fetch. It never writes shared `node_modules` or installs globally.
+
+See `PROJECT_PLAN.md` for the historical roadmap and `RELEASING.md` for the
+current release contract.
 
 ## License
 

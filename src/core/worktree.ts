@@ -98,7 +98,7 @@ export async function resolveRepoState(cwd: string): Promise<RepoState> {
 }
 
 function worktreeBaseDir(override?: string): string {
-	const raw = (override ?? process.env.IMP_WORKTREE_DIR ?? "").trim();
+	const raw = (override ?? process.env.INK_WORKTREE_DIR ?? "").trim();
 	return raw === "" ? tmpdir() : path.resolve(raw);
 }
 
@@ -108,8 +108,8 @@ export async function createChildWorktree(
 	name: string,
 	overrideBaseDir?: string,
 ): Promise<ChildWorktree> {
-	const dir = path.join(worktreeBaseDir(overrideBaseDir), `imp-worktree-${name}`);
-	const branch = `imp/task-${name}`;
+	const dir = path.join(worktreeBaseDir(overrideBaseDir), `ink-worktree-${name}`);
+	const branch = `ink/task-${name}`;
 	// Base the branch on the PARENT's HEAD (repo.head), not the main root's:
 	// when the parent itself runs inside a linked worktree the two differ, and
 	// change detection diffs against repo.head (review B2).
@@ -347,7 +347,7 @@ export async function worktreeChangeStat(wt: ChildWorktree, repo: RepoState, bas
 /** One kept worktree as /worktrees shows it (M6b §7 follow-up). */
 export interface WorktreeListEntry {
 	path: string;
-	/** Branch name without refs/heads/ (imp/task-*). */
+	/** Branch name without refs/heads/ (ink/task-*). */
 	branch: string;
 	/** The branch commit is an ancestor of the main checkout's HEAD —
 	 *  committed work on the branch cannot be lost by removing it. Says
@@ -365,9 +365,9 @@ export interface WorktreeListEntry {
 	missing: boolean;
 }
 
-/** Enumerate imp-kept child worktrees of `repo` (M6b handbacks awaiting a
- *  manual merge). Source of truth is `git worktree list --porcelain` — no
- *  bookkeeping of our own can drift from reality. */
+/** Enumerate Ink child worktrees of `repo`, including historical imp names
+ *  (M6b handbacks awaiting a manual merge). Source of truth is
+ *  `git worktree list --porcelain` — no bookkeeping can drift from reality. */
 export async function listChildWorktrees(repo: RepoState): Promise<WorktreeListEntry[]> {
 	const raw = await git(repo.root, ["worktree", "list", "--porcelain"]);
 	if (raw.status !== 0) throw new Error(`git worktree list failed: ${(raw.stderr || raw.stdout).trim()}`);
@@ -378,7 +378,9 @@ export async function listChildWorktrees(repo: RepoState): Promise<WorktreeListE
 		const branchRef = lines.find((l) => l.startsWith("branch "))?.slice("branch ".length);
 		if (wtPath === undefined || branchRef === undefined) continue;
 		if (wtPath === repo.root) continue; // the main checkout is never a handback (M8 review F4)
-		if (!path.basename(wtPath).startsWith("imp-worktree-")) continue; // only imp's children
+		const directoryName = path.basename(wtPath);
+		// Recognize retained historical children without renaming or removing them.
+		if (!directoryName.startsWith("ink-worktree-") && !directoryName.startsWith("imp-worktree-")) continue;
 		const branch = branchRef.replace(/^refs\/heads\//, "");
 		const mergedProbe = await git(repo.root, ["merge-base", "--is-ancestor", branch, "HEAD"]);
 		const merged = mergedProbe.status === 0;

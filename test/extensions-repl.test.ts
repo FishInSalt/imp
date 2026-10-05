@@ -50,7 +50,7 @@ interface StartArgs {
 	tools?: Tool[];
 	tty?: boolean;
 	extensionFiles?: Record<string, string>;
-	/** Written to <cwd>/.imp/agents/ before the runner loads (M5c discovery). */
+	/** Written to <cwd>/.ink/agents/ before the runner loads (M5c discovery). */
 	agentFiles?: Record<string, string>;
 	extensionPaths?: string[];
 	noExtensions?: boolean;
@@ -75,7 +75,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	await mkdir(cwd, { recursive: true });
 	if (args.extensionFiles) await writeExtensionFiles(cwd, args.extensionFiles);
 	if (args.agentFiles) {
-		const agentsDir = path.join(cwd, ".imp", "agents");
+		const agentsDir = path.join(cwd, ".ink", "agents");
 		await mkdir(agentsDir, { recursive: true });
 		for (const [name, content] of Object.entries(args.agentFiles)) {
 			await writeFile(path.join(agentsDir, name), content, "utf8");
@@ -183,7 +183,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -207,7 +207,7 @@ describe("full-path extension wiring through the REPL (design §14)", () => {
 		// M4c: the registered context section is injected into the system prompt
 		expect(env.requests[0]?.system).toContain("# Extension context: notes");
 		// the tool really executed against the fixture's file
-		const saved = JSON.parse(readFileSync(path.join(env.cwd, ".imp", "notes.json"), "utf8")) as {
+		const saved = JSON.parse(readFileSync(path.join(env.cwd, ".ink", "notes.json"), "utf8")) as {
 			notes: string[];
 		};
 		expect(saved.notes).toEqual(["ship it"]);
@@ -255,7 +255,7 @@ export default function (api) {
 		});
 		env.send("go\n");
 		await waitUntil(() => env.output().includes("done"));
-		expect(env.output()).toMatch(/imp: extension broken failed to load — /);
+		expect(env.output()).toMatch(/ink: extension broken failed to load — /);
 		expect(env.output()).toContain("▪ extension good [project] — 1 tool");
 		// P3-6: scripted/deferInit mode still prints extensions BEFORE the
 		// deferred context banner (structurally guaranteed — now asserted)
@@ -413,7 +413,7 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 		env.send("/notes save hi\n");
 		await waitUntil(() => env.output().includes("▪ note saved (1 total)"));
 		// the command really executed against the fixture's file
-		const saved = JSON.parse(readFileSync(path.join(env.cwd, ".imp", "notes.json"), "utf8")) as {
+		const saved = JSON.parse(readFileSync(path.join(env.cwd, ".ink", "notes.json"), "utf8")) as {
 			notes: string[];
 		};
 		expect(saved.notes).toEqual(["save hi"]);
@@ -449,7 +449,7 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 			},
 		});
 		env.send("/nope\n");
-		await waitUntil(() => env.output().includes('imp: unknown command "/nope"'));
+		await waitUntil(() => env.output().includes('ink: unknown command "/nope"'));
 		expect(env.output()).toContain(
 			"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /mcp /settings /copy /name /compact /extcmd — /help shows what they do",
 		);
@@ -486,7 +486,7 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 		env.send("/slowcmd\n");
 		await waitUntil(() => env.output().includes("waits for the running turn"));
 		expect(env.output()).toContain(
-			"imp: /slowcmd waits for the running turn — press Ctrl+C to abort it first, then /slowcmd",
+			"ink: /slowcmd waits for the running turn — press Ctrl+C to abort it first, then /slowcmd",
 		);
 		expect(env.output()).not.toContain("▪ slowcmd ran");
 		// once idle, the same command dispatches normally
@@ -539,7 +539,7 @@ describe("extension commands through the REPL line path (M4b, design §8.2/§14)
 		});
 		// named rejection at load time (design §9/E6) — the loser's registration is skipped
 		expect(env.output()).toContain(
-			'imp: extension second could not register command "shared" — already registered by first',
+			'ink: extension second could not register command "shared" — already registered by first',
 		);
 		// first wins at dispatch time
 		env.send("/shared\n");
@@ -882,10 +882,10 @@ describe("handler isolation through the full path (design §6.1, E10)", () => {
 		expect(result).toMatchObject({ toolCallId: "t1", content: "ran fine", isError: false });
 		// both handler failures surfaced as E10 diagnostics, exactly once each
 		expect(
-			env.output().match(/imp: extension crashy handler error \(tool_end\) — observer exploded/g),
+			env.output().match(/ink: extension crashy handler error \(tool_end\) — observer exploded/g),
 		).toHaveLength(1);
 		expect(
-			env.output().match(/imp: extension crashy handler error \(message_end\) — async observer exploded/g),
+			env.output().match(/ink: extension crashy handler error \(message_end\) — async observer exploded/g),
 		).toHaveLength(2); // one per assistant message: the tool_use turn and the closing reply
 		env.fake.eof();
 		expect(await env.repl).toBe(0); // the host process is still standing
@@ -952,7 +952,7 @@ export default function (api) {
 		// the whole point (M6b): the child's cwd is ITS worktree, not the parent
 		// project — gates read the child's own cwd
 		expect(childWrite).toMatchObject({ subagent: true });
-		expect(childWrite?.cwd).toContain("imp-worktree-");
+		expect(childWrite?.cwd).toContain("ink-worktree-");
 		expect(childWrite?.cwd).not.toBe(env.cwd);
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
@@ -960,7 +960,7 @@ export default function (api) {
 
 	it("ui.confirm over the fake tty: y approves and the tool runs; n declines with the gate's reason", async () => {
 		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
-		vi.stubEnv("HOME", fakeHome); // keep extension discovery hermetic (never the real ~/.imp)
+		vi.stubEnv("HOME", fakeHome); // keep extension discovery hermetic (never the real ~/.ink)
 		const env = await startRepl({
 			confirm: true,
 			scripts: [

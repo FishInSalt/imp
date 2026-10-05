@@ -62,10 +62,10 @@ describe("anthropic key resolution (#login-repl review P2)", () => {
 
 	it("stored key beats AUTH_TOKEN and forces x-api-key; the env pair keeps its original order", async () => {
 		const dir = await mkdtemp(path.join(tmpdir(), "imp-ant-"));
-		const prevPath = process.env.IMP_AUTH_PATH;
+		const prevPath = process.env.INK_AUTH_PATH;
 		const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
 		const prevKey = process.env.ANTHROPIC_API_KEY;
-		process.env.IMP_AUTH_PATH = path.join(dir, "auth.json");
+		process.env.INK_AUTH_PATH = path.join(dir, "auth.json");
 		delete process.env.ANTHROPIC_AUTH_TOKEN;
 		delete process.env.ANTHROPIC_API_KEY;
 		try {
@@ -84,8 +84,8 @@ describe("anthropic key resolution (#login-repl review P2)", () => {
 			await drain();
 			expect(captured).toEqual({ authorization: undefined, xApiKey: "key-env" });
 		} finally {
-			if (prevPath === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = prevPath;
+			if (prevPath === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = prevPath;
 			if (prevToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
 			else process.env.ANTHROPIC_AUTH_TOKEN = prevToken;
 			if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY;

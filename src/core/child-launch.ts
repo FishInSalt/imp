@@ -863,12 +863,12 @@ export async function validateChildContinuation(
 		});
 	}
 
-	// 3. imp version (O2: the binary-controlled layer is not fingerprinted
+	// 3. Ink version (O2: the binary-controlled layer is not fingerprinted
 	//    per-component, so any version change is an incompatibility).
 	if (current.impVersion !== launch.impVersion) {
 		reasons.push({
 			code: "version-drift",
-			message: `launched under imp ${launch.impVersion}; the current build is ${current.impVersion} — resuming across versions is refused`,
+			message: `launched under application version ${launch.impVersion}; the current build is ${current.impVersion} — resuming across versions is refused`,
 		});
 	}
 

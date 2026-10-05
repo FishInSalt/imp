@@ -83,14 +83,14 @@ describe("loadSkills — discovery", () => {
 		expect(result.skills.map((s) => s.name)).toEqual(["outer"]);
 	});
 
-	it("bare .md at an imp-style root is a skill; at an agents-style root it is ignored, nested grouping .md is found", () => {
+	it("bare .md at an Ink-style root is a skill; at an agents-style root it is ignored, nested grouping .md is found", () => {
 		const home = tmp("home");
-		// user tiers: ~/.imp/skills (imp mode) + ~/.agents/skills (agents mode).
+		// user tiers: ~/.ink/skills (Ink mode) + ~/.agents/skills (agents mode).
 		// (mkdirSync returns the FIRST directory it created under recursive —
 		// never join() off that return value; build paths explicitly.)
-		const impRoot = join(home, ".imp", "skills");
-		mkdirSync(impRoot, { recursive: true });
-		writeFileSync(join(impRoot, "loose.md"), "---\nname: loose\ndescription: root md\n---\nbody\n");
+		const inkRoot = join(home, ".ink", "skills");
+		mkdirSync(inkRoot, { recursive: true });
+		writeFileSync(join(inkRoot, "loose.md"), "---\nname: loose\ndescription: root md\n---\nbody\n");
 		const agentsRoot = join(home, ".agents", "skills");
 		mkdirSync(agentsRoot, { recursive: true });
 		writeFileSync(
@@ -166,8 +166,8 @@ describe("loadSkills — discovery", () => {
 	it("precedence: explicit paths > project > user (first-wins)", () => {
 		const home = tmp("home");
 		const cwd = tmp("cwd");
-		writeSkill(join(home, ".imp", "skills", "dup"), "name: dup\ndescription: user\n");
-		writeSkill(join(cwd, ".imp", "skills", "dup"), "name: dup\ndescription: project\n");
+		writeSkill(join(home, ".ink", "skills", "dup"), "name: dup\ndescription: user\n");
+		writeSkill(join(cwd, ".ink", "skills", "dup"), "name: dup\ndescription: project\n");
 		const explicitDir = tmp("explicit");
 		writeSkill(join(explicitDir, "dup"), "name: dup\ndescription: explicit\n");
 		const result = loadSkills({
@@ -183,8 +183,8 @@ describe("loadSkills — discovery", () => {
 	it("untrusted project: project tiers skipped entirely, user tiers still load", () => {
 		const home = tmp("home");
 		const cwd = tmp("cwd");
-		writeSkill(join(home, ".imp", "skills", "global"));
-		writeSkill(join(cwd, ".imp", "skills", "local"));
+		writeSkill(join(home, ".ink", "skills", "global"));
+		writeSkill(join(cwd, ".ink", "skills", "local"));
 		const untrusted = loadSkills({ cwd, home, projectTrusted: false, noSkills: false, explicitPaths: [] });
 		expect(untrusted.skills.map((s) => s.name)).toEqual(["global"]);
 		const trusted = loadSkills({ cwd, home, projectTrusted: true, noSkills: false, explicitPaths: [] });
@@ -194,8 +194,8 @@ describe("loadSkills — discovery", () => {
 	it("--no-skills skips every default location; explicit paths still load", () => {
 		const home = tmp("home");
 		const cwd = tmp("cwd");
-		writeSkill(join(home, ".imp", "skills", "global"));
-		writeSkill(join(cwd, ".imp", "skills", "local"));
+		writeSkill(join(home, ".ink", "skills", "global"));
+		writeSkill(join(cwd, ".ink", "skills", "local"));
 		const explicitDir = tmp("explicit2");
 		writeSkill(join(explicitDir, "kept"));
 		const result = loadSkills({
@@ -362,11 +362,11 @@ describe("ancestorAgentsSkillDirs", () => {
 });
 
 describe("trustRequiringResources — skills additions (M12)", () => {
-	it(".imp/skills in cwd gates", () => {
+	it(".ink/skills in cwd gates", () => {
 		const dir = tmp("t1");
 		const elsewhere = tmp("t1home");
-		mkdirSync(join(dir, ".imp", "skills"), { recursive: true });
-		expect(trustRequiringResources(dir, elsewhere)).toEqual([".imp/skills"]);
+		mkdirSync(join(dir, ".ink", "skills"), { recursive: true });
+		expect(trustRequiringResources(dir, elsewhere)).toEqual([".ink/skills"]);
 	});
 	it(".agents/skills in cwd gates, relative to cwd", () => {
 		const dir = tmp("t2");

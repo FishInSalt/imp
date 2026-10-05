@@ -1,116 +1,172 @@
-# Releasing imp
+# Releasing Ink
 
-Design: [`docs/publishing-design.md`](docs/publishing-design.md). Two paths:
+Current contract: [`docs/ink-rename-design.md`](docs/ink-rename-design.md) r3.
+The selected package/version is **`ink-agent@0.2.0`**, with the sole `ink`
+executable. The repository is still **`FishInSalt/imp`**. Package metadata,
+lockfile (including its root package), app `VERSION`, and release tag must
+agree. Never publish as `imp-agent` or plain `ink`, and never reuse `v0.1.0`.
+No publication, tag push, workflow dispatch, account configuration, or global
+installation is authorized by these instructions alone.
 
-- **Bootstrap (v0.1.0, one time)** — the very first publish is manual. npm's
-  trusted-publisher configuration lives on the package's settings page, which
-  only exists once the package does.
-- **Regular releases** — tag-driven, published by
-  [`.github/workflows/release.yml`](.github/workflows/release.yml) with
-  provenance through npm trusted publishing (OIDC, no long-lived tokens).
+## Historical capability: retire separately before release probing
 
-The repo variable `NPM_PUBLISH_ENABLED` is the publish gate: while it is not
-`true`, a tag push runs the gates and prints a "publish skipped" warning
-instead of publishing. Check for that warning (and the job summary) — a green
-run does not necessarily mean something was published.
+Changing the current workflow does **not** change workflows at historical
+refs. The retained `v0.1.0` workflow can still reach its legacy real-publish
+path through a tag dispatch with `dry_run=false` while the existing
+`NPM_PUBLISH_ENABLED` variable is enabled. An already-published-version error
+is not a safety gate.
 
-## Prerequisites
+Before any external release probe or cutover, request explicit approval to
+disable/remove the legacy `NPM_PUBLISH_ENABLED` repository variable and
+assess old npm trusted-publisher bindings for retirement. Do not dispatch
+historical refs or rerun historical publishing events until that capability
+is disabled. Preserve historical tags/workflow files and `imp-agent@0.1.0`;
+old-package deprecation/unpublication is not included in this rename.
+[`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
+not the current release procedure.
 
-- npm account with 2FA enabled and email verified, logged in locally
-  (`npm login`).
-- Push access to `FishInSalt/imp`.
+## First Ink-package publication is blocked pending a separate design
 
-## Bootstrap release (v0.1.0 — one time)
+First publication is outside the ordinary tag-push CI contract. It requires
+its own **independently reviewed release design**, then explicit approval
+for each external action. There is deliberately no executable bootstrap
+recipe here; do not mechanically rename the old manual-publish instructions.
 
-Preconditions: CI on `main` is green, `main` is in sync with `origin/main`,
-the working tree is clean, `HEAD` is the commit being released, and
-`CHANGELOG.md` carries the date you are publishing on.
+The bootstrap design must establish:
 
-```bash
-set -e
-TAG=v0.1.0
-test "$(node -p 'require("./package.json").version')" = "${TAG#v}"  # version guard
-git tag -a "$TAG" -m "imp-agent $TAG"
-git push origin "$TAG"    # gates run; the publish stays gated off
-npm publish --access public
-npm view imp-agent version  # expect 0.1.0 (registry propagation can take up to a minute)
-```
+- ownership/publishability of `ink-agent` (registry absence is not reservation
+  or trademark clearance);
+- exact package/lock/app/tag identity, reviewed tarball, and public access;
+- first-publication authentication and its actual provenance guarantees
+  (a manual first publish is not a tag-push trusted-publishing event);
+- the selected package's npm trusted-publisher binding: GitHub Actions,
+  repository `FishInSalt/imp`, workflow filename `release.yml`, and any
+  configured environment matching the workflow;
+- enabling the new variables only after publisher binding is verified;
+  rechecking the binding after any separately approved repository rename.
 
-Then:
+No npm token, account settings, legacy variable, or publisher binding is
+changed by implementation. Global state migration/source-linked cutover is
+a separate operation governed by the rename design and reviewed runbook.
 
-1. Check the tag-push workflow run: it must be **green and carry the
-   "publish skipped" warning** plus the matching job summary — the gates ran,
-   nothing was published yet. A green run alone does not mean "published".
-2. Smoke-test the published package: `npm install -g imp-agent@0.1.0` and
-   `imp --version`.
-3. On npmjs.com: package settings → Trusted Publisher → GitHub Actions →
-   repository `FishInSalt/imp`, workflow file name `release.yml`.
-4. In the GitHub repo: Settings → Secrets and variables → Actions →
-   Variables → set `NPM_PUBLISH_ENABLED` to `true`.
-5. Publish the GitHub Release with the changelog section as the notes:
+## Revised workflow truth table
 
-```bash
-gh release create v0.1.0 --verify-tag --title "imp-agent v0.1.0" --notes-file notes.md
-```
+[`.github/workflows/release.yml`](.github/workflows/release.yml) at revised
+refs uses only the new variables:
 
-## Regular release
+- `INK_NPM_PUBLISH_ENABLED` must equal the string `true`;
+- `INK_NPM_PACKAGE` must exactly equal `package.json.name` (`ink-agent`).
 
-1. Branch from `main` and bump the version in **both** `package.json` and
-   `src/format.ts` (`VERSION`) — `test/package-metadata.test.ts` fails when
-   they disagree.
-2. Move the `[Unreleased]` changelog entries into a
-   `## [x.y.z] - YYYY-MM-DD` section, dated on the release day.
-3. Merge to `main` (`--no-ff`) once the CI gates pass.
-4. Tag and push:
+The legacy `NPM_PUBLISH_ENABLED` variable is ignored by this workflow.
 
-```bash
-TAG=v0.1.1   # the version being released
-test "$(node -p 'require("./package.json").version')" = "${TAG#v}"
-git tag -a "$TAG" -m "imp-agent $TAG"
-git push origin "$TAG"
-```
+| Event/ref | New gates | Input `dry_run` | Revised workflow result |
+| --- | --- | --- | --- |
+| Push of matching version tag on main ancestry | Enabled + package match | Not applicable | Real publish, after all checks |
+| Tag push | Disabled/missing or package mismatch | Not applicable | Explicit publication-skipped warning and summary |
+| Dispatch from main/branch | Any | `true` or `false` | Dry-run only, after ancestry and identity checks |
+| Dispatch from matching tag | Any | `true` or `false` | Dry-run only, never real publication |
+| Any version/identity/ancestry mismatch | Any | Any | Failure, no publish |
 
-5. Watch the release workflow: `gate` must pass; `publish` runs only for tag
-   refs with `NPM_PUBLISH_ENABLED=true`. It verifies registry visibility and
-   prints the provenance link.
-6. Verify locally: `npm view imp-agent version`, then
-   `npm i -g imp-agent@x.y.z` and smoke-test.
-7. Create the GitHub Release as above.
+A dispatch input of `false` cannot override the event gate. Green gates do
+not imply publication: inspect the warning/summary and registry outcome.
+Historical refs do not inherit this truth table.
 
-## Dry runs
+## Offline local gates
+
+Start a dedicated branch/worktree before edits. Bump `package.json`, both
+lockfile versions, and `src/format.ts` together for future releases. Move
+Unreleased notes into a dated version section only for the actual release.
 
 ```bash
-gh workflow run release.yml --ref main -f dry_run=true
+npm run typecheck
+npm run lint
+npm run build
+npm test
+node scripts/release-guards.mjs identity
+node scripts/release-guards.mjs npm-version "$(npm --version)"
+node scripts/package-smoke.mjs --cache-source "$HOME/.npm"
+git diff --check
 ```
 
-Runs the gates plus `npm publish --dry-run` without writing to the registry.
-Dispatch from a ref whose commits are all on `origin/main` (i.e., `main`) —
-the tag-on-main check runs for every ref and uses ancestry, so an advanced
-`origin/main` still passes while unmerged commits fail. A dispatch from a
-branch ref can never publish; on a tag ref, `-f dry_run=false` combined with
-`NPM_PUBLISH_ENABLED=true` **would** publish, so leave the default for
-probes.
+`npm run lint` also runs `lint:scripts`, which syntax-checks both package and
+release guard scripts with `node --check`. Both CI workflows use this gate.
+
+Use the controlled offline test boundary in the rename design: no production
+credentials or provider endpoints. Never run `npm ci` against a shared
+`node_modules` symlink; use dependencies read-only or separately owned
+workspace/scratch dependencies. CI uses independently owned checkouts.
+
+The artifact smoke captures the single `npm pack --json` filename rather
+than a package-name glob. It checks packed metadata, every tar path and
+regular-file mode, strict header checksums and octal fields, complete file
+bodies/padding, two zero end blocks and a zero-only remainder. It rejects
+entries or nonzero bytes after even a single zero block. It checks the Node
+shebang, required `dist/cli.js`/`bin/ink.js`,
+and absence of old launcher, runtime roots, dotenv, credentials, source,
+tests, docs, or unexpected artifacts. It installs locally in a private
+temporary prefix with temporary HOME/cache, no credentials, no install
+scripts, and no network. It executes help and exact `Ink 0.2.0` version
+(for this release), then checks npm-exec's single-bin inference against the
+**local tarball from a neutral cwd**. It never invokes `npx ink` or modifies
+shared dependencies. The optional cache source is read-only; missing cached
+dependencies fail instead of fetching. Scratch paths are printed for
+inspection; their cleanup is a separate operator decision.
+
+`test/package-metadata.test.ts` runs the copied CLI in a controlled fixture
+and checks the same exact version assertion used for installed and npm-exec
+output. `test/package-tar.test.ts` exercises the exported parser with actual
+synthetic tar bytes, including entries/duplicates after one zero block,
+checksum and numeric corruption, injected secret paths, and truncation.
+After a fresh build, run these regressions without installing dependencies:
+
+```bash
+node node_modules/vitest/vitest.mjs run test/package-metadata.test.ts test/package-tar.test.ts test/release-guards.test.ts
+```
+
+CI keeps Node 20 and 24 coverage. Local checks on a different Node version
+do not substitute for those CI matrix runs. Independently review code and
+artifact results before declaring a release ready; merge to main only with
+`--no-ff`.
+
+## Ordinary releases, after approved bootstrap
+
+After bootstrap and legacy retirement are complete, obtain separate owner
+approval for external release actions. The approved matching version tag
+must point to a reviewed commit in main's ancestry. The release workflow
+runs typecheck, lint, build, tests, artifact smoke, and identity checks.
+The publish job repeats ancestry, identity, npm-version and artifact checks
+before its publication step. Only a **tag push** plus both new gates can
+reach real publishing, with `--provenance --access public`.
+
+Trusted publishing requires **npm >=11.5.1**, including the patch component.
+The workflow checks the runner-provided version and fails if too old; it
+does not implicitly install a moving `npm@latest` globally. Use a separately
+reviewed runner/toolchain update if required. No local global npm upgrade is
+authorized by editing a workflow.
+
+Registry visibility checks and provenance URLs derive from the validated
+selected package/version. After a real publication, verify the expected
+registry version/artifact/provenance; do not infer success from a green
+skipped run. Global installation and release-page publication need separate
+approval and an appropriate isolated/production acceptance plan.
 
 ## Troubleshooting
 
-- **"publish skipped" warning on a tag push** — `NPM_PUBLISH_ENABLED` is not
-  `true` (or was cleared). Nothing was published. Set the variable, then
-  re-run that same tag-push run: the tag ref plus the variable now reach the
-  real publish step. (If a version was already published, the re-run fails
-  with "cannot publish over existing version" — cut a new patch instead.)
-- **Auth / token errors after binding trusted publishing** — check the npm
-  version in the publish job log first: trusted publishing needs npm >=
-  11.5.1 (the workflow upgrades npm explicitly). Then re-check the
-  trusted-publisher fields (repository + workflow file name `release.yml`).
-- **"cannot publish over existing version"** — the tag points at an already
-  published version. Cut a new patch version; do not reuse the tag.
-- **A broken release** — prefer a patch release with the fix. `npm unpublish`
-  works only for 24 hours after publishing and permanently burns the version
-  number; for a defective version that stays up, `npm deprecate` it with a
-  pointer to the replacement.
-
-## Why not a token?
-
-Trusted publishing exchanges a short-lived GitHub OIDC token for publish
-rights, so there is no npm token to store, rotate, or leak. Provenance
-attestations are generated automatically on publish.
+- **Publication skipped:** confirm event is a tag push, new gate equals
+  `true`, and new package variable equals `ink-agent`. Do not enable gates
+  before the approved bootstrap/binding or legacy retirement. A rerun of a
+  real tag-push event can publish if gates have since been enabled; it is
+  still an external action requiring approval.
+- **Dispatch did not publish:** expected; dispatch is always dry-run at
+  revised refs, even with a tag and `dry_run=false`.
+- **npm too old:** `11.5.0` is insufficient. The full minimum is `11.5.1`.
+- **Auth/provenance failure:** verify the selected package's trusted-publisher
+  fields against the actual repository/workflow, runner npm, and GitHub OIDC
+  permissions. Do not introduce a long-lived token as an unreviewed fallback.
+- **Offline smoke cache miss:** seed a complete production-dependency cache
+  through a separately appropriate dependency-install step, or report that
+  smoke verification is unavailable. Do not retry with network access or
+  execute install scripts implicitly.
+- **Already-published version/broken release:** use a newly reviewed patch
+  release; do not reuse tags or overwrite package versions. Deprecation or
+  unpublication is a separate externally visible operation requiring approval.

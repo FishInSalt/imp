@@ -8,7 +8,7 @@
  * (utils/child-process.ts:49) differs from pi in two deliberate ways
  * (design D2, review round-2 F2):
  *
- * 1. it returns { code, signal } — imp reports "terminated by signal X"
+ * 1. it returns { code, signal } — Ink reports "terminated by signal X"
  *    (pi's helper drops the signal);
  * 2. an abort signal FINALIZES IMMEDIATELY, whether or not the child has
  *    exited — pi's unbounded idle re-arm would let a continuously-writing

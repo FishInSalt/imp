@@ -37,6 +37,8 @@ describe("HttpTransport + McpClient", () => {
 		const client = makeClient(fake.url);
 		try {
 			await client.connect();
+			const initialize = fake.requests.find((request) => request.body?.method === "initialize");
+			expect(initialize?.body?.params).toMatchObject({ clientInfo: { name: "ink", version: "test" } });
 			const { tools } = await client.listTools();
 			expect(tools.map((t) => t.name)).toEqual(["echo"]);
 			const result = await client.callTool("echo", { text: "hi" });

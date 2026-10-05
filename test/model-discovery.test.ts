@@ -171,14 +171,14 @@ describe("discoverModels + familyConfigured", () => {
 			"ANTHROPIC_BASE_URL",
 			"OPENAI_API_KEY",
 			"OPENAI_BASE_URL",
-			"IMP_AUTH_PATH",
-			"IMP_CATALOG_BASE_URL",
+			"INK_AUTH_PATH",
+			"INK_CATALOG_BASE_URL",
 		]) {
 			SAVED[key] = process.env[key];
 			delete process.env[key];
 		}
-		// deleting IMP_AUTH_PATH would EXPOSE the host's real login — pin "none"
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		// deleting INK_AUTH_PATH would EXPOSE the host's real login — pin "none"
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 		hits = [];
 	});
 	afterEach(() => {
@@ -214,7 +214,7 @@ describe("discoverModels + familyConfigured", () => {
 		expect(hits).toContain("/models");
 	});
 
-	it("codex: pi.dev catalog (bare-array shape) via IMP_CATALOG_BASE_URL; gated on login", async () => {
+	it("codex: pi.dev catalog (bare-array shape) via INK_CATALOG_BASE_URL; gated on login", async () => {
 		// credential present (pinned path) + local catalog server
 		const dir = mkdtempSync(path.join(tmpdir(), "imp-disc-"));
 		const credFile = path.join(dir, "auth.json");
@@ -236,26 +236,26 @@ describe("discoverModels + familyConfigured", () => {
 		});
 		await new Promise<void>((r) => cat.listen(0, "127.0.0.1", r));
 		const { port } = cat.address() as { port: number };
-		const savedAuth = process.env.IMP_AUTH_PATH;
-		const savedCat = process.env.IMP_CATALOG_BASE_URL;
-		process.env.IMP_AUTH_PATH = credFile;
-		process.env.IMP_CATALOG_BASE_URL = `http://127.0.0.1:${port}`;
+		const savedAuth = process.env.INK_AUTH_PATH;
+		const savedCat = process.env.INK_CATALOG_BASE_URL;
+		process.env.INK_AUTH_PATH = credFile;
+		process.env.INK_CATALOG_BASE_URL = `http://127.0.0.1:${port}`;
 		try {
 			resetDiscoveryCacheForTest();
 			expect(await discoverModels("openai-codex")).toEqual(["gpt-6-astra", "gpt-5.5"]);
 			expect(hit).toBe(true);
 			// without the login, no fetch happens even with the catalog configured
-			process.env.IMP_AUTH_PATH = "/nonexistent";
+			process.env.INK_AUTH_PATH = "/nonexistent";
 			resetDiscoveryCacheForTest();
 			hit = false;
 			expect(await discoverModels("openai-codex")).toBeNull();
 			expect(hit).toBe(false);
 		} finally {
 			cat.close();
-			if (savedAuth === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = savedAuth;
-			if (savedCat === undefined) delete process.env.IMP_CATALOG_BASE_URL;
-			else process.env.IMP_CATALOG_BASE_URL = savedCat;
+			if (savedAuth === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = savedAuth;
+			if (savedCat === undefined) delete process.env.INK_CATALOG_BASE_URL;
+			else process.env.INK_CATALOG_BASE_URL = savedCat;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
@@ -269,14 +269,14 @@ describe("discoverModels + familyConfigured", () => {
 		expect(familyConfigured("openai")).toBe(false);
 	});
 
-	it("familyConfigured: codex honors IMP_AUTH_PATH (hermetic — host login irrelevant)", () => {
-		// unset → reads the real ~/.imp/auth.json — NOT asserted here; the
-		// IMP_AUTH_PATH pin below is the hermetic contract
+	it("familyConfigured: codex honors INK_AUTH_PATH (hermetic — host login irrelevant)", () => {
+		// unset → reads the real ~/.ink/auth.json — NOT asserted here; the
+		// INK_AUTH_PATH pin below is the hermetic contract
 		expect(typeof familyConfigured("openai-codex")).toBe("boolean");
 	});
 });
 
-describe("familyConfigured via IMP_AUTH_PATH", () => {
+describe("familyConfigured via INK_AUTH_PATH", () => {
 	it("a stored credential makes the codex family available", () => {
 		const dir = mkdtempSync(path.join(tmpdir(), "imp-disc-"));
 		const file = path.join(dir, "auth.json");
@@ -290,14 +290,14 @@ describe("familyConfigured via IMP_AUTH_PATH", () => {
 				accountId: "acct",
 			}),
 		);
-		const prev = process.env.IMP_AUTH_PATH;
+		const prev = process.env.INK_AUTH_PATH;
 		try {
-			process.env.IMP_AUTH_PATH = file;
+			process.env.INK_AUTH_PATH = file;
 			expect(familyConfigured("openai-codex")).toBe(true);
 			// and the picker shows the static codex catalog
 		} finally {
-			if (prev === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = prev;
+			if (prev === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = prev;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
@@ -419,7 +419,7 @@ describe("discoverModels pagination (anthropic family, docs/overflow-pagination-
 		setDiscoveryClockForTest(() => 1_000_000);
 		process.env.ANTHROPIC_AUTH_TOKEN = "zai-token";
 		process.env.ANTHROPIC_BASE_URL = baseUrl;
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 		hits = [];
 		mode = "single-camel";
 	});

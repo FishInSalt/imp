@@ -23,7 +23,7 @@ import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -234,7 +234,7 @@ describe("parseCommand", () => {
 describe("slash commands", () => {
 	// Hermetic picker (#model-discovery): the /model list depends on which
 	// families hold credentials — pin the test env to "nothing configured"
-	// (IMP_AUTH_PATH to a nonexistent file; no provider keys).
+	// (INK_AUTH_PATH to a nonexistent file; no provider keys).
 	const SAVED: Record<string, string | undefined> = {};
 	beforeEach(() => {
 		for (const key of [
@@ -246,12 +246,12 @@ describe("slash commands", () => {
 			"MOONSHOT_API_KEY",
 			"MOONSHOT_BASE_URL",
 			"MOONSHOT_CN_BASE_URL",
-			"IMP_AUTH_PATH",
+			"INK_AUTH_PATH",
 		]) {
 			SAVED[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 	});
 	afterEach(() => {
 		for (const [key, value] of Object.entries(SAVED)) {
@@ -278,7 +278,7 @@ describe("slash commands", () => {
 			expect(text).toContain(label);
 		}
 		expect(text).toContain("Ctrl+C");
-		expect(text).toContain("Lines typed while imp is working are queued");
+		expect(text).toContain("Lines typed while Ink is working are queued");
 	});
 
 	it("no-extras /help body is byte-pinned (review P3-1): M4b's extras plumbing cannot drift the built-in rendering", () => {
@@ -340,7 +340,7 @@ describe("slash commands", () => {
 				"  while a question is pending (/login keys, confirms):",
 				"    Enter            submits the answer · Esc or Ctrl+C cancels",
 				"",
-				"Lines typed while imp is working are queued and injected when the current turn ends.",
+				"Lines typed while Ink is working are queued and injected when the current turn ends.",
 			].join("\n"),
 		);
 	});
@@ -462,7 +462,7 @@ describe("slash commands", () => {
 		const newId8 = env.runner.session?.header.id.slice(0, 8);
 		expect(newId8).not.toBe(oldId8);
 		expect(env.runner.history).toHaveLength(0);
-		expect(env.output()).toBe(`▪ new session ${newId8} — previous ${oldId8} saved (imp -r ${oldId8})\n`);
+		expect(env.output()).toBe(`▪ new session ${newId8} — previous ${oldId8} saved (ink -r ${oldId8})\n`);
 		// old session file still on disk, append-only
 		const { readFileSync } = await import("node:fs");
 		const lines = readFileSync(oldPath as string, "utf8")
@@ -492,7 +492,7 @@ describe("slash commands", () => {
 		const env = await makeEnv({ active: true });
 		await dispatchCommand("/new", env.ctx);
 		expect(env.output()).toBe(
-			"imp: /new waits for the running turn — press Ctrl+C to abort it first, then /new\n",
+			"ink: /new waits for the running turn — press Ctrl+C to abort it first, then /new\n",
 		);
 	});
 
@@ -523,27 +523,27 @@ describe("slash commands", () => {
 		const active = await makeEnv({ seed, active: true });
 		await dispatchCommand("/compact", active.ctx);
 		expect(active.output()).toBe(
-			"imp: /compact waits for the running turn — press Ctrl+C to abort it first, then /compact\n",
+			"ink: /compact waits for the running turn — press Ctrl+C to abort it first, then /compact\n",
 		);
 
 		// rejected without a session
 		const stateless = await makeEnv({ noSession: true });
 		await dispatchCommand("/compact", stateless.ctx);
-		expect(stateless.output()).toBe("imp: /compact needs a session — restart without --no-session\n");
+		expect(stateless.output()).toBe("ink: /compact needs a session — restart without --no-session\n");
 	});
 
 	it("unknown /foo teaches; the provider is never called", async () => {
 		const env = await makeEnv();
 		await dispatchCommand("/foo", env.ctx);
 		expect(env.output()).toBe(
-			'imp: unknown command "/foo"\n' +
+			'ink: unknown command "/foo"\n' +
 				"known: /help /exit /new /fork /tree /sessions /resume /model /login /logout /think /worktrees /trust /status /mcp /settings /copy /name /compact — /help shows what they do\n",
 		);
 		expect(env.requests).toHaveLength(0);
 		// bare "/" gets the same teaching error with the empty name
 		const bare = await makeEnv();
 		await dispatchCommand("/", bare.ctx);
-		expect(bare.output()).toContain('imp: unknown command "/"\n');
+		expect(bare.output()).toContain('ink: unknown command "/"\n');
 		expect(bare.requests).toHaveLength(0);
 	});
 });
@@ -804,7 +804,7 @@ describe("/trust (M8)", () => {
 	it("records render as a checklist; the decision names where it was recorded", async () => {
 		const env = await makeEnv();
 		// /trust reads process.cwd(); the STORE is the hermetic temp file, so
-		// recording the real repo cwd stays hermetic (nothing touches ~/.imp)
+		// recording the real repo cwd stays hermetic (nothing touches ~/.ink)
 		setTrust(env.trustStore, process.cwd(), true);
 		const outcome = await dispatchCommand("/trust", env.ctx);
 		expect(outcome).toBe("handled");
@@ -935,7 +935,7 @@ describe("/tree (#10 batch 2)", () => {
 	});
 
 	it("text fallback lists tree rows; /tree <n> navigates and replays (summary off)", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		const env = await branchedEnv();
 		await dispatchCommand("/tree", env.ctx);
 		let out = env.output();
@@ -945,7 +945,7 @@ describe("/tree (#10 batch 2)", () => {
 		await dispatchCommand("/tree 4", env.ctx);
 		out = env.output();
 		expect(out).toContain("navigated —");
-		expect(out).toContain("summary off — IMP_BRANCH_SUMMARY=0");
+		expect(out).toContain("summary off — INK_BRANCH_SUMMARY=0");
 		// history is the OLD branch again
 		const texts = env.runner.history.map((m) => (m.role === "user" ? m.content : ""));
 		expect(texts).toContain("q2-old");
@@ -1045,8 +1045,8 @@ describe("/tree (#10 batch 2)", () => {
 				assistantText("answer two"),
 			],
 		});
-		const prev = process.env.IMP_CONTEXT_WINDOW;
-		process.env.IMP_CONTEXT_WINDOW = "150"; // everything overflows; keepRecent dominates
+		const prev = process.env.INK_CONTEXT_WINDOW;
+		process.env.INK_CONTEXT_WINDOW = "150"; // everything overflows; keepRecent dominates
 		try {
 			await dispatchCommand("/model claude-opus-4-6", env.ctx); // same family → keeps the fake; window re-read from env (#glm-retire: glm-4.6 would swap to zai)
 			await expect(env.runner.runTurn({ userMessage: "next" })).rejects.toThrow(
@@ -1054,8 +1054,8 @@ describe("/tree (#10 batch 2)", () => {
 			);
 			expect(env.output()).toContain("compacting");
 		} finally {
-			if (prev === undefined) delete process.env.IMP_CONTEXT_WINDOW;
-			else process.env.IMP_CONTEXT_WINDOW = prev;
+			if (prev === undefined) delete process.env.INK_CONTEXT_WINDOW;
+			else process.env.INK_CONTEXT_WINDOW = prev;
 		}
 	});
 
@@ -1328,7 +1328,7 @@ describe("/tree (#10 batch 2)", () => {
 	});
 
 	it("editorText backfill lands only over an EMPTY editor (#tree)", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		const env = await branchedEnv();
 		// rows: q1(1) a1(2) q2-old(3) a2-old(4); /tree 1 → q1 (user) → editorText
 		let editor = "";
@@ -1349,7 +1349,7 @@ describe("/tree (#10 batch 2)", () => {
 	});
 
 	it("treeSelect cancel is silent; a pick navigates (#tree)", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		const env = await branchedEnv();
 		let picked: string | null = null;
 		(env.ctx as { treeSelect?: unknown }).treeSelect = async () => picked;
@@ -1608,7 +1608,7 @@ describe("/think (#thinking-levels)", () => {
 		expect(env.output()).toContain("Model: zai/glm-5.3");
 		expect(env.output()).toContain("glm-5.3 is a Z.ai model — sign in with /login zai");
 		// a stored /login key silences the teaching (stored > env). NOTE:
-		// zaiApiKey() reads the global IMP_AUTH_PATH sandbox, NOT
+		// zaiApiKey() reads the global INK_AUTH_PATH sandbox, NOT
 		// ctx.authStorePath — save there and clear it for the neighbors
 		const stored = await makeEnv();
 		await saveApiKey("zai", "sk-stored");
@@ -1630,8 +1630,8 @@ describe("/think (#thinking-levels)", () => {
 		expect(quiet.output()).not.toContain("sign in with /login zai");
 	});
 
-	it("construction seam: IMP_MODEL=glm-5.3 builds the zai family and clamps into its ladder; a keyless startup teaches /login", async () => {
-		// zai construction (the documented "keep IMP_MODEL, add ZAI_API_KEY" flow)
+	it("construction seam: INK_MODEL=glm-5.3 builds the zai family and clamps into its ladder; a keyless startup teaches /login", async () => {
+		// zai construction (the documented "keep INK_MODEL, add ZAI_API_KEY" flow)
 		const env = await makeEnv({ model: "glm-5.3" });
 		const prev = process.env.ZAI_API_KEY;
 		process.env.ZAI_API_KEY = "sk-test";
@@ -1822,7 +1822,7 @@ describe("/think (#thinking-levels)", () => {
 		saveApiKey("anthropic", "sk-a", legacy.ctx.authStorePath);
 		await dispatchCommand("/logout", legacy.ctx);
 		expect(legacy.output()).toContain("stored: Anthropic");
-		expect(legacy.output()).toContain("edit ~/.imp/auth.json");
+		expect(legacy.output()).toContain("edit ~/.ink/auth.json");
 	});
 
 	it("/login codex: an abort landing MID-FETCH is silent too (pi's fetchWithLoginCancellation)", async () => {
@@ -1883,11 +1883,11 @@ describe("/think (#thinking-levels)", () => {
 		const env = await makeEnv();
 		env.ctx.secret = async () => "sk-zai-2";
 		const prevKey = process.env.ZAI_API_KEY;
-		const prevAuth = process.env.IMP_AUTH_PATH;
+		const prevAuth = process.env.INK_AUTH_PATH;
 		delete process.env.ZAI_API_KEY;
 		// familyConfigured/parseModelRef read the DEFAULT store path — point
-		// IMP_AUTH_PATH at the same temp file the command wrote
-		process.env.IMP_AUTH_PATH = env.ctx.authStorePath;
+		// INK_AUTH_PATH at the same temp file the command wrote
+		process.env.INK_AUTH_PATH = env.ctx.authStorePath;
 		try {
 			await dispatchCommand("/login zai", env.ctx);
 			expect(familyConfigured("zai")).toBe(true);
@@ -1899,8 +1899,8 @@ describe("/think (#thinking-levels)", () => {
 		} finally {
 			if (prevKey === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevKey;
-			if (prevAuth === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = prevAuth;
+			if (prevAuth === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = prevAuth;
 		}
 	});
 
@@ -1973,7 +1973,7 @@ describe("/tree batch B (#tree-b)", () => {
 	}
 
 	it("treeFilterMode setting feeds the picker's initialFilterMode; project wins over global (trusted)", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		const env = await branchedEnvB({ trusted: true });
 		const seen: (string | undefined)[] = [];
 		let pick: string | null = null;
@@ -1996,7 +1996,7 @@ describe("/tree batch B (#tree-b)", () => {
 		await dispatchCommand("/tree", env.ctx);
 		expect(seen[seen.length - 1]).toBe("user-only");
 		// …a TRUSTED project file wins (impl-review P2-2: pin the command seam)
-		const projSettings = pathMod.join(env.runner.runnerCwd, ".imp", "settings.json");
+		const projSettings = pathMod.join(env.runner.runnerCwd, ".ink", "settings.json");
 		await fs.mkdir(pathMod.dirname(projSettings), { recursive: true });
 		await fs.writeFile(projSettings, JSON.stringify({ treeFilterMode: "labeled-only" }), "utf-8");
 		await dispatchCommand("/tree", env.ctx);
@@ -2022,7 +2022,7 @@ describe("/tree batch B (#tree-b)", () => {
 		expect(asks).toBe(0); // skipped — no summary, straight over
 		expect(env.output()).toContain("navigated —");
 		// combined with the env hard-off: still no ask, and the runner gate keeps summaries off
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		await dispatchCommand("/tree", env.ctx);
 		expect(asks).toBe(0);
 	});
@@ -2182,7 +2182,7 @@ describe("/tree batch C (#tree-c)", () => {
 	});
 
 	it("onCopy rides the ctx.copyText seam: text → status; undefined → error (D7)", async () => {
-		vi.stubEnv("IMP_BRANCH_SUMMARY", "0");
+		vi.stubEnv("INK_BRANCH_SUMMARY", "0");
 		const env = await branchedEnvC();
 		let onCopy: ((text: string | undefined) => void) | undefined;
 		(env.ctx as { treeSelect?: unknown }).treeSelect = async (opts: {
@@ -2211,6 +2211,6 @@ describe("/tree batch C (#tree-c)", () => {
 		const base2 = env.output().length;
 		onCopy?.("more text");
 		await new Promise((r) => setTimeout(r, 10));
-		expect(env.output().slice(base2)).toContain("imp: copy failed — no clipboard tool");
+		expect(env.output().slice(base2)).toContain("ink: copy failed — no clipboard tool");
 	});
 });

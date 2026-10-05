@@ -25,8 +25,8 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
-const configPath = (): string => path.join(fakeHome, ".imp", "guardian.json");
-const auditPath = (): string => path.join(fakeHome, ".imp", "guardian.log");
+const configPath = (): string => path.join(fakeHome, ".ink", "guardian.json");
+const auditPath = (): string => path.join(fakeHome, ".ink", "guardian.log");
 
 /** Audit file minus the ISO timestamp; one entry per line, in write order. */
 const auditBodies = (): string[] => {

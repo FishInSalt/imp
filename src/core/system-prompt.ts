@@ -50,7 +50,7 @@ ${lines.join("\n")}`
 		// is discoverable via one bash call; cwd is not.
 		return `${opts.override}${appendSection}\n\nCurrent working directory: ${context.cwd}`;
 	}
-	return `You are imp, a small coding agent that runs in the user's terminal.
+	return `You are Ink, an open-source AI assistant and agent harness for the terminal.
 
 # Environment
 - Working directory: ${context.cwd}

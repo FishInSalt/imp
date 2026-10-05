@@ -46,7 +46,7 @@ function webSearchFiles(): Record<string, string> {
 }
 
 function webSearchEnv(base: string, key = "test-key"): Record<string, string> {
-	return { TAVILY_API_KEY: key, IMP_WEB_SEARCH_CONFIG: path.join(base, "missing-config.json") };
+	return { TAVILY_API_KEY: key, INK_WEB_SEARCH_CONFIG: path.join(base, "missing-config.json") };
 }
 
 interface Env {
@@ -138,7 +138,7 @@ async function startRepl(args: StartArgs): Promise<Env> {
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -150,7 +150,7 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 		const env = await startRepl({
 			scripts: [reply("done")],
 			extensionFiles: { "notify.mjs": example("notify.mjs") },
-			env: (base) => ({ IMP_NOTIFY_MIN_SEC: "0", IMP_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
+			env: (base) => ({ INK_NOTIFY_MIN_SEC: "0", INK_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
 		});
 		expect(env.output()).toContain("▪ extension notify [project] — 2 hooks");
 		env.send("hi\n");
@@ -162,7 +162,7 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 			.split("\n")
 			.map((l) => JSON.parse(l));
 		expect(entries.length).toBe(1);
-		expect(entries[0].title).toBe("imp — completed");
+		expect(entries[0].title).toBe("Ink — completed");
 		expect(entries[0].body).toContain("1 turns");
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
@@ -172,7 +172,7 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 		const env = await startRepl({
 			scripts: [reply("quick")],
 			extensionFiles: { "notify.mjs": example("notify.mjs") },
-			env: (base) => ({ IMP_NOTIFY_MIN_SEC: "999", IMP_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
+			env: (base) => ({ INK_NOTIFY_MIN_SEC: "999", INK_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
 		});
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("quick"));
@@ -186,7 +186,7 @@ describe("notify.mjs (run_end → sound + popup, dry-tested)", () => {
 		const env = await startRepl({
 			scripts: [reply("one"), reply("two")],
 			extensionFiles: { "notify.mjs": example("notify.mjs") },
-			env: (base) => ({ IMP_NOTIFY_MIN_SEC: "0", IMP_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
+			env: (base) => ({ INK_NOTIFY_MIN_SEC: "0", INK_NOTIFY_DRY: path.join(base, "notify.jsonl") }),
 		});
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("one"));

@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type AgentMessage, type AssistantBlock, emptyUsage } from "../src/core/messages.js";
 import { clearApiKey, saveApiKey } from "../src/provider/auth-store.js";
 import { CATALOG_FAMILIES, loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
@@ -13,7 +13,7 @@ import {
 	DEEPSEEK_SEED_MODELS,
 	deepseekApiKey,
 } from "../src/provider/deepseek.js";
-import { discoverModels, familyConfigured } from "../src/provider/discover.js";
+import { discoverModels, familyConfigured, resetDiscoveryCacheForTest } from "../src/provider/discover.js";
 import { contextWindowInfoFor, costFor } from "../src/provider/models.js";
 import { createProviderFor, parseModelRef, resolveModel } from "../src/provider/resolve.js";
 import { thinkingMetaFor } from "../src/provider/thinking.js";
@@ -72,7 +72,7 @@ afterAll(async () => {
 });
 
 const envBackup: Array<[string, string | undefined]> = [];
-const savedCatalogPath = process.env.IMP_CATALOG_PATH;
+const savedCatalogPath = process.env.INK_CATALOG_PATH;
 function setEnv(name: string, value: string | undefined): void {
 	envBackup.push([name, process.env[name]]);
 	if (value === undefined) delete process.env[name];
@@ -83,21 +83,23 @@ afterEach(() => {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
 	}
-	if (savedCatalogPath === undefined) delete process.env.IMP_CATALOG_PATH;
-	else process.env.IMP_CATALOG_PATH = savedCatalogPath;
+	if (savedCatalogPath === undefined) delete process.env.INK_CATALOG_PATH;
+	else process.env.INK_CATALOG_PATH = savedCatalogPath;
 	resetCatalogForTest(); // the disk overlay must not leak into the next test
+	resetDiscoveryCacheForTest();
+	vi.unstubAllGlobals();
 });
 
 /** Disk-inject a catalog overlay for one family (the model-catalog.test.ts
  *  pattern — there is no direct overlay API by design). */
 function overlayCatalog(models: Record<string, object>): void {
-	if (process.env.IMP_CATALOG_PATH === undefined) {
+	if (process.env.INK_CATALOG_PATH === undefined) {
 		// lazily point at a temp file (path recorded in envBackup for restore)
-		process.env.IMP_CATALOG_PATH = path.join(tmpdir(), `imp-ds-catalog-${Date.now()}.json`);
-		envBackup.push(["IMP_CATALOG_PATH", undefined]);
+		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `imp-ds-catalog-${Date.now()}.json`);
+		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(
-		process.env.IMP_CATALOG_PATH as string,
+		process.env.INK_CATALOG_PATH as string,
 		JSON.stringify({ version: 1, providers: { deepseek: { models, checkedAt: Date.now() } } }),
 		"utf-8",
 	);
@@ -147,7 +149,7 @@ describe("deepseek provider (#deepseek-provider)", () => {
 	it("2. key resolution: stored > DEEPSEEK_API_KEY; no-key names the deepseek env var, never OPENAI_API_KEY", async () => {
 		const dir = await mkdtemp(path.join(tmpdir(), "imp-ds-"));
 		const authPath = path.join(dir, "auth.json");
-		setEnv("IMP_AUTH_PATH", authPath);
+		setEnv("INK_AUTH_PATH", authPath);
 		setEnv("DEEPSEEK_API_KEY", "sk-env-ds");
 		setEnv("OPENAI_API_KEY", "sk-env-openai");
 		expect(deepseekApiKey()).toBe("sk-env-ds");
@@ -317,13 +319,23 @@ describe("deepseek provider (#deepseek-provider)", () => {
 	});
 
 	it("5. discovery: unreachable default endpoint → seeds; redirected DEEPSEEK_BASE_URL → null (#gateway-truth)", async () => {
+		resetDiscoveryCacheForTest();
+		const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error("offline fixture"));
+		vi.stubGlobal("fetch", fetchMock);
 		setEnv("DEEPSEEK_API_KEY", "sk-test");
 		delete process.env.DEEPSEEK_BASE_URL;
-		// default endpoint unreachable in tests (no network): seeds are the floor
+		// Simulate an unreachable default endpoint without attempting real network access.
 		const ids = await discoverModels("deepseek");
 		expect(ids).toEqual([...DEEPSEEK_SEED_MODELS]);
+		expect(fetchMock).toHaveBeenNthCalledWith(
+			1,
+			`${DEEPSEEK_DEFAULT_BASE_URL}/models`,
+			expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer sk-test" }) }),
+		);
 		setEnv("DEEPSEEK_BASE_URL", "http://127.0.0.1:1"); // redirected + unreachable
 		expect(await discoverModels("deepseek")).toBeNull(); // no invented ids
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:1/models", expect.any(Object));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 		// configured follows the key
 		setEnv("DEEPSEEK_API_KEY", undefined);
 		expect(familyConfigured("deepseek")).toBe(false);

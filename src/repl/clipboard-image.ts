@@ -1,7 +1,7 @@
 /**
  * Clipboard image reading — M13 batch 2. pi reads the clipboard through
  * pi-tui native bindings (prebuilt .node) with xclip/wl-paste fallbacks;
- * imp has no native bindings, so this port is command-based on every
+ * Ink has no native bindings, so this port is command-based on every
  * platform (design §14.5, divergence D8):
  *
  *   darwin  — osascript JXA ObjC bridge: NSPasteboard PNG, TIFF→PNG via
@@ -204,7 +204,7 @@ export function isWSL(env: NodeJS.ProcessEnv = process.env): boolean {
  *  clipboard; PowerShell saves the Windows clipboard to a tmp file visible
  *  on both sides via wslpath. */
 async function readViaPowerShellWsl(run: typeof runClipboardCommand): Promise<ClipboardImage | null> {
-	const tmpFile = join(tmpdir(), `imp-wsl-clip-${randomUUID()}.png`);
+	const tmpFile = join(tmpdir(), `ink-wsl-clip-${randomUUID()}.png`);
 	try {
 		const winPathResult = await run("wslpath", ["-w", tmpFile], { timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
 		if (winPathResult === undefined) return null;
@@ -313,7 +313,7 @@ export async function readClipboardImage(
  */
 export function writeClipboardImageToTmp(image: ClipboardImage): string {
 	const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-	const filePath = join(tmpdir(), `imp-clipboard-${randomUUID()}.${ext}`);
+	const filePath = join(tmpdir(), `ink-clipboard-${randomUUID()}.${ext}`);
 	writeFileSync(filePath, Buffer.from(image.bytes));
 	return filePath;
 }

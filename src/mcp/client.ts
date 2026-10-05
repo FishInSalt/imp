@@ -14,7 +14,7 @@
  */
 import type { McpTransport } from "./transport.js";
 
-/** Protocol version imp requests (latest spec revision at design time). */
+/** Protocol version Ink requests (latest spec revision at design time). */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 /** Page cap for tools/list cursor pagination (z.ai has_more lesson). */
 export const TOOLS_LIST_PAGE_CAP = 10;
@@ -114,7 +114,7 @@ export class McpClient {
 				{
 					protocolVersion: MCP_PROTOCOL_VERSION,
 					capabilities: {},
-					clientInfo: { name: "imp", version: this.options.clientVersion },
+					clientInfo: { name: "ink", version: this.options.clientVersion },
 				},
 				this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
 			)) as { protocolVersion?: string; serverInfo?: { name?: string } };
@@ -232,7 +232,7 @@ export class McpClient {
 				this.transport.send({
 					jsonrpc: "2.0",
 					id: msg.id,
-					error: { code: -32601, message: `imp does not support "${msg.method}" (v1)` },
+					error: { code: -32601, message: `Ink does not support "${msg.method}" (v1)` },
 				});
 			}
 			return;

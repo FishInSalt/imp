@@ -59,7 +59,7 @@ async function makeEnv(provider?: LLMProvider): Promise<Env> {
 }
 
 describe("/mcp command", () => {
-	it("without a manager it teaches where imp looked (read-only, allowed mid-run)", async () => {
+	it("without a manager it teaches where Ink looked (read-only, allowed mid-run)", async () => {
 		const env = await makeEnv();
 		await dispatchCommand("/mcp", env.ctx);
 		expect(env.output()).toContain("no MCP servers configured (looked in:");

@@ -4,11 +4,11 @@ import path from "node:path";
 
 /**
  * Structured run log — the debugging lifeline. One JSONL file per run under
- * ~/.imp/logs/, one JSON object per line:
+ * ~/.ink/logs/, one JSON object per line:
  *
  *   { t: ISO timestamp, type: "llm_request" | "message_end" | "tool_start" | ... , ...payload }
  *
- * Disabled with IMP_LOG=0. Streams/deltas are not recorded (too noisy); full
+ * Disabled with INK_LOG=0. Streams/deltas are not recorded (too noisy); full
  * tool outputs and final assistant messages are.
  */
 export interface RunLogger {
@@ -37,10 +37,10 @@ export async function createRunLogger(options: {
 	argv: string[];
 	home?: string;
 }): Promise<RunLogger> {
-	if (process.env.IMP_LOG === "0") return noopLogger;
+	if (process.env.INK_LOG === "0") return noopLogger;
 
 	const home = options.home ?? os.homedir();
-	const dir = path.join(home, ".imp", "logs");
+	const dir = path.join(home, ".ink", "logs");
 	const file = path.join(dir, `${timestampedName()}.jsonl`);
 
 	try {

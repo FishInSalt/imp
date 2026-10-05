@@ -351,9 +351,9 @@ async function fetchAnthropicModelsPaged(
 }
 
 /** Codex listing: pi's public catalog service (unauthenticated, fast).
- *  IMP_CATALOG_BASE_URL redirects it (tests / mirrors). */
+ *  INK_CATALOG_BASE_URL redirects it (tests / mirrors). */
 async function discoverCodexModels(): Promise<string[] | null> {
 	if (!familyConfigured("openai-codex")) return null;
-	const base = (process.env.IMP_CATALOG_BASE_URL ?? "https://pi.dev").replace(/\/+$/, "");
+	const base = (process.env.INK_CATALOG_BASE_URL ?? "https://pi.dev").replace(/\/+$/, "");
 	return fetchJson(`${base}/api/models/providers/openai-codex`, { accept: "application/json" });
 }

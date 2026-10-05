@@ -3,8 +3,8 @@
  * slash command. The CC-parity affordance for "send this prompt" without
  * writing an extension module.
  *
- *   ~/.imp/commands/fix.md        global — every project
- *   <cwd>/.imp/commands/review.md project — this repo only
+ *   ~/.ink/commands/fix.md        global — every project
+ *   <cwd>/.ink/commands/review.md project — this repo only
  *
  * Format (same hand-rolled frontmatter style as the agents registry):
  *
@@ -104,10 +104,10 @@ export function renderMdPrompt(body: string, args: string): string {
 
 export async function loadMdCommands(options: MdCommandLoadOptions): Promise<MdCommandLoadResult> {
 	const tiers: Array<{ dir: string; source: string }> = [
-		{ dir: join(options.home, ".imp", "commands"), source: "md:global" },
+		{ dir: join(options.home, ".ink", "commands"), source: "md:global" },
 	];
 	if (options.projectAllowed)
-		tiers.push({ dir: join(options.cwd, ".imp", "commands"), source: "md:project" });
+		tiers.push({ dir: join(options.cwd, ".ink", "commands"), source: "md:project" });
 	// Insertion order: global first, then project — later same-name entries
 	// REPLACE earlier ones, which is exactly the override rule.
 	const byName = new Map<string, RegisteredExtensionCommand>();
@@ -123,13 +123,13 @@ export async function loadMdCommands(options: MdCommandLoadOptions): Promise<MdC
 			const source = `${tier.dir}/${file}`;
 			if (!NAME_RE.test(name)) {
 				options.onDiagnostic?.(
-					`imp: command file "${file}" ignored — the name must match [a-z0-9][a-z0-9_-]*`,
+					`ink: command file "${file}" ignored — the name must match [a-z0-9][a-z0-9_-]*`,
 				);
 				continue;
 			}
 			if (options.reserved.has(name)) {
 				options.onDiagnostic?.(
-					`imp: command file "${file}" ignored — "/${name}" is a built-in command (built-in names are reserved)`,
+					`ink: command file "${file}" ignored — "/${name}" is a built-in command (built-in names are reserved)`,
 				);
 				continue;
 			}
@@ -137,7 +137,7 @@ export async function loadMdCommands(options: MdCommandLoadOptions): Promise<MdC
 			try {
 				parsed = parseMdFrontmatter(readFileSync(join(tier.dir, file), "utf8"), source);
 			} catch (err) {
-				options.onDiagnostic?.(`imp: command file "${file}" could not be read — ${String(err)}`);
+				options.onDiagnostic?.(`ink: command file "${file}" could not be read — ${String(err)}`);
 				continue;
 			}
 			if (typeof parsed === "string") {
@@ -145,7 +145,7 @@ export async function loadMdCommands(options: MdCommandLoadOptions): Promise<MdC
 				continue;
 			}
 			if (parsed.body === "") {
-				options.onDiagnostic?.(`imp: command file "${file}" ignored — the prompt body is empty`);
+				options.onDiagnostic?.(`ink: command file "${file}" ignored — the prompt body is empty`);
 				continue;
 			}
 			const body = parsed.body;

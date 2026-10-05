@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { modelAvailability } from "../src/provider/model-availability.js";
 import { NO_MODEL_SEGMENT, NO_MODEL_SHORT, welcomeLines } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
+import { type CliFixture, createCliFixture } from "./helpers/cli-fixture.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 /**
@@ -14,7 +15,7 @@ import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
  * footer segments, the D2 teaching note (generic + targeted + F5
  * suppression), the availability seam, and the D7 test-seam
  * determinism. Hermetic: every test scrubs the credential env vars and
- * points IMP_AUTH_PATH at a temp empty file (the two levers the design
+ * points INK_AUTH_PATH at a temp empty file (the two levers the design
  * names; login-dialog.test.ts precedent).
  */
 
@@ -25,31 +26,40 @@ const CREDENTIAL_ENV = [
 	"ZAI_API_KEY",
 	"DEEPSEEK_API_KEY",
 	"MOONSHOT_API_KEY",
-	"IMP_MODEL",
+	"INK_MODEL",
 ] as const;
 
 describe("#fresh-install-hint availability seam", () => {
 	const saved: Record<string, string | undefined> = {};
+	const fixtures: CliFixture[] = [];
+	function cli(): CliFixture {
+		const fixture = createCliFixture({ model: null }); // startup selection is the subject under test
+		fixtures.push(fixture);
+		return fixture;
+	}
 	// Monotonic counter (round-2 review, same class as F6): two tests inside
-	// the same millisecond would otherwise share one IMP_AUTH_PATH — a key
+	// the same millisecond would otherwise share one INK_AUTH_PATH — a key
 	// stored by an earlier test leaks into the next one's probe.
 	let authSeq = 0;
 	beforeEach(() => {
+		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
 		for (const key of CREDENTIAL_ENV) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(
+		process.env.INK_AUTH_PATH = path.join(
 			tmpdir(),
 			`imp-fresh-auth-${process.pid}-${Date.now()}-${authSeq++}.json`,
 		);
 	});
 	afterEach(() => {
+		for (const fixture of fixtures.splice(0)) fixture.cleanup();
 		for (const key of CREDENTIAL_ENV) {
 			if (saved[key] === undefined) delete process.env[key];
 			else process.env[key] = saved[key];
 		}
-		delete process.env.IMP_AUTH_PATH;
+		if (saved.INK_AUTH_PATH === undefined) delete process.env.INK_AUTH_PATH;
+		else process.env.INK_AUTH_PATH = saved.INK_AUTH_PATH;
 	});
 
 	it("test 4: per-family table — env only / stored only / neither / codex stored", async () => {
@@ -64,7 +74,7 @@ describe("#fresh-install-hint availability seam", () => {
 		process.env.ANTHROPIC_AUTH_TOKEN = "t";
 		expect(modelAvailability("anthropic").usable).toBe(true);
 		delete process.env.ANTHROPIC_AUTH_TOKEN;
-		// stored only (via /login) — saveApiKey honors IMP_AUTH_PATH
+		// stored only (via /login) — saveApiKey honors INK_AUTH_PATH
 		const { saveApiKey } = await import("../src/provider/auth-store.js");
 		saveApiKey("deepseek", "stored-key");
 		expect(modelAvailability("deepseek")).toEqual({ usable: true, configuredFamilies: ["deepseek"] });
@@ -89,7 +99,7 @@ describe("#fresh-install-hint availability seam", () => {
 		expect(output()).toContain("zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn");
 		// welcomeLines renders the segment the caller passes (D1)
 		const lines = welcomeLines("deadbeef", NO_MODEL_SEGMENT, false);
-		expect(lines[lines.length - 1]).toBe(`imp 0.1.0 · session deadbeef · ${NO_MODEL_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SEGMENT}`);
 		expect(lines[lines.length - 1]).not.toContain("claude-sonnet-4-5");
 	});
 
@@ -268,12 +278,14 @@ describe("#fresh-install-hint availability seam", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hello"], {
 			cwd,
-			env: { PATH: process.env.PATH, HOME: home },
+			env: fixture.env(),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stderr: string; code?: number; stdout: string };
 		expect(err.code).toBe(1);
@@ -293,7 +305,7 @@ describe("#fresh-install-hint availability seam", () => {
 				else written.push(full);
 			}
 		};
-		walk(path.join(home, ".imp"));
+		walk(path.join(home, ".ink"));
 		expect(written.filter((f) => f.includes("/sessions/") || f.includes("/logs/"))).toEqual([]); // P4
 	});
 
@@ -317,7 +329,7 @@ describe("#fresh-install-hint availability seam", () => {
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			expect(message).toContain("No API key found");
-			expect(message).toContain("/login anthropic  (interactive — stores the key in ~/.imp/auth.json)");
+			expect(message).toContain("/login anthropic  (interactive — stores the key in ~/.ink/auth.json)");
 		}
 		expect(events).toEqual([]);
 	});
@@ -369,16 +381,18 @@ describe("#fresh-install-hint availability seam", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
 		// seed one prior session so -c works
 		const { createSession } = await import("../src/core/session/manager.js");
 		const prior = createSession(cwd, path.join(home, "sessions"));
 		prior.appendMessage({ role: "user", content: "old" });
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hi", "-c", "--no-session"], {
 			cwd,
-			env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") },
+			env: fixture.env({ INK_AUTH_PATH: path.join(home, "auth.json") }),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.stdout).not.toContain("no model available — sign in with /login ("); // F3: not on stdout
@@ -393,12 +407,14 @@ describe("#fresh-install-hint availability seam", () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
-		const home = await mkdtemp(path.join(tmpdir(), "imp-fresh-home-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-fresh-cwd-"));
-		const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+		const fixture = cli();
+		const home = fixture.home;
+		const cwd = fixture.cwd;
+		const BIN = fixture.bin;
 		const result: unknown = await run(process.execPath, [BIN, "-p", "hi", "-c", "-m", "glm-4.6"], {
 			cwd,
-			env: { PATH: process.env.PATH, HOME: home, IMP_AUTH_PATH: path.join(home, "auth.json") },
+			env: fixture.env({ INK_AUTH_PATH: path.join(home, "auth.json") }),
+			timeout: 10_000,
 		}).catch((err: unknown) => err);
 		const err = result as { stdout: string; stderr: string; code?: number };
 		expect(err.code).toBe(1);

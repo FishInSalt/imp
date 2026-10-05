@@ -20,7 +20,7 @@ import { createZaiProvider } from "./zai.js";
  *   moonshotai-cn/kimi-k3     → Moonshot AI China official (MOONSHOT_API_KEY)
  *   anthropic/glm-4.6         → explicit anthropic-messages routing (equivalent to glm-4.6)
  *   openai-codex/gpt-5.5      → Responses protocol on the ChatGPT-subscription
- *                               credential (imp login; see codex-auth.ts)
+ *                               credential (ink login; see codex-auth.ts)
  *
  * This is the seed of the full registry (contextWindow per model, picker,
  * session persistence). #glm-retire: bare glm-* ids route to zai

@@ -9,7 +9,7 @@
  *                  pi's envApiKeyAuth order; both families share the env var,
  *                  the stored keys are per family)
  *
- * The wire itself is imp's openai-completions provider — this module only
+ * The wire itself is Ink's openai-completions provider — this module only
  * fixes the defaults (endpoints, family key resolution) and the provider
  * NAMES, which the thinking catalog keys off (per-model compat decides the
  * style: "deepseek" thinking {type} for k2.x, "openai" reasoning_effort for

@@ -8,8 +8,8 @@ import { escapeXml } from "../skills.js";
 /**
  * Agent registry (M5 design §9/M5c): subagent personas as markdown files.
  *
- *   <cwd>/.imp/agents/*.md   — project agents (win on name collision)
- *   ~/.imp/agents/*.md       — user agents
+ *   <cwd>/.ink/agents/*.md   — project agents (win on name collision)
+ *   ~/.ink/agents/*.md       — user agents
  *
  * Format — hand-rolled frontmatter (no YAML dep), ~40 lines by design:
  *
@@ -65,7 +65,7 @@ export interface AgentDefinition {
 /** prompt-audit P8: the <advertised_agents> system block. Numeric caps are
  *  pi-subagents' (advertised-agent-prompt.ts): 16 agents, 12288 bytes total,
  *  512 bytes per description. Unlike pi we do NOT require an opt-in
- *  `advertise` flag — imp's registries are small; revisit if they grow. */
+ *  `advertise` flag — Ink's registries are small; revisit if they grow. */
 const MAX_ADVERTISED_AGENTS = 16;
 const MAX_CATALOG_BYTES = 12_288;
 const MAX_DESCRIPTION_BYTES = 512;
@@ -121,7 +121,7 @@ export interface AgentRegistry {
 	agents: AgentDefinition[];
 	/** Teaching-style diagnostics for skipped files (shown once at startup). */
 	warnings: string[];
-	/** Project `.imp/agents` existed but was skipped by the trust gate — the
+	/** Project `.ink/agents` existed but was skipped by the trust gate — the
 	 *  task tool's roster message must not claim "no agents are defined". */
 	projectGated: boolean;
 }
@@ -231,8 +231,8 @@ export function loadAgentDefinitions(
 	const byName = new Map<string, AgentDefinition>();
 	const warnings: string[] = [];
 	const dirs = [
-		path.join(homeDir, ".imp", "agents"), // scanned first: loses collisions
-		path.join(cwd, ".imp", "agents"), // scanned last: wins collisions
+		path.join(homeDir, ".ink", "agents"), // scanned first: loses collisions
+		path.join(cwd, ".ink", "agents"), // scanned last: wins collisions
 	];
 	// M8 trust gate. When cwd IS the home dir the two entries are the same
 	// directory — the global tier is the user's own installation and is never

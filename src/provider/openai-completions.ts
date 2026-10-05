@@ -84,7 +84,7 @@ function toUserParts(content: string | ContentBlock[]): string | WireUserPart[] 
  *  moonshotai, moonshotai-cn); the "" fill on bare frames is model-level
  *  (deepseek family-constant true, pi :1643; Moonshot via catalog compat —
  *  k3 only). The field name is HARDCODED to reasoning_content — pi replays
- *  under the incoming field's name (:1312-1318), but imp reads only that
+ *  under the incoming field's name (:1312-1318), but Ink reads only that
  *  one field (D5), so hardcoding is full parity for these families. */
 function toWireMessages(
 	system: string,

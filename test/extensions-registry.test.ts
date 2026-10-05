@@ -45,7 +45,7 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerTool(tool("other"));
 		});
 		expect(lines).toEqual([
-			'imp: extension clash could not register tool "deploy" — already registered by guardian',
+			'ink: extension clash could not register tool "deploy" — already registered by guardian',
 		]);
 		expect(registry.tools.map((t) => t.name)).toEqual(["deploy", "other"]);
 	});
@@ -62,8 +62,8 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerContext("notes", "second");
 		});
 		expect(lines).toEqual([
-			'imp: extension two could not register command "notes" — already registered by one',
-			'imp: extension two could not register context "notes" — already registered by one',
+			'ink: extension two could not register command "notes" — already registered by one',
+			'ink: extension two could not register context "notes" — already registered by one',
 		]);
 		expect(registry.commands.map((c) => c.command.name)).toEqual(["notes"]);
 		expect(registry.commands[0]?.source).toBe("one");
@@ -80,9 +80,9 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerTool(tool("fine"));
 		});
 		expect(lines).toEqual([
-			'imp: extension shadow could not register tool "bash" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
-			'imp: extension shadow could not register tool "ls" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
-			'imp: extension shadow could not register tool "task" — reserved by imp (built-in tools: bash read edit write grep find ls task)',
+			'ink: extension shadow could not register tool "bash" — reserved by Ink (built-in tools: bash read edit write grep find ls task)',
+			'ink: extension shadow could not register tool "ls" — reserved by Ink (built-in tools: bash read edit write grep find ls task)',
+			'ink: extension shadow could not register tool "task" — reserved by Ink (built-in tools: bash read edit write grep find ls task)',
 		]);
 		expect(registry.tools.map((t) => t.name)).toEqual(["fine"]);
 	});
@@ -94,7 +94,7 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerCommand(command("model"));
 		});
 		expect(lines).toEqual([
-			'imp: extension meta could not register command "model" — reserved by imp (known: help exit new fork tree sessions resume model login logout think worktrees trust status mcp settings copy name compact)',
+			'ink: extension meta could not register command "model" — reserved by Ink (known: help exit new fork tree sessions resume model login logout think worktrees trust status mcp settings copy name compact)',
 		]);
 	});
 
@@ -106,8 +106,8 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerCommand(command("9lives"));
 		});
 		expect(lines).toEqual([
-			'imp: extension weird could not register tool "Bad_Name" — tool names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "Bad_Name")',
-			'imp: extension weird could not register command "9lives" — command names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "9lives")',
+			'ink: extension weird could not register tool "Bad_Name" — tool names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "Bad_Name")',
+			'ink: extension weird could not register command "9lives" — command names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "9lives")',
 		]);
 	});
 
@@ -123,9 +123,9 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerTool(tool("garbage", { parameters: { type: 42 } as unknown as Tool["parameters"] }));
 		});
 		expect(lines).toEqual([
-			'imp: extension sanity could not register tool "nodesc" — description must be a non-empty string',
+			'ink: extension sanity could not register tool "nodesc" — description must be a non-empty string',
 			expect.stringMatching(
-				/^imp: extension sanity could not register tool "badschema" — parameters schema is malformed: /,
+				/^ink: extension sanity could not register tool "badschema" — parameters schema is malformed: /,
 			),
 		]);
 		// required_props registered; garbage schema { type: 42 } does not throw → accepted
@@ -140,7 +140,7 @@ describe("extension registry — registration validation and conflicts (design �
 			registry.registerTool(tool("dup"));
 		});
 		expect(lines).toEqual([
-			'imp: extension double could not register tool "dup" — already registered by double',
+			'ink: extension double could not register tool "dup" — already registered by double',
 		]);
 		expect(registry.tools).toHaveLength(1);
 	});
@@ -178,7 +178,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			output: "ok",
 			isError: false,
 		});
-		expect(lines).toEqual(["imp: extension boom handler error (tool_end) — kaboom"]);
+		expect(lines).toEqual(["ink: extension boom handler error (tool_end) — kaboom"]);
 		expect(calls).toEqual(["bash"]);
 	});
 
@@ -192,7 +192,7 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 		});
 		registry.emitMessageEnd({ type: "message_end", message: assistant([{ type: "text", text: "m" }]) });
 		await ticks(2);
-		expect(lines).toEqual(["imp: extension late handler error (message_end) — later"]);
+		expect(lines).toEqual(["ink: extension late handler error (message_end) — later"]);
 	});
 
 	it("tool_call chain: allow continues, the first block short-circuits the rest", async () => {
@@ -278,8 +278,8 @@ describe("extension registry — isolated emits (design §6.1/§7.2)", () => {
 			registry.subscribe("tool_end", "not a function");
 		});
 		expect(lines).toEqual([
-			'imp: extension odd could not subscribe to "session_shutdown" — known events: tool_call tool_end message_end run_start run_end',
-			"imp: extension odd could not subscribe to tool_end — handler must be a function, got string",
+			'ink: extension odd could not subscribe to "session_shutdown" — known events: tool_call tool_end message_end run_start run_end',
+			"ink: extension odd could not subscribe to tool_end — handler must be a function, got string",
 		]);
 	});
 });
@@ -345,7 +345,7 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 			expect(answer).toBe(false);
 			expect(stderr).toHaveBeenCalledTimes(1);
 			expect(String(stderr.mock.calls[0]?.[0])).toBe(
-				"imp: extension asked for confirmation but no interactive prompt is available — declining\n",
+				"ink: extension asked for confirmation but no interactive prompt is available — declining\n",
 			);
 		} finally {
 			stderr.mockRestore();
@@ -374,7 +374,7 @@ describe("ui.confirm plumbing (spec part 2)", () => {
 			},
 		});
 		await expect(registry.confirm("q")).resolves.toBe(false);
-		expect(lines).toEqual(["imp: extension confirm handler error — prompt exploded"]);
+		expect(lines).toEqual(["ink: extension confirm handler error — prompt exploded"]);
 	});
 });
 
@@ -396,7 +396,7 @@ describe("run_start event (task-timer design §4.1)", () => {
 		});
 		registry.emitRunStart({ type: "run_start" });
 		expect(seen).toEqual(["first", "second"]); // a throwing handler does not stop the chain
-		expect(lines).toEqual(["imp: extension broken handler error (run_start) — boom"]);
+		expect(lines).toEqual(["ink: extension broken handler error (run_start) — boom"]);
 	});
 });
 
@@ -434,9 +434,9 @@ describe("extension status channel (task-timer design §4.2)", () => {
 		registry.setExtensionStatus("cli:x", "k", 42 as unknown as string);
 		expect(registry.getExtensionStatusEntries()).toEqual([]);
 		expect(lines).toEqual([
-			"imp: extension cli:x status dropped — key must be a non-empty string",
-			"imp: extension cli:x status dropped — key must be a non-empty string",
-			"imp: extension cli:x status dropped — text must be a string or undefined",
+			"ink: extension cli:x status dropped — key must be a non-empty string",
+			"ink: extension cli:x status dropped — key must be a non-empty string",
+			"ink: extension cli:x status dropped — text must be a string or undefined",
 		]);
 	});
 
@@ -552,8 +552,8 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 		});
 		loadOne(registry, "gamma", () => registry.suggestToolColor("*", "black"));
 		expect(lines).toEqual([
-			'imp: extension beta could not suggest tool color for "bash" — already suggested by alpha',
-			'imp: extension gamma could not suggest tool color for "*" — already suggested by beta',
+			'ink: extension beta could not suggest tool color for "bash" — already suggested by alpha',
+			'ink: extension gamma could not suggest tool color for "*" — already suggested by beta',
 		]);
 		expect(registry.toolColorFor("bash")).toBe("red");
 		expect(registry.toolColorFor("other")).toBe("white");
@@ -570,10 +570,10 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 			registry.suggestToolColor("ok", "cyan"); // the one good call stands
 		});
 		expect(lines).toEqual([
-			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
-			'imp: extension clumsy could not suggest tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
-			'imp: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
-			"imp: extension clumsy could not suggest tool color — expected a name or an array of names, got number",
+			'ink: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			'ink: extension clumsy could not suggest tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
+			'ink: extension clumsy could not suggest tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			"ink: extension clumsy could not suggest tool color — expected a name or an array of names, got number",
 		]);
 		expect(registry.toolColorFor("bash")).toBeUndefined(); // rejected calls left nothing behind
 		expect(registry.toolColorFor("ok")).toBe("cyan");
@@ -602,8 +602,8 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 		expect(registry.toolColorFor("bash")).toBe("green");
 		expect(registry.toolColorFor("read")).toBe("red");
 		expect(lines).toEqual([
-			'imp: extension gamma could not register tool color for "bash" — already registered by beta',
-			'imp: extension delta could not register tool color for "*" — already registered by alpha',
+			'ink: extension gamma could not register tool color for "bash" — already registered by beta',
+			'ink: extension delta could not register tool color for "*" — already registered by alpha',
 		]);
 	});
 
@@ -620,11 +620,11 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 			registry.registerToolColor(["ok", "ok2"], "red"); // the one good call stands
 		});
 		expect(lines).toEqual([
-			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
-			'imp: extension clumsy could not register tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
-			'imp: extension clumsy could not register tool color for "42" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "42")',
-			'imp: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
-			"imp: extension clumsy could not register tool color — expected a name or an array of names, got number",
+			'ink: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			'ink: extension clumsy could not register tool color for "Bash" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "Bash")',
+			'ink: extension clumsy could not register tool color for "42" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "42")',
+			'ink: extension clumsy could not register tool color — unknown color (expected one of: black red green yellow blue magenta cyan white gray brightRed brightGreen brightYellow brightBlue brightMagenta brightCyan brightWhite none, ansi256:N (0-255), or #rrggbb, got "orange")',
+			"ink: extension clumsy could not register tool color — expected a name or an array of names, got number",
 		]);
 		// the failed call left nothing behind — no partial ["bash"] from the color rejection
 		expect(registry.toolColorFor("bash")).toBeUndefined();
@@ -638,7 +638,7 @@ describe("tool name colors (#tool-name-colors, design D1/D2)", () => {
 		const registry = new ExtensionRegistry({ report: (l) => lines.push(l) });
 		loadOne(registry, "echo", () => registry.registerToolColor(["read", "read"], "red"));
 		expect(lines).toEqual([
-			'imp: extension echo could not register tool color for "read" — already registered by echo',
+			'ink: extension echo could not register tool color for "read" — already registered by echo',
 		]);
 		expect(registry.toolColorFor("read")).toBeUndefined();
 	});

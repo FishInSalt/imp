@@ -1,15 +1,15 @@
 {
-	"name": "imp-agent",
-	"version": "0.1.0",
-	"description": "imp — a small coding agent that runs in your terminal",
+	"name": "ink-agent",
+	"version": "0.2.0",
+	"description": "Ink — an open-source AI assistant and agent harness for the terminal",
 	"type": "module",
 	"license": "MIT",
 	"author": "L Z",
 	"bin": {
-		"imp": "bin/imp.js"
+		"ink": "bin/ink.js"
 	},
 	"files": [
-		"bin",
+		"bin/ink.js",
 		"dist",
 		"README.md",
 		"LICENSE"
@@ -23,7 +23,8 @@
 		"url": "https://github.com/FishInSalt/imp/issues"
 	},
 	"keywords": [
-		"coding-agent",
+		"ai-assistant",
+		"agent-harness",
 		"cli",
 		"tui",
 		"terminal",
@@ -32,10 +33,12 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsx src/cli.ts",
-		"start": "npm run build && node bin/imp.js",
+		"start": "npm run build && node bin/ink.js",
+		"package:smoke": "node scripts/package-smoke.mjs",
 		"prepare": "npm run build",
 		"typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
-		"lint": "biome check .",
+		"lint": "biome check . && npm run lint:scripts",
+		"lint:scripts": "node --check scripts/package-smoke.mjs && node --check scripts/release-guards.mjs",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
 		"test:watch": "vitest"

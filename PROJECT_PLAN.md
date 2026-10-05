@@ -1,5 +1,10 @@
 # Imp — 从零开发的 Coding Agent · 项目计划
 
+> Historical plan and implementation ledger. The current product is **Ink**;
+> see [README](README.md), [rename acceptance](docs/ink-rename-design.md#10-workspace-implementation-acceptance--2026-10-05)
+> and [cutover runbook](docs/ink-cutover-runbook.md). Historical entries below
+> retain their original identities and are not migration or release instructions.
+
 > **名字**：imp（小恶魔/小精灵）——替主人跑腿办事的小家伙，勤快、偶尔捣蛋，天生自带"工具需要权限门"的直觉。彩蛋：IMP 也是 ARPANET 最早的分组交换节点，路由器的祖先。
 > 参考项目：[pi](https://github.com/earendil-works/pi-mono)（本地已克隆在 `../pi`）
 > 本文档基于对 pi 源码结构的实际分析制定

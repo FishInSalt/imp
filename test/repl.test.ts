@@ -88,7 +88,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 		input: fake.stdin,
 		output: fake.stdout,
 		interactive: args.interactive ?? args.tty ?? true,
-		// These scenarios pin the readline shell (the IMP_REPL=legacy escape
+		// These scenarios pin the readline shell (the INK_REPL=legacy escape
 		// hatch path). The pi-tui shell has its own suite (repl-tui.test.ts).
 		shell: "legacy",
 		releaseStartupNotes:
@@ -112,7 +112,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -124,21 +124,19 @@ describe("runRepl welcome panel", () => {
 		const env = await startRepl({ scripts: [reply("hi")] });
 		await waitUntil(() => env.output().includes("Tips for getting started:"));
 		const out = env.output();
-		// glyphs pinned verbatim against ANSI Shadow.flf (full-width
-		// layout): tittle-less i, m, and p whose bowl closes one row above
-		// the bare descender — rendered plain because ansi:false
-		expect(out).toContain("██╗███╗   ███╗██████╗");
-		expect(out).toContain("██║████╗ ████║██╔══██╗");
-		expect(out).toContain("██║██╔████╔██║██████╔╝");
-		expect(out).toContain("██║██║╚██╔╝██║██╔═══╝");
-		expect(out).toContain("██║██║ ╚═╝ ██║██║");
-		expect(out).toContain("╚═╝╚═╝     ╚═╝╚═╝");
+		// Ink's six pixel rows, rendered plain because ansi:false.
+		expect(out).toContain("██╗███╗   ██╗██╗  ██╗");
+		expect(out).toContain("██║████╗  ██║██║ ██╔╝");
+		expect(out).toContain("██║██╔██╗ ██║█████╔╝");
+		expect(out).toContain("██║██║╚██╗██║██╔═██╗");
+		expect(out).toContain("██║██║ ╚████║██║  ██╗");
+		expect(out).toContain("╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝");
 		// Gemini-style numbered tips (verbatim — generic best practice)
 		expect(out).toContain("1. Ask questions, edit files, or run commands.");
 		expect(out).toContain("2. Be specific for the best results.");
 		expect(out).toContain("3. /help for more information.");
 		// identity line: version + session id + model
-		expect(out).toMatch(/imp 0\.1\.0 · session [0-9a-f]{8} · test-model/);
+		expect(out).toMatch(/Ink 0\.2\.0 · session [0-9a-f]{8} · test-model/);
 		// the old compact banner line is gone on fresh sessions
 		expect(out).not.toContain("/help for commands");
 		env.fake.eof();
@@ -148,7 +146,7 @@ describe("runRepl welcome panel", () => {
 	it("gradientLine colorizes per column when ansi, stays plain otherwise", async () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		const plain = welcomeLines("deadbeef", "test-model", false);
-		expect(plain[0]).toBe("██╗███╗   ███╗██████╗"); // no escapes
+		expect(plain[0]).toBe("██╗███╗   ██╗██╗  ██╗"); // no escapes
 		const colored = welcomeLines("deadbeef", "test-model", true);
 		// first painted column ≈ blue stop, last ≈ pink stop (exact lerp
 		// values depend on the column index — anchor on near-stop hues)
@@ -177,7 +175,7 @@ describe("runRepl welcome panel", () => {
 		const env = await startRepl({ scripts: [reply("hi")], interactive: false, tty: false });
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("1 turns"));
-		expect(env.output()).not.toContain("Welcome to imp");
+		expect(env.output()).not.toContain("Welcome to Ink");
 		expect(env.output()).not.toContain("╭");
 		env.fake.eof();
 		await env.repl;
@@ -200,9 +198,9 @@ describe("runRepl welcome panel", () => {
 		});
 		await waitUntil(() => second.output().includes("replayed"));
 		const out = second.output();
-		expect(out).toContain("imp 0.1.0 — /help for commands"); // legacy banner on resume
+		expect(out).toContain("Ink 0.2.0 — /help for commands"); // legacy banner on resume
 		expect(out).toContain("▪ replayed");
-		expect(out).not.toContain("Welcome to imp");
+		expect(out).not.toContain("Welcome to Ink");
 		second.fake.eof();
 		await second.repl;
 	});
@@ -395,7 +393,7 @@ describe("runRepl", () => {
 		env.fake.interrupt();
 		g.resolve(); // held stream learns of the abort and ends without message_end
 		await waitUntil(() => env.output().includes("(aborted)"));
-		expect(env.output()).not.toContain("imp:");
+		expect(env.output()).not.toContain("ink:");
 		expect(env.output()).not.toContain("This operation was aborted"); // no DOMException leak
 		// prompt restored — a command still works after the abort
 		env.send("/help\n");
@@ -529,7 +527,7 @@ describe("runRepl", () => {
 		});
 		await ticks(2);
 		fake.send("hi\n"); // triggers warmup -> resolveSession throws
-		await waitUntil(() => fake.output().includes("imp:"));
+		await waitUntil(() => fake.output().includes("ink:"));
 		expect(fake.output()).toMatch(/deadbeef/);
 		expect(fake.output()).not.toContain("unreachable"); // the turn never ran
 		fake.eof();
@@ -562,7 +560,7 @@ describe("runRepl", () => {
 		const env = await startRepl({ scripts: [abortError as unknown as ScriptStep] });
 		env.send("hi\n");
 		await waitUntil(() => env.output().includes("(aborted)"));
-		expect(env.output()).not.toContain("imp:");
+		expect(env.output()).not.toContain("ink:");
 		expect(env.output()).not.toContain("resume from the break"); // aborts are not failures
 		env.fake.eof();
 		expect(await env.repl).toBe(0);
@@ -738,7 +736,7 @@ describe("runRepl", () => {
 			expect(store.isPersisted).toBe(true);
 			expect(existsSync(store.filePath)).toBe(true);
 			const id8 = store.header.id.slice(0, 8);
-			expect(env.output()).toContain(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
+			expect(env.output()).toContain(`▪ session ${id8} saved — resume with: ink -r ${id8}`);
 			expect(env.output()).not.toContain("▪ bye");
 		},
 	);
@@ -750,7 +748,7 @@ describe("runRepl", () => {
 		env.fake.send("\x04");
 		expect(await env.repl).toBe(0);
 		const id8 = env.runner.session?.header.id.slice(0, 8);
-		expect(env.output()).toContain(`▪ session ${id8} saved — resume with: imp -r ${id8}`);
+		expect(env.output()).toContain(`▪ session ${id8} saved — resume with: ink -r ${id8}`);
 
 		const stateless = await startRepl({ scripts: [reply("ok")], noSession: true });
 		stateless.fake.send("\x04");
@@ -791,7 +789,7 @@ describe("runRepl", () => {
 		expect(env.output()).toContain("(aborted)"); // the run was aborted before the exit
 	});
 
-	it("provider throw mid-run: imp: <msg>, the REPL survives and keeps working", async () => {
+	it("provider throw mid-run: ink: <msg>, the REPL survives and keeps working", async () => {
 		const env = await startRepl({
 			scripts: [
 				reply("fine"),
@@ -804,7 +802,7 @@ describe("runRepl", () => {
 		env.send("go\n");
 		await waitUntil(() => env.requests.length >= 1);
 		env.send("again\n");
-		await waitUntil(() => env.output().includes("imp: boom"));
+		await waitUntil(() => env.output().includes("ink: boom"));
 		// mid-run failure note: work is saved, next message resumes (dogfood fix)
 		expect(env.output()).toContain("resume from the break");
 		env.send("third\n");
@@ -847,7 +845,7 @@ describe("runRepl", () => {
 	});
 
 	it("auto-compaction across REPL turns (tiny keep window): banner appears, conversation continues", async () => {
-		vi.stubEnv("IMP_KEEP_RECENT", "1");
+		vi.stubEnv("INK_KEEP_RECENT", "1");
 		vi.resetModules();
 		const { createRunner: freshCreateRunner } = await import("../src/runner.js");
 		const { runRepl: freshRunRepl } = await import("../src/repl/repl.js");
@@ -939,8 +937,8 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 		// indirectly: simplest is the shell's own API on the input object.
 		// runRepl does not hand the shell out, so drive /login zai with the
 		// store redirected, then verify the file.
-		const prevAuth = process.env.IMP_AUTH_PATH;
-		process.env.IMP_AUTH_PATH = path.join(baseDir, "auth.json");
+		const prevAuth = process.env.INK_AUTH_PATH;
+		process.env.INK_AUTH_PATH = path.join(baseDir, "auth.json");
 		const prevZai = process.env.ZAI_API_KEY;
 		delete process.env.ZAI_API_KEY;
 		try {
@@ -955,8 +953,8 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 			await repl;
 			secretAnswered.push("done");
 		} finally {
-			if (prevAuth === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = prevAuth;
+			if (prevAuth === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = prevAuth;
 			if (prevZai === undefined) delete process.env.ZAI_API_KEY;
 			else process.env.ZAI_API_KEY = prevZai;
 		}
@@ -1013,10 +1011,10 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 		await new Promise<void>((r) => hangServer.listen(0, "127.0.0.1", r));
 		const hangBase = `http://127.0.0.1:${(hangServer.address() as { port: number }).port}`;
 		const authPath = path.join(baseDir, "auth.json");
-		const prevAuth = process.env.IMP_AUTH_PATH;
-		const prevCodexBase = process.env.IMP_CODEX_AUTH_BASE;
-		process.env.IMP_AUTH_PATH = authPath;
-		process.env.IMP_CODEX_AUTH_BASE = hangBase;
+		const prevAuth = process.env.INK_AUTH_PATH;
+		const prevCodexBase = process.env.INK_CODEX_AUTH_BASE;
+		process.env.INK_AUTH_PATH = authPath;
+		process.env.INK_CODEX_AUTH_BASE = hangBase;
 		const repl = runRepl({
 			runner,
 			commands: [],
@@ -1050,10 +1048,10 @@ describe("/login codex guarded state (batch B, machine level)", () => {
 			const { loadCodexCredential } = await import("../src/provider/codex-auth.js");
 			expect(loadCodexCredential(authPath)).toBeNull(); // nothing persisted
 		} finally {
-			if (prevAuth === undefined) delete process.env.IMP_AUTH_PATH;
-			else process.env.IMP_AUTH_PATH = prevAuth;
-			if (prevCodexBase === undefined) delete process.env.IMP_CODEX_AUTH_BASE;
-			else process.env.IMP_CODEX_AUTH_BASE = prevCodexBase;
+			if (prevAuth === undefined) delete process.env.INK_AUTH_PATH;
+			else process.env.INK_AUTH_PATH = prevAuth;
+			if (prevCodexBase === undefined) delete process.env.INK_CODEX_AUTH_BASE;
+			else process.env.INK_CODEX_AUTH_BASE = prevCodexBase;
 			await new Promise<void>((r) => hangServer.close(() => r()));
 		}
 	});
@@ -1312,7 +1310,7 @@ describe("! passthrough (M10)", () => {
 });
 describe("queue on provider failure (handed back, never dropped)", () => {
 	beforeEach(() => {
-		vi.stubEnv("IMP_LOG", "0");
+		vi.stubEnv("INK_LOG", "0");
 	});
 	afterEach(() => {
 		vi.unstubAllEnvs();
@@ -1335,7 +1333,7 @@ describe("queue on provider failure (handed back, never dropped)", () => {
 		env.send("held line\n");
 		await waitUntil(() => env.output().includes("▪ queued: held line"));
 		g.resolve(); // the provider now throws
-		await waitUntil(() => env.output().includes("imp: provider exploded"));
+		await waitUntil(() => env.output().includes("ink: provider exploded"));
 		// legacy has no editor: the texts echo back — never silently lost
 		await waitUntil(() => env.output().includes("1 queued message(s) not run:"));
 		expect(env.output()).toContain("▪ held line");

@@ -1,7 +1,7 @@
 // examples/extensions/task-timer.mjs — live per-run timer in the TUI footer.
 //
-// Install: copy into <project>/.imp/extensions/ (or ~/.imp/extensions/) and
-// restart imp. While a run is in flight the footer shows "running M:SS",
+// Install: copy into <project>/.ink/extensions/ (or ~/.ink/extensions/) and
+// restart Ink. While a run is in flight the footer shows "running M:SS",
 // ticking once a second; when the run settles the line becomes "done in M:SS"
 // and stays until the next run starts. Footer display only; nothing is
 // written to session files, and print mode / the legacy shell are unaffected
@@ -15,7 +15,7 @@
 //   - A crashed run (provider throw) never emits run_end: the "running …"
 //     line stays on screen until the next run starts and resets it.
 //   - After /new, /resume, /tree, or /fork, a stale "done in …" persists
-//     until the next run (imp has no session-lifecycle events yet).
+//     until the next run (Ink has no session-lifecycle events yet).
 //   - The tick interval is unref'd: on the crash path nothing clears it, and
 //     a ref'd handle would block process exit. ANY timer an extension
 //     creates should be unref'd for the same reason.

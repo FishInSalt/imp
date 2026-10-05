@@ -1,7 +1,7 @@
 /**
  * Project trust — the gate for project-scoped executable resources (M8).
  *
- * Loading `<cwd>/.imp/extensions/*.mjs` or `<cwd>/.imp/agents/*` from a
+ * Loading `<cwd>/.ink/extensions/*.mjs` or `<cwd>/.ink/agents/*` from a
  * directory the user has never vouched for is arbitrary code execution: a
  * cloned repository becomes a drive-by. The model follows pi's
  * trust-manager (verified against its source): a global JSON store of
@@ -35,7 +35,7 @@ import { ancestorAgentsSkillDirs } from "./skills.js";
 export type TrustFile = Record<string, boolean>;
 
 export function defaultTrustStorePath(home: string): string {
-	return join(home, ".imp", "trust.json");
+	return join(home, ".ink", "trust.json");
 }
 
 /** realpath when it resolves (recorded paths and queries stay comparable),
@@ -79,9 +79,9 @@ export function readTrustFile(storePath: string): TrustFile {
 
 /** Sorted keys keep the file diff-friendly under version control. The write
  *  is tmp+rename so a concurrent reader never sees a torn file (M8 review:
- *  a bare writeFileSync read mid-write crashed a whole imp startup), and the
+ *  a bare writeFileSync read mid-write crashed a whole Ink startup), and the
  *  read-modify-write helpers below serialize through an exclusive lock file
- *  so two imp processes cannot silently drop each other's records. */
+ *  so two Ink processes cannot silently drop each other's records. */
 export function writeTrustFile(storePath: string, data: TrustFile): void {
 	const sorted: TrustFile = {};
 	for (const key of Object.keys(data).sort()) {
@@ -96,7 +96,7 @@ export function writeTrustFile(storePath: string, data: TrustFile): void {
 
 /** Minimal exclusive lock (zero deps, unlike pi's proper-lockfile): O_EXCL
  *  on a sidecar file, bounded retry, stale-break after 5s — enough for the
- *  two-imp-terminals case, not a distributed lock. Degrades to unlocked
+ *  two-ink-terminals case, not a distributed lock. Degrades to unlocked
  *  rather than bricking after 1s of contention. */
 function withStoreLock<T>(storePath: string, fn: () => T): T {
 	const lockPath = `${storePath}.lock`;
@@ -198,38 +198,38 @@ export function askTrustOnce(
 	});
 }
 
-/** Project resources that REQUIRE trust: only `<cwd>/.imp/` items that load
+/** Project resources that REQUIRE trust: only `<cwd>/.ink/` items that load
  *  executable or model-directed content, plus `.agents/skills` directories in
  *  cwd and its ancestors up to the git root (M12 — pi parity: the ancestor
  *  walk stops at the repo boundary; the user-global `~/.agents/skills` itself
- *  is never a project resource). Global `~/.imp/` needs no gate — the user
+ *  is never a project resource). Global `~/.ink/` needs no gate — the user
  *  installed it themselves. Plain `AGENTS.md` context files stay
  *  ungated (prompt-level, matching pi and Claude Code). */
 export function trustRequiringResources(cwd: string, home: string): string[] {
-	// ONLY $HOME itself is exempt — there `.imp/*` IS the user's own global
+	// ONLY $HOME itself is exempt — there `.ink/*` IS the user's own global
 	// installation and must never gate itself. The whole home TREE is NOT
 	// exempt (#trust-home-fix): pi gates any directory with project
 	// resources regardless of location (macOS keeps everything under ~ —
 	// a blanket exemption would silently disable the gate everywhere).
 	if (canonicalizeDir(cwd) === canonicalizeDir(home)) return [];
 	const found: string[] = [];
-	// ".imp/commands" (M11 #6) is prompt-level, not code — but it talks to
+	// ".ink/commands" (M11 #6) is prompt-level, not code — but it talks to
 	// the model, so it gates like the rest (review P1: a commands-only repo
 	// used to slip through the empty-resources early-exit).
-	// ".imp/skills" (M12) — same reasoning: skills ARE model-directed content.
-	// ".imp/settings.json" (M15) — project settings redirect the model and
+	// ".ink/skills" (M12) — same reasoning: skills ARE model-directed content.
+	// ".ink/settings.json" (M15) — project settings redirect the model and
 	// toggle behavior; a cloned repo must not grow them un-gated.
-	for (const rel of [".imp/extensions", ".imp/agents", ".imp/commands", ".imp/skills"]) {
+	for (const rel of [".ink/extensions", ".ink/agents", ".ink/commands", ".ink/skills"]) {
 		const target = join(cwd, rel);
 		if (existsSync(target) && statSync(target).isDirectory()) found.push(rel);
 	}
-	if (existsSync(join(cwd, ".imp", "settings.json"))) found.push(".imp/settings.json");
+	if (existsSync(join(cwd, ".ink", "settings.json"))) found.push(".ink/settings.json");
 	// #system-md: repo-shipped prompt redirects gate like settings (same M15
 	// file-level precedent). isFile — a directory shadowing the name must not
 	// trigger the ask (design review P3-1).
 	for (const name of ["SYSTEM.md", "APPEND_SYSTEM.md"]) {
-		const target = join(cwd, ".imp", name);
-		if (existsSync(target) && statSync(target).isFile()) found.push(`.imp/${name}`);
+		const target = join(cwd, ".ink", name);
+		if (existsSync(target) && statSync(target).isFile()) found.push(`.ink/${name}`);
 	}
 	// #mcp-trust (m19 F1): project-tier mcp config is an EXECUTABLE resource —
 	// a cloned repo's .mcp.json spawns servers before any consent. Counting it

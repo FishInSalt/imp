@@ -16,7 +16,7 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "imp-web-search-config-"));
 	configPath = join(dir, "config.json");
 	vi.stubEnv("TAVILY_API_KEY", "");
-	vi.stubEnv("IMP_WEB_SEARCH_CONFIG", configPath);
+	vi.stubEnv("INK_WEB_SEARCH_CONFIG", configPath);
 	vi.stubEnv("HOME", dir);
 	vi.stubEnv("USERPROFILE", dir);
 });
@@ -32,9 +32,9 @@ describe("web search configuration", () => {
 	});
 
 	it("trims file credentials and uses the default home path", () => {
-		vi.stubEnv("IMP_WEB_SEARCH_CONFIG", undefined);
-		mkdirSync(join(dir, ".imp", "web-search"), { recursive: true });
-		configPath = join(dir, ".imp", "web-search", "config.json");
+		vi.stubEnv("INK_WEB_SEARCH_CONFIG", undefined);
+		mkdirSync(join(dir, ".ink", "web-search"), { recursive: true });
+		configPath = join(dir, ".ink", "web-search", "config.json");
 		config('{"apiKey":"  test-placeholder \\n"}');
 		expect(resolveApiKey()).toBe("test-placeholder");
 	});
@@ -43,7 +43,7 @@ describe("web search configuration", () => {
 		config("invalid JSON");
 		vi.stubEnv("TAVILY_API_KEY", " \t environment-placeholder \n");
 		expect(resolveApiKey()).toBe("environment-placeholder");
-		vi.stubEnv("IMP_WEB_SEARCH_CONFIG", "relative.json");
+		vi.stubEnv("INK_WEB_SEARCH_CONFIG", "relative.json");
 		expect(resolveApiKey()).toBe("environment-placeholder");
 	});
 
@@ -56,7 +56,7 @@ describe("web search configuration", () => {
 	it.each(["", "relative.json", "~/config.json", "$HOME/config.json", "$(command)"])(
 		"rejects invalid override %j without reflecting it",
 		(value) => {
-			vi.stubEnv("IMP_WEB_SEARCH_CONFIG", value);
+			vi.stubEnv("INK_WEB_SEARCH_CONFIG", value);
 			expect(() => resolveApiKey()).toThrow(/must be an absolute file path/);
 		},
 	);

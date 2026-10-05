@@ -257,11 +257,11 @@ describe("codex-responses provider", () => {
 		).rejects.toThrow("bad request shape");
 	});
 
-	it("401 teaches imp login", async () => {
+	it("401 teaches ink login", async () => {
 		script = { status: 401, chunks: [] };
 		await expect(
 			collect(provider().stream(REQ("gpt-5.5", [{ role: "user", content: "hi" }]))),
-		).rejects.toThrow(/imp login/);
+		).rejects.toThrow(/ink login/);
 	});
 
 	it("abort mid-stream: no throw, no message_end", async () => {
@@ -458,11 +458,11 @@ describe("contextWindowFor registry", () => {
 		expect(contextWindowFor("openai-codex/gpt-7-nova")).toBe(400_000); // prefix-stripped
 		resetDiscoveredWindowsForTest();
 		expect(contextWindowFor("glm-4.6")).toBe(200_000); // back to the table
-		const prev = process.env.IMP_CONTEXT_WINDOW;
-		process.env.IMP_CONTEXT_WINDOW = "999";
+		const prev = process.env.INK_CONTEXT_WINDOW;
+		process.env.INK_CONTEXT_WINDOW = "999";
 		expect(contextWindowFor("gpt-5.5")).toBe(999);
-		if (prev === undefined) delete process.env.IMP_CONTEXT_WINDOW;
-		else process.env.IMP_CONTEXT_WINDOW = prev;
+		if (prev === undefined) delete process.env.INK_CONTEXT_WINDOW;
+		else process.env.INK_CONTEXT_WINDOW = prev;
 	});
 });
 

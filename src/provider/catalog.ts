@@ -5,14 +5,14 @@
  * MODEL_RULES, vision.ts, FAMILY_FALLBACKS) are FROZEN: first-run bootstrap
  * and offline floor, no longer hand-maintained.
  *
- * Wire: GET {IMP_CATALOG_BASE_URL|https://pi.dev}/api/models/providers/<family>
+ * Wire: GET {INK_CATALOG_BASE_URL|https://pi.dev}/api/models/providers/<family>
  * — public, unauthenticated; entries carry id/name/api/baseUrl/reasoning/
  * input/cost/contextWindow/maxTokens/thinkingLevelMap/compat (verified live
  * 2026-09-20; the endpoint pi's remote-catalog-provider.ts consumes).
  *
  * Refresh model (pi semantics, user-approved): NO periodic polling — a
  * 4-hour staleness window throttles network use. Triggers: startup check +
- * /model open. Disk cache (~/.imp/models-catalog.json) is the fallback when
+ * /model open. Disk cache (~/.ink/models-catalog.json) is the fallback when
  * pi.dev is unreachable; ETag revalidation keeps 304s bodyless.
  *
  * Divergences recorded in docs/m14-model-catalog-design.md §4: no
@@ -54,7 +54,7 @@ export interface CatalogCost {
 	cacheWrite: number;
 }
 
-/** One pi.dev catalog entry (subset imp consumes; unknown fields ignored). */
+/** One pi.dev catalog entry (subset Ink consumes; unknown fields ignored). */
 export interface CatalogEntry {
 	id: string;
 	name?: string;
@@ -134,11 +134,11 @@ export function resetCatalogForTest(): void {
 }
 
 export function catalogPath(): string {
-	return process.env.IMP_CATALOG_PATH ?? join(homedir(), ".imp", "models-catalog.json");
+	return process.env.INK_CATALOG_PATH ?? join(homedir(), ".ink", "models-catalog.json");
 }
 
 function catalogBase(): string {
-	return (process.env.IMP_CATALOG_BASE_URL ?? "https://pi.dev").replace(/\/+$/, "");
+	return (process.env.INK_CATALOG_BASE_URL ?? "https://pi.dev").replace(/\/+$/, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ function parseCatalog(family: ProviderName, value: unknown): Record<string, Cata
 	return models;
 }
 
-/** Keep only fields imp consumes, defensively typed. */
+/** Keep only fields Ink consumes, defensively typed. */
 function sanitizeEntry(entry: CatalogEntry): CatalogEntry {
 	const clean: CatalogEntry = { id: entry.id };
 	if (typeof entry.name === "string") clean.name = entry.name;

@@ -1,6 +1,6 @@
 /**
  * Clipboard text writing — M16 `/copy`. Ported from pi
- * `coding-agent/src/utils/clipboard.ts` (copyToClipboard), with imp's
+ * `coding-agent/src/utils/clipboard.ts` (copyToClipboard), with Ink's
  * divergence D8: no native bindings, commands only, plus pi's OSC 52
  * escape as the last resort (what makes /copy work over SSH).
  *

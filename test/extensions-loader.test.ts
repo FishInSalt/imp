@@ -57,7 +57,7 @@ async function load(env: Env, options: Partial<LoadExtensionsOptions> = {}): Pro
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -90,7 +90,7 @@ describe("extension discovery (design §3)", () => {
 		await writeExtensionFiles(env.cwd, { "proj.mjs": toolFixture("proj_tool") });
 		await writeExtensionFiles(env.home, { "glob.mjs": toolFixture("glob_tool") });
 		const { loaded, lines } = await load(env, {
-			cliPaths: [path.join(env.cwd, ".imp", "extensions", "proj.mjs")],
+			cliPaths: [path.join(env.cwd, ".ink", "extensions", "proj.mjs")],
 		});
 		expect(lines).toEqual([]);
 		expect(loaded.summaries.map((s) => `${s.name}:${s.origin}`)).toEqual(["proj:cli", "glob:global"]);
@@ -100,9 +100,9 @@ describe("extension discovery (design §3)", () => {
 	it("case 2 (realpath): a symlinked entry dedups against its target across sources", async () => {
 		const env = await setup();
 		await writeExtensionFiles(env.home, { "real.mjs": toolFixture("real_tool") });
-		const projDir = path.join(env.cwd, ".imp", "extensions");
+		const projDir = path.join(env.cwd, ".ink", "extensions");
 		mkdirSync(projDir, { recursive: true });
-		symlinkSync(path.join(env.home, ".imp", "extensions", "real.mjs"), path.join(projDir, "link.mjs"));
+		symlinkSync(path.join(env.home, ".ink", "extensions", "real.mjs"), path.join(projDir, "link.mjs"));
 		const { loaded, lines } = await load(env);
 		expect(lines).toEqual([]);
 		expect(loaded.summaries.map((s) => `${s.name}:${s.origin}`)).toEqual(["link:project"]);
@@ -118,7 +118,7 @@ describe("extension load isolation (design §7)", () => {
 		});
 		const { loaded, lines } = await load(env);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toMatch(/^imp: extension broken failed to load — /);
+		expect(lines[0]).toMatch(/^ink: extension broken failed to load — /);
 		expect(lines[0]).not.toContain("hint:");
 		expect(loaded.summaries).toEqual([]);
 		expect(loaded.runtime.tools).toEqual([]);
@@ -136,7 +136,7 @@ describe("extension load isolation (design §7)", () => {
 		});
 		const { loaded, lines } = await load(env);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toMatch(/^imp: extension legacy failed to load — /);
+		expect(lines[0]).toMatch(/^ink: extension legacy failed to load — /);
 		expect(lines[0]).toContain(
 			'hint: bare ".js" files without a module-typed package.json are CommonJS to Node — rename to ".mjs" or add package.json {"type":"module"}',
 		);
@@ -153,8 +153,8 @@ describe("extension load isolation (design §7)", () => {
 		});
 		const { lines } = await load(env);
 		expect(lines).toEqual([
-			"imp: extension cjs failed to load — default export must be a function, got object",
-			"imp: extension noexport failed to load — default export must be a function, got undefined",
+			"ink: extension cjs failed to load — default export must be a function, got object",
+			"ink: extension noexport failed to load — default export must be a function, got undefined",
 		]);
 	});
 
@@ -177,7 +177,7 @@ describe("extension load isolation (design §7)", () => {
 			"good.mjs": toolFixture("good_tool"),
 		});
 		const { loaded, lines } = await load(env);
-		expect(lines).toEqual(["imp: extension bad failed to load — factory exploded"]);
+		expect(lines).toEqual(["ink: extension bad failed to load — factory exploded"]);
 		expect(loaded.summaries.map((s) => s.name)).toEqual(["good"]);
 		expect(loaded.runtime.tools.map((t) => t.name)).toEqual(["good_tool"]); // atomic discard
 		expect(loaded.runtime.toolColorFor("bash")).toBeUndefined(); // suggestions discard too (A3)
@@ -211,7 +211,7 @@ describe("-ne / --no-extensions (design §3.1)", () => {
 });
 
 describe("M8 trust gate: projectDirAllowed=false", () => {
-	it("skips the <cwd>/.imp/extensions tier but keeps -e paths and the global dir", async () => {
+	it("skips the <cwd>/.ink/extensions tier but keeps -e paths and the global dir", async () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, { "proj.mjs": toolFixture("proj_tool") });
 		await writeExtensionFiles(env.home, { "glob.mjs": toolFixture("glob_tool") });
@@ -426,7 +426,7 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 			delete (globalThis as { __impHueApi?: unknown }).__impHueApi;
 		}
 		expect(lines).toEqual([
-			'imp: extension hue could not register tool color for "read" — registration only works while the factory runs',
+			'ink: extension hue could not register tool color for "read" — registration only works while the factory runs',
 		]);
 		expect(loaded.runtime.toolColorFor("read")).toBeUndefined();
 	});
@@ -449,7 +449,7 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 			delete (globalThis as { __impHuesApi?: unknown }).__impHuesApi;
 		}
 		expect(lines).toEqual([
-			"imp: extension hues could not register tool color for 2 names — registration only works while the factory runs",
+			"ink: extension hues could not register tool color for 2 names — registration only works while the factory runs",
 		]);
 	});
 
@@ -474,8 +474,8 @@ describe("tool name colors through the api (#tool-name-colors)", () => {
 			delete (globalThis as { __impHuesApi3?: unknown }).__impHuesApi3;
 		}
 		expect(lines).toEqual([
-			'imp: extension hues could not suggest tool color for "read" — suggestions only work while the factory runs',
-			"imp: extension hues could not suggest tool color for 2 names — suggestions only work while the factory runs",
+			'ink: extension hues could not suggest tool color for "read" — suggestions only work while the factory runs',
+			"ink: extension hues could not suggest tool color for 2 names — suggestions only work while the factory runs",
 		]);
 		expect(loaded.runtime.toolColorFor("read")).toBeUndefined();
 	});

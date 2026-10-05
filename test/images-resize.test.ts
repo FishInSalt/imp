@@ -24,6 +24,7 @@ import {
 	readClipboardImage,
 	writeClipboardImageToTmp,
 } from "../src/repl/clipboard-image.js";
+import { createCliFixture } from "./helpers/cli-fixture.js";
 
 // ---------------------------------------------------------------------------
 // Real image builders (photon-decodable — the processor is on every path)
@@ -548,7 +549,7 @@ describe("M13-2 clipboard matrix", () => {
 		expect(extensionForImageMimeType("image/png")).toBe("png");
 		expect(extensionForImageMimeType("image/jpeg")).toBe("jpg");
 		const written = writeClipboardImageToTmp({ bytes: PNG, mimeType: "image/png" });
-		expect(written).toContain("imp-clipboard-");
+		expect(written).toContain("ink-clipboard-");
 		expect(written.endsWith(".png")).toBe(true);
 		const back = await readFile(written);
 		expect(back.equals(PNG)).toBe(true);
@@ -578,15 +579,20 @@ describe("M13-2 CLI @file args", () => {
 		const { promisify } = await import("node:util");
 		const run = promisify(execFile);
 		const missing = path.join(DIR, "nope.png");
-		const result: unknown = await run(process.execPath, ["dist/cli.js", `@${missing}`, "hello"], {
-			cwd: process.cwd(),
-			env: { ...process.env, IMP_HOME_DIR: DIR },
-		}).catch((err: unknown) => err);
-		const err = result as { stderr: string; code?: number };
-		// The observable: parseArgs did NOT treat @nope.png as prompt text —
-		// the processor owns it and reports the missing file.
-		expect(err.stderr).toContain("File not found");
-		expect(err.code).toBe(1);
+		const fixture = createCliFixture();
+		try {
+			const result: unknown = await run(process.execPath, [fixture.bin, `@${missing}`, "hello"], {
+				cwd: fixture.cwd,
+				env: fixture.env(),
+			}).catch((err: unknown) => err);
+			const err = result as { stderr: string; code?: number };
+			// The observable: parseArgs did NOT treat @nope.png as prompt text —
+			// the processor owns it and reports the missing file.
+			expect(err.stderr).toContain("File not found");
+			expect(err.code).toBe(1);
+		} finally {
+			fixture.cleanup();
+		}
 	}, 30000);
 });
 

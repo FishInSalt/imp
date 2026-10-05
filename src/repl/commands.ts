@@ -104,7 +104,7 @@ export interface CommandContext {
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
 	/** #login-repl: credential store location — hermetic tests inject a temp
-	 *  path; production defaults to ~/.imp/auth.json. */
+	 *  path; production defaults to ~/.ink/auth.json. */
 	authStorePath?: string;
 	/** #login-repl batch B: the codex device-code OAuth base URL — hermetic
 	 *  tests inject a local fake; production uses auth.openai.com. */
@@ -224,7 +224,7 @@ export function helpText(
 	lines.push("");
 	lines.push(HELP_KEYS.trimEnd());
 	lines.push("");
-	lines.push("Lines typed while imp is working are queued and injected when the current turn ends.");
+	lines.push("Lines typed while Ink is working are queued and injected when the current turn ends.");
 	return lines.join("\n");
 }
 
@@ -237,7 +237,7 @@ function formatWhen(date: Date): string {
 /** v1 selector candidates for /model: no model registry exists, so this is
  *  the README-documented set (claude-sonnet-4-5 default; the GLM coding-plan
  *  ids) with the runner's current id prepended when it is not among them — a
- *  custom IMP_MODEL / -m id must stay pickable. Replace when a real model
+ *  custom INK_MODEL / -m id must stay pickable. Replace when a real model
  *  registry lands. */
 const MODEL_CANDIDATES: readonly string[] = [
 	"claude-sonnet-4-5",
@@ -310,7 +310,7 @@ interface SettingEntry {
 	key: string;
 	label: string;
 	current: string;
-	/** env vars shadow a key (the imp invariant: env is the session override). */
+	/** env vars shadow a key (the Ink invariant: env is the session override). */
 	envShadow?: string;
 	source: "env" | "project" | "global" | "default";
 	kind: "boolean" | "level" | "string" | "mode";
@@ -328,8 +328,8 @@ function settingSource(ctx: CommandContext, key: string): "env" | "project" | "g
 			return (o as { branchSummary?: { skipPrompt?: boolean } }).branchSummary?.skipPrompt;
 		return (o as Record<string, unknown>)[key];
 	};
-	if (key === "defaultModel" && process.env.IMP_MODEL !== undefined) return "env";
-	if (key === "autoCompact" && process.env.IMP_AUTOCOMPACT === "0") return "env";
+	if (key === "defaultModel" && process.env.INK_MODEL !== undefined) return "env";
+	if (key === "autoCompact" && process.env.INK_AUTOCOMPACT === "0") return "env";
 	if (pick(loadProjectSettings(ctx.runner.runnerCwd, ctx.runner.projectSettingsAllowed)) !== undefined) {
 		return "project";
 	}
@@ -352,9 +352,9 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 	return [
 		{
 			key: "defaultModel",
-			label: "startup model (-m and IMP_MODEL win)",
-			current: env("IMP_MODEL") ?? effective.defaultModel ?? "(builtin default)",
-			envShadow: env("IMP_MODEL") !== undefined ? "IMP_MODEL" : undefined,
+			label: "startup model (-m and INK_MODEL win)",
+			current: env("INK_MODEL") ?? effective.defaultModel ?? "(builtin default)",
+			envShadow: env("INK_MODEL") !== undefined ? "INK_MODEL" : undefined,
 			kind: "string",
 			source: src("defaultModel"),
 		},
@@ -375,8 +375,8 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 		{
 			key: "autoCompact",
 			label: "auto-compaction on context pressure",
-			current: process.env.IMP_AUTOCOMPACT === "0" ? "false" : bool(effective.autoCompact, true),
-			envShadow: process.env.IMP_AUTOCOMPACT === "0" ? "IMP_AUTOCOMPACT=0" : undefined,
+			current: process.env.INK_AUTOCOMPACT === "0" ? "false" : bool(effective.autoCompact, true),
+			envShadow: process.env.INK_AUTOCOMPACT === "0" ? "INK_AUTOCOMPACT=0" : undefined,
 			kind: "boolean",
 			source: src("autoCompact"),
 		},
@@ -400,7 +400,7 @@ function settingsEntries(ctx: CommandContext): SettingEntry[] {
 			current: bool(effective.mcp?.enabled, true),
 			kind: "boolean",
 			source: src("mcp.enabled"),
-			envShadow: process.env.IMP_MCP === "0" ? "IMP_MCP=0" : undefined,
+			envShadow: process.env.INK_MCP === "0" ? "INK_MCP=0" : undefined,
 		},
 		{
 			key: "steeringMode",
@@ -510,18 +510,18 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		const key = parts[0] as string;
 		const scope = parts[2] ?? "global";
 		if (scope !== "global" && scope !== "project") {
-			ctx.renderer.error(`imp: scope must be global or project — got ${JSON.stringify(scope)}`);
+			ctx.renderer.error(`ink: scope must be global or project — got ${JSON.stringify(scope)}`);
 			return "handled";
 		}
 		if (scope === "project" && !ctx.runner.projectSettingsAllowed) {
 			ctx.renderer.error(
-				"imp: project settings need this directory trusted — start imp with --trust (or without --no-trust) and accept the prompt",
+				"ink: project settings need this directory trusted — start Ink with --trust (or without --no-trust) and accept the prompt",
 			);
 			return "handled";
 		}
 		const parsed = parseSettingValue(key, parts[1] as string);
 		if (!parsed.ok) {
-			ctx.renderer.error(`imp: ${parsed.error}`);
+			ctx.renderer.error(`ink: ${parsed.error}`);
 			return "handled";
 		}
 		const before = settingsEntries(ctx).find((e) => e.key === key)?.current ?? "(unset)";
@@ -529,15 +529,15 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		const saved =
 			scope === "project"
 				? saveProjectSettings(
-						patch as Partial<import("../core/settings.js").ImpSettings>,
+						patch as Partial<import("../core/settings.js").InkSettings>,
 						ctx.runner.runnerCwd,
 					)
 				: saveSettings(
-						patch as Partial<import("../core/settings.js").ImpSettings>,
+						patch as Partial<import("../core/settings.js").InkSettings>,
 						ctx.runner.globalSettingsPath(),
 					);
 		if (!saved) {
-			ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
+			ctx.renderer.error(`ink: could not write the ${scope} settings file — changes NOT saved`);
 			return "handled";
 		}
 		const when = key === "treeFilterMode" || key === "branchSummary.skipPrompt" ? "live" : "next session";
@@ -549,7 +549,7 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 	if (parts.length === 1) {
 		const key = parts[0] as string;
 		if (!SETTING_KEYS.includes(key as (typeof SETTING_KEYS)[number])) {
-			ctx.renderer.error(`imp: unknown setting ${JSON.stringify(key)} — one of: ${SETTING_KEYS.join(", ")}`);
+			ctx.renderer.error(`ink: unknown setting ${JSON.stringify(key)} — one of: ${SETTING_KEYS.join(", ")}`);
 			return "handled";
 		}
 		const entry = settingsEntries(ctx).find((e) => e.key === key);
@@ -595,7 +595,7 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 		else {
 			const checked = parseSettingValue(entry.key, typed);
 			if (!checked.ok) {
-				ctx.renderer.error(`imp: ${checked.error}`);
+				ctx.renderer.error(`ink: ${checked.error}`);
 				return "handled";
 			}
 			next = String(checked.value);
@@ -632,13 +632,13 @@ async function runSettingsCommand(args: string, ctx: CommandContext): Promise<Co
 	const patch = settingPatchFor(entry.key, entry.kind === "boolean" ? next === "true" : next);
 	const saved =
 		scope === "project"
-			? saveProjectSettings(patch as Partial<import("../core/settings.js").ImpSettings>, ctx.runner.runnerCwd)
+			? saveProjectSettings(patch as Partial<import("../core/settings.js").InkSettings>, ctx.runner.runnerCwd)
 			: saveSettings(
-					patch as Partial<import("../core/settings.js").ImpSettings>,
+					patch as Partial<import("../core/settings.js").InkSettings>,
 					ctx.runner.globalSettingsPath(),
 				);
 	if (!saved) {
-		ctx.renderer.error(`imp: could not write the ${scope} settings file — changes NOT saved`);
+		ctx.renderer.error(`ink: could not write the ${scope} settings file — changes NOT saved`);
 		return "handled";
 	}
 	const when =
@@ -839,7 +839,7 @@ function resumeById(ctx: CommandContext, id: string): CommandOutcome {
 			}`,
 		);
 	} catch (err) {
-		ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+		ctx.renderer.error(`ink: ${err instanceof Error ? err.message : String(err)}`);
 	}
 	return "handled";
 }
@@ -895,7 +895,7 @@ export function loginUsesDialog(line: string, hasDialogShell: boolean): boolean 
 }
 
 /** #startup-model-resolution (D4): the shared login success tail. When NO
- *  usable model exists — imp's analog of pi's unknown-model sentinel — the
+ *  usable model exists — Ink's analog of pi's unknown-model sentinel — the
  *  family's curated switchHint is selected (pi auto-selects too) and the
  *  manual /model step after a first login is gone. With a usable model the
  *  pre-D4 behavior is byte-identical: footer refresh, then the family
@@ -934,9 +934,9 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 		try {
 			await loginCodex({
 				authPath: ctx.authStorePath,
-				// IMP_CODEX_AUTH_BASE: machine-level e2e seam (dispatch tests
+				// INK_CODEX_AUTH_BASE: machine-level e2e seam (dispatch tests
 				// use ctx.codexAuthBaseUrl; the machine builds no such ctx)
-				authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.IMP_CODEX_AUTH_BASE,
+				authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.INK_CODEX_AUTH_BASE,
 				signal: controller.signal,
 				onDeviceCode: ({ verificationUri, userCode }) => {
 					ctx.renderer.note(`▪ open ${verificationUri} and enter code: ${userCode}`);
@@ -947,7 +947,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			if (message === "Login cancelled") return; // pi: silent cancel
-			ctx.renderer.error(`imp: ${target.name} login failed — ${message}`);
+			ctx.renderer.error(`ink: ${target.name} login failed — ${message}`);
 		} finally {
 			ctx.onLongOpAbort?.(null);
 		}
@@ -957,7 +957,7 @@ async function loginToTarget(ctx: CommandContext, target: LoginTarget): Promise<
 	const secret = ctx.secret;
 	if (secret === undefined) {
 		ctx.renderer.error(
-			`imp: /login needs an interactive prompt — or set the key directly:\n  export ${target.envVar}=<key>`,
+			`ink: /login needs an interactive prompt — or set the key directly:\n  export ${target.envVar}=<key>`,
 		);
 		return;
 	}
@@ -981,7 +981,7 @@ async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise
 				if (target.method === "oauth") {
 					await loginCodex({
 						authPath: ctx.authStorePath,
-						authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.IMP_CODEX_AUTH_BASE,
+						authBaseUrl: ctx.codexAuthBaseUrl ?? process.env.INK_CODEX_AUTH_BASE,
 						signal: dialog.signal, // the dialog's own AbortController
 						onDeviceCode: (p) => {
 							dialog.deviceCode({ verificationUri: p.verificationUri, userCode: p.userCode });
@@ -1005,7 +1005,7 @@ async function loginViaDialog(ctx: CommandContext, target: LoginTarget): Promise
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message === "Login cancelled") return; // silent
-		ctx.renderer.error(`imp: ${target.name} login failed — ${message}`);
+		ctx.renderer.error(`ink: ${target.name} login failed — ${message}`);
 		return;
 	}
 	// Success tail — restore-then-status ordering (pi 5837→5838): the
@@ -1045,8 +1045,8 @@ function renderNavigateSuccess(
 			: result.summary === "empty"
 				? "nothing was written beyond that point to summarize"
 				: result.summary === "disabled"
-					? "summary off — IMP_BRANCH_SUMMARY=0"
-					: "summarizer failed — see imp-log; switched without it";
+					? "summary off — INK_BRANCH_SUMMARY=0"
+					: "summarizer failed — see ink-log; switched without it";
 	ctx.renderer.note(`▪ navigated — ${result.messages} messages here (${tail})`);
 }
 
@@ -1096,13 +1096,13 @@ export const COMMANDS: readonly SlashCommand[] = [
 			if (/^[1-9]\d*$/.test(trimmed)) {
 				const target = points[Number(trimmed) - 1];
 				if (target === undefined) {
-					ctx.renderer.error(`imp: /fork ${trimmed} — the list runs #1–#${points.length}`);
+					ctx.renderer.error(`ink: /fork ${trimmed} — the list runs #1–#${points.length}`);
 					return "handled";
 				}
 				entryId = target.id;
 			} else if (trimmed !== "") {
 				ctx.renderer.error(
-					"imp: /fork takes no text — /fork opens the picker, /fork <n> forks before message #n",
+					"ink: /fork takes no text — /fork opens the picker, /fork <n> forks before message #n",
 				);
 				return "handled";
 			} else if (ctx.select !== undefined) {
@@ -1179,17 +1179,17 @@ export const COMMANDS: readonly SlashCommand[] = [
 			let viaPicker = false; // the TUI navigator already asked; the numbered path never asks
 			if (/^0\d*$/.test(trimmed)) {
 				// numeric but invalid (zero / leading zero) — a precise message
-				ctx.renderer.error(`imp: /tree ${trimmed} — row numbers run #1–#${rows.length}`);
+				ctx.renderer.error(`ink: /tree ${trimmed} — row numbers run #1–#${rows.length}`);
 				return "handled";
 			} else if (/^[1-9]\d*$/.test(trimmed)) {
 				const target = rows[Number(trimmed) - 1];
 				if (target === undefined) {
-					ctx.renderer.error(`imp: /tree ${trimmed} — the tree runs #1–#${rows.length}`);
+					ctx.renderer.error(`ink: /tree ${trimmed} — the tree runs #1–#${rows.length}`);
 					return "handled";
 				}
 				targetId = target.entryId;
 			} else if (trimmed !== "") {
-				ctx.renderer.error("imp: /tree takes no text — /tree opens the navigator, /tree <n> goes to row #n");
+				ctx.renderer.error("ink: /tree takes no text — /tree opens the navigator, /tree <n> goes to row #n");
 				return "handled";
 			} else if (ctx.treeSelect !== undefined) {
 				// The pick → ask → navigate loop. Batch A P2: Esc at the ask
@@ -1223,14 +1223,14 @@ export const COMMANDS: readonly SlashCommand[] = [
 						// happened — the selector stays open either way.
 						onLabelChange: (entryId, label) => {
 							if (session.getEntry(entryId) === undefined) {
-								ctx.renderer.error(`imp: cannot label ${entryId} — entry not found`);
+								ctx.renderer.error(`ink: cannot label ${entryId} — entry not found`);
 								return;
 							}
 							try {
 								session.appendLabelChange(entryId, label);
 							} catch (err) {
 								ctx.renderer.error(
-									`imp: label write failed — ${err instanceof Error ? err.message : String(err)}`,
+									`ink: label write failed — ${err instanceof Error ? err.message : String(err)}`,
 								);
 							}
 						},
@@ -1238,7 +1238,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 						// seam like every other clipboard write in commands.
 						onCopy: (text) => {
 							if (text === undefined) {
-								ctx.renderer.error("imp: selected entry has no text to copy");
+								ctx.renderer.error("ink: selected entry has no text to copy");
 								return;
 							}
 							const write = ctx.copyText ?? ((value: string) => copyToClipboard(value));
@@ -1246,7 +1246,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 								.then(() => ctx.renderer.status("Copied selected entry to clipboard"))
 								.catch((err) =>
 									ctx.renderer.error(
-										`imp: copy failed — ${err instanceof Error ? err.message : String(err)}`,
+										`ink: copy failed — ${err instanceof Error ? err.message : String(err)}`,
 									),
 								);
 						},
@@ -1266,7 +1266,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					}
 					targetId = picked;
 					let backToTree = false;
-					if (!(skipPrompt || ctx.select === undefined || process.env.IMP_BRANCH_SUMMARY === "0")) {
+					if (!(skipPrompt || ctx.select === undefined || process.env.INK_BRANCH_SUMMARY === "0")) {
 						for (;;) {
 							const choice = await ctx.select({
 								title: "Summarize the branch you are leaving into the new one?",
@@ -1351,9 +1351,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 				return "handled";
 			}
 
-			// /tree <n> (both shells) and IMP_BRANCH_SUMMARY=0 keep the old
+			// /tree <n> (both shells) and INK_BRANCH_SUMMARY=0 keep the old
 			// behavior — summarize when enabled, never otherwise (no ask).
-			if (targetId !== null && !viaPicker && process.env.IMP_BRANCH_SUMMARY !== "0") {
+			if (targetId !== null && !viaPicker && process.env.INK_BRANCH_SUMMARY !== "0") {
 				summarize = true;
 			}
 			// Progress feedback BEFORE the potentially 5-20s summarizer await —
@@ -1409,7 +1409,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			}
 			const hidden = sessions.length - shown.length;
 			const extra = hidden > 0 ? ` (${hidden} older hidden)` : "";
-			ctx.renderer.note(`▪ switch with /resume <id> — or restart: imp -r <id>${extra}`);
+			ctx.renderer.note(`▪ switch with /resume <id> — or restart: ink -r <id>${extra}`);
 			ctx.renderer.note("▪ use /resume (no args) to pick one");
 			return "handled";
 		},
@@ -1525,7 +1525,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const target = loginTargetFor(args);
 			if (args.trim() !== "" && target === undefined) {
 				ctx.renderer.error(
-					`imp: unknown provider "/login ${args.trim()}" — known: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`,
+					`ink: unknown provider "/login ${args.trim()}" — known: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`,
 				);
 				return "handled";
 			}
@@ -1537,7 +1537,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			if (select === undefined) {
 				// Legacy text path (readline shell has a picker-less contract).
 				ctx.renderer.writeLine(`providers: ${LOGIN_TARGETS.map((t) => t.family).join(", ")}`);
-				ctx.renderer.writeLine("sign in with: /login <provider> — the key is stored in ~/.imp/auth.json");
+				ctx.renderer.writeLine("sign in with: /login <provider> — the key is stored in ~/.ink/auth.json");
 				return "handled";
 			}
 			const rows = LOGIN_TARGETS.map((t) => ({
@@ -1556,7 +1556,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: false,
 		run: async (_args, ctx): Promise<CommandOutcome> => {
 			// pi's /logout lists ONLY stored credentials — an env-configured
-			// provider is not imp's to remove (interactive-mode.ts
+			// provider is not Ink's to remove (interactive-mode.ts
 			// getLogoutProviderOptions reads the credential store).
 			const rows: Array<{ label: string; description: string; act: () => string }> = [];
 			const codexTarget = LOGIN_TARGETS.find((t) => t.family === "openai-codex");
@@ -1579,7 +1579,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					act: () => {
 						clearApiKey(family, ctx.authStorePath);
 						ctx.refreshFooter?.(); // #fresh-install-hint (D6/F3): a lost credential may flip the footer back to the /login pointer
-						// pi's wording, adapted (imp has no models.json)
+						// pi's wording, adapted (Ink has no models.json)
 						return `Removed stored API key for ${target?.name ?? family}. Environment variables are unchanged.`;
 					},
 				});
@@ -1593,7 +1593,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			const select = ctx.select;
 			if (select === undefined) {
 				ctx.renderer.writeLine(`stored: ${rows.map((r) => r.label).join(", ")}`);
-				ctx.renderer.writeLine("remove with: edit ~/.imp/auth.json (a picker lands with the TUI shell)");
+				ctx.renderer.writeLine("remove with: edit ~/.ink/auth.json (a picker lands with the TUI shell)");
 				return "handled";
 			}
 			const index = await select({ title: "log out of a provider", items: rows });
@@ -1688,7 +1688,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					ctx.renderer.note(`▪ already in main with no uncommitted work: ${deletable.join(", ")}`);
 				}
 			} catch (err) {
-				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+				ctx.renderer.error(`ink: ${err instanceof Error ? err.message : String(err)}`);
 			}
 			return "handled";
 		},
@@ -1703,7 +1703,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 			if (args.startsWith("remove ")) {
 				const target = args.slice("remove ".length).trim();
 				if (target === "") {
-					ctx.renderer.error("imp: /trust remove <dir> — which record?");
+					ctx.renderer.error("ink: /trust remove <dir> — which record?");
 					return "handled";
 				}
 				try {
@@ -1716,7 +1716,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 							: `▪ no trust record for ${shown} (paths are absolute; "~" is not expanded)`,
 					);
 				} catch (err) {
-					ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+					ctx.renderer.error(`ink: ${err instanceof Error ? err.message : String(err)}`);
 				}
 				return "handled";
 			}
@@ -1729,7 +1729,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 				const entry = nearestTrustEntry(data, cwd);
 				const status =
 					entry === null
-						? "undecided — project .imp/ resources are skipped until trusted (imp --trust, or the startup ask)"
+						? "undecided — project .ink/ resources are skipped until trusted (ink --trust, or the startup ask)"
 						: entry.trusted
 							? `trusted (decided at ${entry.path})`
 							: `not trusted (decided at ${entry.path})`;
@@ -1744,7 +1744,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					ctx.renderer.note("▪ /trust remove <dir> forgets a record");
 				}
 			} catch (err) {
-				ctx.renderer.error(`imp: ${err instanceof Error ? err.message : String(err)}`);
+				ctx.renderer.error(`ink: ${err instanceof Error ? err.message : String(err)}`);
 			}
 			return "handled";
 		},
@@ -1821,9 +1821,9 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: true, // read-only status, like /status (M18 §6)
 		run: (_args, ctx) => {
 			// Mirror createMcpSetup's gate order: environment first, then settings.
-			if (process.env.IMP_MCP === "0") {
+			if (process.env.INK_MCP === "0") {
 				ctx.renderer.note(
-					"▪ mcp disabled via IMP_MCP=0 (environment) — unset it or set IMP_MCP=1 (next session)",
+					"▪ mcp disabled via INK_MCP=0 (environment) — unset it or set INK_MCP=1 (next session)",
 				);
 				return "handled";
 			}
@@ -1890,7 +1890,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 					await write(text);
 					ctx.renderer.status("Copied last agent message to clipboard");
 				} catch (error) {
-					ctx.renderer.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
+					ctx.renderer.error(`ink: ${error instanceof Error ? error.message : String(error)}`);
 				}
 				return "handled";
 			}
@@ -1907,7 +1907,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 		run: (args, ctx): CommandOutcome => {
 			const session = ctx.runner.session;
 			if (!session) {
-				ctx.renderer.error("imp: /name needs a session — restart without --no-session");
+				ctx.renderer.error("ink: /name needs a session — restart without --no-session");
 				return "handled";
 			}
 			const trimmed = args.trim();
@@ -1945,7 +1945,7 @@ export const COMMANDS: readonly SlashCommand[] = [
 		allowedDuringRun: false,
 		run: async (_args, ctx): Promise<CommandOutcome> => {
 			if (!ctx.runner.session) {
-				ctx.renderer.error("imp: /compact needs a session — restart without --no-session");
+				ctx.renderer.error("ink: /compact needs a session — restart without --no-session");
 				return "handled";
 			}
 			ctx.renderer.note("▪ compacting…");
@@ -1982,7 +1982,7 @@ export async function dispatchCommand(
 		extras.find((e) => e.command.name === parsed.name)?.command;
 	if (command === undefined) {
 		// Teaching-style error (project convention); never sent to the model.
-		ctx.renderer.error(`imp: unknown command "/${parsed.name}"`);
+		ctx.renderer.error(`ink: unknown command "/${parsed.name}"`);
 		const known = [...COMMANDS, ...extras]
 			.map(entryName)
 			.map((name) => `/${name}`)
@@ -2001,7 +2001,7 @@ export async function dispatchCommand(
 	}
 	if (!command.allowedDuringRun && ctx.isActive()) {
 		ctx.renderer.error(
-			`imp: /${command.name} waits for the running turn — press Ctrl+C to abort it first, then /${command.name}`,
+			`ink: /${command.name} waits for the running turn — press Ctrl+C to abort it first, then /${command.name}`,
 		);
 		return "handled";
 	}

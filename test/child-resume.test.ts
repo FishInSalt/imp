@@ -843,7 +843,7 @@ describe("SA-07 resume", () => {
 		if (repaired?.type !== "message" || repaired.message.role !== "toolResult")
 			throw new Error("no repair entry");
 		expect(repaired.message.results[0]?.isError).toBe(true);
-		expect(repaired.message.results[0]?.content).toContain("[imp] this tool call was interrupted");
+		expect(repaired.message.results[0]?.content).toContain("[ink] this tool call was interrupted");
 		// The repaired pair precedes the new instruction in the request.
 		const serialized = JSON.stringify(sink[0]?.messages);
 		expect(serialized).toContain("interrupted before a result was recorded");

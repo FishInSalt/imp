@@ -1,6 +1,6 @@
 /**
  * ls tool — M16, ported from pi `coding-agent/src/core/tools/ls.ts`
- * (slimmed: no LsOperations seam — imp has no remote delegates yet).
+ * (slimmed: no LsOperations seam — Ink has no remote delegates yet).
  *
  * Answers "what is in THIS directory": entries sorted case-insensitively
  * (pi parity), dotfiles included, directories suffixed `/`. Output is

@@ -463,7 +463,7 @@ export class Renderer {
 	}
 
 	/** The trace bypasses the markdown pipeline (pi styles it as markdown;
-	 *  imp's answer stream owns that pipeline — the trace stays plain
+	 *  Ink's answer stream owns that pipeline — the trace stays plain
 	 *  prose), dim + italic per pi's thinkingText theme.
 	 *
 	 *  Accepted deviation (review P2, #thinking-stream): streaming wraps

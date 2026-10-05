@@ -12,7 +12,7 @@ import { TtyConfirm } from "../src/repl/repl.js";
 import { makeRenderer } from "./helpers/fakes.js";
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {

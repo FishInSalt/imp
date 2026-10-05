@@ -15,7 +15,7 @@ import { modelSupportsVision } from "./vision.js";
  * OpenAI Responses wire protocol as spoken by the Codex backend
  * (chatgpt.com/backend-api/codex/responses) — the ChatGPT-subscription
  * credential path. Auth comes from the device-code OAuth store
- * (~/.imp/auth.json, `imp login`); the chatgpt-account-id header is derived
+ * (~/.ink/auth.json, `ink login`); the chatgpt-account-id header is derived
  * from the access token's JWT claim.
  *
  * Wire shape differs from both prior protocols in the ways that matter:
@@ -232,7 +232,7 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 				const text = await response.text().catch(() => "");
 				const hint =
 					response.status === 401
-						? " — run: imp login"
+						? " — run: ink login"
 						: response.status === 404
 							? " — check the model id (a Codex/ChatGPT model name, e.g. openai-codex/gpt-5.5)"
 							: "";

@@ -13,7 +13,7 @@
  *  - protocol mappings in each provider (budget / adaptive+effort /
  *    reasoning_effort / zai thinking object).
  *
- * imp mirrors this with a static per-model table below. Family defaults
+ * Ink mirrors this with a static per-model table below. Family defaults
  * cover unknown/dynamically discovered ids conservatively (effort styles:
  * off..high; binary styles: off/high).
  */
@@ -187,7 +187,7 @@ const MODEL_RULES: ReadonlyArray<{ provider: string; prefix: string; meta: Model
 	{ provider: "openai", prefix: "glm-", meta: { style: "glm-openai" } }, // 4.x / 5-turbo: binary (pi.dev live)
 	// #deepseek-provider offline floor (pi.dev live catalog 2026-09-25;
 	// v4-pro also carries supportsMidConvoSystemMessages — deliberately not
-	// adopted, imp consumes that flag nowhere)
+	// adopted, Ink consumes that flag nowhere)
 	{
 		provider: "deepseek",
 		prefix: "deepseek-flash",

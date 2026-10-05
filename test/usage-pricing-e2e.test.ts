@@ -20,11 +20,11 @@ let base: string;
 
 beforeEach(() => {
 	base = mkdtempSync(path.join(tmpdir(), "imp-pricing-e2e-"));
-	vi.stubEnv("IMP_LOG", "0");
-	vi.stubEnv("IMP_AUTOCOMPACT", "0"); // compact manually — exactly one summarizer call
-	vi.stubEnv("IMP_CONTEXT_WINDOW", "200000");
-	vi.stubEnv("IMP_KEEP_RECENT", "1");
-	vi.stubEnv("IMP_CATALOG_PATH", path.join(base, "catalog.json"));
+	vi.stubEnv("INK_LOG", "0");
+	vi.stubEnv("INK_AUTOCOMPACT", "0"); // compact manually — exactly one summarizer call
+	vi.stubEnv("INK_CONTEXT_WINDOW", "200000");
+	vi.stubEnv("INK_KEEP_RECENT", "1");
+	vi.stubEnv("INK_CATALOG_PATH", path.join(base, "catalog.json"));
 	writeFileSync(
 		path.join(base, "catalog.json"),
 		JSON.stringify({

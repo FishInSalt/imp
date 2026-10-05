@@ -29,7 +29,7 @@ export function defaultChildTimeoutMs(): number | undefined {
  *  tool_end wait (a fast call reports behind at most cap-1 slow siblings). */
 export const MAX_CONCURRENT_TASKS = 5;
 
-/** imp's built-in tool names (M18: moved here from extensions/registry so the
+/** Ink's built-in tool names (M18: moved here from extensions/registry so the
  *  MCP bridge shares the exact same hand list — the M16 P1 lesson was this
  *  list drifting between checkers, letting an extension register `ls` over
  *  the builtin. Order preserved from the registry original — error strings

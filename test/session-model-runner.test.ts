@@ -60,11 +60,11 @@ beforeEach(() => {
 	// settings/auth/catalog files and an empty home for deterministic defaults.
 	for (const [key, value] of Object.entries({
 		HOME: root,
-		IMP_SETTINGS_PATH: path.join(root, "settings.json"),
-		IMP_AUTH_PATH: path.join(root, "auth.json"),
-		IMP_CATALOG_PATH: path.join(root, "catalog.json"),
-		IMP_LOG: "0",
-		IMP_BRANCH_SUMMARY: "0",
+		INK_SETTINGS_PATH: path.join(root, "settings.json"),
+		INK_AUTH_PATH: path.join(root, "auth.json"),
+		INK_CATALOG_PATH: path.join(root, "catalog.json"),
+		INK_LOG: "0",
+		INK_BRANCH_SUMMARY: "0",
 	}))
 		vi.stubEnv(key, value);
 	for (const key of [
@@ -72,8 +72,8 @@ beforeEach(() => {
 		"ANTHROPIC_AUTH_TOKEN",
 		"OPENAI_API_KEY",
 		"ZAI_API_KEY",
-		"IMP_MODEL",
-		"IMP_THINKING",
+		"INK_MODEL",
+		"INK_THINKING",
 	])
 		vi.stubEnv(key, undefined);
 	vi.stubGlobal(

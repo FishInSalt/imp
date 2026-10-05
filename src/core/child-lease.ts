@@ -552,7 +552,7 @@ export function acquireChildLease(
 								timer = undefined;
 							}
 							process.stderr.write(
-								`imp: child lease anomaly at ${ownPath} — the candidate no longer belongs to this attempt\n`,
+								`ink: child lease anomaly at ${ownPath} — the candidate no longer belongs to this attempt\n`,
 							);
 							onAnomaly();
 							return;
@@ -575,7 +575,7 @@ export function acquireChildLease(
 					try {
 						unlinkSync(ownPath); // unique name: it is ours or gone
 					} catch {
-						process.stderr.write(`imp: could not remove the child lease candidate ${ownPath}\n`);
+						process.stderr.write(`ink: could not remove the child lease candidate ${ownPath}\n`);
 					}
 					try {
 						unlinkSync(path.join(leaseDir, stagingName));

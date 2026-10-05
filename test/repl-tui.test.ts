@@ -176,7 +176,7 @@ function stripAnsi(text: string): string {
 /** Settle TUI renders: nextTick + the 16ms minimum render interval. */
 /** #fresh-install-hint: every env var familyConfigured reads — scrubbed
  *  by the footer-behavior tests so the live probe answers from a clean
- *  world (plus a redirected IMP_AUTH_PATH, set per-test). */
+ *  world (plus a redirected INK_AUTH_PATH, set per-test). */
 const CREDENTIAL_ENV_KEYS = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
@@ -184,7 +184,7 @@ const CREDENTIAL_ENV_KEYS = [
 	"ZAI_API_KEY",
 	"DEEPSEEK_API_KEY",
 	"MOONSHOT_API_KEY",
-	"IMP_MODEL",
+	"INK_MODEL",
 ] as const;
 
 async function settle(extraMs = 30): Promise<void> {
@@ -682,10 +682,10 @@ describe("TuiShell", () => {
 		const { terminal, transcript, shell } = makeShell();
 		shell.start();
 		await settle(0);
-		transcript.feed("▪ session abc — saved, resume with: imp -r abc\n");
+		transcript.feed("▪ session abc — saved, resume with: ink -r abc\n");
 		shell.close(); // same-tick close, exactly like gracefulExit → finish()
 		await settle(80); // deferred stop must let the pending paint land first
-		expect(terminal.frameSince(0)).toContain("resume with: imp -r abc");
+		expect(terminal.frameSince(0)).toContain("resume with: ink -r abc");
 	});
 
 	it("SIGINT (kill -INT) and stdin-end handlers are registered on start", async () => {
@@ -1078,11 +1078,11 @@ describe("TuiShell selector", () => {
 // ── resolveShell: the documented escape hatch ────────────────────────────
 
 describe("resolveShell", () => {
-	it("defaults to the tui shell; IMP_REPL=legacy selects the readline path", async () => {
+	it("defaults to the tui shell; INK_REPL=legacy selects the readline path", async () => {
 		const { resolveShell: rs } = await import("../src/tui.js");
-		vi.stubEnv("IMP_REPL", "legacy");
+		vi.stubEnv("INK_REPL", "legacy");
 		expect(rs()).toBe("legacy");
-		vi.stubEnv("IMP_REPL", "");
+		vi.stubEnv("INK_REPL", "");
 		expect(rs()).toBe("tui");
 		vi.unstubAllEnvs();
 	});
@@ -2117,7 +2117,7 @@ describe("runRepl with shell:tui", () => {
 			noSession?: boolean;
 			markdown?: boolean;
 			/** #tool-name-colors: real .mjs fixtures loaded by the real loader,
-			 *  written to <cwd>/.imp/extensions before the runner starts. */
+			 *  written to <cwd>/.ink/extensions before the runner starts. */
 			extensionFiles?: Record<string, string>;
 			/** #tui-tool-elapsed: deterministic sink clock for duration pins. */
 			clock?: () => number;
@@ -2280,11 +2280,11 @@ describe("runRepl with shell:tui", () => {
 		// #model-discovery hermeticity: pin "no family configured" so the list
 		// is the classic seed set, independent of the host's login/keys.
 		const saved: Record<string, string | undefined> = {};
-		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "INK_AUTH_PATH"]) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 		try {
 			const env = await startTuiRepl([reply("ok")]);
 			await settle();
@@ -2327,12 +2327,12 @@ describe("runRepl with shell:tui", () => {
 		// must NOT mask the gating). claude-sonnet-4-5 HAS a thinking meta, so
 		// a missing think segment is the F7 pin (a reverted `usable &&` gate
 		// would render `no model — /login think:medium` and fail this).
-		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
+		const saved: Record<string, string | undefined> = { INK_AUTH_PATH: process.env.INK_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
 		try {
 			// NO provider injection — the runner resolves a REAL anthropic
 			// provider; no turn is ever submitted, so nothing reaches the
@@ -2355,12 +2355,12 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("#fresh-install-hint test 11: /model to an unconfigured family mid-session flips the footer back", async () => {
-		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
+		const saved: Record<string, string | undefined> = { INK_AUTH_PATH: process.env.INK_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
 		try {
 			// start USABLE (env key on) so the initial footer shows the model;
 			// then drop the key and switch family — the live probe must flip it.
@@ -2385,12 +2385,12 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("#fresh-install-hint: terminal title — startup default keyless shows the pointer; an explicit /model pick shows the id", async () => {
-		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
+		const saved: Record<string, string | undefined> = { INK_AUTH_PATH: process.env.INK_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
 		try {
 			const env = await startTuiRepl([], { model: "claude-sonnet-4-5", realProvider: true });
 			await settle();
@@ -2398,13 +2398,13 @@ describe("runRepl with shell:tui", () => {
 			// stream — shell.setTitle writes them directly) mirrors the /login
 			// pointer (F5) — never the dead id.
 			const bytes = () => env.terminal.writes.join("");
-			expect(bytes()).toContain("\x1b]2;imp — no model — /login\x07");
-			expect(bytes()).not.toContain("\x1b]2;imp — claude-sonnet-4-5\x07");
+			expect(bytes()).toContain("\x1b]2;Ink — no model — /login\x07");
+			expect(bytes()).not.toContain("\x1b]2;Ink — claude-sonnet-4-5\x07");
 			// An explicit /model pick is the user's choice: the id shows even
 			// though zai holds no credential (modelSelectedExplicitly).
 			env.terminal.data("/model glm-4.6\r");
 			await settle();
-			expect(bytes()).toContain("\x1b]2;imp — glm-4.6\x07");
+			expect(bytes()).toContain("\x1b]2;Ink — glm-4.6\x07");
 			env.terminal.data("/exit\r");
 			await env.repl;
 		} finally {
@@ -2416,12 +2416,12 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("#fresh-install-hint test 10: /login success repaints the footer (credential change flips the segment)", async () => {
-		const saved: Record<string, string | undefined> = { IMP_AUTH_PATH: process.env.IMP_AUTH_PATH };
+		const saved: Record<string, string | undefined> = { INK_AUTH_PATH: process.env.INK_AUTH_PATH };
 		for (const key of CREDENTIAL_ENV_KEYS) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
 		try {
 			const env = await startTuiRepl([], { model: "deepseek/deepseek-v4-pro", realProvider: true });
 			await settle();
@@ -2447,11 +2447,11 @@ describe("runRepl with shell:tui", () => {
 	it("/model selector: Esc cancels — no switch, no note, editor keeps keys", async () => {
 		// #model-discovery hermeticity (same pin as the Down+Enter test)
 		const saved: Record<string, string | undefined> = {};
-		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "INK_AUTH_PATH"]) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 		try {
 			const env = await startTuiRepl([reply("ok")]);
 			await settle();
@@ -2479,11 +2479,11 @@ describe("runRepl with shell:tui", () => {
 	it("Ctrl+L opens the model picker (pi's app.model.select); held-key repeats queue no second picker", async () => {
 		// #model-discovery hermeticity (same pin as the /model tests above)
 		const saved: Record<string, string | undefined> = {};
-		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IMP_AUTH_PATH"]) {
+		for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "INK_AUTH_PATH"]) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.IMP_AUTH_PATH = "/nonexistent-imp-auth.json";
+		process.env.INK_AUTH_PATH = "/nonexistent-imp-auth.json";
 		try {
 			const env = await startTuiRepl([reply("first"), reply("second")]);
 			await settle();
@@ -2698,7 +2698,7 @@ describe("runRepl with shell:tui", () => {
 		await expect(env.repl).resolves.toBe(0);
 	});
 
-	it("autocomplete is live in production wiring: imp's COMMANDS feed the panel, Enter completes and runs /help", async () => {
+	it("autocomplete is live in production wiring: Ink's COMMANDS feed the panel, Enter completes and runs /help", async () => {
 		const env = await startTuiRepl([reply("ok")]);
 		await settle();
 		env.terminal.data("/he"); // filters COMMANDS: help matches, model does not
@@ -3791,9 +3791,9 @@ describe("runRepl with shell:tui", () => {
 
 	it("a subagent paints a tree row held on screen; it leaves with the task", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
-		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			path.join(agentsHome, ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -3838,9 +3838,9 @@ describe("runRepl with shell:tui", () => {
 
 	it("the task slot timer never resets when the provisional row is replaced (#call-closing-status A1.2)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
-		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			path.join(agentsHome, ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -4031,9 +4031,9 @@ describe("runRepl with shell:tui", () => {
 
 	it("the task call takes its hue from the shipped example theme (#tool-name-colors A1)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
-		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			path.join(agentsHome, ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -4066,9 +4066,9 @@ describe("runRepl with shell:tui", () => {
 
 	it("child edit results never reach the Renderer or fold — zero ⎿, the one ▸ is the task result (P2#3)", async () => {
 		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
-		await mkdir(path.join(agentsHome, ".imp", "agents"), { recursive: true });
+		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
-			path.join(agentsHome, ".imp", "agents", "scout.md"),
+			path.join(agentsHome, ".ink", "agents", "scout.md"),
 			"---\nname: scout\ndescription: test scout\n---\nYou are a test scout.\n",
 			"utf-8",
 		);
@@ -5075,7 +5075,7 @@ describe("runRepl with shell:tui", () => {
 				delete process.env[key];
 			}
 			const authPath = path.join(await mkdtemp(path.join(tmpdir(), "imp-login-")), "auth.json");
-			process.env.IMP_AUTH_PATH = authPath;
+			process.env.INK_AUTH_PATH = authPath;
 			try {
 				const env = await startTuiRepl([reply("ok")]);
 				await settle();
@@ -6124,7 +6124,7 @@ describe("TuiShell ctrl+v image paste", () => {
 		terminal.data("\x16"); // ctrl+v through the real stdin splitter
 		await new Promise((r) => setTimeout(r, 20)); // async handler settles
 		const text = shell.getText() ?? "";
-		expect(text).toContain("imp-clipboard-");
+		expect(text).toContain("ink-clipboard-");
 		expect(text.endsWith(".png")).toBe(true);
 		shell.close();
 	});

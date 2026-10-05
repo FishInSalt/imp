@@ -24,7 +24,7 @@ import type {
 	ToolEndEvent,
 } from "./types.js";
 
-/** imp's own slash commands — reserved (design §9). Derived from COMMANDS
+/** Ink's own slash commands — reserved (design §9). Derived from COMMANDS
  *  (M15 review P2-6): the hand list had drifted to a subset, letting
  *  extensions register duplicate /settings, /think, /status, /trust rows. */
 const BUILTIN_COMMAND_NAMES: readonly string[] = COMMANDS.map((command) => command.name);
@@ -86,7 +86,7 @@ interface OpenSection {
 }
 
 export interface ExtensionRegistryOptions {
-	/** Teaching-style diagnostic sink (`imp: …` lines, design §12). Default: discard. */
+	/** Teaching-style diagnostic sink (`ink: …` lines, design §12). Default: discard. */
 	report?: (line: string) => void;
 	/** Interactive confirm (the REPL's tty prompt). Absent — print mode, plain
 	 *  tests — api.confirm resolves false after one stderr teaching line and
@@ -102,7 +102,7 @@ export interface ExtensionRegistryOptions {
 
 /** The one stderr line written when api.confirm runs without an interactive host. */
 export const NO_CONFIRM_LINE =
-	"imp: extension asked for confirmation but no interactive prompt is available — declining\n";
+	"ink: extension asked for confirmation but no interactive prompt is available — declining\n";
 
 function errorText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -257,33 +257,33 @@ export class ExtensionRegistry {
 		if (section === null) return; // post-load attempts are reported by the api layer
 		if (typeof tool !== "object" || tool === null) {
 			this.report(
-				`imp: extension ${section.name} could not register tool — expected a tool object, got ${typeof tool}`,
+				`ink: extension ${section.name} could not register tool — expected a tool object, got ${typeof tool}`,
 			);
 			return;
 		}
 		const name = typeof tool.name === "string" ? tool.name : String(tool.name);
 		if (typeof tool.name !== "string" || !NAME_PATTERN.test(name)) {
 			this.report(
-				`imp: extension ${section.name} could not register tool "${name}" — tool names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "${name}")`,
+				`ink: extension ${section.name} could not register tool "${name}" — tool names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "${name}")`,
 			);
 			return;
 		}
 		if (BUILTIN_TOOL_NAMES.includes(name)) {
 			this.report(
-				`imp: extension ${section.name} could not register tool "${name}" — reserved by imp (built-in tools: ${BUILTIN_TOOL_NAMES.join(" ")})`,
+				`ink: extension ${section.name} could not register tool "${name}" — reserved by Ink (built-in tools: ${BUILTIN_TOOL_NAMES.join(" ")})`,
 			);
 			return;
 		}
 		const earlier = this.conflictOwner(this.toolOwners, section.tools, name, (t) => t.name);
 		if (earlier !== undefined) {
 			this.report(
-				`imp: extension ${section.name} could not register tool "${name}" — already registered by ${earlier}`,
+				`ink: extension ${section.name} could not register tool "${name}" — already registered by ${earlier}`,
 			);
 			return;
 		}
 		if (typeof tool.description !== "string" || tool.description.trim() === "") {
 			this.report(
-				`imp: extension ${section.name} could not register tool "${name}" — description must be a non-empty string`,
+				`ink: extension ${section.name} could not register tool "${name}" — description must be a non-empty string`,
 			);
 			return;
 		}
@@ -295,7 +295,7 @@ export class ExtensionRegistry {
 			Value.Check(tool.parameters, {});
 		} catch (err) {
 			this.report(
-				`imp: extension ${section.name} could not register tool "${name}" — parameters schema is malformed: ${firstLine(errorText(err), 160)}`,
+				`ink: extension ${section.name} could not register tool "${name}" — parameters schema is malformed: ${firstLine(errorText(err), 160)}`,
 			);
 			return;
 		}
@@ -307,27 +307,27 @@ export class ExtensionRegistry {
 		if (section === null) return;
 		if (typeof command !== "object" || command === null) {
 			this.report(
-				`imp: extension ${section.name} could not register command — expected a command object, got ${typeof command}`,
+				`ink: extension ${section.name} could not register command — expected a command object, got ${typeof command}`,
 			);
 			return;
 		}
 		const name = typeof command.name === "string" ? command.name : String(command.name);
 		if (typeof command.name !== "string" || !NAME_PATTERN.test(name)) {
 			this.report(
-				`imp: extension ${section.name} could not register command "${name}" — command names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "${name}")`,
+				`ink: extension ${section.name} could not register command "${name}" — command names must match /^[a-z][a-z0-9_-]{0,63}$/ (got "${name}")`,
 			);
 			return;
 		}
 		if (BUILTIN_COMMAND_NAMES.includes(name)) {
 			this.report(
-				`imp: extension ${section.name} could not register command "${name}" — reserved by imp (known: ${BUILTIN_COMMAND_NAMES.join(" ")})`,
+				`ink: extension ${section.name} could not register command "${name}" — reserved by Ink (known: ${BUILTIN_COMMAND_NAMES.join(" ")})`,
 			);
 			return;
 		}
 		const earlier = this.conflictOwner(this.commandOwners, section.commands, name, (c) => c.command.name);
 		if (earlier !== undefined) {
 			this.report(
-				`imp: extension ${section.name} could not register command "${name}" — already registered by ${earlier}`,
+				`ink: extension ${section.name} could not register command "${name}" — already registered by ${earlier}`,
 			);
 			return;
 		}
@@ -340,20 +340,20 @@ export class ExtensionRegistry {
 		const label = typeof id === "string" ? id : String(id);
 		if (typeof id !== "string" || id === "") {
 			this.report(
-				`imp: extension ${section.name} could not register context "${label}" — id must be a non-empty string`,
+				`ink: extension ${section.name} could not register context "${label}" — id must be a non-empty string`,
 			);
 			return;
 		}
 		if (typeof text !== "string") {
 			this.report(
-				`imp: extension ${section.name} could not register context "${label}" — text must be a string, got ${typeof text}`,
+				`ink: extension ${section.name} could not register context "${label}" — text must be a string, got ${typeof text}`,
 			);
 			return;
 		}
 		const earlier = this.conflictOwner(this.contextOwners, section.contexts, id, (c) => c.id);
 		if (earlier !== undefined) {
 			this.report(
-				`imp: extension ${section.name} could not register context "${label}" — already registered by ${earlier}`,
+				`ink: extension ${section.name} could not register context "${label}" — already registered by ${earlier}`,
 			);
 			return;
 		}
@@ -391,13 +391,13 @@ export class ExtensionRegistry {
 			typeof names === "string" ? [names] : Array.isArray(names) ? names : null;
 		if (list === null) {
 			this.report(
-				`imp: extension ${section.name} could not ${verb} — expected a name or an array of names, got ${typeof names}`,
+				`ink: extension ${section.name} could not ${verb} — expected a name or an array of names, got ${typeof names}`,
 			);
 			return;
 		}
 		if (!isToolColor(color)) {
 			this.report(
-				`imp: extension ${section.name} could not ${verb} — unknown color (expected one of: ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got "${firstLine(String(color), 160)}")`,
+				`ink: extension ${section.name} could not ${verb} — unknown color (expected one of: ${TOOL_COLOR_NAMES.join(" ")}, ansi256:N (0-255), or #rrggbb, got "${firstLine(String(color), 160)}")`,
 			);
 			return;
 		}
@@ -405,7 +405,7 @@ export class ExtensionRegistry {
 			if (typeof entry !== "string" || (entry !== "*" && !NAME_PATTERN.test(entry))) {
 				const shown = firstLine(String(entry), 160);
 				this.report(
-					`imp: extension ${section.name} could not ${verb} for "${shown}" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "${shown}")`,
+					`ink: extension ${section.name} could not ${verb} for "${shown}" — names must match /^[a-z][a-z0-9_-]{0,63}$/ or be "*" (got "${shown}")`,
 				);
 				return;
 			}
@@ -420,7 +420,7 @@ export class ExtensionRegistry {
 				(seen.has(name) ? section.name : undefined);
 			if (owner !== undefined) {
 				this.report(
-					`imp: extension ${section.name} could not ${verb} for "${name}" — already ${
+					`ink: extension ${section.name} could not ${verb} for "${name}" — already ${
 						suggest ? "suggested" : "registered"
 					} by ${owner}`,
 				);
@@ -450,13 +450,13 @@ export class ExtensionRegistry {
 		if (section === null) return;
 		if (!KNOWN_EVENTS.includes(event as ExtensionEventName)) {
 			this.report(
-				`imp: extension ${section.name} could not subscribe to "${String(event)}" — known events: ${KNOWN_EVENTS.join(" ")}`,
+				`ink: extension ${section.name} could not subscribe to "${String(event)}" — known events: ${KNOWN_EVENTS.join(" ")}`,
 			);
 			return;
 		}
 		if (typeof handler !== "function") {
 			this.report(
-				`imp: extension ${section.name} could not subscribe to ${event} — handler must be a function, got ${typeof handler}`,
+				`ink: extension ${section.name} could not subscribe to ${event} — handler must be a function, got ${typeof handler}`,
 			);
 			return;
 		}
@@ -496,7 +496,7 @@ export class ExtensionRegistry {
 		try {
 			return await this.confirmHandler(message, detail, options, source);
 		} catch (err) {
-			this.report(`imp: extension confirm handler error — ${firstLine(errorText(err), 160)}`);
+			this.report(`ink: extension confirm handler error — ${firstLine(errorText(err), 160)}`);
 			return false;
 		}
 	}
@@ -544,11 +544,11 @@ export class ExtensionRegistry {
 	 *  is one teaching-style diagnostic, never a throw into the host. */
 	setExtensionStatus(bucket: string, key: string, text: string | undefined): void {
 		if (typeof key !== "string" || key.trim() === "") {
-			this.report(`imp: extension ${bucket} status dropped — key must be a non-empty string`);
+			this.report(`ink: extension ${bucket} status dropped — key must be a non-empty string`);
 			return;
 		}
 		if (text !== undefined && typeof text !== "string") {
-			this.report(`imp: extension ${bucket} status dropped — text must be a string or undefined`);
+			this.report(`ink: extension ${bucket} status dropped — text must be a string or undefined`);
 			return;
 		}
 		if (text === undefined) {
@@ -606,7 +606,7 @@ export class ExtensionRegistry {
 		try {
 			this.statusSink(this.composeStatusLine());
 		} catch (err) {
-			this.report(`imp: extension status sink error — ${firstLine(errorText(err), 160)}`);
+			this.report(`ink: extension status sink error — ${firstLine(errorText(err), 160)}`);
 		}
 	}
 
@@ -626,7 +626,7 @@ export class ExtensionRegistry {
 
 	private reportHandlerError(stored: StoredHandler, err: unknown): void {
 		this.report(
-			`imp: extension ${stored.source} handler error (${stored.event}) — ${firstLine(errorText(err), 160)}`,
+			`ink: extension ${stored.source} handler error (${stored.event}) — ${firstLine(errorText(err), 160)}`,
 		);
 	}
 

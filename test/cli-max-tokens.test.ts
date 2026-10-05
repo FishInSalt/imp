@@ -1,46 +1,41 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
-const run = promisify(execFile);
-const BIN = path.resolve(import.meta.dirname, "../bin/imp.js");
+import { type CliFixture, createCliFixture } from "./helpers/cli-fixture.js";
 
-/** Hermetic world: fresh HOME per case — no settings, no .env, no creds. */
-let world: string | undefined;
-function freshWorld(): string {
-	world = mkdtempSync(path.join(tmpdir(), "imp-tokens-e2e-"));
+const run = promisify(execFile);
+let world: CliFixture | undefined;
+function freshWorld(): CliFixture {
+	world = createCliFixture();
 	return world;
 }
-afterEach(() => {
-	world = undefined;
-});
+afterEach(() => world?.cleanup());
 
-describe("#output-truncation D3 CLI wiring (bin/imp.js e2e)", () => {
+describe("#output-truncation D3 CLI wiring (fixture bin/ink.js e2e)", () => {
 	it("--help advertises the catalog default with the DEFAULT_MAX_TOKENS fallback", async () => {
-		const dir = freshWorld();
-		const { stdout } = await run(process.execPath, [BIN, "--help"], {
-			cwd: dir,
-			env: { ...process.env, HOME: dir },
+		const fixture = freshWorld();
+		const { stdout } = await run(process.execPath, [fixture.bin, "--help"], {
+			cwd: fixture.cwd,
+			env: fixture.env(),
 		});
 		expect(stdout).toContain("Max output tokens per turn (default: model catalog limit; 16384 when unknown)");
 	});
 
 	it("--max-tokens rejects non-numeric and non-positive values", async () => {
-		const dir = freshWorld();
+		const fixture = freshWorld();
 		await expect(
-			run(process.execPath, [BIN, "--max-tokens", "foo", "-p", "hi"], {
-				cwd: dir,
-				env: { ...process.env, HOME: dir },
+			run(process.execPath, [fixture.bin, "--max-tokens", "foo", "-p", "hi"], {
+				cwd: fixture.cwd,
+				env: fixture.env(),
 			}),
 		).rejects.toThrow(/Invalid --max-tokens value "foo"/);
 		await expect(
-			run(process.execPath, [BIN, "--max-tokens", "0", "-p", "hi"], {
-				cwd: dir,
-				env: { ...process.env, HOME: dir },
+			run(process.execPath, [fixture.bin, "--max-tokens", "0", "-p", "hi"], {
+				cwd: fixture.cwd,
+				env: fixture.env(),
 			}),
 		).rejects.toThrow(/must be a positive integer/);
 	});

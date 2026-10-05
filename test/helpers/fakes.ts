@@ -92,13 +92,13 @@ export async function waitUntil(cond: () => boolean, maxMs = 2000): Promise<void
 }
 
 /**
- * Writes real extension fixture files into <cwd>/.imp/extensions/ (design
+ * Writes real extension fixture files into <cwd>/.ink/extensions/ (design
  * §14): keys are paths relative to that dir ("notes.mjs", "sub/index.mjs").
  * Tests load them through the real dynamic import — fresh temp dirs per case
  * keep the Node module cache out of the picture.
  */
 export async function writeExtensionFiles(cwd: string, files: Record<string, string>): Promise<string> {
-	const dir = path.join(cwd, ".imp", "extensions");
+	const dir = path.join(cwd, ".ink", "extensions");
 	for (const [name, content] of Object.entries(files)) {
 		const target = path.join(dir, name);
 		await mkdir(path.dirname(target), { recursive: true });

@@ -110,7 +110,7 @@ export function createBashTool(options: BashToolOptions = {}): Tool {
 				// print-mode teardown sweep live groups (design D1/D3).
 				const child = spawn("/bin/bash", ["-c", command], {
 					cwd,
-					env: { ...process.env, IMP: "1" },
+					env: { ...process.env, INK: "1" },
 					detached: process.platform !== "win32",
 				});
 				if (child.pid !== undefined) trackDetachedChildPid(child.pid);
@@ -209,7 +209,7 @@ async function formatOutput(
 	if (stdout.totalBytes === 0 && stderr.totalBytes === 0) sections.push("(no output)");
 	if (!interruption && exitCode !== undefined && exitCode !== 0) sections.push(`Exit code: ${exitCode}`);
 	if (out.truncated || err.truncated) {
-		const file = path.join(tmpdir(), `imp-output-${randomUUID()}.log`);
+		const file = path.join(tmpdir(), `ink-output-${randomUUID()}.log`);
 		let handle: Awaited<ReturnType<typeof open>> | undefined;
 		let owned = false;
 		try {

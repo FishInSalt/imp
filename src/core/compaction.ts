@@ -34,7 +34,7 @@ export interface CompactionSettings {
 	triggerTokens?: number;
 	/** Approximate tokens of recent messages kept verbatim. Default 20000. */
 	keepRecentTokens: number;
-	/** Model context window. Default from IMP_CONTEXT_WINDOW or 131072. */
+	/** Model context window. Default from INK_CONTEXT_WINDOW or 131072. */
 	contextWindow: number;
 }
 
@@ -45,7 +45,7 @@ export function envInt(name: string, fallback: number): number {
 	if (raw === undefined || raw === "") return fallback;
 	const n = Number(raw);
 	if (!Number.isFinite(n) || n <= 0) {
-		process.stderr.write(`imp: ignoring invalid ${name}=${JSON.stringify(raw)}, using ${fallback}\n`);
+		process.stderr.write(`ink: ignoring invalid ${name}=${JSON.stringify(raw)}, using ${fallback}\n`);
 		return fallback;
 	}
 	return n;
@@ -60,8 +60,8 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	// 131k-200k windows compact 1.6-14% earlier. See
 	// docs/compaction-thinking-retry-design.md.
 	reserveTokens: 32768,
-	keepRecentTokens: envInt("IMP_KEEP_RECENT", 20000),
-	contextWindow: envInt("IMP_CONTEXT_WINDOW", 131072),
+	keepRecentTokens: envInt("INK_KEEP_RECENT", 20000),
+	contextWindow: envInt("INK_CONTEXT_WINDOW", 131072),
 };
 
 /** The summarizer's output budget (#derived-budget, pi parity):
@@ -199,7 +199,7 @@ export function isContextOverflowError(err: unknown): boolean {
 }
 
 /** The teaching message when recovery is impossible: what happened, and the
- *  two ways out (pi's guidance, adapted to imp's commands). */
+ *  two ways out (pi's guidance, adapted to Ink's commands). */
 export function overflowGuidance(contextTokens: number, settings: CompactionSettings, cause: string): string {
 	return (
 		`context ~${formatTokens(contextTokens)} exceeds the current model's window ` +

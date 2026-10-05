@@ -1,9 +1,10 @@
 # Changelog
 
-All notable changes to imp are documented here. The format follows
+All notable changes to Ink (formerly imp) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). While imp is at
-0.x, minor releases may include behavior changes.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). While Ink is at
+0.x, minor releases may include behavior changes. Historical entries retain
+their original release identity.
 
 ## [Unreleased]
 
@@ -54,6 +55,19 @@ All notable changes to imp are documented here. The format follows
   review rounds + three amendments: `docs/tool-name-colors-design.md`.
 
 ### Changed
+
+- **Ink rename (planned `ink-agent@0.2.0`).** The product is now Ink, an
+  open-source AI assistant and agent harness for the terminal. The sole
+  executable is `ink`; there is no `imp` alias. Active configuration uses
+  `~/.ink`, project `.ink`, and `INK_*`, without automatic migration or
+  old-name fallback. `ImpSettings` becomes `InkSettings` for source consumers.
+  Ordinary session history can be preserved by a separately approved cutover;
+  historical child sessions remain inspectable but are not resumable. Saved
+  `impVersion` fields, `.imp-machine-id` leases, historical release records,
+  and actual `FishInSalt/imp` URLs are retained. Publication uses new
+  `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` gates; dispatch is always
+  dry-run. Historical publishing capability needs separately approved
+  retirement, and the first Ink publication needs its own reviewed design.
 
 - **Task live view in its own header (#task-inline-live-rows).** A running
   `task` call's live overview (the `└─ pending #N …` line with the agent and

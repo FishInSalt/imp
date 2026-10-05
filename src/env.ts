@@ -20,10 +20,10 @@ export function parseDotEnv(text: string): Record<string, string> {
 }
 
 /**
- * Load `.env` from the imp installation root (the directory containing
+ * Load `.env` from the Ink installation root (the directory containing
  * package.json — resolves correctly for both src/ via tsx and dist/ builds,
  * and regardless of the caller's cwd). Real environment variables win,
- * so `ANTHROPIC_API_KEY=... imp` still overrides the file.
+ * so `ANTHROPIC_API_KEY=... ink` still overrides the file.
  */
 export async function loadDotEnv(): Promise<void> {
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

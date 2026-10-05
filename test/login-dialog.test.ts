@@ -34,7 +34,7 @@ interface Env {
 async function startDialogRepl(commands?: Parameters<typeof runRepl>[0]["commands"]): Promise<Env> {
 	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-login-dlg-"));
 	const authPath = path.join(baseDir, "auth.json");
-	process.env.IMP_AUTH_PATH = authPath;
+	process.env.INK_AUTH_PATH = authPath;
 	for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY"]) {
 		if (process.env[key] !== undefined) delete process.env[key];
 	}
@@ -160,8 +160,8 @@ afterEach(async () => {
 		}
 	}
 	for (const s of servers.splice(0)) await new Promise<void>((r) => s.close(() => r()));
-	delete process.env.IMP_CODEX_AUTH_BASE;
-	delete process.env.IMP_AUTH_PATH;
+	delete process.env.INK_CODEX_AUTH_BASE;
+	delete process.env.INK_AUTH_PATH;
 });
 
 describe("login dialog (#login-dialog)", () => {
@@ -207,7 +207,7 @@ describe("login dialog (#login-dialog)", () => {
 
 	it("3. oauth flow: device code renders, waiting APPENDS below it, poll completes, teardown", async () => {
 		const fake = await fakeCodexAuth();
-		process.env.IMP_CODEX_AUTH_BASE = fake.baseUrl;
+		process.env.INK_CODEX_AUTH_BASE = fake.baseUrl;
 		const env = await fresh();
 		env.terminal.data("/login openai-codex\r");
 		await settle(80);
@@ -228,7 +228,7 @@ describe("login dialog (#login-dialog)", () => {
 
 	it("4. Esc during the oauth poll: silent cancel, no credential, no guard residue", async () => {
 		const fake = await fakeCodexAuth({ hang: true });
-		process.env.IMP_CODEX_AUTH_BASE = fake.baseUrl;
+		process.env.INK_CODEX_AUTH_BASE = fake.baseUrl;
 		const env = await fresh();
 		env.terminal.data("/login openai-codex\r");
 		await settle(80);
@@ -240,7 +240,7 @@ describe("login dialog (#login-dialog)", () => {
 		// follow-up /login works — the dialog mutex cleared with the dispatch
 		await fake.close();
 		const fake2 = await fakeCodexAuth();
-		process.env.IMP_CODEX_AUTH_BASE = fake2.baseUrl;
+		process.env.INK_CODEX_AUTH_BASE = fake2.baseUrl;
 		env.terminal.data("/login zai\r");
 		await settle();
 		expect(env.terminal.frameSince(0)).toContain("Enter Z.AI API key");
@@ -279,7 +279,7 @@ describe("login dialog (#login-dialog)", () => {
 		// tail was the old pin; the body grows — Ctrl+L once pushed "/logout"
 		// out of slice(-3000)) — and a command name could also come from the
 		// autocomplete panel rather than the help output.
-		expect(env.terminal.frameSince(0)).toContain("Lines typed while imp is working are queued");
+		expect(env.terminal.frameSince(0)).toContain("Lines typed while Ink is working are queued");
 	});
 
 	it("13. dialogOpen refusals: a delayed submitPrompt mid-dialog is refused (authorized exemption holds)", async () => {
@@ -459,7 +459,7 @@ describe("login dialog (#login-dialog)", () => {
 		// live endpoint — the recorded flake (real request vs OAUTH_BUDGET
 		// under parallel load).
 		const fake = await fakeCodexAuth();
-		process.env.IMP_CODEX_AUTH_BASE = fake.baseUrl;
+		process.env.INK_CODEX_AUTH_BASE = fake.baseUrl;
 		const env = await fresh();
 		env.terminal.data("/login openai-codex\r");
 		await frameEventually(env, "Enter code:", OAUTH_BUDGET);

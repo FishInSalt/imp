@@ -14,10 +14,10 @@ let base: string;
 let savedCatalogPath: string | undefined;
 beforeEach(() => {
 	base = mkdtempSync(join(tmpdir(), "imp-child-model-meta-"));
-	savedCatalogPath = process.env.IMP_CATALOG_PATH;
-	process.env.IMP_CATALOG_PATH = join(base, "catalog.json");
+	savedCatalogPath = process.env.INK_CATALOG_PATH;
+	process.env.INK_CATALOG_PATH = join(base, "catalog.json");
 	writeFileSync(
-		process.env.IMP_CATALOG_PATH,
+		process.env.INK_CATALOG_PATH,
 		JSON.stringify({
 			version: 1,
 			providers: {
@@ -40,8 +40,8 @@ beforeEach(() => {
 	loadCatalogCache();
 });
 afterEach(() => {
-	if (savedCatalogPath === undefined) delete process.env.IMP_CATALOG_PATH;
-	else process.env.IMP_CATALOG_PATH = savedCatalogPath;
+	if (savedCatalogPath === undefined) delete process.env.INK_CATALOG_PATH;
+	else process.env.INK_CATALOG_PATH = savedCatalogPath;
 	resetCatalogForTest();
 });
 

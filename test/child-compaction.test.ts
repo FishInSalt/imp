@@ -412,9 +412,9 @@ describe("task tool end-to-end (default settings, real session seam)", () => {
 	}, 20000);
 });
 
-describe("IMP_AUTOCOMPACT=0 (main-loop parity)", () => {
+describe("INK_AUTOCOMPACT=0 (main-loop parity)", () => {
 	it("disables child compaction: no entry, no splice, no summarizer call", async () => {
-		vi.stubEnv("IMP_AUTOCOMPACT", "0");
+		vi.stubEnv("INK_AUTOCOMPACT", "0");
 		try {
 			const dir = await mkdtemp(path.join(tmpdir(), "imp-child-nocompact-"));
 			const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);

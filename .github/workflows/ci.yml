@@ -34,20 +34,10 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
-      # Packaging smoke (node 20 only): the npm tarball must contain dist/ and
-      # a runnable bin — guards against "packed without a build" regressions.
-      - if: matrix.node == 20
-        name: packaging smoke
-        run: |
-          mkdir -p "$RUNNER_TEMP"
-          rm -f imp-agent-*.tgz
-          npm pack
-          tar -tzf imp-agent-*.tgz > "$RUNNER_TEMP/pack-list.txt"
-          grep -q "^package/dist/cli.js$" "$RUNNER_TEMP/pack-list.txt"
-          grep -q "^package/bin/imp.js$" "$RUNNER_TEMP/pack-list.txt"
-          if grep -qE "^package/(src|test|docs)/" "$RUNNER_TEMP/pack-list.txt"; then
-            echo "tarball contains src/, test/, or docs/ — check the files field" >&2
-            exit 1
-          fi
-          npm install -g --prefix "$RUNNER_TEMP/imp-smoke" ./imp-agent-*.tgz
-          "$RUNNER_TEMP/imp-smoke/bin/imp" --help > /dev/null
+      - name: release identity
+        run: node scripts/release-guards.mjs identity
+      # The script captures npm pack --json's single filename, checks every
+      # actual tar entry/mode, then installs and executes offline in a temporary
+      # HOME/cache/local prefix and neutral cwd. No global install or npx ink.
+      - name: packaging smoke
+        run: node scripts/package-smoke.mjs --cache-source "$HOME/.npm"

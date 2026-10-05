@@ -97,7 +97,7 @@ export type SubmitMode = "steer" | "followUp";
  *
  * Two implementations, selected in runRepl:
  *  - ReplInput (input.ts) — the readline shell, the pre-M9 interactive
- *    path and the `IMP_REPL=legacy` escape hatch;
+ *    path and the `INK_REPL=legacy` escape hatch;
  *  - TuiShell (shell.ts) — the pi-tui shell (M9).
  *
  * The machine is presentation-agnostic: it routes by state and never

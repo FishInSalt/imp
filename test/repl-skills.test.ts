@@ -25,7 +25,7 @@ import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {
@@ -177,7 +177,7 @@ describe("buildSkillCommands (§11.1)", () => {
 		});
 		expect(commands).toEqual([]);
 		expect(diagnostics).toEqual([
-			"imp: skill command /skill:ledger skipped — a command with that name is already registered",
+			"ink: skill command /skill:ledger skipped — a command with that name is already registered",
 		]);
 	});
 });
@@ -217,7 +217,7 @@ describe("/skill:name dispatch", () => {
 		expect(outcome).toBe("handled");
 		expect(submitted).toHaveLength(0);
 		const text = out();
-		expect(text).toContain("imp: /skill:ledger failed to read");
+		expect(text).toContain("ink: /skill:ledger failed to read");
 		expect(text).not.toContain("ledger bookkeeping"); // no raw forwarding
 	});
 
@@ -226,7 +226,7 @@ describe("/skill:name dispatch", () => {
 		const { ctx, out } = makeCtx(null);
 		await dispatchCommand("/skill:nope", ctx, register(skill));
 		const text = out();
-		expect(text).toContain('imp: unknown command "/skill:nope"');
+		expect(text).toContain('ink: unknown command "/skill:nope"');
 		expect(text).toContain("/skill:ledger"); // listed among the known commands
 	});
 

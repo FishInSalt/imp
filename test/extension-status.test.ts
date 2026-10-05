@@ -135,7 +135,7 @@ function makeShell(columns = 80): { shell: TuiShell; terminal: FakeTerminal } {
 }
 
 beforeEach(() => {
-	vi.stubEnv("IMP_LOG", "0");
+	vi.stubEnv("INK_LOG", "0");
 });
 
 afterEach(() => {

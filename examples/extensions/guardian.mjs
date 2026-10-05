@@ -1,9 +1,9 @@
 // examples/extensions/guardian.mjs — a minimal config-driven permission gate.
 //
-// Install: copy this file into <project>/.imp/extensions/ (or
-// ~/.imp/extensions/) and restart imp. guardian watches bash / write / edit
+// Install: copy this file into <project>/.ink/extensions/ (or
+// ~/.ink/extensions/) and restart Ink. guardian watches bash / write / edit
 // tool calls and matches them against two rule lists in
-// ~/.imp/guardian.json:
+// ~/.ink/guardian.json:
 //
 //   • deny rules block the call outright — the model receives the rule's
 //     reason as a teaching-style tool result and the run continues;
@@ -24,7 +24,7 @@
 // A missing config file is valid (zero rules). An invalid one keeps the last
 // valid rules, shows a footer flag and an audit line, and is recoverable
 // with /guardian reload. One audit line per deny/ask decision goes to
-// ~/.imp/guardian.log (created with mode 0600).
+// ~/.ink/guardian.log (created with mode 0600).
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,7 +33,7 @@ import path from "node:path";
 /* helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** One line, whitespace flattened, capped like imp's own diagnostics. */
+/** One line, whitespace flattened, capped like Ink's own diagnostics. */
 const oneLine = (text, cap = 160) => {
 	const flat = String(text).replaceAll(/\s+/gu, " ").trim();
 	return flat.length > cap ? `${flat.slice(0, cap - 1)}…` : flat;
@@ -203,8 +203,8 @@ const parseConfig = (text) => {
 
 /** @param {import("../../src/extensions/types.js").ExtensionApi} api */
 export default function (api) {
-	const configFile = path.join(os.homedir(), ".imp", "guardian.json");
-	const logFile = path.join(os.homedir(), ".imp", "guardian.log");
+	const configFile = path.join(os.homedir(), ".ink", "guardian.json");
+	const logFile = path.join(os.homedir(), ".ink", "guardian.log");
 
 	/** The last valid rules (zero defaults before any valid load). */
 	let rules = { deny: [], ask: [] };

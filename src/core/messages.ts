@@ -1,5 +1,5 @@
 /**
- * Imp's internal message model.
+ * Ink's internal message model.
  *
  * Design rule (inherited from pi): internal messages ≠ LLM wire format.
  * Internal messages carry metadata and stay provider-agnostic; conversion to a

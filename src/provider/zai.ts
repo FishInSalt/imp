@@ -9,7 +9,7 @@
  *            (tool_stream: true when tools are present), max_tokens field,
  *            no store, no developer role.
  *
- * The wire itself is imp's openai-completions provider — this module only
+ * The wire itself is Ink's openai-completions provider — this module only
  * fixes the defaults (endpoint, key, zai compat flags) and the provider
  * NAME, which the thinking model catalog keys off (glm-* rules).
  */

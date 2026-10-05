@@ -28,7 +28,24 @@ describe("buildSystemPrompt (prompt-audit P5/P6)", () => {
 		const prompt = buildSystemPrompt(CTX, [{ name: "bash", promptSnippet: "x" }]);
 		expect(prompt).not.toContain("# Tools\n");
 		expect(prompt).not.toContain("# Editing rules");
+		expect(prompt).toContain("You are Ink");
+		expect(prompt).toContain("AI assistant and agent harness");
+		expect(prompt).toContain(
+			"1. Work inside the current working directory unless the user explicitly asks otherwise.",
+		);
+		expect(prompt).toContain(
+			"2. Inspect before you modify: read a file (or list/grep via bash) before editing it. Never guess file contents.",
+		);
 		expect(prompt).toContain("3. After editing code, verify the change");
+		expect(prompt).toContain(
+			"4. Be concise. State what you changed (file paths, commands run); do not dump whole files back at the user.",
+		);
+		expect(prompt).toContain(
+			"5. If a task fails, say what failed and why. Do not silently give up or fake success.",
+		);
+		expect(prompt).toContain(
+			"6. When a request is ambiguous or destructive beyond the workspace, ask the user first.",
+		);
 		expect(prompt).toContain("In addition to the tools above");
 	});
 
@@ -170,7 +187,7 @@ describe("buildSystemPrompt override/append (#system-md)", () => {
 describe("runner SYSTEM.md integration (#system-md)", () => {
 	async function makeBase(): Promise<string> {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-sysmd-"));
-		await mkdir(join(base, ".imp"), { recursive: true });
+		await mkdir(join(base, ".ink"), { recursive: true });
 		return base;
 	}
 
@@ -196,7 +213,7 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 	it("override replaces the body; context/skills/agents survive (D3/D4); note fires", async () => {
 		const base = await makeBase();
 		await mkdir(join(base, "home"), { recursive: true });
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "You are my Rust reviewer.");
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "You are my Rust reviewer.");
 		await writeFile(join(base, "AGENTS.md"), "Project rule: be terse.");
 		const { runner, output } = await makeRunner(base, {
 			systemPromptProjectAllowed: true,
@@ -218,13 +235,13 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		expect(system).toContain("<project_context>");
 		expect(system).toContain("Project rule: be terse.");
 		expect(system).toContain("<available_skills>");
-		expect(output()).toContain("▪ system: .imp/SYSTEM.md");
+		expect(output()).toContain("▪ system: .ink/SYSTEM.md");
 	});
 
 	it("P1-1 pin: session trust (nothing recorded in the store) still loads the project file", async () => {
 		const base = await makeBase();
 		await mkdir(join(base, "home"), { recursive: true });
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "session persona");
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "session persona");
 		// no trust store anywhere — the session-resolved boolean is the only grant
 		const { runner } = await makeRunner(base, { systemPromptProjectAllowed: true });
 		expect(runner.system.startsWith("session persona")).toBe(true);
@@ -233,7 +250,7 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 	it("default is conservative: without the flag the project file is ignored (global home empty)", async () => {
 		const base = await makeBase();
 		await mkdir(join(base, "home"), { recursive: true });
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "project persona");
 		const { runner, output } = await makeRunner(base);
 		expect(runner.system).toContain("# Core rules");
 		expect(output()).not.toContain("▪ system:");
@@ -242,13 +259,13 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 	it("P1-2 hermeticity: systemPromptHomeDir isolates the global tier both ways", async () => {
 		const base = await makeBase();
 		const home = join(base, "home");
-		await mkdir(join(home, ".imp"), { recursive: true });
-		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
+		await mkdir(join(home, ".ink"), { recursive: true });
+		await writeFile(join(home, ".ink", "SYSTEM.md"), "global persona");
 		const withGlobal = await makeRunner(base);
 		expect(withGlobal.runner.system.startsWith("global persona")).toBe(true);
 		// a different, empty home → no override even though the first home exists on disk
 		const emptyHome = join(base, "home2");
-		await mkdir(join(emptyHome, ".imp"), { recursive: true });
+		await mkdir(join(emptyHome, ".ink"), { recursive: true });
 		const without = await makeRunner(base, { systemPromptHomeDir: emptyHome });
 		expect(without.runner.system).toContain("# Core rules");
 	});
@@ -256,35 +273,35 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 	it("mixed pairs render per-file superseded notes + unreadable warns (impl review P2)", async () => {
 		const base = await makeBase();
 		const home = join(base, "home");
-		await mkdir(join(home, ".imp"), { recursive: true });
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
-		await writeFile(join(base, ".imp", "APPEND_SYSTEM.md"), "project append");
-		await writeFile(join(home, ".imp", "APPEND_SYSTEM.md"), "global append");
+		await mkdir(join(home, ".ink"), { recursive: true });
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "project persona");
+		await writeFile(join(base, ".ink", "APPEND_SYSTEM.md"), "project append");
+		await writeFile(join(home, ".ink", "APPEND_SYSTEM.md"), "global append");
 		const { output } = await makeRunner(base, { systemPromptProjectAllowed: false });
-		expect(output()).toContain("global APPEND_SYSTEM.md active — project .imp/APPEND_SYSTEM.md ignored");
+		expect(output()).toContain("global APPEND_SYSTEM.md active — project .ink/APPEND_SYSTEM.md ignored");
 		expect(output()).not.toContain("global SYSTEM.md active"); // SYSTEM pair has no global takeover
 	});
 
 	it("an unreadable trusted file renders the skip warn (D5)", async () => {
 		const base = await makeBase();
 		await mkdir(join(base, "home"), { recursive: true });
-		const locked = join(base, ".imp", "APPEND_SYSTEM.md");
+		const locked = join(base, ".ink", "APPEND_SYSTEM.md");
 		await writeFile(locked, "locked append");
 		await chmod(locked, 0o000);
 		const { output } = await makeRunner(base, { systemPromptProjectAllowed: true });
-		expect(output()).toContain("▪ could not read .imp/APPEND_SYSTEM.md — skipped");
+		expect(output()).toContain("▪ could not read .ink/APPEND_SYSTEM.md — skipped");
 	});
 
 	it("untrusted + global takeover renders the superseded note (D6 copy)", async () => {
 		const base = await makeBase();
 		const home = join(base, "home");
-		await mkdir(join(home, ".imp"), { recursive: true });
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "project persona");
-		await writeFile(join(home, ".imp", "SYSTEM.md"), "global persona");
+		await mkdir(join(home, ".ink"), { recursive: true });
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "project persona");
+		await writeFile(join(home, ".ink", "SYSTEM.md"), "global persona");
 		const { runner, output } = await makeRunner(base, { systemPromptProjectAllowed: false });
 		expect(runner.system.startsWith("global persona")).toBe(true);
-		expect(output()).toContain("global SYSTEM.md active — project .imp/SYSTEM.md ignored");
-		expect(output()).toContain("imp --trust to enable");
+		expect(output()).toContain("global SYSTEM.md active — project .ink/SYSTEM.md ignored");
+		expect(output()).toContain("ink --trust to enable");
 	});
 
 	it("D10: mid-session file edit is picked up by refreshSystemPrompt", async () => {
@@ -292,7 +309,7 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		await mkdir(join(base, "home"), { recursive: true });
 		const { runner } = await makeRunner(base, { systemPromptProjectAllowed: true });
 		expect(runner.system).toContain("# Core rules");
-		await writeFile(join(base, ".imp", "SYSTEM.md"), "edited persona");
+		await writeFile(join(base, ".ink", "SYSTEM.md"), "edited persona");
 		runner.refreshSystemPrompt();
 		expect(runner.system.startsWith("edited persona")).toBe(true);
 	});

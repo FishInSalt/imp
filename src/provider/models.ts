@@ -1,7 +1,7 @@
 /**
  * Static model registry (#multi-provider batch 2): the per-model context
  * window, sourced from pi's auto-generated provider catalogs (which track the
- * live APIs) rather than guesswork. imp default-model users get correct
+ * live APIs) rather than guesswork. Ink default-model users get correct
  * auto-compaction thresholds for the first time; unknown models fall back to
  * the historical 128K default — conservative in the safe direction (compaction
  * fires earlier than strictly necessary, never later).
@@ -10,7 +10,7 @@
  * The pi.dev catalog overlay (catalog.ts) outranks them for every id it
  * knows; hand-maintenance stopped with this comment.
  *
- * IMP_CONTEXT_WINDOW still wins over everything, as before.
+ * INK_CONTEXT_WINDOW still wins over everything, as before.
  */
 
 import { catalogEntryFor, catalogEntryForReference } from "./catalog.js";
@@ -147,13 +147,13 @@ function envInt(name: string): number | undefined {
 	// between the footer and the compaction gate (review P2-8).
 	if (!envWarned) {
 		envWarned = true;
-		process.stderr.write(`imp: ignoring invalid ${name}=${JSON.stringify(raw)} (not a positive number)\n`);
+		process.stderr.write(`ink: ignoring invalid ${name}=${JSON.stringify(raw)} (not a positive number)\n`);
 	}
 	return undefined;
 }
 
 /** Families whose traffic rides a subscription plan rather than the token
- *  meter (the catalog carries rates but not billing mode — imp's reality:
+ *  meter (the catalog carries rates but not billing mode — Ink's reality:
  *  zai = GLM Coding Plan, openai-codex = ChatGPT credential; anthropic and
  *  openai are metered API). Static tables encode the same per-model. */
 const SUBSCRIPTION_FAMILIES = new Set(["zai", "openai-codex"]);
@@ -186,7 +186,7 @@ export interface ContextWindowInfo {
 /** Effective context window and provenance for a canonical or bare reference.
  * Priority: environment > catalog > discovery > static table > fallback. */
 export function contextWindowInfoFor(reference: string): ContextWindowInfo {
-	const env = envInt("IMP_CONTEXT_WINDOW");
+	const env = envInt("INK_CONTEXT_WINDOW");
 	if (env !== undefined) return { contextWindow: env, source: "env" };
 	const slash = reference.indexOf("/");
 	const modelId = slash === -1 ? reference : reference.slice(slash + 1);

@@ -3,7 +3,7 @@
  *
  * pi's `utils/photon.ts` carries an fs-patch fallback ladder for Bun-compiled
  * binaries (the CJS entry does `fs.readFileSync(__dirname + "/photon_rs_bg.wasm")`
- * which bakes a build-machine path into the binary). imp ships as plain npm
+ * which bakes a build-machine path into the binary). Ink ships as plain npm
  * ESM: the wasm sits in node_modules next to the module and loads cleanly, so
  * all that survives is the lazy load + null-on-failure contract that the
  * resize/convert layers already handle.

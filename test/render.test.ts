@@ -159,10 +159,10 @@ describe("Renderer", () => {
 		r.event({ type: "tool_start", toolCallId: "t1", name: "bash", args: { command: "ls" } });
 		r.event({ type: "tool_end", result: okResult("ok") });
 		r.note("▪ a note");
-		r.error("imp: boom");
+		r.error("ink: boom");
 		r.writeLine("plain line");
 		r.endRun();
-		expect(out.output()).toBe("● bash $ ls ✓\n  ⎿  ok\n▪ a note\nimp: boom\nplain line\n");
+		expect(out.output()).toBe("● bash $ ls ✓\n  ⎿  ok\n▪ a note\nink: boom\nplain line\n");
 		expect(out.output()).not.toContain("\r");
 		expect(out.output()).not.toContain("\x1b");
 	});

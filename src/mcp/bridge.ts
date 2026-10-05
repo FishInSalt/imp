@@ -1,9 +1,9 @@
 /**
- * MCP tool → imp Tool bridge (M18, docs/m18-mcp-design.md §4).
+ * MCP tool → Ink Tool bridge (M18, docs/m18-mcp-design.md §4).
  *
- * Flat direct registration (D2): every MCP tool becomes one imp tool named
+ * Flat direct registration (D2): every MCP tool becomes one Ink tool named
  * `<server>_<tool>` (the shape the pi adapter's directTools mode produces —
- * e.g. zai-vision_analyze_image). MCP inputSchema is JSON Schema and imp's
+ * e.g. zai-vision_analyze_image). MCP inputSchema is JSON Schema and Ink's
  * Tool.parameters is a TypeBox TSchema — the same thing at runtime — so the
  * schema passes through with minimal normalization.
  *
@@ -33,7 +33,7 @@ export function normalizeInputSchema(inputSchema: unknown): TSchema {
 }
 
 /** Build the flat direct tool name `<server>_<tool>`; null + reason when the
- *  name cannot live in imp's tool table (pattern/length — design §4). */
+ *  name cannot live in Ink's tool table (pattern/length — design §4). */
 export function directToolName(server: string, toolName: string): { name: string } | { error: string } {
 	const name = `${server}_${toolName}`;
 	if (!NAME_PATTERN.test(name)) {
@@ -45,7 +45,7 @@ export function directToolName(server: string, toolName: string): { name: string
 	return { name };
 }
 
-/** Map an MCP call result into imp's ToolExecuteResult (design §4). Output
+/** Map an MCP call result into Ink's ToolExecuteResult (design §4). Output
  *  is tail-capped at MAX_BYTES like every builtin (a chatty server must not
  *  flood the next provider request). */
 export function mapCallResult(result: McpCallResult): ToolExecuteResult {

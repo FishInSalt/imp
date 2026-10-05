@@ -9,8 +9,8 @@ import { registerDiscoveredContextWindows, resetDiscoveredWindowsForTest } from 
 import { contextWindowFor, contextWindowInfoFor } from "../src/provider/models.js";
 
 beforeEach(() => {
-	vi.stubEnv("IMP_CONTEXT_WINDOW", undefined);
-	vi.stubEnv("IMP_CATALOG_PATH", join(mkdtempSync(join(tmpdir(), "imp-threshold-")), "catalog.json"));
+	vi.stubEnv("INK_CONTEXT_WINDOW", undefined);
+	vi.stubEnv("INK_CATALOG_PATH", join(mkdtempSync(join(tmpdir(), "imp-threshold-")), "catalog.json"));
 	resetCatalogForTest();
 	resetDiscoveredWindowsForTest();
 });
@@ -23,7 +23,7 @@ afterEach(() => {
 
 function installCatalog(models: Record<string, { id: string; contextWindow: number }>): void {
 	writeFileSync(
-		process.env.IMP_CATALOG_PATH as string,
+		process.env.INK_CATALOG_PATH as string,
 		JSON.stringify({ version: 1, providers: { zai: { models, checkedAt: Date.now() } } }),
 	);
 	loadCatalogCache();
@@ -37,14 +37,14 @@ describe("context window provenance", () => {
 		expect(contextWindowInfoFor("zai/glm-5.3")).toEqual({ contextWindow: 200000, source: "discovery" });
 		installCatalog({ "glm-5.3": { id: "glm-5.3", contextWindow: 512000 } });
 		expect(contextWindowInfoFor("zai/glm-5.3")).toEqual({ contextWindow: 512000, source: "catalog" });
-		vi.stubEnv("IMP_CONTEXT_WINDOW", "65536");
+		vi.stubEnv("INK_CONTEXT_WINDOW", "65536");
 		expect(contextWindowInfoFor("zai/glm-5.3")).toEqual({ contextWindow: 65536, source: "env" });
 		expect(contextWindowFor("zai/glm-5.3")).toBe(65536);
 	});
 
 	it.each(["", "0", "-1", "NaN", "Infinity"])("ignores invalid override %j", (value) => {
 		vi.spyOn(process.stderr, "write").mockReturnValue(true);
-		vi.stubEnv("IMP_CONTEXT_WINDOW", value);
+		vi.stubEnv("INK_CONTEXT_WINDOW", value);
 		expect(contextWindowInfoFor("unknown-model").source).toBe("fallback");
 		expect(contextWindowInfoFor("glm-5.3").source).toBe("static");
 	});
@@ -82,7 +82,7 @@ describe("automatic compaction thresholds", () => {
 		[8192, 6963],
 		[1, 1],
 	])("known window %i has strict threshold %i", (window, threshold) => {
-		vi.stubEnv("IMP_CONTEXT_WINDOW", String(window));
+		vi.stubEnv("INK_CONTEXT_WINDOW", String(window));
 		const settings = compactionSettingsFor("unknown-model");
 		expect(contextWindowInfoFor("unknown-model").source).toBe("env");
 		expect(settings.contextWindow).toBe(window);

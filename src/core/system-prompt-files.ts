@@ -5,8 +5,8 @@ import path from "node:path";
 /**
  * #system-md: SYSTEM.md / APPEND_SYSTEM.md discovery (docs/system-md-design.md).
  *
- * Two files, two tiers each — project `<cwd>/.imp/<name>` (behind the
- * session-resolved trust bit, see D2) and global `~/.imp/<name>`. One file
+ * Two files, two tiers each — project `<cwd>/.ink/<name>` (behind the
+ * session-resolved trust bit, see D2) and global `~/.ink/<name>`. One file
  * per pair: the project tier wins, the tiers are never merged (pi parity).
  *
  * Deviations from pi (design §2 D5-D7): a read failure falls through to the
@@ -74,7 +74,7 @@ export function loadSystemPromptFiles(
 		unreadableProject: [],
 	};
 	const resolvePair = (name: string): { text: string; path: string } | undefined => {
-		const projectPath = path.join(cwd, ".imp", name);
+		const projectPath = path.join(cwd, ".ink", name);
 		let projectIgnored = false;
 		if (projectAllowed) {
 			const tier = readTier(projectPath);
@@ -86,7 +86,7 @@ export function loadSystemPromptFiles(
 			result.ignoredUntrusted.push(projectPath); // gate before peek
 			projectIgnored = true;
 		}
-		const globalTier = readTier(path.join(home, ".imp", name));
+		const globalTier = readTier(path.join(home, ".ink", name));
 		if (globalTier !== "absent" && globalTier !== "unreadable" && globalTier !== "slot-taken") {
 			if (projectIgnored) result.supersededByGlobal.push(projectPath);
 			return globalTier;

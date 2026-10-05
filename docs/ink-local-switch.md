@@ -24,6 +24,16 @@ recursive removal, or overwrite/retarget any existing link. Verify exact link te
 identity, resolved executable and isolated help/version before asking for startup.
 No command registration itself starts an application.
 
+## Registration result — 2026-10-05
+
+The owner separately approved both creations. The module link and command link
+were exclusively created and verified against the exact texts above; parent
+identity/postchecks and directory synchronization passed. `command -v ink`
+resolves `/opt/homebrew/bin/ink`, and its real executable is the independent
+runtime's `bin/ink.js`. No application was started by registration. Old imp command
+and module links remain unchanged for current-session operation and recovery.
+Registered-command isolated acceptance and normal startup are not claimed here.
+
 ## Order
 
 1. Complete selected private-copy byte/mode/link checks. Current copies are not a

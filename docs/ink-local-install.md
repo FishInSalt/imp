@@ -1,107 +1,102 @@
-# Local independent Ink installation
+# Ink local installation and acceptance
 
-Status: INSTALLED AND ISOLATED ACCEPTANCE PASSED; selected private configuration
-copied with owner approval. Global commands and normal startup remain untouched. Independent reviewer
-`64e1e447-c51b-4cab-822b-92d9f2ecb99e` approved this bounded procedure; private
-configuration, normal startup and command switching remain separately gated.
-Application: `b1deda4da7c4dd524bacde8f0a6070d5d3f11591`.
+Status: **OWNER ACCEPTED**, 2026-10-05. Installed application commit:
+`b1deda4da7c4dd524bacde8f0a6070d5d3f11591`, **ink-agent@0.2.0**.
+This is one local installation record, not a general migration tool or permission
+to modify another installation. The earlier full-state migration/source-linked
+activation proposal was abandoned; its historical documents remain in Git.
 
-The owner requested direct progress on installation, not completion of a general
-installer. Use standard npm and the existing reviewed package parser. Do not run
-the unfinished ink-runtime scripts. This short operation replaces their proposed
-nested output layout for the local install; it does not change application code.
+## Installed layout
 
-## Workspace operation
+- Independent runtime: `<workspace>/ink-runtime-0.2.0`, containing package/lock,
+  bin/dist, its own production node_modules and public extension assets.
+- Selected private configuration: `~/.ink`; old `~/.imp` remains unchanged.
+- Global module: `/opt/homebrew/lib/node_modules/ink-agent` points to the independent
+  runtime; command `/opt/homebrew/bin/ink` points to
+  `../lib/node_modules/ink-agent/bin/ink.js`. Both were separately approved,
+  exclusively created and verified. Existing entries were never overwritten.
+- Old `/opt/homebrew/bin/imp` and its module registration remain for recovery.
+  No imp alias redirects to Ink. The old source/runtime/dependencies were not
+  changed, rebuilt or moved. Git main integration does not replace installed files.
 
-1. Verify a clean pinned application checkout and its already-tested local tarball.
-   Parse the whole gzip/tar with the reviewed `parseTar`; require 340 exact members,
-   compare their bytes/modes with that checkout's package/bin/README/LICENSE/dist,
-   verify the package is ESM ink-agent@0.2.0 with sole ink bin.
-2. Exclusively create `/Users/z/Z/Agent_demo/ink-runtime-0.2.0` (existing entry blocks).
-   Copy those approved tar bytes to this directory, preserving public package
-   modes, plus the pinned package-lock.json. New app root contains bin/dist/package
-   and its own node_modules; it is not a source/worktree/dependency symlink.
-3. Use a fresh private scratch HOME/cache/neutral cwd/npmrc. Seed cache by copying
-   only the already-sanitized scratch cache from the previous successful artifact
-   smoke, not the user's actual cache/config. Run the existing installed Node/npm
-   with an allowlisted environment and reviewed network blocker, npm ci --offline
-   --ignore-scripts --omit=dev --no-audit --no-fund. Target only the new runtime;
-   never install into active/shared dependencies. No network fallback/scripts.
-4. Verify six exact production dependencies against frozen lock placements and
-   versions; approved YAML/marked bins allowed. Check npm result, no outward links,
-   no dotenv, Photon WASM and Darwin arm64 TUI addon resources. Copy 13 exact
-   committed public example/support files to assets/examples/extensions. Do not
-   execute these extensions or substitute their template/example configuration.
-5. Run help/version in a neutral cwd with fake auth/settings/catalog paths and
-   network blocker. Require Ink 0.2.0 and Usage: ink. Recompare application bytes,
-   public assets, lockfile, old checkout HEAD/status and global link metadata.
-   This establishes local installation only, not real-user startup readiness.
+Installation used the reviewed local tarball, a matching lockfile and standard
+`npm ci --offline --ignore-scripts --omit=dev --no-audit --no-fund` in a fresh root
+with isolated npm configuration/cache. The unfinished custom installer was not used.
+**340 application files**, **6 locked production packages**, **13 public extension
+assets** and **2 internal dependency bin links** were checked. Isolated help/version,
+TUI import and synthetic Photon image processing passed with no network attempts.
 
-Failure retains the new directory and scratch; no overwrite, delete, retry in a
-partial destination or automatic rollback. All filesystem writes are inside the
-workspace or scratch directories. npm diagnostics are private scratch logs.
+## Selected configuration
 
-## Installation result — 2026-10-05
+Copied byte-for-byte with separate approval: `auth.json`, `settings.json`,
+`guardian.json`, `trust.json`, `models-catalog.json`, `AGENTS.md` and
+`web-search/config.json`. New root/extensions/web-search directories are **0700**;
+both credential files are **0600**. File owner/group/modes and copied bytes were
+verified; preservation of old timestamps/macOS provenance was not promised.
+No private values, credential digests or headers are stored in this repository.
 
-- Runtime: `/Users/z/Z/Agent_demo/ink-runtime-0.2.0`, owned private root, independent
-  application files and dependencies; no link to active/shared dependency tree.
-- Reviewed local package: **340 application files**, byte/mode comparisons passed.
-- `npm ci --offline --ignore-scripts --omit=dev --no-audit --no-fund`: **6 packages
-  installed**; exact six hidden-lock records match the frozen application lock.
-- **13 public extension/support files** copied and compared; none executed.
-- Help/version with fake HOME/auth/settings/catalog and neutral cwd: passed,
-  exact **Ink 0.2.0**. Direct pinned TUI module import and one synthetic Photon
-  pixel (1x1) passed. This is not interactive TUI or user configuration acceptance.
-- Closed installed links: **2**, YAML/marked, both internal. No installation dotenv,
-  no imp alias, **0 recorded network attempts**.
-- Old public source/runtime dist/bin/examples/package/lock byte/mode/link graphs,
-  old HEAD/clean status and both global imp link identities/text remained unchanged.
-  Real HOME credentials/config/history were not read or copied.
-- Private scratch evidence retained at `/tmp/ink-local-install.l63ySo`:
-  `baseline.json`, `npm-ci.log`, `acceptance.json`; no cleanup performed.
+Guardian, notify, task-timer, tool-colors and web-search links point to independent
+Ink assets, not the old source. Model settings needed no old-path adaptation.
+Guardian's **10 deny/2 ask** entries needed no regex modification; original rule
+bytes and safety instructions were retained. Credential bytes were opaque during
+copying; the later separately approved API-key test used the migrated auth file.
 
-The failed/unfinished custom runtime builder is not involved in this installation.
-The installed runtime stays unregistered and must not be started with real HOME
-until selected private configuration and startup effects receive separate approval.
+No old sessions, child sessions, logs or history were copied or deleted. Ink starts
+new sessions; old child history is not supported for cross-version resumption.
+Project .imp settings are not automatically loaded. Any needed project .ink
+configuration or instruction wording adjustment is a separate approved change;
+never silently omit safety resources. Standard AGENTS/skills/MCP filenames stay
+unchanged. Unknown extension dependencies/data need explicit classification, not
+an assumption that they are disposable history.
 
-## Approved selected configuration copy — 2026-10-05
+## Acceptance
 
-The owner separately approved read-only inventory, then exact selected copying to
-`/Users/z/.ink`; copying was performed after that approval. Seven selected files
-were copied byte-for-byte: `auth.json`, `settings.json`, `guardian.json`,
-`trust.json`, `models-catalog.json`, `AGENTS.md`, `web-search/config.json`.
-Neither credential file was parsed, printed, used for login or submitted anywhere.
-No private contents/digests enter this repository record.
+- Registered-command help/version with fake HOME: exact **Ink 0.2.0**, no recorded
+  network attempts.
+- Real terminal (PTY) with a local synthetic provider: **7 checks passed** — TUI
+  startup, Chinese input/reply, actual read-tool result roundtrip, /status, Esc
+  interruption and next turn, exit code **0** with terminal restoration, and new
+  synthetic session persistence. **5 local provider requests**, no nonlocal attempts.
+- Separately authorized real-model PTY test: migrated default
+  **deepseek/deepseek-flash** and API key, **1 request**, HTTP **200**, expected
+  reply **INK_REAL_OK 12**, /status, exit **0**, terminal restored and selected
+  configuration unchanged. Thinking off, 96-output-token cap, one turn; no OAuth,
+  tools, user extensions, context files, MCP, notifications or real-state writes.
+- Focused independent reviews approved the installation, switching instructions
+  and both interaction results. The owner then reported independent acceptance
+  without apparent problems. That report is not additional automated coverage of
+  all providers, normal extensions/MCP or unrestricted startup.
 
-- New root, extensions and web-search directories: **0700**, current owner, no ACL
-  entries reported by `ls -lde`. Credential files: **0600**; file UID/GID/modes
-  equal their originals. Old timestamps/macOS provenance are not promised for these
-  fresh copies, as disclosed in the owner's approved copy scope.
-- **5 new symlinks**: guardian, notify, task-timer, tool-colors, web-search point
-  exclusively at the independent runtime's matching public assets. No extension
-  was imported or started. Old extensions and their old source links remain intact.
-- Settings have no active old-name path references; guardian has **10 deny/2 ask**
-  entries, no old-name pattern references. Original rule bytes remain unchanged;
-  no regex transformation was needed or attempted.
-- Selected JSON configuration parsed without duplicate keys. Settings/policy/trust/
-  catalog are objects; this is structural validation, not production startup.
-- Original selected bytes and full pre/post file signatures stayed identical
-  during copying. Old history/session/log content was not read/copied. New history,
-  sessions and logs remain absent.
-- Original safety instruction bytes retained. The new AGENTS still names old
-  configuration paths in examples; new-name wording requires a separate explicit
-  edit approval, never an implied change to safety protections.
-- Original imp global links remain present/unchanged; new ink links remain absent.
-  Active old checkout remains clean on its original revision.
+No further paid request is needed for this acceptance. Node 25.5.0/Darwin arm64 was
+observed; this is not proof of Node 20/24 or Linux support. The reviewed application
+was integrated locally using --no-ff. The unfinished installer and experimental
+preparation/activation branches were excluded. Early full-state runbook/test helpers
+had entered main with the rename; this cleanup removes them and the redundant
+history-copy test. Push, repository rename, tags, npm publication and account changes are
+separately authorized operations.
 
-## Remaining separate approvals
+## Remaining switching and recovery boundaries
 
-No global registration, old source/dist/examples/node_modules, main or remote change
-ran. Additive project .ink resources, new safety-instruction wording, final copied
-configuration freshness and each command-link operation require specific approval.
-Current imp continues to run; do not start real Ink concurrently. Before current
-session exit deliver bounded terminal switching and recovery steps. Normal Ink
-startup requires side-effect approval: catalog/MCP/extensions/notifications/provider
-refresh may occur. OAuth/shared effects can prevent automatic old-runtime restart.
-Ink acceptance precedes main --no-ff integration and separately approved push.
-Local install does not prove the unfinished general tools correct.
+Use an ordinary terminal for final session switching. Exit old imp normally with
+`/exit`, wait for tracked children and verify no relevant writer remains before
+normal Ink startup or any OAuth refresh. Do not signal uncertain processes. While
+old imp remains running, copied auth/settings/catalog may change; compare without
+printing secrets, and request exact refresh approval if necessary. Do not start
+both real environments concurrently against rotating OAuth or shared data.
+
+Old-command retirement requires a separate approval for the verified
+`/opt/homebrew/bin/imp` symlink only. Keep old module/runtime/configuration for
+recovery; no npm uninstall or forced overwrite is needed. After any separately
+approved command change, clear the terminal command cache if needed.
+
+On a failure, preserve both configuration/runtime roots. Before normal Ink startup,
+the retained old command still works; if retired, separately approve its exclusive
+restoration with text `../lib/node_modules/imp/bin/imp.js` only after checking the
+retained module target and destination absence. Existing/foreign entries block
+replacement; partial registration failure is not evidence that nothing changed.
+
+After Ink has run, stop it before considering old startup. Preserve new data and
+assess OAuth rotation/shared external effects. Do not copy old credentials over new
+ones or automatically merge/delete history. Restoring a link cannot undo those
+external changes. HOME cleanup, global-link removal and snapshot deletion require
+specific approval; none is part of repository cleanup.

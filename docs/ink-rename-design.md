@@ -1,5 +1,15 @@
 # Ink rename and single-user cutover
 
+> **Historical design and implementation snapshot.** The branding, configuration,
+> trust and protocol decisions remain implemented. The ordinary-history migration,
+> full-state copying and live source-linked activation proposal below was abandoned
+> in favor of an independent installation with selected configuration only. Use
+> [the current installation and acceptance record](ink-local-install.md), not
+> sections 4-5 or the old activation matrix, for the local outcome and remaining
+> approval boundaries. The obsolete runbook and helpers are available in Git at
+> `b1deda4`; their later removal does not invalidate the test results recorded here.
+> This document is not a current deployment procedure.
+
 - Date: 2026-10-04
 - Revision: r3
 - Status: **WORKSPACE IMPLEMENTATION VERIFIED** — approved design r3; runtime, isolation, packaging and synthetic cutover helper code reviews closed. Owner confirmed `ink-agent@0.2.0` on 2026-10-04. Acceptance recorded on 2026-10-05. Global migration, installation, live integration and publication remain separately gated.
@@ -232,4 +242,5 @@ Final commands/results on Darwin arm64, Node **25.5.0**, npm **11.8.0**:
 - `node scripts/package-smoke.mjs --cache-source "$HOME/.npm"`: passed offline, **340 allowed artifact files**, modes, isolated local installation, exact help/version and local npm-exec inference. Existing cache was read-only; writes remained in private scratch.
 - `git diff --check`: passed. `.ink/settings.json` matches the original **26 bytes**; non-root lockfile dependency entries are unchanged. Remaining legacy identifiers are deliberate schema/lease/protocol/history references, not runtime aliases.
 
-Evidence limits: Node 20/24 were not installed locally and CI was not triggered. The existing `@earendil-works/pi-tui@0.82.0` dependency declares a newer Node floor than the package's retained `>=20`; this pre-existing support discrepancy needs actual target-runtime verification, not a compatibility claim from Node 25. Linux, cross-mount, unsupported native-operation and production-path evidence remain unavailable. Synthetic quiescence/activation ledgers do not prove real process shutdown. No model/provider quota, global installation, GitHub/account changes, push or npm publication occurred. See [cutover runbook](ink-cutover-runbook.md) for remaining real-operation approvals.
+Evidence limits: Node 20/24 were not installed locally and CI was not triggered. The existing `@earendil-works/pi-tui@0.82.0` dependency declares a newer Node floor than the package's retained `>=20`; this pre-existing support discrepancy needs actual target-runtime verification, not a compatibility claim from Node 25. Linux, cross-mount, unsupported native-operation and production-path evidence remain unavailable. Synthetic quiescence/activation ledgers do not prove real process shutdown. No model/provider quota, global installation, GitHub/account changes, push or npm publication occurred. At that snapshot, the full-state cutover runbook described remaining approvals;
+it is now superseded by [the local installation record](ink-local-install.md).

@@ -38,7 +38,10 @@ Subsequent PTY interactive acceptance also passed; see the separate
 [interaction record](ink-interaction-acceptance.md). Subsequently one separately
 approved real-model PTY interaction passed with migrated DeepSeek auth/settings;
 see [real-provider acceptance](ink-real-interaction-acceptance.md). Normal user
-extension execution and unrestricted real HOME startup remain unverified.
+extension execution and unrestricted real HOME startup were not automatically
+tested. The owner subsequently reported independent acceptance without apparent
+problems; see [owner acceptance](ink-owner-acceptance.md). No additional paid test
+or broader automated coverage is implied by that report.
 
 ## Order
 

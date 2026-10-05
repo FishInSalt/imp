@@ -2,7 +2,7 @@
 
 A zero-dependency Node.js extension providing `web_search` (Tavily) and `url_read`
 (HTTP page text). Authentication and configuration belong to this extension, not
-Ink's model provider registry or `/login` command. Requires Ink's Node >=20 runtime.
+Ink's model provider registry or `/login` command. Requires Ink's Node >=22.19.0 runtime.
 
 ## Installation
 

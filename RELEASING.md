@@ -123,8 +123,9 @@ After a fresh build, run these regressions without installing dependencies:
 node node_modules/vitest/vitest.mjs run test/package-metadata.test.ts test/package-tar.test.ts test/release-guards.test.ts
 ```
 
-CI keeps Node 20 and 24 coverage. Local checks on a different Node version
-do not substitute for those CI matrix runs. Independently review code and
+CI checks the exact Node 22.19.0 minimum and Node 24. Both CI and the release
+gate provision `rg`/`fd` and fail if search-test prerequisites are missing.
+Local checks on a different Node version do not substitute for those CI runs. Independently review code and
 artifact results before declaring a release ready; merge to main only with
 `--no-ff`.
 

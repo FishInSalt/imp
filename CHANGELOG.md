@@ -19,7 +19,7 @@ their original release identity.
   path, bash rules match the command. Anything unmatched runs; there is no
   `allow` action. A broken config keeps the last good rules (footer hint,
   `/guardian reload`); every deny/ask outcome is audited to
-  `~/.imp/guardian.log`. The ask picker red-highlights the span the rule
+  `~/.ink/guardian.log`. The ask picker red-highlights the span the rule
   matched (`preview.warnSpans`). An ask question left unanswered can now
   time out (`askTimeoutMs`, a new optional host-side deadline on
   `api.confirm`; the shipped template uses 10 minutes): the timeout counts
@@ -55,6 +55,10 @@ their original release identity.
   review rounds + three amendments: `docs/tool-name-colors-design.md`.
 
 ### Changed
+
+- **Node support and CI coverage.** The minimum Node version is now 22.19.0,
+  matching the pinned TUI dependency. CI checks that exact minimum and Node 24;
+  CI and release gates require `rg`/`fd` instead of silently skipping search tests.
 
 - **Ink rename (planned `ink-agent@0.2.0`).** The product is now Ink, an
   open-source AI assistant and agent harness for the terminal. The sole
@@ -225,7 +229,7 @@ their original release identity.
 
 - **guardian v1 and the host classify seam.** The rule-based example gate
   (`examples/extensions/guardian.mjs`, configurable via `IMP_GUARDIAN_BLOCK`,
-  audited to `~/.imp/guardian.log`), its tests (`test/guardian.test.ts`,
+  audited to `~/.ink/guardian.log`), its tests (`test/guardian.test.ts`,
   `test/guardian-auto.test.ts`, `test/guardian-auto-host.test.ts`,
   `test/classify-seam.test.ts`, `test/user-input-log.test.ts`), and the
   `#guardian-auto-mode` host machinery (`api.classify` and its types, the

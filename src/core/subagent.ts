@@ -322,10 +322,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentOut
 		}
 	}
 
-	// Composite abort: parent signal OR the child's own clock. A manual relay
-	// (not AbortSignal.any) keeps engines ">=20" exactly true — any() needs
-	// 20.3. Timeout is detectable afterwards: the clock fired, the parent
-	// signal did not. #subagent-softlanding rev 4: the clock exists ONLY when
+	// Composite abort: parent signal OR the child's own clock. The manual
+	// relay preserves the established cancellation behavior. Timeout is
+	// detectable afterwards: the clock fired, the parent signal did not.
+	// #subagent-softlanding rev 4: the clock exists ONLY when
 	// timeoutMs is set (REPL default = no clock; every timedOut classification
 	// below reads `clock?.aborted ?? false`, so 'timeout' is unreachable on the
 	// default path — a clock-less abort is always the parent signal/Ctrl+C).

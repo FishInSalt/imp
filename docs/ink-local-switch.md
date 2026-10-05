@@ -32,7 +32,11 @@ identity/postchecks and directory synchronization passed. `command -v ink`
 resolves `/opt/homebrew/bin/ink`, and its real executable is the independent
 runtime's `bin/ink.js`. No application was started by registration. Old imp command
 and module links remain unchanged for current-session operation and recovery.
-Registered-command isolated acceptance and normal startup are not claimed here.
+Subsequent registered-command isolated help/version passed with fake HOME and
+zero recorded network attempts, evidence `/tmp/ink-registered-check.7wXuxu`.
+Subsequent PTY interactive acceptance also passed; see the separate
+[interaction record](ink-interaction-acceptance.md). Real-provider authentication,
+normal user extension execution and real HOME startup remain unverified.
 
 ## Order
 

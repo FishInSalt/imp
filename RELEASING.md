@@ -19,14 +19,16 @@ through a tag dispatch with `dry_run=false` **only while** the
 `NPM_PUBLISH_ENABLED` repository variable was enabled. That variable has been
 **deleted** (2026-10-06), so the legacy path is inert. Do not re-enable it.
 
-The old `imp-agent` npm trusted-publisher binding was **retired by the owner
-on 2026-10-06**: `npm trust revoke imp-agent --id=…` was answered `204` by the
-registry after owner web authentication (confirmed in the local npm log). The
-former caveat — do not dispatch historical refs or re-run historical
-publishing events until the binding is retired — accordingly lapses; those
-actions still require their ordinary approvals. Preserve historical
-tags/workflow files and `imp-agent@0.1.0`; old-package
-deprecation/unpublication is not included.
+The `imp-agent` npm trusted-publisher bindings were **fully retired by the
+owner on 2026-10-06**: the first revoke was answered `204` by the registry
+after owner web authentication (confirmed in the local npm log); the last
+entry (id `8e7aba0e-eeaa-4e88-b28b-9de09e08f109`, bound to the pre-rename
+`FishInSalt/imp`) was revoked the same way, and the final
+`npm trust list imp-agent` reports **no trust configurations**. The former
+caveat — do not dispatch historical refs or re-run historical publishing
+events until the binding is retired — accordingly lapses; those actions still
+require their ordinary approvals. Preserve historical tags/workflow files and
+`imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 

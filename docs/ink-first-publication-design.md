@@ -432,9 +432,13 @@ as pending, this governs:
   published the package with provenance (`gitHead` `23cb91f`) and was left red
   only by its post-publish registry-visibility check (a 60s window, raised to
   180s in `72f81fc`); the registry artifact was verified manually.
-- **Remaining:** retire the legacy `imp-agent` trusted-publisher binding
-  (status unrecorded at the `v0.2.1` push; required before the `0.2.2` tag
-  push); publish `0.2.2` by tag push from reviewed `main`.
+- **Done for `0.2.2`:** tag `v0.2.2` pushed 2026-10-06 from reviewed `main`;
+  the second OIDC run completed green end to end (gate, publish, and the
+  post-publish registry-visibility check inside the raised window), with
+  provenance (`gitHead` `35f34b4`); the `v0.2.2` GitHub Release page is
+  published from the dated CHANGELOG section.
+- **Remaining:** retire the legacy `imp-agent` trusted-publisher binding (the
+  2026-10-06 CLI check answered EOTP — interactive 2FA required).
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 

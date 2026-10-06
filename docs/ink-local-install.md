@@ -6,6 +6,12 @@ This is one local installation record, not a general migration tool or permissio
 to modify another installation. The earlier full-state migration/source-linked
 activation proposal was abandoned; its historical documents remain in Git.
 
+> **Update 2026-10-06 (owner-directed):** see the update section at the end of
+> this file — the independent runtime was retired, the global `ink-agent`
+> module now points at the source checkout, and the old `imp` entries were
+> removed. The layout and recovery statements in this file describe the
+> 2026-10-05 snapshot and are superseded where they conflict.
+
 ## Installed layout
 
 - Independent runtime: `<workspace>/ink-runtime-0.2.0`, containing package/lock,
@@ -100,3 +106,24 @@ assess OAuth rotation/shared external effects. Do not copy old credentials over 
 ones or automatically merge/delete history. Restoring a link cannot undo those
 external changes. HOME cleanup, global-link removal and snapshot deletion require
 specific approval; none is part of repository cleanup.
+
+## Update — 2026-10-06 (owner-directed)
+
+The local arrangement changed after the 2026-10-05 snapshot; the changes are
+owner-directed (confirmed 2026-10-06):
+
+- The independent runtime `<workspace>/ink-runtime-0.2.0` was retired.
+- The global module `/opt/homebrew/lib/node_modules/ink-agent` now points at
+  the source checkout `/Users/z/Z/Agent_demo/ink` (the directory renamed from
+  `.../imp`); `/opt/homebrew/bin/ink` resolves through it as before, so the
+  command is source-linked. `dist` must be rebuilt (`npm run build`) after
+  source changes for the command to reflect them.
+- Old `/opt/homebrew/bin/imp` and its module registration were removed; the
+  recovery path described under "Remaining switching and recovery boundaries"
+  no longer exists.
+- `~/.ink` (selected configuration) and the untouched `~/.imp` state remain as
+  recorded.
+
+The "Installed layout" statements above ("points to the independent runtime",
+"remain for recovery", "not changed, rebuilt or moved") describe the
+2026-10-05 snapshot only.

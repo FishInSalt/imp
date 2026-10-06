@@ -80,7 +80,7 @@ export function assembleCurrentChildEnvironment(sources: {
 	childTools: ReadonlyArray<{ name: string; mcpServer?: string }>;
 }): CurrentChildEnvironment {
 	return {
-		impVersion: sources.launchEnvironment.impVersion,
+		inkVersion: sources.launchEnvironment.inkVersion,
 		systemText: sources.launchEnvironment.systemText,
 		cwd: sources.cwd,
 		agentResolver: sources.agentResolver,

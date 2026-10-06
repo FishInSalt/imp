@@ -2533,7 +2533,7 @@ describe("child launch record (SA-06)", () => {
 				? {}
 				: {
 						getLaunchEnvironment: () => ({
-							impVersion: "9.9.9",
+							inkVersion: "9.9.9",
 							systemText: SYSTEM,
 							contextFiles: [{ path: "/p/AGENTS.md", content: "ctx" }],
 							promptFiles: [] as { kind: "override" | "append"; path: string; text: string }[],
@@ -2552,7 +2552,7 @@ describe("child launch record (SA-06)", () => {
 
 	function currentFor(launch: { cwd: string }): CurrentChildEnvironment {
 		return {
-			impVersion: "9.9.9",
+			inkVersion: "9.9.9",
 			systemText: SYSTEM,
 			cwd: launch.cwd,
 			agentResolver: () => undefined,
@@ -2586,7 +2586,7 @@ describe("child launch record (SA-06)", () => {
 		expect(launch.version).toBe(1);
 		expect(launch.parentSessionId).toBe(parent.header.id);
 		expect(launch.childId).toBe(rec.childId);
-		expect(launch.impVersion).toBe("9.9.9");
+		expect(launch.inkVersion).toBe("9.9.9");
 		expect((launch.model as { reference: string }).reference).toBe("anthropic/parent-wire");
 		expect(launch.cwd).toBe(cwd);
 		expect((launch.system as { contextFiles: unknown[] }).contextFiles).toHaveLength(1);
@@ -2636,7 +2636,7 @@ describe("child launch record (SA-06)", () => {
 			extensions: loaded.runtime,
 		});
 		const env = runner.getLaunchEnvironment();
-		expect(env.impVersion).toBe(VERSION);
+		expect(env.inkVersion).toBe(VERSION);
 		expect(env.systemText).toBe(runner.system);
 		expect(env.systemText).toContain("project rules");
 		const projectFile = env.contextFiles.find((file) => file.path === path.join(cwd, "AGENTS.md"));

@@ -833,7 +833,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 						return buildChildLaunch({
 							parentSessionId: parentStore.header.id,
 							childId,
-							impVersion: env.impVersion,
+							inkVersion: env.inkVersion,
 							...(agent === undefined
 								? {}
 								: { agent: { name: agent.name, system: agent.system, source: agent.source } }),

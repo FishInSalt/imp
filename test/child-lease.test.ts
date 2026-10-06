@@ -389,7 +389,7 @@ describe("child lease — legacy single-FILE migration", () => {
 });
 
 describe("child lease — machine id (publish-once, §7.4)", () => {
-	const idPathOf = (child: string) => path.join(path.dirname(child), ".imp-machine-id");
+	const idPathOf = (child: string) => path.join(path.dirname(child), ".ink-machine-id");
 	const ownCandidateOf = (child: string, attemptId: string) =>
 		path.join(leaseDirFor(child), candidateName(4242, "my-instance", attemptId));
 
@@ -484,5 +484,24 @@ describe("child lease — machine id (publish-once, §7.4)", () => {
 		if (second.ok) second.lease.release();
 		expect(readFileSync(idPathOf(child), "utf8").trim()).toBe(referenced);
 		if (first.ok) first.lease.release();
+	});
+
+	it("T33f: a pre-existing .imp-machine-id is never read or adopted", async () => {
+		const { child } = await setup("ink-mid-legacy-");
+		const legacyPath = path.join(path.dirname(child), ".imp-machine-id");
+		const legacyBytes = "legacy-machine-id-never-used\n";
+		writeFileSync(legacyPath, legacyBytes);
+		const result = acquireChildLease(child, "a1", {
+			pid: 4242,
+			host: "test-host",
+			nonce: "my-instance",
+			maxAttempts: 1,
+		});
+		expect(result.ok).toBe(true);
+		const fresh = readFileSync(idPathOf(child), "utf8").trim();
+		expect(fresh).not.toBe(legacyBytes.trim());
+		expect(JSON.parse(readFileSync(ownCandidateOf(child, "a1"), "utf8")).machineId).toBe(fresh);
+		expect(readFileSync(legacyPath, "utf8")).toBe(legacyBytes);
+		if (result.ok) result.lease.release();
 	});
 });

@@ -8,6 +8,8 @@ their original release identity.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-06
+
 ### Added
 
 - **guardian — the config-driven permission gate (#guardian).** The
@@ -60,7 +62,7 @@ their original release identity.
   matching the pinned TUI dependency. CI checks that exact minimum and Node 24;
   CI and release gates require `rg`/`fd` instead of silently skipping search tests.
 
-- **Ink rename (planned `ink-agent@0.2.0`).** The product is now Ink, an
+- **Ink rename (`ink-agent@0.2.0`).** The product is now Ink, an
   open-source AI assistant and agent harness for the terminal. The sole
   executable is `ink`; there is no `imp` alias. Active configuration uses
   `~/.ink`, project `.ink`, and `INK_*`, without automatic migration or
@@ -147,8 +149,8 @@ their original release identity.
   attempts, and the child's
   compaction-failure backstop. Child facts surface honestly (task-result
   lines + a `health` field on the TaskRecord); first fires render one dim
-  REPL note (`▪ health: …`; `IMP_HEALTH=0` disables; thresholds overridable
-  via `IMP_HEALTH_*` env). Nothing is injected into any model context; print
+  REPL note (`▪ health: …`; `INK_HEALTH=0` disables; thresholds overridable
+  via `INK_HEALTH_*` env). Nothing is injected into any model context; print
   mode gains no health output of its own (a fired signal's task-result text
   change shows there only in the tool row's line count). Design + two-track
   adversarial review (plus two folded post-merge review rounds):
@@ -158,7 +160,7 @@ their original release identity.
   only credential belongs to a non-anthropic family no longer demands a
   manual `/model` in every new session:
   - when the builtin startup default is unusable and exactly ONE credential
-    source exists (the shared-`MOONSHOT_API_KEY` pair counts once), imp
+    source exists (the shared-`MOONSHOT_API_KEY` pair counts once), Ink
     resolves that family's curated `switchHint` (`zai/glm-5.3`, …) — one
     `▪` note, never written to settings, seeded as a non-explicit session
     model, print mode resolves silently;
@@ -166,7 +168,7 @@ their original release identity.
     exists (a usable model is never replaced);
   - an explicit `/model` switch prints a one-time pointer:
     `/settings defaultModel <id>` keeps it for new sessions;
-  - `imp -c`/`-r` re-resolves a stale restored model the same way (the
+  - `ink -c`/`-r` re-resolves a stale restored model the same way (the
     recorded `session_model` row is intentionally left as-is);
   - copy: with a configured provider present, `no model available — run
     /login` becomes `no model selected — /model` on the banner/footer/title,
@@ -184,11 +186,11 @@ their original release identity.
   - one startup `▪` note teaches `/login` (all seven families listed) or
     the env var — a configured-elsewhere machine gets the targeted
     `run /login <family>` form;
-  - print mode (`imp -p …`) fails fast BEFORE any session/log write with a
+  - print mode (`ink -p …`) fails fast BEFORE any session/log write with a
     family-targeted error (`@file` argument errors still win the exit);
   - the dead default is never persisted: all three `seedModel` sites
     (startup, `/new`, resume restore) are gated on live usability, so
-    `imp -c` can no longer resurrect it; sessions written by 0.1.0 resume
+    `ink -c` can no longer resurrect it; sessions written by 0.1.0 resume
     unchanged (no migration, nothing rewritten);
   - `/login` and `/logout` repaint the footer, so the model segment flips
     immediately after a credential change;
@@ -229,7 +231,7 @@ their original release identity.
 
 - **guardian v1 and the host classify seam.** The rule-based example gate
   (`examples/extensions/guardian.mjs`, configurable via `IMP_GUARDIAN_BLOCK`,
-  audited to `~/.ink/guardian.log`), its tests (`test/guardian.test.ts`,
+  audited to `~/.imp/guardian.log`), its tests (`test/guardian.test.ts`,
   `test/guardian-auto.test.ts`, `test/guardian-auto-host.test.ts`,
   `test/classify-seam.test.ts`, `test/user-input-log.test.ts`), and the
   `#guardian-auto-mode` host machinery (`api.classify` and its types, the

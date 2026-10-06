@@ -47,7 +47,7 @@ The proposed final local installation remains **source-linked to `/Users/z/Z/Age
 | First Ink version | Owner confirmed `0.2.0` in package, lockfile, and `src/format.ts`. Do not reuse published `0.1.0` or its tag. |
 | Global / project root | `~/.ink` / `<project>/.ink`, with no automatic `.imp` fallback, merge, or dual discovery |
 | Environment | `INK_*` replaces active `IMP_*`, with no aliases; the bash tool injects `INK=1` instead of `IMP=1`. Provider-owned variables and arbitrary inherited environment remain unchanged. |
-| Repository | Keep `FishInSalt/imp` and its actual URLs initially. A GitHub rename to `FishInSalt/ink` is optional and requires separate approval. Do not advertise nonexistent URLs. |
+| Repository | Keep `FishInSalt/imp` and its actual URLs initially. A GitHub rename to `FishInSalt/ink` is optional and requires separate approval. Do not advertise nonexistent URLs. **Executed 2026-10-06: renamed to `FishInSalt/ink`** (see [ink-first-publication-design](ink-first-publication-design.md) §14). |
 | Source / existing worktrees | Do not move or rename their directories or branches. New task worktrees use Ink names. |
 | History | Preserve Git history, released tags, historical design/ledger entries and JSONL bytes. Add a new rename changelog entry and supersession pointers where needed. |
 | Ordinary sessions | Supported after an approved state migration with original project cwd unchanged; prove using offline fixtures. |

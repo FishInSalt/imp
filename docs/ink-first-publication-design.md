@@ -23,12 +23,14 @@ ordinary releases to the existing tag-push trusted-publishing path.
 
 **Non-goals (each needs its own approval and is out of scope here).**
 
-- Renaming the GitHub repository `FishInSalt/imp` or updating remotes.
 - Deprecating, unpublishing or otherwise touching `imp-agent@0.1.0`.
 - Changing the npm account, its 2FA method, or introducing any token.
 - Global installation of Ink on any machine.
 - Trademark clearance of the name (a separate legal question; registry
   absence is neither reservation nor clearance).
+
+The repository rename is no longer a non-goal: it was executed on 2026-10-06
+(`FishInSalt/imp` → `FishInSalt/ink`; see §14).
 
 ## 1. Preconditions and owner inputs
 
@@ -162,7 +164,7 @@ After the package exists (§7 step 4), the owner binds its trusted publisher on
 the npmjs.com package settings page:
 
 - Provider: **GitHub Actions**
-- Repository: **`FishInSalt/imp`**
+- Repository: **`FishInSalt/ink`** (renamed from `FishInSalt/imp`; see §14)
 - Workflow filename: **`release.yml`** (the form takes the file name, not the
   `.github/workflows/` path)
 - Environment: **left blank**, because the `publish` job in `release.yml`
@@ -258,8 +260,12 @@ owner approval. Do not batch them.
   reports `0.2.0`.
 - Download `dist.tarball` and confirm its SHA-256 equals the frozen §3 value
   (the published bytes are the reviewed bytes).
-- The package page renders README, points at `FishInSalt/imp`, and shows the
-  intended public access. No provenance badge is expected on `0.2.0` (§4).
+- The package page renders the README embedded in the published tarball. For
+  the already-published `0.2.0` that text and the `repository` field are the
+  pre-rename ones (`FishInSalt/imp`, redirecting); they cannot be changed
+  without a new version, and the `FishInSalt/ink` README/repository takes effect
+  only from the next published version. This pre-rename page text is **not** a
+  §7/§9 content failure. No provenance badge is expected on `0.2.0` (§4).
 - Installing `ink-agent@0.2.0` in a throwaway prefix yields the single `ink`
   command and prints `Ink 0.2.0` (smoke already covers this offline).
 
@@ -317,9 +323,10 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
 - **Environment matching.** The repository currently has no GitHub
   Environments. If one is added to the `publish` job later, update the npm
   binding in the same, separately approved change.
-- **Repository rename ordering.** Any future GitHub rename must be followed by
-  re-verifying the trusted-publisher repository field (§5), since the binding
-  names the repository explicitly.
+- **Repository rename ordering.** The GitHub rename (2026-10-06; see §14) is
+  reflected by binding the publisher to the new name; any *further* rename must
+  likewise be followed by re-verifying the trusted-publisher repository field
+  (§5), since the binding names the repository explicitly.
 - **`npm trust` / staged publishing.** npm has introduced a `npm trust` CLI and
   staged publishing; before executing §7, check whether a not-yet-published
   package can be pre-bound to a trusted publisher. If so, that removes the
@@ -338,7 +345,7 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
 | Independent review | `R` code-reviewed before merge; frozen tarball independently reviewed after freeze and before publish |
 | Gate visibility | Tag push with variables unset is green and shows the publication-skipped warning + summary |
 | First publish | `ink-agent@0.2.0` visible; downloaded SHA-256 == frozen; no provenance badge (expected) |
-| Binding | npm trusted publisher = GitHub Actions / `FishInSalt/imp` / `release.yml` / no environment |
+| Binding | npm trusted publisher = GitHub Actions / `FishInSalt/ink` / `release.yml` / no environment |
 | Variables | `INK_NPM_PUBLISH_ENABLED=true`, `INK_NPM_PACKAGE=ink-agent`, set only after binding and deferred to step L; `v0.2.0` tag event never re-run afterward |
 | Legacy | `NPM_PUBLISH_ENABLED` absent; `imp-agent@0.1.0` untouched; no historical-ref dispatch |
 | Ordinary path | A later version's tag push publishes with provenance (verified at that release) |
@@ -378,3 +385,50 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
 Independent review is closed. Implementation (release preparation, tag,
 publish, binding, variables) still requires the separate owner approvals in
 §10; reviewer approval does not authorize any external action.
+
+## 14. Amendment A2 — repository renamed to `FishInSalt/ink`
+
+Status: **pending its own independent review.** On 2026-10-06 the GitHub
+repository was renamed `FishInSalt/imp` → **`FishInSalt/ink`** (owner-approved;
+the old URLs redirect). Consequences for this design:
+
+- §0's "renaming the GitHub repository" non-goal no longer applies — the rename
+  is done.
+- §5's trusted-publisher repository field is now **`FishInSalt/ink`**; §8 and
+  §12 are updated to match. Bind the publisher to `FishInSalt/ink`.
+- `package.json` (repository/homepage/bugs), `README.md`, `RELEASING.md` and
+  `test/package-metadata.test.ts` now point at `FishInSalt/ink`.
+- Historical records keep the old name as history: the released CHANGELOG
+  `0.2.0` entry, the `PROJECT_PLAN.md` ledger,
+  [`docs/publishing-design.md`](publishing-design.md), and
+  [`docs/ink-rename-design.md`](ink-rename-design.md) (which already named
+  `FishInSalt/ink` as the intended target of an optional rename).
+- The already-published `ink-agent@0.2.0` still carries the old repository URL
+  and ships the pre-rename README inside its tarball (npm renders that README on
+  the package page); neither can be changed without a new version, and the
+  repository URL redirects. This is **not** a §7/§9 content failure — the
+  `FishInSalt/ink` README/repository takes effect from the next published
+  version.
+- Re-verify the publisher binding after the rename (§11) — done by binding to
+  the new name in the first place, since the binding had not yet been created.
+
+### 14.1 Execution status (the bootstrap is partly done)
+
+The body's §6/§7/§9/§10/§12 are retained as the reviewed plan; where they read
+as pending, this governs:
+
+- §7 step 4 (manual first publish) and step 5 (verification): **done** —
+  `ink-agent@0.2.0` is live, byte-identical to the frozen artifact (SHA-256
+  `a0f40e64…b507`), no provenance. §10 gate 4 is done.
+- Remaining: §7 step 6 (bind publisher, to `FishInSalt/ink`), step 7 (tag push),
+  step 8 (GitHub Release page), and step L (variables + next version for
+  provenance). §10 gates 5–8 remain, plus the first-OIDC-publish part of gate 9
+  (gate 9's rename component was the executed 2026-10-06 rename).
+- The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
+  published); it applies only to future versions.
+
+### 14.2 Review record
+
+- A2 r1: NEEDS-FIXES (documentation consistency — §8 made a claim false for the
+  live `0.2.0` page, and §7/§10/§12 still framed the first publish as pending).
+  Folded in this revision. Re-review pending.

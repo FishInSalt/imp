@@ -86,10 +86,10 @@ describe("package metadata (release identity)", () => {
 		expect(pkg.files).toEqual(["bin/ink.js", "dist", "README.md", "LICENSE"]);
 	});
 
-	it("describes a general assistant and retains the actual repository URLs", () => {
+	it("describes a general assistant and points at the Ink repository URLs", () => {
 		expect(pkg.description).toBe("Ink — an open-source AI assistant and agent harness for the terminal");
-		expect(pkg.repository.url).toBe("git+https://github.com/FishInSalt/imp.git");
-		expect(pkg.homepage).toBe("https://github.com/FishInSalt/imp#readme");
-		expect(pkg.bugs.url).toBe("https://github.com/FishInSalt/imp/issues");
+		expect(pkg.repository.url).toBe("git+https://github.com/FishInSalt/ink.git");
+		expect(pkg.homepage).toBe("https://github.com/FishInSalt/ink#readme");
+		expect(pkg.bugs.url).toBe("https://github.com/FishInSalt/ink/issues");
 	});
 });

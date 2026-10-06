@@ -23,7 +23,8 @@ ordinary releases to the existing tag-push trusted-publishing path.
 
 **Non-goals (each needs its own approval and is out of scope here).**
 
-- Renaming the GitHub repository `FishInSalt/imp` or updating remotes.
+- Renaming the GitHub repository, which was done separately on 2026-10-06
+  (`FishInSalt/imp` → `FishInSalt/ink`; see §14).
 - Deprecating, unpublishing or otherwise touching `imp-agent@0.1.0`.
 - Changing the npm account, its 2FA method, or introducing any token.
 - Global installation of Ink on any machine.
@@ -162,7 +163,7 @@ After the package exists (§7 step 4), the owner binds its trusted publisher on
 the npmjs.com package settings page:
 
 - Provider: **GitHub Actions**
-- Repository: **`FishInSalt/imp`**
+- Repository: **`FishInSalt/ink`** (renamed from `FishInSalt/imp`; see §14)
 - Workflow filename: **`release.yml`** (the form takes the file name, not the
   `.github/workflows/` path)
 - Environment: **left blank**, because the `publish` job in `release.yml`
@@ -258,7 +259,7 @@ owner approval. Do not batch them.
   reports `0.2.0`.
 - Download `dist.tarball` and confirm its SHA-256 equals the frozen §3 value
   (the published bytes are the reviewed bytes).
-- The package page renders README, points at `FishInSalt/imp`, and shows the
+- The package page renders README, points at `FishInSalt/ink`, and shows the
   intended public access. No provenance badge is expected on `0.2.0` (§4).
 - Installing `ink-agent@0.2.0` in a throwaway prefix yields the single `ink`
   command and prints `Ink 0.2.0` (smoke already covers this offline).
@@ -338,7 +339,7 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
 | Independent review | `R` code-reviewed before merge; frozen tarball independently reviewed after freeze and before publish |
 | Gate visibility | Tag push with variables unset is green and shows the publication-skipped warning + summary |
 | First publish | `ink-agent@0.2.0` visible; downloaded SHA-256 == frozen; no provenance badge (expected) |
-| Binding | npm trusted publisher = GitHub Actions / `FishInSalt/imp` / `release.yml` / no environment |
+| Binding | npm trusted publisher = GitHub Actions / `FishInSalt/ink` / `release.yml` / no environment |
 | Variables | `INK_NPM_PUBLISH_ENABLED=true`, `INK_NPM_PACKAGE=ink-agent`, set only after binding and deferred to step L; `v0.2.0` tag event never re-run afterward |
 | Legacy | `NPM_PUBLISH_ENABLED` absent; `imp-agent@0.1.0` untouched; no historical-ref dispatch |
 | Ordinary path | A later version's tag push publishes with provenance (verified at that release) |
@@ -378,3 +379,29 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
 Independent review is closed. Implementation (release preparation, tag,
 publish, binding, variables) still requires the separate owner approvals in
 §10; reviewer approval does not authorize any external action.
+
+## 14. Amendment A2 — repository renamed to `FishInSalt/ink`
+
+Status: **pending its own independent review.** On 2026-10-06 the GitHub
+repository was renamed `FishInSalt/imp` → **`FishInSalt/ink`** (owner-approved;
+the old URLs redirect). Consequences for this design:
+
+- §0's "renaming the GitHub repository" non-goal no longer applies — the rename
+  is done.
+- §5's trusted-publisher repository field is now **`FishInSalt/ink`**; §8 and
+  §12 are updated to match. Bind the publisher to `FishInSalt/ink`.
+- `package.json` (repository/homepage/bugs), `README.md`, `RELEASING.md` and
+  `test/package-metadata.test.ts` now point at `FishInSalt/ink`.
+- Historical records keep the old name as history: the released CHANGELOG
+  `0.2.0` entry, the `PROJECT_PLAN.md` ledger,
+  [`docs/publishing-design.md`](publishing-design.md), and
+  [`docs/ink-rename-design.md`](ink-rename-design.md) (which already named
+  `FishInSalt/ink` as the intended target of an optional rename).
+- The already-published `ink-agent@0.2.0` metadata still carries the old URL;
+  it cannot be changed and will redirect.
+- Re-verify the publisher binding after the rename (§11) — done by binding to
+  the new name in the first place, since the binding had not yet been created.
+
+### 14.1 Review record
+
+- A2 r1: pending fresh-context adversarial review.

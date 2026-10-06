@@ -2,7 +2,8 @@
 
 Current contract: [`docs/ink-rename-design.md`](docs/ink-rename-design.md) r3.
 The selected package/version is **`ink-agent@0.2.0`**, with the sole `ink`
-executable. The repository is still **`FishInSalt/imp`**. Package metadata,
+executable. The repository is **`FishInSalt/ink`** (renamed from
+`FishInSalt/imp`; old URLs redirect). Package metadata,
 lockfile (including its root package), app `VERSION`, and release tag must
 agree. Never publish as `imp-agent` or plain `ink`, and never reuse `v0.1.0`.
 No publication, tag push, workflow dispatch, account configuration, or global
@@ -40,7 +41,7 @@ The bootstrap design must establish:
 - first-publication authentication and its actual provenance guarantees
   (a manual first publish is not a tag-push trusted-publishing event);
 - the selected package's npm trusted-publisher binding: GitHub Actions,
-  repository `FishInSalt/imp`, workflow filename `release.yml`, and any
+  repository `FishInSalt/ink`, workflow filename `release.yml`, and any
   configured environment matching the workflow;
 - enabling the new variables only after publisher binding is verified;
   rechecking the binding after any separately approved repository rename.

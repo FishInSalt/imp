@@ -4,9 +4,9 @@ An open-source AI assistant and agent harness for the terminal. Use Ink for
 research, writing, analysis, software development, and other tool-assisted
 tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
-The repository remains [FishInSalt/imp](https://github.com/FishInSalt/imp).
-Ink is the current product name; historical release and design records keep
-their original names.
+The repository is [FishInSalt/ink](https://github.com/FishInSalt/ink), renamed
+from `FishInSalt/imp`; GitHub redirects the old URLs. Ink is the current
+product name; historical release and design records keep their original names.
 
 ## Status
 
@@ -95,8 +95,8 @@ and [release instructions](RELEASING.md). The original
 [rename design](docs/ink-rename-design.md) is historical; its full-state
 migration and source-linked activation proposal was superseded.
 Do not copy credentials, install globally, migrate state, or publish as part
-of an ordinary checkout update. The actual repository URLs still refer to
-`FishInSalt/imp`; a repository rename requires separate approval.
+of an ordinary checkout update. The repository is `FishInSalt/ink`; the old
+`FishInSalt/imp` URLs redirect to it.
 
 ### Signing in (/login)
 

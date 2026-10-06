@@ -3,7 +3,10 @@
 > Historical plan and implementation ledger. The current product is **Ink**;
 > see [README](README.md), [rename acceptance](docs/ink-rename-design.md#10-workspace-implementation-acceptance--2026-10-05)
 > and [local installation](docs/ink-local-install.md). The old full-state cutover
-> proposal was superseded. Historical entries below retain their original
+> proposal was superseded. Entries stop at 2026-10-04, before the rename
+> cutover; later work (the rename, the 0.2.x publications and the identifier
+> follow-through) is recorded in the README, the design/acceptance documents
+> and the Git history. Historical entries below retain their original
 > identities and are not migration or release instructions.
 
 > **名字**：imp（小恶魔/小精灵）——替主人跑腿办事的小家伙，勤快、偶尔捣蛋，天生自带"工具需要权限门"的直觉。彩蛋：IMP 也是 ARPANET 最早的分组交换节点，路由器的祖先。

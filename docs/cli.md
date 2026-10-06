@@ -17,6 +17,22 @@ Do not use `npx ink` — plain `ink` is an unrelated npm package. There is no
 
 Requires Node 22.19.0 or newer. From a source checkout:
 `npm install` (builds via the prepare script), `npm start` to launch.
+The registry package itself runs no install lifecycle scripts (the
+`prepare` build script only runs on git clones and local links).
+
+Verify an installation non-interactively:
+
+```bash
+ink --version    # prints "Ink <version>"
+ink --help       # flag reference, exits 0
+```
+
+Uninstall: `npm uninstall -g ink-agent`. If a global install fails with
+EACCES, the npm prefix is not user-writable — do not prefix the command
+with sudo; point npm at a user-owned prefix (`npm config get prefix`, then
+see the npm docs on fixing permissions) and retry. A note for scripted
+runs: ink refuses `.ink/` project configuration in an untrusted directory
+(safe by default); pre-approve it with `ink --trust` once, per project.
 
 Sign in with an API key (or `/login` inside a session):
 

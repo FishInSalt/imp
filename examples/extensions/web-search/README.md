@@ -123,82 +123,39 @@ checks presence and format, **not validity with Tavily**. A live search is the n
 step only with explicit approval (keyed searches consume credits; keyless searches
 are rate-limited). Do not run live searches in an unattended setup script.
 
-## Tool behavior
+## Tool behavior (summary)
 
-`web_search` parameters:
+Both tools are tightly bounded so a hostile or oversized response cannot
+flood the context. The full parameter and caching contract is in the design
+document; the essentials:
 
-| Parameter | Contract |
-| --- | --- |
-| `query` | Nonblank string, at most 2000 characters |
-| `max_results` | Integer 1–10; default 5 |
-| `days` | Integer 1–365; uses the existing Tavily `news` topic and `days` mapping |
-| `include_domains`, `exclude_domains` | Up to 100 hostname strings each |
-| `full` | Include up to 3000 characters of raw content per source |
+- `web_search`: query ≤ 2000 chars, `max_results` 1–10, `days` 1–365 (news
+  filtering), `include_domains`/`exclude_domains` ≤ 100 hostnames each,
+  `full` for up to 3000 chars of raw content per source. Results are source
+  snippets for the model to synthesize and cite — never a second model's
+  generated answer. Total response ≤ 40,000 characters; 15-second timeout.
+- `url_read`: HTTP(S) URLs ≤ 2048 chars; HTML tags and script/style blocks
+  are stripped; 300,000-byte download cap, 20,000-character output cap,
+  20-second timeout. Does not render JavaScript or parse binary formats.
+- A 10-minute in-memory cache (≤ 64 queries) avoids repeat searches;
+  authentication is checked before cache lookup.
+- **Network policy limitation:** page reading can access local/private
+  addresses and follows redirects. There is no SSRF isolation or
+  private-network approval policy in this release — use only approved
+  destinations. All returned web content is untrusted evidence, not
+  instructions; warnings are not an injection security boundary.
 
-Filters are normalized, deduplicated and sorted; IDNA domain names are accepted.
-URLs, paths, ports, wildcards, IP addresses and single-label names are not domain
-filters. Include/exclude overlap is rejected. `days` is provider-specific news
-filtering, not a general date range; current provider compatibility is not live-
-verified by the unit tests.
+## Terminal presentation (summary)
 
-Requests explicitly use `search_depth: basic` and `include_answer: false`.
-The tool returns source results for the parent model to synthesize and cite, not
-a second model's generated answer. Invalid source entries are skipped. Empty
-results are a normal response; wholly malformed nonempty results are an error.
-Source URLs are never shortened; oversized URLs are skipped. Warnings, metadata
-and truncation markers count toward the 40,000-character total limit.
-
-With no credential configured, requests carry `X-Tavily-Access-Mode: keyless` and
-no authorization header; keyed requests never send the access-mode header.
-Keyless 401/403/429/432/433 report one sanitized hint pointing at `TAVILY_API_KEY`
-for higher limits; other statuses keep mode-neutral wording. A configuration
-error is still a local error even without an environment key.
-
-Search responses have a 1 MiB decoded-body byte cap and a 15-second timeout.
-The 10-minute in-memory cache holds at most 64 queries, is shared across `/new`
-within one extension instance, and clears on observed credential changes
-(including key <-> keyless transitions) or configuration errors. Failed requests
-are not cached; there is no disk cache or parallel-request deduplication.
-Authentication is checked before cache lookup.
-
-`url_read` accepts HTTP(S) URLs without embedded credentials, at most 2048
-characters. HTML script/style blocks and tags are stripped; plain text, JSON and
-XML remain text. It does not render JavaScript or parse arbitrary binary formats.
-A streaming 300,000-byte download cap and a 20,000-character total output cap
-include explicit truncation notices. Timeout is 20 seconds. Character limits
-count JavaScript UTF-16 units while avoiding split surrogate pairs.
-
-**Network policy limitation:** page reading can access local/private addresses
-and follows redirects. This release does not implement SSRF isolation or a
-private-network approval policy. Use only approved destinations. All returned web
-content is untrusted evidence, not instructions; warnings are not an injection
-security boundary. Successful source text may contain arbitrary remote content.
-
-## Terminal presentation
-
-When supported by the terminal UI, `web_search` shows the normalized query and
-requested filters, followed by title/hostname previews from recognizable result text.
-These synchronous display hooks do not read credentials, fetch URLs, or change
-requests, cached output, model content, or saved history. `url_read` shows the URL and first nonblank body lines from an exact recognized
-envelope; the warning and redirect metadata remain in expanded Result text.
-
-Result previews are deliberately count-free: source text can imitate the output
-format, so parsing cannot establish an authoritative source count. Errors and image responses use the generic view. Unknown historical formats,
-unsafe URLs, and detectable delimiter ambiguity show the neutral `Source preview unavailable`
-summary without inferred source facts. Empty results are described as reported by the text; omission
-markers are quoted as reports, not inferred counts. Expanded presentation retains
-the original text subject to the host's normal display limits. Full content is
-already bounded by the tool, not a claim of complete page content. Live display
-overrides are not used for parsing; replay interprets the same saved result text.
-
-Expanded calls show labeled effective arguments, marking absent options as defaults;
-unknown keys remain visible under Other arguments. Alt+O switches all eligible
-expanded calls between readable fields and retained original JSON without changing
-Ctrl+O expansion. Collapsed calls remain compact. Alt+O requires a single terminal
-alt sequence (ESC+o); separately dispatched Escape retains its cancel action.
-Raw display is sanitized and capped, not unlimited transport bytes. Conversation
-clear resets readable mode. Original URLs, warnings and snippets remain available
-in expanded Result text.
+`web_search` shows the normalized query, requested filters, and title/hostname
+previews from recognizable result text; `url_read` shows the URL and first
+nonblank body lines. Expanded calls show labeled effective arguments; Alt+O
+switches expanded calls between readable fields and the retained original
+JSON. These display hooks never read credentials, fetch URLs, or change
+requests, cached output, model content, or saved history. Previews are
+deliberately conservative — source text can imitate the output format, so
+ambiguous or unknown formats show a neutral "source preview unavailable"
+summary instead of inferred facts.
 
 ## Troubleshooting
 

@@ -1,18 +1,69 @@
+<p align="center">
+  <a href="https://www.npmjs.com/package/ink-agent"><img alt="npm" src="https://img.shields.io/npm/v/ink-agent?style=flat-square" /></a>
+  <a href="https://github.com/FishInSalt/ink/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
+  <a href="https://github.com/FishInSalt/ink/releases"><img alt="releases" src="https://img.shields.io/github/v/release/FishInSalt/ink?style=flat-square" /></a>
+</p>
+
 # Ink
 
 An open-source AI assistant and agent harness for the terminal. Use Ink for
 research, writing, analysis, software development, and other tool-assisted
 tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
-The repository is [FishInSalt/ink](https://github.com/FishInSalt/ink),
-renamed from `FishInSalt/imp`; GitHub redirects the old URLs. Ink is the current
-product name; historical release and design records keep their original names.
+Adapt Ink to your workflows, not the other way around: extend it with
+[extensions](docs/extensions.md), [skills](docs/skills.md), [named
+subagents](docs/subagents.md), and [MCP servers](docs/mcp.md) — the bundled
+[examples](examples/README.md) (extensions, a subagent, a skill) show how.
 
-## Status
+## Getting started
+
+Install and run in the directory where you want it to work:
+
+```bash
+npm install -g ink-agent@latest
+cd /path/to/project
+ink
+```
+
+Verify a non-interactive install with `ink --version` (prints `Ink <version>`)
+or `ink --help`; for scripted one-shot use `ink -p "question"` prints the
+answer and exits. The registry package runs no install lifecycle scripts.
+Uninstall with `npm uninstall -g ink-agent`.
+
+Or let npm infer the single `ink` executable from the explicit package:
+
+```bash
+npm exec -- ink-agent@latest --help
+```
+
+Do not use `npx ink`: plain `ink` is an unrelated npm package. There is no
+`imp` executable alias. Requires Node 22.19.0 or newer (matching the pinned
+TUI dependency). Then sign in with an API key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+or `/login` inside a session (ChatGPT-plan OAuth included). Give Ink a task.
+For a full walkthrough, start at the [documentation](docs/index.md) topic
+map.
+
+Working from a source checkout instead:
+
+```bash
+npm install   # installs dependencies and builds (prepare script)
+npm start     # launches the interactive REPL
+```
+
+Do not copy credentials, migrate state, or publish when updating a source
+checkout; for a normal install use the npm package above. Ink reads
+`~/.ink` and `INK_*` configuration only and never touches historical
+`.imp` state — see [docs/cli.md](docs/cli.md).
+
+## What's inside
 
 A working assistant with an interactive terminal interface, persistent
-sessions, and extensible tools. Roadmap and historical implementation ledger:
-`PROJECT_PLAN.md`. At a glance:
+sessions, and extensible tools:
 
 - Interactive TUI (streaming, one-line tool status, queued steering and
   follow-up runs) plus print mode (`ink -p "..."`) and piped stdin
@@ -25,44 +76,36 @@ sessions, and extensible tools. Roadmap and historical implementation ledger:
 - Tools: `bash` (timeout, truncation), `read` (offset/limit, images), `edit`
   (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd), `ls`,
   `task` (subagents) — search tools respect .gitignore
-- Providers: Anthropic, Z.AI (GLM), DeepSeek, Moonshot/Kimi, OpenAI (API key
-  or ChatGPT-plan OAuth) — credentials come from environment variables or
-  `/login`
+- Providers: Anthropic, OpenAI (API key or ChatGPT-plan OAuth), Z.AI (GLM),
+  DeepSeek, Moonshot/Kimi (international and CN endpoints) — credentials
+  from environment variables or `/login`
 - Extensions, skills, named subagents, MCP servers, markdown quick commands,
   and custom system prompts (SYSTEM.md)
 
-## Setup
+Roadmap and the historical implementation ledger live in `PROJECT_PLAN.md`;
+every feature's design documents and review records live in
+[docs/design/](docs/design/) (not shipped in the npm package).
 
-Requires Node 22.19.0 or newer, matching the pinned TUI dependency.
-The package is published on npm as `ink-agent`. Install it to provide the
-`ink` command:
+## Interactive mode in one screen
 
-```bash
-npm install -g ink-agent@latest
-ink
-```
+Run `ink` with no arguments for an interactive session over one shared
+conversation and session. Plain lines go to the model; lines typed while Ink
+is working are queued (`steer:` on Enter, `follow-up:` on alt+enter —
+alt+up pulls them back). Ctrl+C aborts the running turn (twice to exit);
+Ctrl+D exits; Ctrl+O expands every fold; Ctrl+L opens the model picker;
+Shift+Tab cycles thinking; Ctrl+T hides reasoning traces.
 
-Or let npm infer the single `ink` executable from the explicit package:
+Slash commands: `/help`, `/exit`, `/new`, `/fork <n>`, `/tree`, `/sessions`,
+`/resume <id>`, `/model [id]`, `/think [level]`, `/compact`, `/status`,
+`/copy`, `/name`, `/trust`, `/worktrees`, `/login`, `/logout`, `/mcp`,
+`/settings`. Unknown commands get a hint instead of reaching the model;
+prefix a line with a space to send a literal leading `/`. Details:
+[sessions.md](docs/sessions.md).
 
-```bash
-npm exec -- ink-agent@latest --help
-```
-
-Do not use `npx ink`: plain `ink` is an unrelated npm package. There is no
-`imp` executable alias.
-
-Then sign in with an API key (or `/login` inside a session):
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Working from a source checkout instead:
-
-```bash
-npm install   # installs dependencies and builds (prepare script)
-npm start     # launches the interactive REPL
-```
+Terminal notes for the alt keys: iTerm2, Ghostty, Kitty, and recent VS Code
+terminals work out of the box. WezTerm binds Option+Enter to fullscreen by
+default and Alacritty may send a plain Return — map both to `\x1b[13;3u`,
+or use esc+p.
 
 ## Documentation
 
@@ -85,51 +128,9 @@ a topic map:
   isolation
 - [Images](docs/images.md) — vision models, paste, the resize ladder
 
-### Rename from imp
-
-Ink reads `~/.ink`, project `.ink`, and `INK_*` configuration only. It does
-not discover, merge, or automatically migrate `.imp` state or `IMP_*`
-settings. Standard `AGENTS.md`, `.agents/skills`, and MCP configuration
-filenames are unchanged. This cutover uses an independent installation and
-selected configuration only; old sessions, logs and history stay in `.imp`
-and are not migrated. Start new Ink sessions. Historical child sessions
-cannot resume across the version change.
-The public source type `ImpSettings` is now `InkSettings`, a breaking change
-for deep imports. Historical records stay readable but are never rewritten
-or migrated: legacy launch records (`impVersion`) stay readable through a
-normalization arm, and old `.imp-machine-id` files are left untouched (never
-read, adopted or deleted). New records and leases use Ink names
-(`inkVersion`, `.ink-machine-id`), and new task worktrees use
-`ink-worktree-*` / `ink/task-*` while historical `imp-worktree-*`
-directories stay listed. Codex plan requests now carry `originator: "ink"`.
-
-See the [local installation and acceptance record](docs/design/ink-local-install.md)
-and [release instructions](RELEASING.md). The original
-[rename design](docs/design/ink-rename-design.md) is historical; its full-state
-migration and source-linked activation proposal was superseded.
-Do not copy credentials, migrate state, or publish when updating a source
-checkout; for a normal install use the npm package above.
-
-## Interactive mode in one screen
-
-Run `ink` with no arguments for an interactive session over one shared
-conversation and session. Plain lines go to the model; lines typed while Ink
-is working are queued (`steer:` on Enter, `follow-up:` on alt+enter —
-alt+up pulls them back). Ctrl+C aborts the running turn (twice to exit);
-Ctrl+D exits; Ctrl+O expands every fold; Ctrl+L opens the model picker;
-Shift+Tab cycles thinking; Ctrl+T hides reasoning traces.
-
-Slash commands: `/help`, `/exit`, `/new`, `/fork <n>`, `/tree`, `/sessions`,
-`/resume <id>`, `/model [id]`, `/think [level]`, `/compact`, `/status`,
-`/copy`, `/name`, `/trust`, `/worktrees`, `/login`, `/logout`, `/mcp`,
-`/settings`. Unknown commands get a hint instead of reaching the model;
-prefix a line with a space to send a literal leading `/`. Details:
-[sessions.md](docs/sessions.md).
-
-Terminal notes for the alt keys: iTerm2, Ghostty, Kitty, and recent VS Code
-terminals work out of the box. WezTerm binds Option+Enter to fullscreen by
-default and Alacritty may send a plain Return — map both to `\x1b[13;3u`,
-or use esc+p.
+The npm package ships this documentation; the agent routes its own questions
+through it. The bundled [examples](examples/README.md) — extensions, a named
+subagent, a skill — install alongside.
 
 ## Platform support
 
@@ -159,7 +160,9 @@ npm test               # vitest run
 
 Design archive: every feature's design document and review record lives in
 [docs/design/](docs/design/) (not shipped in the npm package).
-[RELEASING.md](RELEASING.md) documents the release process.
+[RELEASING.md](RELEASING.md) documents the release process. The repository
+was renamed from `FishInSalt/imp`; GitHub redirects the old URLs, and
+historical release and design records keep their original names.
 
 ## License
 

@@ -176,7 +176,7 @@ function sleepSync(ms: number): void {
  * guidance and is never touched.
  */
 function resolveMachineId(dir: string, onBeforeMachineIdPublish?: () => void): string {
-	const file = path.join(dir, ".imp-machine-id");
+	const file = path.join(dir, ".ink-machine-id");
 	for (let round = 0; round < MACHINE_ID_ROUNDS; round++) {
 		let content: string | undefined;
 		let exists = true;

@@ -1,5 +1,10 @@
 # SA-06 design: child launch record — persist and validate resumable launch state
 
+> Identifier note (2026-10-06): new launch records write `inkVersion` (the
+> legacy `impVersion` key remains readable; see
+> [ink-rename-design](ink-rename-design.md) §11, Amendment A1). The
+> historical text below keeps the original field name.
+
 Task list item: SA-06 ("Persist and validate resumable child launch state") —
 `docs/subagent-delegation-task-list.md` §SA-06. Branch:
 `feat/sa-06-child-launch-record`. Date: 2026-09-28. Baseline: `848632a`.

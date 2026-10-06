@@ -64,7 +64,7 @@ export interface LaunchExtensionContext {
 }
 
 export interface LaunchEnvironmentFacts {
-	impVersion: string;
+	inkVersion: string;
 	systemText: string;
 	contextFiles: LaunchContextFile[];
 	promptFiles: LaunchPromptFile[];
@@ -92,7 +92,7 @@ export interface ChildLaunchRecord {
 	version: 1;
 	parentSessionId: string;
 	childId: string;
-	impVersion: string;
+	inkVersion: string;
 	agent?: { name: string; source: string; roleSha256: string };
 	model: ChildModelBinding;
 	cwd: string;
@@ -110,7 +110,7 @@ export interface ChildLaunchRecord {
 export interface ChildLaunchBuildInput {
 	parentSessionId: string;
 	childId: string;
-	impVersion: string;
+	inkVersion: string;
 	agent?: { name: string; system: string; source: string };
 	model: ChildModelBinding;
 	cwd: string;
@@ -149,7 +149,7 @@ export function buildChildLaunch(input: ChildLaunchBuildInput): ChildLaunchRecor
 		version: CHILD_LAUNCH_VERSION,
 		parentSessionId: input.parentSessionId,
 		childId: input.childId,
-		impVersion: input.impVersion,
+		inkVersion: input.inkVersion,
 		model: { ...input.model },
 		cwd: input.cwd,
 		tools: input.tools
@@ -204,9 +204,17 @@ export function parseChildLaunch(value: unknown): ChildLaunchParse {
 	if (!isRecord(value)) return { ok: false, reason: "invalid" };
 	const r = value;
 	if (r.version !== CHILD_LAUNCH_VERSION) return { ok: false, reason: "invalid" };
-	if (!isName(r.parentSessionId) || !isName(r.childId) || !isName(r.impVersion)) {
+	if (!isName(r.parentSessionId) || !isName(r.childId)) {
 		return { ok: false, reason: "invalid" };
 	}
+	// Presence is an own property: a present `inkVersion` must be a nonempty
+	// string (no fallback); the legacy `impVersion` is consulted only when the
+	// new key is absent; carrying both names requires equal values.
+	const hasInk = Object.hasOwn(r, "inkVersion");
+	const hasLegacy = Object.hasOwn(r, "impVersion");
+	const version = hasInk ? r.inkVersion : r.impVersion;
+	if (!isName(version)) return { ok: false, reason: "invalid" };
+	if (hasInk && hasLegacy && r.impVersion !== version) return { ok: false, reason: "invalid" };
 	if (!isAbsolutePath(r.cwd)) return { ok: false, reason: "invalid" };
 	if (!isBinding(r.model)) return { ok: false, reason: "invalid" };
 	if (r.agent !== undefined && !isAgent(r.agent)) return { ok: false, reason: "invalid" };
@@ -217,8 +225,12 @@ export function parseChildLaunch(value: unknown): ChildLaunchParse {
 		return { ok: false, reason: "invalid" };
 	}
 	// Unknown extra fields are tolerated (readers-ignore convention); the
-	// builder never writes them, and nothing in the verdict reads them.
-	return { ok: true, launch: value as unknown as ChildLaunchRecord };
+	// builder never writes them, and nothing in the verdict reads them. One
+	// deliberate exception: the legacy `impVersion` key is consumed and dropped
+	// here, so every reader sees exactly one version field.
+	const launch: Record<string, unknown> = { ...r, inkVersion: version };
+	delete launch.impVersion;
+	return { ok: true, launch: launch as unknown as ChildLaunchRecord };
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -746,7 +758,7 @@ export interface ChildContinuationVerdict {
 /** The currently resolved environment, supplied by the caller (SA-07's
  *  wiring). All plain data — no provider instances, no closures with state. */
 export interface CurrentChildEnvironment {
-	impVersion: string;
+	inkVersion: string;
 	systemText: string;
 	cwd: string | undefined;
 	agentResolver: (name: string) => { system: string } | undefined;
@@ -865,10 +877,10 @@ export async function validateChildContinuation(
 
 	// 3. Ink version (O2: the binary-controlled layer is not fingerprinted
 	//    per-component, so any version change is an incompatibility).
-	if (current.impVersion !== launch.impVersion) {
+	if (current.inkVersion !== launch.inkVersion) {
 		reasons.push({
 			code: "version-drift",
-			message: `launched under application version ${launch.impVersion}; the current build is ${current.impVersion} — resuming across versions is refused`,
+			message: `launched under application version ${launch.inkVersion}; the current build is ${current.inkVersion} — resuming across versions is refused`,
 		});
 	}
 

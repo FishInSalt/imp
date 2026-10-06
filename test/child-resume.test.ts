@@ -87,7 +87,7 @@ interface HarnessArgs {
 	scripts?: ScriptStep[];
 	providerName?: string;
 	system?: string;
-	impVersion?: string;
+	inkVersion?: string;
 	agents?: AgentDefinition[];
 	tools?: Tool[];
 	timeoutMs?: number;
@@ -128,7 +128,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 			? {}
 			: {
 					getLaunchEnvironment: () => ({
-						impVersion: args.impVersion ?? "9.9.9",
+						inkVersion: args.inkVersion ?? "9.9.9",
 						systemText: system,
 						contextFiles: [],
 						promptFiles: [],
@@ -704,7 +704,7 @@ describe("SA-07 resume", () => {
 		const systemResult = await drifted.task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(systemResult.isError).toBe(true);
 		expect(systemResult.output).toContain("system-drift");
-		const versioned = harness({ session: parent, baseDir: base, cwd, scripts: [], impVersion: "9.9.10" });
+		const versioned = harness({ session: parent, baseDir: base, cwd, scripts: [], inkVersion: "9.9.10" });
 		const versionResult = await versioned.task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(versionResult.isError).toBe(true);
 		expect(versionResult.output).toContain("version-drift");

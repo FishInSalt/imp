@@ -44,7 +44,7 @@ function seedAgedDeadCandidate(dir: string): string {
 	// candidate matches the workers' identity instead of being refused as
 	// owned-elsewhere.
 	const machineId = "00000000-1111-4222-8333-444444444444";
-	writeFileSync(path.join(dir, ".imp-machine-id"), `${machineId}\n`);
+	writeFileSync(path.join(dir, ".ink-machine-id"), `${machineId}\n`);
 	const leaseDir = path.join(dir, "child.jsonl.lease");
 	mkdirSync(leaseDir, { recursive: true });
 	const file = path.join(leaseDir, "lease-999999-deadbeef-stale");

@@ -83,9 +83,12 @@ selected configuration only; old sessions, logs and history stay in `.imp`
 and are not migrated. Start new Ink sessions. Historical child sessions
 cannot resume across the version change.
 The public source type `ImpSettings` is now `InkSettings`, a breaking change
-for deep imports. Historical `impVersion` launch fields, `.imp-machine-id`
-lease storage, and the Codex `originator: "imp"` compatibility identifier
-remain intentionally unchanged.
+for deep imports. Historical records stay readable but are never rewritten
+or migrated: legacy launch records (`impVersion`) stay readable through a
+normalization arm, and old `.imp-machine-id` files are left untouched (never
+read, adopted or deleted). New records and leases use Ink names
+(`inkVersion`, `.ink-machine-id`). Codex plan requests now carry
+`originator: "ink"`.
 
 See the [local installation and acceptance record](docs/ink-local-install.md)
 and [release instructions](RELEASING.md). The original

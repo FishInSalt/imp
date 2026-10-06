@@ -306,7 +306,7 @@ function childTask(
 		getSession: () => parent,
 		childSessions: true,
 		getLaunchEnvironment: () => ({
-			impVersion: version,
+			inkVersion: version,
 			systemText: CUSTOM_SYSTEM,
 			contextFiles: [],
 			promptFiles: [],
@@ -332,6 +332,19 @@ function persistTask(parent: SessionStore, result: ToolExecuteResult): void {
 	});
 }
 
+/** The builder no longer writes the legacy field: rewrite the stored header
+ *  key so this fixture really exercises the legacy read arm. */
+function rewriteLaunchKey(file: string, from: string, to: string): void {
+	const lines = fs.readFileSync(file, "utf8").split("\n");
+	const header = JSON.parse(lines[0] ?? "") as { launch?: Record<string, unknown> };
+	const launch = header.launch;
+	if (launch === undefined || launch[from] === undefined) throw new Error(`fixture has no launch.${from}`);
+	launch[to] = launch[from];
+	delete launch[from];
+	lines[0] = JSON.stringify(header);
+	fs.writeFileSync(file, lines.join("\n"));
+}
+
 describe("child v1 version compatibility", () => {
 	it("inspects an old 0.1.0 child, but refuses before lease, torn-tail repair, mutation or provider calls", async () => {
 		const oldBase = resource(home, ".imp", "sessions");
@@ -343,6 +356,12 @@ describe("child v1 version compatibility", () => {
 		persistTask(parent, first);
 		const transcript = first.taskRecord?.transcript;
 		if (transcript?.present !== true) throw new Error("Expected historical child transcript");
+		// Rewrite the stored key to the legacy name: the builder no longer
+		// writes `impVersion`, and this fixture must exercise the read arm.
+		rewriteLaunchKey(transcript.path, "inkVersion", "impVersion");
+		const legacyBytes = fs.readFileSync(transcript.path, "utf8");
+		expect(legacyBytes).toContain('"impVersion":"0.1.0"');
+		expect(legacyBytes).not.toContain('"inkVersion"');
 		// A crash fragment makes attempted repair observable in bytes/mtime.
 		fs.appendFileSync(transcript.path, '{"type":"mess');
 		const newBase = resource(home, ".ink", "sessions");
@@ -350,8 +369,10 @@ describe("child v1 version compatibility", () => {
 		const copiedParent = SessionStore.open(path.join(newBase, path.relative(oldBase, parent.filePath)));
 		const childPath = path.join(newBase, path.relative(oldBase, transcript.path));
 		const historical = SessionStore.open(childPath);
-		expect(historical.header.launch?.version).toBe(1);
-		expect(historical.header.launch?.impVersion).toBe("0.1.0");
+		const storedLaunch = historical.header.launch as unknown as Record<string, unknown>;
+		expect(storedLaunch.version).toBe(1);
+		expect(storedLaunch.impVersion).toBe("0.1.0");
+		expect(storedLaunch).not.toHaveProperty("inkVersion");
 		expect(parseChildLaunch(historical.header.launch).ok).toBe(true);
 		expect(historical.tornFinalLine).toBe(true);
 		const before = fs.readFileSync(childPath);
@@ -376,6 +397,7 @@ describe("child v1 version compatibility", () => {
 		expect(ink.sink).toHaveLength(0);
 		expect(fs.existsSync(`${childPath}.lease`)).toBe(false);
 		expect(fs.existsSync(path.join(path.dirname(childPath), ".imp-machine-id"))).toBe(false);
+		expect(fs.existsSync(path.join(path.dirname(childPath), ".ink-machine-id"))).toBe(false);
 		expect(fs.readdirSync(path.dirname(childPath)).sort()).toEqual(childrenBefore);
 		expect(fs.readFileSync(childPath)).toEqual(before);
 		expect(fs.statSync(childPath).mtimeMs).toBe(mtime);
@@ -385,7 +407,7 @@ describe("child v1 version compatibility", () => {
 		expect(launch.sink).toHaveLength(1);
 	});
 
-	it("creates and continues a new Ink child, preserving the v1 impVersion and machine-id protocol", async () => {
+	it("creates and continues a new Ink child with the Ink-named launch field and machine-id file", async () => {
 		const parent = createSession(cwd);
 		const firstHost = childTask(parent, VERSION, [assistant([{ type: "text", text: "Ink child answer" }])]);
 		const first = await firstHost.task.execute({ prompt: "Ink task" }, new AbortController().signal, {
@@ -396,10 +418,10 @@ describe("child v1 version compatibility", () => {
 		if (transcript?.present !== true) throw new Error("Expected Ink child transcript");
 		const child = SessionStore.open(transcript.path);
 		expect(child.header.launch?.version).toBe(1);
-		expect(child.header.launch?.impVersion).toBe(VERSION);
-		expect(child.header.launch).not.toHaveProperty("inkVersion");
+		expect(child.header.launch?.inkVersion).toBe(VERSION);
+		expect(child.header.launch).not.toHaveProperty("impVersion");
 		expect(transcript.path).toContain(`${path.sep}.ink${path.sep}`);
-		const machinePath = path.join(path.dirname(transcript.path), ".imp-machine-id");
+		const machinePath = path.join(path.dirname(transcript.path), ".ink-machine-id");
 		const machineBytes = "retained-historical-machine-id\n";
 		write(machinePath, machineBytes);
 		const beforeLease = vi.fn();
@@ -427,7 +449,7 @@ describe("child v1 version compatibility", () => {
 			messages.filter((message) => message.role === "user" && message.content === "Continue Ink child"),
 		).toHaveLength(1);
 		expect(fs.readFileSync(machinePath, "utf8")).toBe(machineBytes);
-		expect(fs.existsSync(path.join(path.dirname(transcript.path), ".ink-machine-id"))).toBe(false);
+		expect(fs.existsSync(path.join(path.dirname(transcript.path), ".imp-machine-id"))).toBe(false);
 		expect(fs.readdirSync(`${transcript.path}.lease`)).toEqual([]);
 	});
 });

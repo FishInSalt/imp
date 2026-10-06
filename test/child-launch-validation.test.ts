@@ -44,7 +44,7 @@ async function makeWorld(options: { noRecord?: boolean; noContent?: boolean } = 
 	const launch = buildChildLaunch({
 		parentSessionId: parent.header.id,
 		childId,
-		impVersion: "9.9.9",
+		inkVersion: "9.9.9",
 		agent: { name: "scout", system: AGENT_BODY, source: "/agents/scout.md" },
 		model: { ...MODEL },
 		cwd,
@@ -108,7 +108,7 @@ async function makeWorld(options: { noRecord?: boolean; noContent?: boolean } = 
 	const found = findChildByLaunch(parent, childId);
 	if (!found.ok) throw new Error(`fixture lookup failed: ${found.code} ${found.message}`);
 	const current: CurrentChildEnvironment = {
-		impVersion: "9.9.9",
+		inkVersion: "9.9.9",
 		systemText: SYSTEM_TEXT,
 		cwd,
 		agentResolver: (name) => (name === "scout" ? { system: AGENT_BODY } : undefined),
@@ -176,7 +176,7 @@ describe("child continuation — verdict basics", () => {
 		const launch = buildChildLaunch({
 			parentSessionId: parent.header.id,
 			childId,
-			impVersion: "9.9.9",
+			inkVersion: "9.9.9",
 			model: { ...MODEL },
 			cwd,
 			tools: [{ name: "read" }],
@@ -248,7 +248,7 @@ describe("child continuation — verdict basics", () => {
 		const found = findChildByLaunch(reopened, childId);
 		if (!found.ok) throw new Error(`${found.code}: ${found.message}`);
 		const current: CurrentChildEnvironment = {
-			impVersion: "9.9.9",
+			inkVersion: "9.9.9",
 			systemText: SYSTEM_TEXT,
 			cwd,
 			agentResolver: () => undefined,
@@ -267,9 +267,9 @@ describe("child continuation — verdict basics", () => {
 });
 
 describe("child continuation — drift matrix", () => {
-	it("imp version drift => version-drift", async () => {
+	it("Ink version drift => version-drift", async () => {
 		const { parent, file, current } = await makeWorld();
-		const verdict = await validateChildContinuation(file, parent, { ...current, impVersion: "0.0.1" });
+		const verdict = await validateChildContinuation(file, parent, { ...current, inkVersion: "0.0.1" });
 		expect(codes(verdict.reasons)).toContain("version-drift");
 	});
 
@@ -398,7 +398,7 @@ async function makeWorktreeWorld(): Promise<WorktreeWorld> {
 	const launch = buildChildLaunch({
 		parentSessionId: parent.header.id,
 		childId,
-		impVersion: "9.9.9",
+		inkVersion: "9.9.9",
 		model: { ...MODEL },
 		cwd: wtPath,
 		worktree: { repoRoot: repo, baseline, path: wtPath, branch, creationReflog },
@@ -438,7 +438,7 @@ async function makeWorktreeWorld(): Promise<WorktreeWorld> {
 	const found = findChildByLaunch(parent, childId);
 	if (!found.ok) throw new Error(`fixture lookup failed: ${found.code} ${found.message}`);
 	const current: CurrentChildEnvironment = {
-		impVersion: "9.9.9",
+		inkVersion: "9.9.9",
 		systemText: SYSTEM_TEXT,
 		cwd,
 		agentResolver: () => undefined,

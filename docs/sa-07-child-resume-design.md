@@ -1,5 +1,10 @@
 # SA-07 — Synchronous continuation of settled children (design)
 
+> Identifier note (2026-10-06): the launch-record version field and the
+> lease machine-id file now use Ink names (`inkVersion`, `.ink-machine-id`;
+> see [ink-rename-design](ink-rename-design.md) §11, Amendment A1). The
+> historical text below keeps the original names.
+
 - Date: 2026-09-29
 - Branch: `feat/sa-07-child-resume`
 - Baseline: `bae428e` (main; SA-06 merged)

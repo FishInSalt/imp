@@ -708,7 +708,7 @@ class RunnerImpl implements Runner {
 	 *  sources plus the live extension identities (load order). */
 	getLaunchEnvironment(): LaunchEnvironmentFacts {
 		return {
-			impVersion: VERSION,
+			inkVersion: VERSION,
 			systemText: this.systemText,
 			contextFiles: this.systemSources.contextFiles.map((file) => ({ ...file })),
 			promptFiles: this.systemSources.promptFiles.map((file) => ({ ...file })),

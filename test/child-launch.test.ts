@@ -37,7 +37,7 @@ function buildInput() {
 	return {
 		parentSessionId: "parent-1",
 		childId: "child-1",
-		impVersion: "9.9.9",
+		inkVersion: "9.9.9",
 		agent: { name: "scout", system: "You are scout.", source: "/agents/scout.md" },
 		model: { ...MODEL },
 		cwd: "/tmp/exec-cwd",
@@ -66,7 +66,7 @@ describe("child launch record — build", () => {
 			"childId",
 			"cwd",
 			"extensions",
-			"impVersion",
+			"inkVersion",
 			"model",
 			"parentSessionId",
 			"system",
@@ -89,7 +89,7 @@ describe("child launch record — build", () => {
 			"childId",
 			"cwd",
 			"extensions",
-			"impVersion",
+			"inkVersion",
 			"model",
 			"parentSessionId",
 			"system",
@@ -147,11 +147,38 @@ describe("child launch record — normalization", () => {
 
 describe("child launch record — parse", () => {
 	const good = (): unknown => buildChildLaunch(buildInput());
+	const versionless = (): Record<string, unknown> => {
+		const { inkVersion, ...rest } = good() as Record<string, unknown>;
+		return rest;
+	};
+	const legacyOnly = (): Record<string, unknown> => ({ ...versionless(), impVersion: "9.9.9" });
 
 	it("accepts a builder-produced record", () => {
 		const parsed = parseChildLaunch(good());
 		expect(parsed.ok).toBe(true);
 		if (parsed.ok) expect(parsed.launch.version).toBe(CHILD_LAUNCH_VERSION);
+	});
+
+	it("accepts a legacy impVersion-only record, normalizes it, and never mutates the input", () => {
+		const input = legacyOnly();
+		const parsed = parseChildLaunch(input);
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(parsed.launch.inkVersion).toBe("9.9.9");
+			expect(Object.hasOwn(parsed.launch, "impVersion")).toBe(false);
+		}
+		expect(Object.hasOwn(input, "inkVersion")).toBe(false);
+		expect(input.impVersion).toBe("9.9.9");
+	});
+
+	it("accepts both names when equal (normalized to inkVersion)", () => {
+		const both = { ...(good() as object), impVersion: "9.9.9" };
+		const parsed = parseChildLaunch(both);
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(parsed.launch.inkVersion).toBe("9.9.9");
+			expect(Object.hasOwn(parsed.launch, "impVersion")).toBe(false);
+		}
 	});
 
 	it("rejects unknown versions and every structural violation", () => {
@@ -161,6 +188,13 @@ describe("child launch record — parse", () => {
 			"nope",
 			{ ...(good() as object), version: 2 },
 			{ ...(good() as object), impVersion: undefined },
+			{ ...(good() as object), inkVersion: undefined, impVersion: "9.9.9" },
+			versionless(),
+			{ ...(good() as object), inkVersion: "" },
+			{ ...(good() as object), inkVersion: 7 },
+			{ ...(good() as object), impVersion: "1.2.3" },
+			{ ...legacyOnly(), impVersion: "" },
+			{ ...legacyOnly(), impVersion: 7 },
 			{ ...(good() as object), cwd: "relative/path" },
 			{ ...(good() as object), tools: "read" },
 			{

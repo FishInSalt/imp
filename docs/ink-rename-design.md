@@ -56,7 +56,7 @@ The proposed final local installation remains **source-linked to `/Users/z/Z/Age
 | Public type | Rename `ImpSettings` to `InkSettings` and update repository consumers; no deprecated alias needed in this single-user breaking release. Explain the deep-import source break. |
 | Codex HTTP originator | Retain the existing `originator: "imp"` compatibility identifier for this cutover. Mocked tests cannot establish provider acceptance of a new value. A later change needs independent protocol evidence or separately approved live verification. |
 
-Package name, version and workspace implementation are explicitly owner-approved. External cutover authorization is not included. If an input changes the cutover semantics or release security, review the amendment before implementation.
+Package name, version and workspace implementation are explicitly owner-approved. External cutover authorization is not included. If an input changes the cutover semantics or release security, review the amendment before implementation. Amendment A1 (§11, draft) revisits the three retained-identifier rows above.
 
 ## 3. Rename inventory and exception policy
 
@@ -100,7 +100,7 @@ Update tests' sandbox variables **before** changing defaults. `.env` is loaded f
 
 ### 3.4 Deliberately retained history and formats
 
-Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not.
+Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not. **Amended by §11 (Amendment A1, draft)** for the launch-record version field and the lease machine-id file name.
 
 Keep prior Git tags, released changelog sections and ledger/design records describing imp. Add a clear current-name pointer to archival onboarding material rather than replacing old events. An implementation audit must explain each remaining active `imp` match; an empty search result is not the success criterion.
 
@@ -244,3 +244,172 @@ Final commands/results on Darwin arm64, Node **25.5.0**, npm **11.8.0**:
 
 Evidence limits: Node 20/24 were not installed locally and CI was not triggered. The existing `@earendil-works/pi-tui@0.82.0` dependency declares a newer Node floor than the package's retained `>=20`; this pre-existing support discrepancy needs actual target-runtime verification, not a compatibility claim from Node 25. Linux, cross-mount, unsupported native-operation and production-path evidence remain unavailable. Synthetic quiescence/activation ledgers do not prove real process shutdown. No model/provider quota, global installation, GitHub/account changes, push or npm publication occurred. At that snapshot, the full-state cutover runbook described remaining approvals;
 it is now superseded by [the local installation record](ink-local-install.md).
+
+## 11. Amendment A1 — identifier follow-through (2026-10-06)
+
+> **DRAFT FOR REVIEW.** Implementation is not authorized until this amendment
+> passes an independent adversarial review. It revisits the three deliberately
+> retained identifiers of §2 now that the rename is complete and published
+> (`ink-agent@0.2.x`; see [ink-local-install.md](ink-local-install.md)).
+
+For these identifiers only, this section supersedes: the §2 rows "Historical
+child sessions", "Lease identity" and "Codex HTTP originator"; the
+`impVersion` and `.imp-machine-id` clauses of §3.4; and the "Metadata and
+branding" and "Historical identifiers" acceptance rows of §7 where they name
+them.
+
+### 11.1 Motivation and scope
+
+The owner asked whether the retained identifiers can now take Ink names. The
+retention rationale (§2, §3.4) was historical-record readability, not active
+compatibility: old records stay on disk, and cross-version child resumption
+is refused in both directions. The Codex row itself anticipated a later
+change ("a later change needs independent protocol evidence or separately
+approved live verification"). This amendment changes only what new code
+*writes*. Historical bytes are never rewritten, migrated or deleted, and no
+old-name aliases are introduced.
+
+In scope:
+
+1. Launch-record field `impVersion` → `inkVersion` for new records, with a
+   retained legacy read arm (A1-D1).
+2. Lease machine-id file `.imp-machine-id` → `.ink-machine-id` (A1-D2).
+3. Codex (ChatGPT plan) responses header `originator: "imp"` → `"ink"`,
+   gated on live verification (A1-D3).
+
+Out of scope (unchanged): the guard assertions (`package-smoke.mjs` old-alias
+absence; `release-guards.mjs` name refusal), historical `imp-worktree-*`
+recognition, `IMP_LEASE_*` test-only IPC markers, historical records, tags and
+published artifacts, `~/.imp` state, the OAuth `client_id`, and any migration
+tooling.
+
+### 11.2 Decisions
+
+**A1-D1 — launch-record field: new name for writes, read both.**
+`ChildLaunchRecord`, `LaunchEnvironmentFacts`, `CurrentChildEnvironment` and
+`ChildLaunchBuildInput` carry `inkVersion`; `runner.getLaunchEnvironment()`
+emits `inkVersion: VERSION`; `task` passes it; `child-resume` maps it. The
+version comparison and refusal logic is unchanged. `parseChildLaunch` accepts
+`inkVersion` when the key is present (nonempty string; otherwise the record is
+invalid), and falls back to the legacy `impVersion` only when the new key is
+absent; a record carrying both names with different values is invalid; the
+normalized record exposes only `inkVersion` (the legacy property is dropped in
+memory only — a deliberate exception to the readers-ignore convention).
+`ChildLaunchRecord.version` stays `1`; this is a field-level rename with a
+read arm, and nothing else about the record shape changes.
+
+Consequences: an `impVersion`-only record still reaches the exact
+`version-drift` refusal with unchanged text, before lease, repair or provider
+calls; new records carry `inkVersion` and never `impVersion` (no dual-write);
+pre-change builds reading a new record refuse it as schema-invalid, which is
+the same refusal family as today's cross-version refusal.
+
+Rejected alternative: hard cut (drop the legacy arm). Old records would fall
+from "parseable, version-drift" to "invalid launch record", degrading
+diagnostics and changing the §7 "Child safety" acceptance row for no
+functional gain — every old child is refused either way.
+
+**A1-D2 — lease machine-id file: clean rename.**
+`resolveMachineId` publishes and reads `.ink-machine-id`. Publish-once,
+no-clobber link, retry/adopt semantics, the empty-file refusal, tmp-debris
+naming and the content format are unchanged.
+
+Safety argument: the lease is only ever touched after the continuation verdict
+accepts the child — i.e., for a same-version child — and each version reads
+and writes leases only inside its own children's directories. Cross-version
+attempts are refused before lease, repair or provider calls (pinned by the
+old-child case in `test/ink-rename.test.ts`), so two versions can never
+contend through different file names. No dual-read: no producer of the old
+name can reach the lease path. Existing `.imp-machine-id` files are left
+untouched and dormant; their semantics were never derived from the file name.
+
+**A1-D3 — Codex originator: change with a live gate.**
+Only the responses header value changes (`src/provider/codex-responses.ts`);
+the device-code and token flows never send this header, and the `client_id`
+stays as-is. Evidence: pi ships `originator: "pi"` on the same header
+(`pi/src/api/openai-codex-responses.ts:1656`) — an independent client using
+its own product name, so a fixed allowlist is implausible. Mock tests cannot
+establish provider acceptance: the acceptance requirement is an owner-approved
+live ChatGPT-plan interaction after implementation (minimal prompt; confirm
+streaming and a normal answer). If the live check fails or is declined,
+A1-D3 reverts to keeping `"imp"`; A1-D1 and A1-D2 are independent of it.
+
+**A1-D4 — version and release coordination (informational).**
+Recommended: ride the next version (e.g. `0.2.2`), which the release stream
+needs anyway after the `v0.2.1` post-publish visibility failure. Release
+actions remain governed by RELEASING.md and separate approvals; this
+amendment authorizes none.
+
+### 11.3 Compatibility matrix
+
+| Reader | New record (`inkVersion`) | Pre-change record (`impVersion`) |
+| --- | --- | --- |
+| New Ink (this change) | Normal path; the version gate decides resume | Parses via the legacy arm; normalized in memory; all pre-change records are version-drift under the new version; refusal text unchanged |
+| Pre-change builds (all shipped versions) | Refused as schema-invalid (missing `impVersion`), before lease/repair/provider | Unchanged pre-change behavior |
+
+No on-disk coexistence of the two field names is produced; old names appear
+only in material written before this change.
+
+### 11.4 Change inventory
+
+Source: `src/core/child-launch.ts` (schema, parser, normalization),
+`src/core/child-resume.ts`, `src/core/tools/task.ts`, `src/runner.ts`,
+`src/core/child-lease.ts`, `src/provider/codex-responses.ts`.
+
+Tests: `test/ink-rename.test.ts` (flip the current pins; add legacy-only and
+both-present cases), `test/child-launch.test.ts`,
+`test/child-launch-validation.test.ts`, `test/child-resume.test.ts`,
+`test/task-tool.test.ts`, `test/child-lease.test.ts`,
+`test/child-lease-scripts.test.ts`, `test/codex-responses.test.ts`.
+
+Docs (implementation phase): README — replace the retained-identifier
+paragraph (currently "Historical `impVersion` launch fields,
+`.imp-machine-id` lease storage, and the Codex `originator: "imp"`
+compatibility identifier remain intentionally unchanged.") with wording that
+keeps the same promises for historical data but names the new writes, e.g.:
+"Historical records stay readable but are never rewritten or migrated: legacy
+launch records (`impVersion`) and old `.imp-machine-id` files remain
+recognized. New records and leases use Ink names (`inkVersion`,
+`.ink-machine-id`), and Codex plan requests carry `originator: "ink"`."
+CHANGELOG — an Unreleased entry describing the three write-side changes plus
+"no migration; historical files are left untouched". Historical design docs
+(`sa-06`, `sa-07`, previous changelog sections, `PROJECT_PLAN.md`) keep their
+original text per §3.4.
+
+### 11.5 Acceptance criteria
+
+1. `test/ink-rename.test.ts`: a newly created child record carries
+   `inkVersion` and has no `impVersion`; an `impVersion`-only fixture still
+   parses, is refused with the unchanged version-drift text, and the existing
+   no-mutation assertions (no lease, no repair, file bytes/mtime unchanged)
+   stay green.
+2. Parser cases: `inkVersion` present (accepted); legacy only (accepted via
+   fallback); both present and equal (accepted, normalized); both present and
+   unequal (invalid).
+3. `test/child-lease*.ts`: with the new file name, publish-once/no-clobber,
+   empty-file refusal and adopt behavior stay unchanged in strength; new code
+   never creates `.imp-machine-id`.
+4. `test/codex-responses.test.ts` expects `originator: "ink"`.
+5. A1-D3 live acceptance: the owner-approved real ChatGPT-plan interaction
+   succeeds; otherwise the change reverts (recorded in the review log).
+6. Gates: typecheck (both configs), lint, build, full `npm test`, artifact
+   smoke, `git diff --check`.
+7. Remaining-match audit: every active `imp` match is listed with a reason.
+   Expected survivors: the two guard scripts, historical `imp-worktree-*`
+   recognition, `IMP_LEASE_*` test IPC markers, historical docs/records, and
+   cosmetic test fixture names.
+
+### 11.6 Risks and residuals
+
+- Pre-change readers produce a schema-invalid refusal message instead of
+  version-drift wording for new records — accepted; cross-version resume is
+  unsupported and documented in both directions.
+- Server-side treatment of the new originator beyond authentication (quota,
+  telemetry segmentation) is not observable from a successful run; recorded.
+- The legacy read arm is retained indefinitely: records live in user session
+  files and §3.4 forbids rewriting or deleting historical bytes.
+- No migration is needed or performed; upgrading leaves old files untouched.
+
+### 11.7 Review record
+
+(reserved — appended when the amendment review closes)

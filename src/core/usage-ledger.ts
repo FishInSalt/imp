@@ -1,5 +1,5 @@
 /**
- * SA-04 (docs/sa-04-attempt-usage-design.md): one exactly-once usage ledger
+ * SA-04 (docs/design/sa-04-attempt-usage-design.md): one exactly-once usage ledger
  * per child execution attempt. Reports are written at the two provider-stream
  * seams (the task loop and the summarizer) the moment a `message_end` arrives
  * — immune to later history splices, rejected summaries, retries and terminal

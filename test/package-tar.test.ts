@@ -150,7 +150,7 @@ describe("strict package tar bytes", () => {
 		"bin/imp.js",
 		"src/cli.ts",
 		"test/x.test.ts",
-		"docs/x.md",
+		"docs/design/x.md",
 		"scripts/package-smoke.mjs",
 		"dist/.env",
 		"dist/../../auth.json",

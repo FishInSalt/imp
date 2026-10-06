@@ -1,5 +1,5 @@
 /**
- * #bash-abort (design docs/bash-abort-design.md rev3.1): process-tree kill
+ * #bash-abort (design docs/design/bash-abort-design.md rev3.1): process-tree kill
  * and detached-group bookkeeping for the bash tool.
  *
  * The bash tool spawns with detached:true (a fresh process group per

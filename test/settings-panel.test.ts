@@ -1,6 +1,6 @@
 /**
  * M15 #settings-panel — two-scope settings with deep merge, trust gating,
- * and the /settings command. Mirrors docs/m15-settings-design.md §4.
+ * and the /settings command. Mirrors docs/design/m15-settings-design.md §4.
  */
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

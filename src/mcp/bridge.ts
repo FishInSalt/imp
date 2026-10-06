@@ -1,5 +1,5 @@
 /**
- * MCP tool → Ink Tool bridge (M18, docs/m18-mcp-design.md §4).
+ * MCP tool → Ink Tool bridge (M18, docs/design/m18-mcp-design.md §4).
  *
  * Flat direct registration (D2): every MCP tool becomes one Ink tool named
  * `<server>_<tool>` (the shape the pi adapter's directTools mode produces —

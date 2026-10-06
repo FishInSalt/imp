@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fake MCP stdio server for imp's M18 tests (docs/m18-mcp-design.md §7).
+// Fake MCP stdio server for imp's M18 tests (docs/design/m18-mcp-design.md §7).
 // NDJSON JSON-RPC on stdin/stdout. Behavior modes via argv[2]:
 //   ok        — handshake + one echo tool + one slow tool
 //   two       — handshake + two tools (schema passthrough pin)

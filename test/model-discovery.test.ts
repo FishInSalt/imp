@@ -331,7 +331,7 @@ describe("formatTokens (pi footer algorithm)", () => {
 	});
 });
 
-describe("discoverModels pagination (anthropic family, docs/overflow-pagination-design.md §4)", () => {
+describe("discoverModels pagination (anthropic family, docs/design/overflow-pagination-design.md §4)", () => {
 	/** Scripted paging server: one mutable "mode" the handler dispatches on.
 	 *  Pages: page1 (no after_id) = m1..m3, page2 (after_id=m3) = m4..m5. */
 	let server: Server;

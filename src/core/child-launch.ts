@@ -16,7 +16,7 @@ import { collectTaskRecords, type TaskRecordStatus, taskRecordsInEntry } from ".
 import { probeWorktreeIdentity } from "./worktree.js";
 
 /**
- * SA-06 design (docs/sa-06-child-launch-record-design.md): the versioned
+ * SA-06 design (docs/design/sa-06-child-launch-record-design.md): the versioned
  * launch record persisted in a CHILD session header, plus the managed lookup
  * and the continuation validation SA-07 consumes.
  *

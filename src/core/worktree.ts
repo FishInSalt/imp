@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 /**
- * Worktree isolation for subagents (M6b, docs/m6b-worktree-design.md).
+ * Worktree isolation for subagents (M6b, docs/design/m6b-worktree-design.md).
  *
  * `git worktree add <path> -b <branch> HEAD` gives a delegated writing task its
  * own checkout: the child cannot touch the parent's files, and the parent gets
@@ -152,7 +152,7 @@ function commandFailure(result: { status: number; stdout: string; stderr: string
 }
 
 /** Decide whether a task-owned worktree can be auto-removed (design
- *  docs/sa-01-worktree-cleanup-design.md §D2). Never throws — internal errors
+ *  docs/design/sa-01-worktree-cleanup-design.md §D2). Never throws — internal errors
  *  become `unknown`, which preserves the worktree. */
 export async function assessWorktreeRemoval(
 	wt: ChildWorktree,

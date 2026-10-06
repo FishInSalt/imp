@@ -16,7 +16,7 @@ import { usageMoneySegment } from "../src/format.js";
 
 /**
  * SA-05: the durable parent-plus-child work-usage aggregate.
- * See docs/sa-05-usage-totals-design.md.
+ * See docs/design/sa-05-usage-totals-design.md.
  */
 
 const TS = "2026-09-27T00:00:00.000Z";

@@ -1,5 +1,5 @@
 /**
- * #bash-abort (design docs/bash-abort-design.md rev3.1 D2): a child-process
+ * #bash-abort (design docs/design/bash-abort-design.md rev3.1 D2): a child-process
  * wait that never hangs on inherited stdio handles.
  *
  * `close` waits for ALL pipe holders — a grandchild (wrapper script, npm's

@@ -5,7 +5,7 @@ import type { AgentEvent } from "./loop.js";
 import type { AssistantMessage, ToolResult } from "./messages.js";
 
 /**
- * #loop-health (docs/loop-health-design.md): the shared, observation-only
+ * #loop-health (docs/design/loop-health-design.md): the shared, observation-only
  * loop health monitor. It consumes the existing AgentEvent stream
  * (message_end / tool_end) at the call sites — runAgentLoop
  * itself gains no options and is behavior-unchanged without a monitor.

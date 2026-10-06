@@ -1,0 +1,855 @@
+# Loop health monitoring + uncapped children (design)
+
+- Date: 2026-09-29
+- Branch: `docs/loop-health-design` (design only); implementation branch TBD
+  (`feat/loop-health` proposed)
+- Baseline: `faf4b55` (main)
+- Status: IMPLEMENTED + IMPLEMENTATION REVIEWED + POST-MERGE REVIEWS FOLDED
+  (rounds 1-2). Design review closed 2026-09-29 (round 1 NEEDS-FIXES /
+  APPROVE WITH CORRECTIONS, round 2 CONFIRMED WITH NOTES, round 3 CONFIRMED —
+  both tracks); owner decisions A/B signed (A = no numeric valve; B = no
+  injection). Implementation on `feat/loop-health`; implementation review
+  round 1 (two tracks, fresh context) closed APPROVE WITH CORRECTIONS with
+  all corrections folded. Post-merge review round 1 folded on
+  `fix/loop-health-review2` (lint fix, main-loop retry span, peak-evidence
+  coherence); round 2 folded on `fix/loop-health-review3` (print-footprint
+  claim tightened + boundary test, legacy-record resume fixture, parser
+  copy, fake-timer abort test — §9). Final gate re-verified with UNMASKED
+  lint exit code. **Amendment 1 (owner decision, 2026-09-29): `tool-open`
+  removed** — the firing condition cannot distinguish a gate wait, a healthy
+  slow tool, and a true hang; producer removed, legacy read-only arms kept
+  (§9). Drafted on `fix/loop-health-remove-tool-open`; design review of this
+  amendment review closed 2026-09-29: fresh-context adversarial reviewer,
+  three passes — `NEEDS-FIXES` on `c8ae8e4` → `CONFIRMED WITH NOTES` on
+  `fec0ab0` → `CONFIRMED` on `7999ebe`; all findings folded (§9).
+- Supersedes: `design/subagent-softlanding-design.md` rev 4 §2.1 (the 60-turn
+  backup wall) and the cap-related entries in its §5; amends the "existing
+  behavior to preserve" bullet in `design/subagent-delegation-task-list.md`
+  ("The child turn cap is 60 per loop invocation…"). Stale-reference sweep
+  (implemented in this batch, §5): `design/sa-07-child-resume-design.md:690`
+  (pinned resume behavior becomes false), `design/sa-03-task-record-design.md:80`,
+  `design/overflow-pagination-design.md:62,121`, `design/m5-subagents-design.md:341`,
+  `PROJECT_PLAN.md` if it repeats the wall value.
+- Owner requirement (2026-09-29): children no longer carry the 60-turn cap;
+  abnormal states are identified by other means; the main loop shares the same
+  identification mechanism. Owner approved this draft + adversarial review as
+  the next step.
+
+## References read for this design (2026-09-29)
+
+- `pi-subagents` v0.69.0 (`~/.pi/agent/npm/node_modules/pi-subagents`):
+  turn budgets removed in 0.59.0 ("Remove assistant turn budgets, including
+  hard termination, wrap-up prompt injection, and launch configuration",
+  CHANGELOG); current replacements are `timeoutMs` + `checkpointBeforeDeadlineMs`
+  (0.68.0), the long-running guard (`src/runs/shared/long-running-guard.ts`),
+  control events `active_long_running` / `needs_attention`
+  (`src/runs/shared/subagent-control.ts`; defaults `needsAttentionAfterMs` 60s,
+  `activeNoticeAfterMs` 240s, `failedToolAttemptsBeforeAttention` 3, mutating
+  failure window 5 min), and the review-style watchdog (`src/watchdog/`,
+  `loop-risk` warning category).
+- Claude Code 2.1.88 restored source
+  (`/Users/z/Z/claude-code-sourcemap/restored-src`): built-in agents set no
+  `maxTurns` (explore/general-purpose/plan); the fork subagent is the lone wall
+  (`forkSubagent.ts:65`, `maxTurns: 200`); `maxTurns` gates the query loop only
+  when the caller supplies it (`query.ts:1705-1717`, `max_turns_reached`
+  attachment); termination is user-driven (Ctrl+C / TaskStop). No anomaly
+  detection exists on either side.
+- imp source at the baseline; paths cited inline.
+
+## 0. Decision chain (why this batch exists)
+
+1. Incident A (2026-09-23): a review child spent 40 turns / ~44.9k tokens with
+   zero final text; the parent was misled by "(completed with no output)".
+2. `#subagent-softlanding` rev 4 fixed the *reporting* side (honest cap/timeout
+   handoff, transcript path, resume guidance), kept zero prompt injection into
+   children, and raised the wall 40 → 60 as a "backup" — explicitly NOT a
+   budget. The design recorded why a wall stayed at all: "imp 无子代理
+   观测/steer 通道——结构上裸奔面更大" (`subagent-softlanding-design.md` §2.1).
+3. Both reference projects then moved further: pi-subagents **removed turn
+   budgets entirely**; CC built-ins never had them. Neither replaced them with
+   another count — pi uses a hard time deadline plus *notice* signals; CC uses
+   user termination.
+4. Owner requirement 2026-09-29: drop the 60-turn cap; identify abnormal
+   states instead; give the main loop the same identification mechanism.
+5. This batch builds the detection/visibility layer rev 4 lacked and removes
+   the count wall. **It does not yet add an acting channel**: v1's live notes
+   inform the user; the parent model learns at settle; nothing terminates
+   automatically beyond the pre-existing surfaces (§3-A). The owner-approved
+   scope refinement: detection is observation-only in this batch; auto-abort
+   is a separate decision; whether any last-resort valve remains is an
+   explicit owner decision (§3).
+
+## 1. Problem definition
+
+### 1.1 What the 60-turn wall does today (verified facts)
+
+- `CHILD_MAX_TURNS = 60` (`src/core/constants.ts:13`) is passed as
+  `maxIterations` by `runSubagent` (`src/core/subagent.ts:339`); the loop stops
+  a tool-calling turn when `turns >= maxIterations` (`src/core/loop.ts:229-241`)
+  and reports `max_iterations`.
+- The overflow-recovery path starts a **second** loop, so one attempt can run
+  up to 2×60 turns (`src/core/subagent.ts:201-203`).
+- The wall counts completed tool-calling turns only. A single hung tool call
+  never advances it; the only clock in play is `defaultChildTimeoutMs()`
+  (TTY: none; print/headless: 60 min — `src/core/constants.ts:24`).
+- Interactive children therefore rely on exactly two termination surfaces: the
+  60-turn wall and Ctrl+C. Print children: the wall + the 60-minute clock.
+
+### 1.2 Why turn count is the wrong abnormal-state signal
+
+- Turn count conflates two unrelated conditions: honest long work (measured in
+  turns by nothing meaningful) and degenerate loops. It truncates the former
+  (rev 4 §2.1: the wall arrived before the clock exactly in cheap-turn honest
+  scenarios) and detects the latter only after N turns *and* only silently.
+- pi-subagents built a turn budget (soft wrap-up + hard termination + grace
+  turns), then removed the whole mechanism in 0.59.0 — the strongest available
+  evidence that count-based termination was the wrong shape even with an
+  escape hatch.
+- CC built-ins are uncapped; the fork wall (200) is a sanity fence, not a
+  budget.
+- The wall cannot see hung tools at all; imp's own rev 4 recorded this gap.
+
+### 1.3 The gap this batch fills — stated precisely
+
+What v1 adds: detection of the concrete degenerate patterns both references
+guard against (repeated identical calls, repeated failed mutations), honest
+surfacing of the child's existing compaction-failure state, and live
+user-visible notes for both loops. (Amendment 1, §9: a third intended
+pattern — `tool-open`, a call left open too long — was merged to main
+(unreleased) and removed the same day; the wall it replaced never saw hung
+tools either (§1.1), and
+the signal could not honestly distinguish a hang from a slow tool or a
+pending human decision.) What v1 does **not** add: any acting channel. Child facts reach the parent model only
+at settle (task results are built after `runSubagent` returns —
+`src/core/tools/task.ts:910,941`); during an undetected degenerate loop the
+live note informs the user, and the user decides (Ctrl+C). The main loop has
+no detector at all today (interactive is uncapped — `src/cli.ts:472`; print
+defaults to 100 — `src/cli.ts:237`). The residual runaway window after this
+batch equals the window before it; what changes is that the window is visible
+and the evidence is recorded. Whether that visibility is sufficient — or a
+valve must remain — is owner decision A.
+
+## 2. Goals / non-goals
+
+Goals:
+
+1. Remove the child turn cap: no `CHILD_MAX_TURNS`; loop launches uncapped.
+2. One shared monitor (`src/core/health.ts`) consumed by the child engine and
+   the main runner; identical signal definitions and thresholds, per-context
+   surfacing.
+3. Signals (v1): `repeat-loop`, `mutation-failure-streak` (both loops) +
+   `compaction-failures` (child-engine fact). (`tool-open` was removed —
+   Amendment 1, §9.)
+4. Detection is observation-only: no prompts, no aborts, no new terminal
+   statuses, `isError` semantics unchanged. (Owner decision B.)
+5. Child facts reach the parent honestly: task-result lines, a TaskRecord
+   field, and interactive live notes; the main loop gets interactive live
+   notes. Print mode gains no health output of its own (no live notes); when
+   facts fire, the task-result text changes by design like any other
+   result-text change, visible there only in the tool line's `(+N lines)`
+   count (post-merge review round 2, F4 — the earlier "byte-identical"
+   wording was too broad).
+6. Tests and docs updated; the old pins are replaced by explicit new contracts.
+
+Non-goals (with reason):
+
+- No auto-abort / token valve in this batch. Whether any last-resort valve
+  exists is owner decision A (§3). v1 does not reduce the runaway window
+  (§1.3) and this is recorded, not hidden.
+- No prompt injection into children (zero-injection stands, rev 4 §2.5);
+  pi's `checkpointBeforeDeadlineMs` is an injected instruction and is
+  deliberately not adopted here.
+- No steer / wait / asynchronous delegation (previously deferred; unchanged).
+- No print-mode additions of the monitor's own (no live notes, no stderr; see
+  §4.3) — the task-result text itself changes by design when facts fire.
+- No extension API or M4 event-set additions (normative set; no named
+  consumer).
+- No changes to timeout precedence, abort propagation, overflow recovery,
+  compaction mechanics, resume/launch validation, worktrees, or child model
+  binding.
+- Main-agent caps unchanged (interactive unlimited; print 100).
+
+## 3. Owner decisions (SIGNED OFF 2026-09-29)
+
+Owner accepted the proposals below as written (A = no numeric valve;
+B = no injection). **Amendment 1 (2026-09-29):** the owner additionally
+decided to remove the `tool-open` signal (§9); A/B stand unchanged.
+
+**A. Last-resort valve after the cap is removed.** Proposed: **none** — no new
+numeric valve. Remaining termination surfaces: Ctrl+C (TTY); per-call
+`timeoutMs` / agent frontmatter (unchanged); print-mode 60-minute default
+clock (unchanged). Recorded risk: a TTY child in a degenerate loop the
+detectors do not catch burns tokens until the user notices; v1 makes this
+window *visible* (live note + recorded facts) but does not shorten it (§1.3).
+Alternatives, both deferred and both fed by the same monitor facts if later
+wanted: (i) opt-in `task.maxTurns` argument (caller decides per dispatch);
+(ii) token-budget abort (default off). Rationale for the proposal: count
+valves are the demonstrated wrong shape (§1.2); the references keep
+termination time-based or user-based; the guard worth building first is
+visibility.
+
+**B. Injection.** Proposed: **none** — detection never writes into a child's
+context (rev 4 zero-injection). All output is parent-/user-facing.
+
+**C. Main-agent scope.** The main loop gets the same monitor with the same
+signal definitions (S1/S2; the compaction fact is child-engine-only). Surfacing is
+interactive-only; print stays silent live; main caps are untouched.
+
+**D. Surfacing inventory.** Child: task-result lines (model-visible by design —
+the parent's decision input, same family as the existing cap/timeout lines),
+TaskRecord field (persisted, program-visible), interactive REPL note (once per
+attempt+code). Main: interactive REPL note (once per run+code). Extensions:
+nothing. History: nothing beyond the child's own result text.
+
+## 4. Design
+
+### 4.1 Architecture
+
+**A monitor that consumes the existing event stream — not a new loop
+subsystem.**
+
+- New `src/core/health.ts` exports:
+
+```ts
+export type HealthCode =
+  | "repeat-loop" | "mutation-failure-streak" | "compaction-failures"
+  | "tool-open"; // legacy read-only since Amendment 1 (no producer; §9)
+
+export interface HealthSignal {
+  code: HealthCode;
+  count: number;  // peak observed run length for the condition
+  turn: number;   // assistant message_end events observed since monitor creation at first fire
+  detail?: string; // bounded single-line evidence (no newlines, ≤120 chars)
+}
+
+export interface LoopHealthMonitor {
+  observe(event: AgentEvent): void;          // message_end / tool_end (tool_start ignored)
+  note(code: HealthCode, count: number, detail?: string): void; // engine-level facts
+  signals(): readonly HealthSignal[];        // deduped by code, first-fire order, ≤3
+  dispose(): void;                           // settle-time close; idempotent
+}
+
+export function createLoopHealth(options: {
+  thresholds?: Partial<HealthThresholds>;
+  emit?: (signal: HealthSignal) => void;     // live relay; first fire per code only
+}): LoopHealthMonitor;
+```
+
+- The monitor observes the existing `AgentEvent` stream at the two call
+  sites; `runAgentLoop` gains **no** new options and is behavior-unchanged
+  when no monitor exists:
+  - `runner.runTurn` / `runTurnOrRecoverFromOverflow` / `runTurnInner`
+    (`src/runner.ts`; `onEvent` wrapper in `runTurnInner`): ONE monitor per
+    top-level run turn, created in `runTurn` and threaded through
+    `runTurnOrRecoverFromOverflow` into `runTurnInner`, so the overflow retry
+    shares it (post-merge review finding 2 — the original per-`runTurnInner`
+    creation reset every signal on retry). The wrapper calls `observe(event)`
+    first; relay via `emit → options.onEvent({ type: "health", signal })`;
+    `dispose()` rides the `runTurn` promise's settle (`.finally`, the same
+    timing class as the old in-method `finally`).
+  - `subagent.runSubagent` (`src/core/subagent.ts:165-429`; the `launchLoop`
+    seam is `:327-346`): create one monitor per attempt (a resume is a fresh
+    `runSubagent` call → fresh monitor; the overflow retry shares the same
+    monitor — counts span both launches, documented). Creation is pinned
+    before the `compactChildHistory` closure (`:220`) is defined/captured so
+    `note()` can fire early; wrap `launchLoop`'s
+    `onEvent`; relay via `emit → options.onEvent({ type: "health", signal })`
+    (the task tool already attaches `{agent, cwd, sourceId, taskToolCallId}`
+    — `src/core/tools/task.ts:877-884`); `dispose()` in the outer `finally`
+    (`src/core/subagent.ts:426-429`).
+- `AgentEvent` (`src/core/loop.ts:17-20`) gains
+  `| { type: "health"; signal: HealthSignal }` (type-only import; no loop
+  behavior change). The variant is emitted by the callers, never by the loop.
+  It flows through the existing relays: child → task tool → `turnEventTap` →
+  REPL (`src/runner.ts:606-620`); main → `RunTurnOptions.onEvent` → REPL
+  (`src/repl/repl.ts:653-680`). Extensions do not see it: their only relaying
+  points forward `tool_end` (`src/runner.ts:608-619` child, `:1417` main).
+- Thresholds: exported constants + env overrides read once at monitor
+  creation. The two numeric thresholds validate through the repo's
+  existing numeric-env style — `envInt` (`src/core/compaction.ts:42-50`),
+  which writes a stderr warning and falls back to the default on malformed
+  values. `IMP_HEALTH` is parsed separately by the call sites (string
+  equality with `"0"` disables the monitor entirely: no facts, no emits; see
+  §7 for the recorded observability caveat) — deliberately NOT through
+  `envInt`, whose `n <= 0` rule would classify `"0"` as invalid and fall back
+  to enabled (round-2 P2-A). Env surface: `IMP_HEALTH` (enabled unless
+  `"0"`); `IMP_HEALTH_REPEAT_TURNS` (default 5);
+  `IMP_HEALTH_MUTATION_FAILURES` (default 3). The former
+  `IMP_HEALTH_TOOL_OPEN_MS` is no longer read (Amendment 1 — a leftover env
+  value is ignored).
+- Lifecycle contract: the caller MUST `dispose()` after the loop settles
+  (normal, abort, timeout, crash, throw). Since Amendment 1 the monitor
+  holds no timers — `dispose()` remains the settle-time close (idempotent;
+  later `observe()`/`note()` calls are ignored). Facts already recorded
+  survive disposal. `note()` is valid before any
+  `observe()` call (the compaction backstop can fire early). Pre-launch
+  rejection paths create no monitor (nothing ran).
+- Abort edge (fold of round-1 findings; re-scoped by Amendment 1): the loop
+  returns early on abort without emitting `tool_end` for in-flight calls
+  (`src/core/loop.ts` `executeToolBatch` early returns). With `tool-open`
+  gone there is nothing pending across an abort — settle-time `dispose()`
+  closes the monitor, and the observable contract stands: after the attempt
+  settles, nothing further is produced (§6 items 3, 7).
+- Concurrency: one monitor instance per child attempt; no shared mutable
+  state; each child's events carry its own `sourceId`, which is also the REPL
+  dedup key.
+
+### 4.2 Signal catalog (v1)
+
+| Code | Condition (all on the observed event stream) | Default | Fires |
+|---|---|---|---|
+| `repeat-loop` | R consecutive assistant turns whose tool-call signature is byte-identical: ordered list of `(toolName, sha256(canonicalJson(arguments)))` taken from the assembled assistant message at `message_end` | R=5 | once; `count` = peak run length; resets on any differing turn |
+| `mutation-failure-streak` | K failed (`isError`) `edit`/`write` results without an intervening successful `edit`/`write`, and with each consecutive pair ≤5 minutes apart (window resets the streak; non-mutating results do not) | K=3 | once; `count` = peak streak; `detail` carries tool + path |
+| `compaction-failures` | child compaction disabled after 3 consecutive summarizer failures (existing path, `src/core/subagent.ts:295-299`) | 3 | once; fact-only via `note()` |
+
+Notes:
+
+- **Amendment 1 (2026-09-29): `tool-open` was removed.** The condition — "a
+  call still open (no `tool_end`) T ms after `tool_start`" — cannot
+  distinguish three structurally different situations: a gate wait
+  (extension/approval, including a pending human decision), a healthy slow
+  tool (a 12-minute build), and a true hang. Phase attribution would
+  disambiguate only the first class; the rest is ambiguous by construction.
+  As a pure observation (decision B) the signal's notice value was marginal
+  while the false facts it wrote ("was still open" on healthy runs; "held
+  the child" on a pending human decision) were structural. Interactive runs
+  keep Ctrl+C as the authority (decision A) and the 60-turn wall never saw
+  hung tools either (§1.1); print runs keep the 60-minute clock and
+  explicit `timeoutMs`. Accepted limitation recorded in §7; the TUI
+  in-flight elapsed display is a separately recorded UX backlog item
+  (PROJECT_PLAN, 2026-09-29). `tool-open` remains a legacy read-only code
+  in the parser and text renderers (§4.3 legacy note; same pattern as the
+  legacy `max_iterations` status, §4.4).
+- **Signature source (fold of round-1 P1-1).** `message_end` is emitted before
+  that turn's `tool_start` events (`src/core/loop.ts`, `streamAssistant` →
+  `executeToolBatch`), so the signature is computed from the assembled
+  assistant message's tool-call blocks — one event, unambiguous turn
+  boundary, and what imp's history actually records. The monitor observes
+  exactly two event types since Amendment 1 (`message_end`, `tool_end`); a
+  `tool_start` event is ignored. Previews are read from the block data
+  captured at `message_end`, keyed by `toolCallId`; `tool_end`
+  supplies `isError`/`toolName` for the mutation streak. A unit test feeds
+  only `message_end` events and asserts detection — pinning the source.
+- Signature canonicalization: extract the existing `canonicalJson` helper from
+  `src/core/tools/task.ts:207-216` into `src/core/canonical.ts` and share it
+  (`task.ts` keeps its launch-comparison use at `:585-586`; health.ts uses the
+  same helper — no second serializer). Key-order insensitivity is intentional
+  for both uses (round-1 P3-1).
+- Mutation-streak `detail` path (fold of round-2 P2-B): `ToolResult` carries
+  no args, so the path is resolved from the same `message_end` block map,
+  keyed by `toolCallId`.
+- `detail` previews: single-line, ≤80 chars: `bash "` + first line of
+  `command` + `"`, `edit <path>`, `write <path>`, otherwise the first line of
+  canonical JSON. No REPL/presentation imports — a local minimal formatter.
+  The `detail` field bound is 120 chars (one producer-side bound; the
+  preview's 80 is a sub-bound of it; the record's generic `bound()` never
+  triggers on health details).
+- Threshold reasoning (tunable by env; review may adjust):
+  R=5 — two or three identical retries occur legitimately during debugging;
+  five byte-identical tool batches in a row is not a productive pattern; the
+  signal is a note, so the threshold trades noise, not safety.
+  K=3 — the integer matches pi's `failedToolAttemptsBeforeAttention` default;
+  the *semantics* are imp-specific (isError-based, 5-minute window,
+  mutation-success reset) and deliberately do **not** adopt pi's text-hint
+  failure test or its repeated-path OR-escalation (recorded as §7 Q2).
+- Documented limitations (accepted v1): rotating cycles (A,B,A,B…), same-tool
+  different-arg loops, and semantic no-progress (e.g. repeated reads of the
+  same file with different offsets) are not detected; pi's repeated-path
+  variant is not adopted (Q2); multi-call turns are compared in order
+  (order-sensitive by design; pinned by a multi-call test). A turn with no
+  tool-call blocks has an empty signature and is never a repeat candidate (a
+  text-only turn ends the child run in today's loop — round-2 note).
+- `turn` semantics (fold of round-1 P2-4, round-2 N2): the number of assistant
+  `message_end` events observed since monitor creation, cumulative across the
+  overflow retry; before the first `message_end` (e.g. an early `note()`), it
+  is 0 — "turns observed so far". Test 8 asserts the value across the retry
+  boundary. Post-merge review finding 3: when the peak `count` grows, the
+  stored entry's `turn`/`detail` are updated together with it — stored facts
+  describe the peak run coherently and never mix evidence from two batches;
+  the live `emit` remains a first-fire snapshot.
+- `compaction-failures` is event-shaped on purpose (round-1 P2-3): it reports
+  3 consecutive summarizer failures that disabled compaction for the run; a
+  run with `IMP_AUTOCOMPACT=0` never fires it (no compaction was attempted —
+  not a failure).
+
+### 4.3 Facts and surfacing
+
+**SubagentOutcome** gains `health: readonly HealthSignal[]` (possibly empty;
+`settled()` snapshots `monitor.signals()`).
+
+**TaskRecord** (`src/core/task-record.ts`) gains an optional additive field:
+
+```ts
+health?: ReadonlyArray<{ code: HealthCode; count: number; turn: number; detail?: string }>;
+```
+
+- Absent when no signal fired (clean runs keep the old record shape — this
+  keeps the exact-field-set golden in `test/task-record.test.ts:68-78` green;
+  that test file is part of this batch's change list). `TASK_RECORD_VERSION`
+  stays 1 (additive optional field).
+- Parser behavior (fold of round-1 P1-5/F6): `parseTaskRecord` currently
+  passes unknown fields through. This batch adds an `isHealth` validator as a
+  deliberate step, with the rule: **a malformed `health` is dropped (treated
+  as absent); it must never null the record** — advisory fields cannot
+  invalidate identity/usage/transcript facts. Mechanism (round-2 N4): the
+  current parser returns the raw object via a cast, which does not strip
+  fields — the drop must delete/reconstruct the key explicitly. Old records
+  (no field) keep parsing. `TaskRecordInput`/`buildTaskRecord` gain the field
+  as optional;
+  the "no prose input" doc-comment is reconciled (health.detail is bounded
+  prose, produced only by the monitor).
+- Bounded: deduped by code, ≤3 entries, first-fire order (producer-enforced).
+
+**Task result text**: `taskResult` (`src/core/tools/task.ts:941-1026`) has
+**four** terminal return shapes (fold of round-1 P1-3/F4): aborted/timeout
+(`:975-984`), crash-without-text (`:986-991`), no-text success (`:999-1005`),
+and the assembled `parts` path (`:1007-1025`). The health block is appended
+as its own `\n\n`-separated block at the very end of the composed output in
+ALL four shapes when facts exist (never on `rejected`); the two no-text shapes
+and the abort/timeout shape get their goldens updated accordingly. Proposed
+strings (pinned by goldens at implementation; ≤3 lines; `isError` unchanged):
+
+- `[task] health: repeated identical tool calls ×5 (last: bash "npm test") — the child may be looping; verify the result before relying on it.`
+- `[task] health: 3 consecutive failed edits (last: edit src/a.ts) — the child may be stuck; verify the result before relying on it.`
+- `[task] health: child compaction disabled after 3 summarizer failures — later turns ran without context compression.`
+
+Legacy read-only (Amendment 1): `tool-open` stays renderable by
+`healthSignalText` (`src/core/health.ts`) and `healthSuffix`
+(`src/core/tools/task.ts`), and the record parser keeps accepting it, so a
+record written before the removal renders and reads back intact; no
+producer emits it (§9).
+
+**Interactive notes** (REPL only):
+
+- Mechanism (fold of round-1 P0-1/P0-3): the health branch is added at the top
+  of the REPL's `onEvent` tap (`src/repl/repl.ts:653-680`), **before**
+  `trackActivity`/`renderer.event`: on `event.type === "health"` it calls
+  `this.renderer.note(...)` explicitly and returns (no `renderer.event`, no
+  `showResultFold`). The note is deduped once per `(sourceId ?? "main", code)`
+  per run (dedup map reset at run start, `submitTurn`); child notes carry the
+  agent label from `info?.agent` (fallback "task"); main notes are plain.
+  Proposed: `▪ health: <agent>: repeated identical tool calls ×5 (last: bash
+  "npm test")`; `▪ health: …` for main.
+- `Renderer.event`'s `default:` case (`src/render.ts:173-177`) already ignores
+  unknown event types — but print safety does **not** rely on that
+  incidentally (round-1 P0-1): print mode wires
+  `onEvent: (event) => renderer.event(event)` (`src/cli.ts:1048-1053`), so
+  health events DO reach the print renderer and are swallowed by the default
+  case. The design therefore (a) states the mechanism explicitly, (b) never
+  calls `renderer.note` from any shared path reachable in print, and (c) adds
+  a unit test asserting `Renderer.event({type:"health", …})` writes zero bytes
+  and changes no spinner state.
+- Once per `(sourceId ?? "main", code)` per run; later growth updates the
+  record and result line, not the note.
+
+**Print mode**: the monitor adds NO output of its own — no live notes, no
+stderr writes; `Renderer.event({type:"health", …})` writes zero bytes (unit
+pinned). When facts fire, the task-result TEXT changes by design (the parent
+must see it); in print that change surfaces exactly as any other result-text
+change — in the task tool line's `(+N lines)` count (pinned by the renderer
+test; post-merge review round 2, F4). Child facts reach the parent model
+through the task result, and the record still lands in the parent session
+JSONL. Main-loop print anomalies get no live surface in v1 (recorded as §7
+Q3).
+
+**Extensions**: unchanged (no new events; the health `AgentEvent` is not
+forwarded to the extension emit points). Exhaustiveness evidence (round-1
+F9): every other consumer switches on specific types or guards before use
+(`src/repl/repl.ts:659,671,701,1147,1161,1168,1202`; `src/core/compaction.ts:425-426`;
+`src/provider/logging.ts:18`); a grep test keeps `src/extensions/` clean.
+
+**Model-context statement**: the only model-visible addition anywhere is the
+child's own task-result lines — the parent's decision input, deliberately in
+the same family as the existing cap/timeout/transcript lines. No child context
+is ever written; no main-agent context is ever written.
+
+### 4.4 Cap removal specifics
+
+- `src/core/constants.ts`: delete `CHILD_MAX_TURNS` (and its stale coupling
+  comment about the clock derivation).
+- `src/core/subagent.ts:339`: pass `maxIterations: Number.POSITIVE_INFINITY`
+  with a comment naming this design (a child caller that omits the option
+  would silently get the loop's 100-turn floor — `src/core/loop.ts:119`; the
+  explicit Infinity is load-bearing). Update the 2×60 overflow comment
+  (`:201-203`) and the "bounded by CHILD_MAX_TURNS" remarks (`:289-290`).
+- `max_iterations` remains in `SubagentStatus` (`src/core/subagent.ts:97-102`)
+  and `TaskRecordStatus` (`src/core/task-record.ts:28-33`) as a legacy value:
+  old records keep parsing; the main loop's explicit `--max-turns` still
+  produces it; uncapped children can no longer produce it. The `taskResult`
+  cap branch (`src/core/tools/task.ts:1014-1019`) stays (defensive; reachable
+  only if a future explicit cap returns) and is documented as unreachable for
+  children in this batch. Its rendering coverage moves to a direct
+  `taskResult` unit test (no live child can produce the shape anymore) —
+  round-1 F1.
+- Guards after removal (unchanged unless §3-A decides otherwise): Ctrl+C
+  (TTY); per-call `timeoutMs` / agent frontmatter / mode default clock
+  (`defaultChildTimeoutMs`); the new detectors (visibility only); SA-07 resume
+  with a narrowed prompt as the recovery path.
+- Token-cost record (replaces the old 2×60 bound): child per-turn output is
+  bounded by the loop's `maxTokens` default 8192 (`src/core/loop.ts:114`;
+  `runSubagent` passes none), but with no turn wall the per-attempt total is
+  unbounded in TTY. Accepted per §3-A; the monitor facts are the data source
+  if a token valve is later added.
+
+### 4.5 Interaction checks (explicitly verified against source)
+
+- Timeout classification (`timeout` vs `aborted`,
+  `src/core/subagent.ts:375-376,405-406,413-414`): untouched — the monitor
+  never touches signals/abort.
+- Overflow retry: one monitor spans both launches in BOTH engines — the
+  child shares it across its two `launchLoop` calls, and the main loop's
+  monitor is hoisted into `runTurn` above `runTurnOrRecoverFromOverflow`
+  (post-merge review finding 2; dedicated runner test). Repeat/streak counts
+  continue across the boundary; `outcome.health` merges (one monitor);
+  `turn` is cumulative (test 8).
+- Resume (SA-07): each attempt has its own monitor and its own record; a
+  resumed attempt's result lines reflect only that attempt.
+- Compaction: `compactChildHistory` failure bookkeeping is unchanged; only the
+  third-consecutive-failure point additionally calls
+  `monitor.note("compaction-failures", 3, …)`.
+- Print byte contract: mechanism and test in §4.3; no new writes in print
+  paths.
+- M4 extension events: untouched; a repo-wide grep for the new variant in
+  `src/extensions/` must stay empty (test item).
+- Abort with an open tool: `tool_start` without `tool_end` is a legal stream
+  shape; with `tool-open` removed (Amendment 1) nothing is pending across an
+  abort; the settle-time dispose closes the monitor (§6 items 3, 7).
+- Rejected paths: no monitor exists (nothing ran) — no facts, no notes.
+
+## 5. Change list
+
+| File | Change | Est. lines |
+|---|---|---|
+| `src/core/health.ts` | NEW: codes, signals, monitor, thresholds, preview, signing | ~240 |
+| `src/core/canonical.ts` | NEW: `canonicalJson` moved from task.ts (`:207-216`), shared; update the `task.ts:585-586` call site | ~30 |
+| `src/core/loop.ts` | `AgentEvent` gains the `health` variant (type only) | ~5 |
+| `src/core/subagent.ts` | monitor create/wire/dispose; `outcome.health`; compaction note; `Infinity` cap; comment fixes | ~65 |
+| `src/core/constants.ts` | delete `CHILD_MAX_TURNS` + stale comment | ~-8 |
+| `src/core/tools/task.ts` | result health lines in four shapes; record wiring; import shared `canonicalJson` | ~60 |
+| `src/core/task-record.ts` | optional `health` field, `isHealth` validator with drop-not-reject semantics; `buildTaskRecord`; comment reconciliation | ~40 |
+| `src/runner.ts` | main monitor create/wire/dispose | ~25 |
+| `src/repl/repl.ts` | health branch at top of the onEvent tap + per-run dedup notes | ~35 |
+| `test/health.test.ts` | NEW unit suite (incl. fake timers) | ~320 |
+| `test/subagent.test.ts` | replace the 60-turn pin (`:99-113`); uncapped run; health facts; dispose; turn across retry | ~90 |
+| `test/task-tool.test.ts` | health lines in four shapes; record field; resume scoping; **rewrite all four cap-relying live tests: `:1346-1388` (worktree excerpt), `:1390-1415` (no-text path e2e), `:1569-1599` (I6 worktree kept), `:1996-2010` (T3/T4)** — handoff shapes re-driven by explicit abort/timeout or moved to direct `taskResult` unit tests (no live child may rely on a cap). Direct legacy-status rendering tests (`:130-144`, `:187-223`) stay unchanged | ~130 |
+| `test/child-resume.test.ts` | **rewrite the cap-loop test at `:922-945`** — a persisted fixture carries the legacy `max_iterations` first attempt; the resume + lifetime-usage assertions (`2 attempts`) stay; no live cap needed | ~40 |
+| `test/task-record.test.ts` | exact-field-set golden (`:68-78`) stays green via omission on clean runs; add health present/malformed-dropped cases | ~30 |
+| `test/child-compaction.test.ts` | comment/assertion touch (`:184`); compaction-failures fact | ~10 |
+| runner/REPL tests | event emission + note rendering + print-silence unit test | ~60 |
+| docs | this file; supersede pointers (softlanding §2.1/§5, task-list bullet, sa-07 `:690`, sa-03 `:80`, overflow-pagination `:62,121`, m5 `:341`); CHANGELOG `Unreleased` | ~40 |
+
+**Amendment 1 change list (2026-09-29):**
+
+| File | Change | Est. lines |
+|---|---|---|
+| `src/core/health.ts` | delete `tool-open` machinery: `toolOpenMs` threshold + `IMP_HEALTH_TOOL_OPEN_MS`; `onToolStart`/`openTimers`; the `tool_start` branch in `observe()`; timer clearing in `dispose()` (the closed flag and `callInfo` clearing stay — `callInfo` still feeds mutation details); `formatElapsed` (single-use helper — dead once the timer goes) and the stale doc comments (module header `:8-10`, `count` `:23`, `observe` `:67`). `HealthCode`/`healthSignalText` keep `"tool-open"` marked legacy read-only. | ~-50 |
+| `src/core/tools/task.ts` | keep the `tool-open` arm in `healthSuffix` (legacy read-only comment); fix the stale "≤4 lines" doc comment (`:931`) → three. | ~2 |
+| `src/core/task-record.ts` | keep `"tool-open"` accepted by `isHealthSignal` (legacy read-only comment; whole-array `every()` semantics — `:275-313`); fix the stale "≤4 entries" doc comment (`:55`) → three. | ~2 |
+| `test/health.test.ts` | delete the `describe("tool-open")` block (its dispose assertions re-scope into the lifecycle block — §6 item 7's mirror); drop the now-dead `start(...)` calls in the mutation block; **rewrite the facts-contract first-fire test off the removed producer** (`:272-291` currently fires via `toolOpenMs: 10` + `observe(start(...))` + fake timers and pins `["tool-open", "compaction-failures"]` — re-vehicle through two `note()` codes, or `repeat-loop` + `note()`, and move the first-fire-order pin off `tool-open`); update the §6-16 sweep to the src-scoped rule; add: `observe(tool_start)` is a no-op (no signals, no timers); the legacy renderer arm still renders. | ~-40 |
+| `test/subagent.test.ts` | delete the `IMP_HEALTH_TOOL_OPEN_MS` abort-with-open-tool test (its subject is gone). | ~-15 |
+| `test/task-record.test.ts` | add: a legacy `tool-open` entry parses and keeps the whole array (compatibility pin). | ~+8 |
+| `CHANGELOG.md` | Unreleased entry: "four conditions … a tool left open ≥10 minutes" → three conditions (final shape; `tool-open` reached main unreleased but never shipped in a release — the changelog describes only the three signals). | ~2 |
+| `README.md` | the loop-health blurb (`:393-395`): "repeated identical tool calls, repeated failed edits, a tool left open too long" → drop the third pattern. | ~2 |
+| `PROJECT_PLAN.md` | ledger entry at merge; backlog bullet for the TUI tool-elapsed display. | ~6 |
+
+## 6. Test plan
+
+1. Health unit — repeat-loop: exactly R identical turns fires; R-1 does not;
+   peak count tracks growth; a differing turn resets; key-order-insensitive
+   arg equality; signature detected from `message_end` alone (source pin);
+   multi-call turn order sensitivity; preview single-line ≤80 chars.
+2. Health unit — mutation streak: 3 failed edit/write results fire;
+   non-mutating results in between do not reset; a mutation success resets; a
+   >5-minute gap resets (fake timers); other tools' failures are ignored;
+   path detail present.
+3. Health unit — removed signal (Amendment 1): `tool_start` events are a
+   no-op (no signals, no timers); `healthSignalText` still renders a legacy
+   `tool-open` fact; a leftover `IMP_HEALTH_TOOL_OPEN_MS` is ignored.
+4. Health unit — facts contract: deduped by code, first-fire order, ≤3
+   entries; `emit` called once per code (first fire); env overrides parsed
+   with `envInt` semantics (stderr warning + default on malformed);
+   `IMP_HEALTH=0` disables.
+5. Subagent — uncapped: a scripted child runs >60 tool turns then answers;
+   `status` completed, `turns` = actual count.
+6. Subagent — health facts: repeated identical tool turns produce
+   `outcome.health` with `repeat-loop`, and the live relay delivers a `health`
+   event through `options.onEvent`.
+7. Subagent — abort with an open tool (Amendment 1 re-scope): settle on the
+   abort path, then advance fake timers arbitrarily — no further
+   signals/emits; nothing pending after settle.
+8. Subagent — overflow retry: a repeat crossing the retry boundary counts on
+   the same monitor; one merged facts array; `turn` value asserted across the
+   boundary.
+9. Subagent — compaction: 3 consecutive summarizer failures still disable
+   compaction and now yield the `compaction-failures` fact; `note()` works
+   before any `observe()`.
+10. Task tool — result rendering: each code's line, exact strings, ≤3 lines,
+    appended last in ALL four terminal shapes (aborted/timeout, crash-no-text,
+    no-text, success); `isError` unchanged; `rejected` has none.
+11. Task tool — record: `health` present only when fired; malformed `health`
+    is dropped and the record still parses (identity/usage/transcript intact);
+    records without the field still parse; exact-field-set golden unaffected
+    on clean runs.
+12. Task tool — resume: second attempt's record/result carry only its own
+    facts; the first attempt's record is unchanged.
+13. Runner — main loop emits `health` via `RunTurnOptions.onEvent`; main
+    history receives no health writes; extensions receive nothing.
+14. REPL — note rendering: one note per `(sourceId|main, code)` per run; child
+    notes carry the agent label; dedup map resets per run; `renderer.event`
+    and `showResultFold` are not invoked for health events.
+15. Print mode: `Renderer.event({type:"health", …})` writes zero bytes (unit
+    pinned); the print tool line carries no health text and the fired-signal
+    delta is exactly the appended result line — `(+N lines)` grows by one
+    (`test/render.test.ts`, post-merge review round 2 F4, which replaces the
+    earlier "identical stdout" e2e intent).
+16. Grep tests: no `src/extensions/` reference to the health variant; no
+    remaining `CHILD_MAX_TURNS` reference outside docs/history; no
+    `tool-open` producer references remain **in `src/`** (`onToolStart`,
+    `openTimers`, `toolOpenMs`, and the `IMP_HEALTH_TOOL_OPEN_MS` env read
+    gone — the legacy read-only arms in `health.ts` / `task.ts` /
+    `task-record.ts` are the only permitted `src/` mentions, each carrying
+    a legacy comment). Test files legitimately keep the removed env-name
+    string (the leftover-env test, item 3) and legacy fixtures — the sweep
+    follows the existing dynamic-needle pattern (`test/health.test.ts:379+`).
+17. Update the old pins. All six cap-relying live-child sites were audited
+    (`scriptedProvider` repeats its last step forever, so once uncapped they
+    spin past the 15s/30s `vitest` timeouts):
+    `test/subagent.test.ts:99-113` → replaced by the uncapped-run test (5/6);
+    `test/task-tool.test.ts:1346-1388`, `:1390-1415`, `:1569-1599`,
+    `:1996-2010` → rewritten (abort/timeout drivers or direct `taskResult`
+    unit tests for the handoff shapes); `test/child-resume.test.ts:922-945`
+    → rewritten with a live timeout driver, plus **T23c**: a persisted legacy
+    `max_iterations` record fixture proves resume never branches on the
+    record's terminal status (restores the fixture coverage promised here —
+    post-merge review round 2, O1). Direct unit tests of the legacy
+    `max_iterations` rendering (`test/task-tool.test.ts:130-144`, `:187-223`,
+    `test/tool-presentation.test.ts:53,88-89,135`,
+    `test/builtin-tool-presentation-integration.test.ts:229`) do not spin and
+    stay. `test/child-compaction.test.ts:184` comment updated (the
+    append-only semantics assertion it guards — compaction buys no extra
+    turns — stays).
+18. Concurrency: two fake children with independent loops produce independent
+    facts and per-source events (no shared state).
+
+## 7. Risks and open questions
+
+- **Detection quality.** False positives (noise) are bounded by dedup and the
+  env escape hatch; false negatives (rotating loops, semantic no-progress)
+  are documented limitations. The remedy is dogfood data, not more v1
+  heuristics.
+- **Cost after cap removal.** Unbounded TTY burn for undetected degenerate
+  loops; estimate and the owner decision are recorded in §3-A/§4.4. v1 does
+  not shorten the window, only makes it visible (§1.3).
+- **Accepted limitation (Amendment 1).** Nothing detects a hung tool
+  mid-run: interactive runs rely on the user (Ctrl+C — decision A's
+  authority; the 60-turn wall never saw hung tools either, §1.1); print runs
+  rely on the 60-minute clock / explicit `timeoutMs`. The visibility channel
+  the monitor could never make honest (a per-call in-flight display) is
+  recorded as a separate TUI UX backlog item (PROJECT_PLAN, 2026-09-29).
+- **`IMP_HEALTH=0` observability hole (accepted, round-1 P2-2):** a disabled
+  monitor is indistinguishable from "no signals" in records and results. This
+  is an operator-chosen state; recorded here rather than adding a marker field
+  in v1.
+- **Timer lifecycle.** Removed with Amendment 1 — the monitor holds no
+  timers; nothing to leak, nothing to cancel at dispose.
+- **Signature limits.** Whitespace-only arg changes defeat repeat detection;
+  accepted (canonical JSON catches key order, not semantic equivalence).
+- **Record growth.** Bounded (≤3 entries, detail ≤120 chars) and validated;
+  malformed health is dropped, never record-nulling.
+- **Text churn.** Result strings and note strings are goldens; print-mode
+  stdout is untouched (test 15); four result shapes enumerated in §4.3.
+- **Open Q1**: threshold defaults (5 / 3) — tune by dogfood; env
+  overrides exist from day one.
+- **Open Q2**: extend `mutation-failure-streak` to bash mutation commands
+  and/or adopt pi's repeated-path OR-escalation in a later batch if dogfood
+  shows missed cases.
+- **Open Q3**: main-loop print-mode live visibility (stderr diagnostic line)
+  — deferred; revisit only if a real print incident is recorded.
+- **Open Q4**: result-line placement — this rev pins "appended last in all
+  four shapes"; review may choose otherwise before implementation.
+- **Open Q5**: whether main-loop facts should also reach the diagnostics
+  logger — deferred (no consumer yet).
+- **Open Q6** (round-1 P0-2): a minimal acting surface (e.g. an interactive
+  confirm prompt on `repeat-loop`) — deliberately out of scope;
+  revisit with dogfood data or as part of decision A.
+
+## 8. Implementation/rollout sketch (after review closes and A/B are signed off)
+
+1. `health.ts` + `canonical.ts` + unit tests (pure, no wiring).
+2. `loop.ts` variant + runner/subagent wiring + REPL notes + print-silence
+   test.
+3. Cap removal + task tool/record/result (four shapes) + test rewrites
+   (`subagent`, `task-tool`, `child-resume`, `task-record`, `child-compaction`).
+4. Docs (supersede sweep, task-list bullet, CHANGELOG) + full suite,
+   typecheck, lint; independent implementation review per repo agreements;
+   merge to main via `--no-ff` only after both.
+
+## 9. Review record
+
+- Round 1 (2026-09-29, two-track adversarial, fresh context; both reviewed
+  `b653b2d`):
+  - Track A (design decisions): NEEDS-FIXES — P0-1 (print-silence mechanism
+    claim false; real mechanism is the renderer default case + absent `note`
+    calls), P0-2 (v1 "fills the gap" overstated: no acting channel during the
+    run), P1-1 (repeat-loop signature source underspecified), P1-2
+    (mutation-streak "matches pi" only in the integer), P1-3 (health lines in
+    four terminal shapes), P1-4 (supersession incomplete — sa-07 pinned
+    behavior becomes false), P1-5 (malformed advisory field must not null the
+    record), P1-6 (abort/dispose ordering for `tool-open`; historical —
+    removed by Amendment 1), plus P2/P3
+    precision items.
+  - Track B (implementation surface): APPROVE WITH CORRECTIONS — F1
+    (`test/task-tool.test.ts:1996-2010` and `test/child-resume.test.ts:922-945`
+    would spin forever once uncapped and were missing from the pin
+    inventory), F2/F3 (same print/REPL mechanics as A-P0-1/P0-3; citations
+    corrected), F4 (four return shapes), F5 (`task-record` exact-field-set
+    golden), F6 (parser passes unknown fields through; the new validator is a
+    deliberate step), F7 (detail bound), F8 (citation drift), F9
+    (exhaustiveness), F10-F14 (verified-correct list incl. timer lifecycle,
+    canonicalJson move safety, extension isolation).
+  - Disposition: all findings folded into this rev 2 (§1.3, §3-A, §4.1-4.5,
+    §5-§7 above). Round-2 confirmation requested from both tracks.
+- Round 2 (2026-09-29, two-track confirmation on `2185f99`):
+  - Track A: CONFIRMED WITH NOTES — all round-1 items FOLDED; new P2-A
+    (`IMP_HEALTH` vs `envInt`'s `<= 0` rule), P2-B (mutation-streak path
+    source), P3 notes (clock injection, creation point, citation, empty
+    signature).
+  - Track B: CONFIRMED WITH NOTES — F2-F8/F10/F12/F14 folded; **N1 (P0):
+    the spin-site inventory was incomplete** — `test/task-tool.test.ts` has
+    four cap-relying live tests (`:1346-1388`, `:1390-1415`, `:1569-1599`,
+    `:1996-2010`), and the `child-resume.test.ts:922-945` rewrite risked
+    dropping the cap-hit-resumability + lifetime-usage intent; N2 (`turn`
+    for note-only signals), N3 (`loop.ts:117`→`:114`), N4 (drop mechanism).
+  - Disposition: all folded into rev 3 (§4.1-§4.4, §5, §6#17 above). The
+    spin-site list was independently re-audited: six sites total
+    (`subagent.test.ts:99`, four in `task-tool.test.ts`,
+    `child-resume.test.ts:922`).
+- Round 3 (2026-09-29, confirmation of `39b059e`): both tracks CONFIRMED.
+  Track A verified P2-A, P2-B, P3-B/C/D folded; the six-site spin inventory
+  matches its independent audit (no seventh site; direct `runAgentLoop` cap
+  tests pass explicit finite values and are unaffected). Track B re-audited
+  every live-child `scriptedProvider` call site (45 in `task-tool.test.ts`
+  alone, plus six other child-driving files): no additional spin site;
+  N2-N4 folded; the `child-resume` persisted-fixture rework is implementable
+  with existing helpers. **Design review closed.** Implementation may start
+  after the owner signs decisions A/B (§3).
+- Implementation review round 1 (2026-09-29, two tracks, fresh context, on
+  `a8cbec9` + `87f294e`):
+  - Track A (design conformance): APPROVE WITH CORRECTIONS — every
+    substantive requirement FULFILLED with evidence; corrections were
+    test-completeness (design §6 items 7/8 absent, the unref assertion
+    missing — historical, both re-scoped by Amendment 1) plus P3
+    coverage/documentation notes.
+  - Track B (adversarial): APPROVE WITH CORRECTIONS — no P0/P1. Folded:
+    P2-1 (the synchronous `observe()`/`note()` paths were unguarded — a
+    cyclic-args event could crash the run; now swallowed under the
+    never-affect-the-run contract, matching the timer guard), P2-2 (a
+    duplicate `toolCallId` orphaned the first `tool-open` timer; now cleared
+    on overwrite), P2-3 (the two §6 tests added), P3-2 (emitted and returned
+    signals were the internal mutable objects; now clones — `emit` is a
+    first-fire snapshot, later growth updates only the outcome facts).
+    Accepted/documented: P3-1 (an open-tool timer can fire during the
+    overflow compact window; observation-only, default T=10 min —
+    historical, `tool-open` removed by Amendment 1) and P3-3
+    (cosmetic commit-message count).
+  - Episode worth recording: the track-B reviewer child was itself stopped by
+    the still-running OLD host build's 60-turn wall mid-review — a live
+    demonstration of the wall this batch removes. The settled child was
+    resumed (`task({resume})`) and completed the review.
+  - After the fold: 126 files / 2408 tests green; both typechecks and build
+    clean. **The "biome clean" claim in this line was WRONG**: the lint check
+    had been run through a pipe, whose last command masked biome's non-zero
+    exit; two formatter violations (`test/subagent.test.ts`) entered with
+    `f27efef`. Corrected post-merge on `fix/loop-health-review2` (formatting
+    only); lint re-verified UNMASKED (`echo $?` → 0). Lesson recorded: never
+    pipeline a gate whose exit code is load-bearing. **Implementation review
+    closed.**
+- Post-merge independent review (owner side, 2026-09-29, on `38b553d`; two
+  fresh adversarial tracks):
+  - Finding 1 (lint / gate honesty): as above — fixed, record corrected.
+  - Finding 2 (P2, fixed): the main loop's overflow retry reset the monitor
+    (created per `runTurnInner`); hoisted into `runTurn`, threaded through
+    the recovery flow; a new runner test (4 identical turns + overflow +
+    a 5th identical turn → repeat-loop fires) was verified RED against the
+    old wiring before the fix and green after — §6 item 8's cross-boundary
+    claim now holds for both engines.
+  - Finding 3 (P3, fixed): peak `count` growth could mix batches (`count`
+    from a later run, `detail`/`turn` from an earlier one); count/turn/detail
+    now move together (see §4.2); a mixed-batch unit test pins it.
+  - Polish folded: §4.2 tool-open wording; the render print-silence test
+    name now matches its assertions (zero bytes; spinner state was never
+    asserted).
+  - Accepted and recorded (no change): `parseTaskRecord` tolerates a foreign
+    `health: []` (harmless — producers never write empty arrays); the REPL
+    dedup-key/label divergence when `info` exists without `sourceId` is
+    unreachable (the task tool always sets it); a `canonicalJson`-throwing
+    argument set degrades to "no signal" per the never-crash contract.
+- Post-merge independent re-review round 2 (owner side, 2026-09-29, branch
+  tip `f27efef` re-audited against current main; findings re-reproduced with
+  probes):
+  - F4 (P3, fixed): the "print stdout byte-identical / no new stdout bytes"
+    claim was too broad. The monitor adds no output of its own, but a fired
+    signal changes the task-RESULT text, and print's two-line tool row
+    (`summarizeResult`) counts content lines — a normal completion with a
+    `repeat-loop` fact moved `  → did the thing (+2 lines)` to `(+3 lines)`.
+    Claims tightened (goals §2.5, non-goals, §4.3 print bullet, §6 item 15,
+    CHANGELOG); the renderer test now pins the real boundary (zero-byte
+    event; no health text in the tool line; delta exactly +1 line).
+  - O1 (fixed): restored the persisted-fixture coverage the §6 item 17
+    wording promised — `T23c`: a legacy `max_iterations` record in the
+    parent session does not block resume (resume never branches on a
+    record's terminal status).
+  - O3 (fixed): `parseTaskRecord` now drops a malformed `health` on a
+    shallow copy instead of mutating its input.
+  - O4 (fixed): the subagent abort-with-open-tool test now uses fake timers
+    (design §6 item 7 wording) — no real-time race.
+  - O2/O5 (recorded): the print e2e is superseded by the boundary test above
+    (which catches the F4 scenario); runner-layer direct tests for items
+    13/18 remain indirect (REPL e2e + grep + unit) and are accepted as
+    accounting notes.
+  - F1-F3 re-confirmed as fixed on current main (reconciliation only).
+
+- **Amendment 1 (owner decision + design change, 2026-09-29): `tool-open`
+  removed.** Trigger: owner scenario — a child tool call parked in an
+  extension approval gate (guardian `api.confirm`) for >10 minutes fires
+  `tool-open` and reports "still open", turning a pending human decision
+  into an apparent health fact. Verified mechanics: `tool_start` precedes
+  the gate in both loop paths (`src/core/loop.ts:389→572` serial,
+  `:433→439` chunk); the interactive confirm host awaits without a timeout
+  (`src/repl/repl.ts`, `TtyConfirm`); the same shape applies to the main
+  loop. Options considered and rejected: (a) wording-only tightening — the
+  monitor cannot attest a cause, so the text would have to speculate;
+  (b) phase attribution (gate-window observation + phase-aware detail) —
+  workable but fixes only the gate class; a healthy slow tool and a true
+  hang remain indistinguishable by construction, so the signal would still
+  write ambiguous facts. Chosen: removal. Rationale: observation-only value
+  was marginal (no abort, no injection; the live UI already tells an
+  attending user more, and Ctrl+C is decision A's authority), while the
+  false-fact surface was structural; the hung-tool class was never the
+  wall's coverage (§1.1), and CC's model for this class is user
+  termination. Complexity removed: the monitor's only timers (timer
+  lifecycle review findings — abort edges, duplicate-id orphans, dispose
+  ordering — become moot). Compatibility: producer-only removal;
+  `HealthCode`, the record parser, and the text renderers keep legacy
+  read-only arms, so pre-removal records keep their whole `health` array
+  (whole-array `every()` drop semantics verified at
+  `src/core/task-record.ts:275-313`). Accepted limitation: §7. Backlog: TUI
+  tool-elapsed display (PROJECT_PLAN, 2026-09-29). Design review of this
+  amendment: closed 2026-09-29 — fresh-context adversarial review, three
+  passes: round 1 `NEEDS-FIXES` on `c8ae8e4` (P1: README.md missing from
+  the change list; P2: "shipped" vs "never shipped" contradiction, §6 item
+  16 unsatisfiable as written, dead `formatElapsed`/stale comments not in
+  the change list, test-item mislabels; P3: stale `≤4` comments, dead
+  `start()` calls, §9 history tags), folded in `fec0ab0`; round 2
+  `CONFIRMED WITH NOTES` on `fec0ab0` (residual P2: the facts-contract
+  first-fire test's vehicle depends on the removed producer — rewrite
+  instruction added to the change list; P3 cite `:64`→`:67`), folded in
+  `7999ebe`; round 3 `CONFIRMED` on `7999ebe`. Implementation on
+  `2b00d80` (producer removal + legacy arms + red→green tests — the
+  no-op / env-ignored / producer-sweep pins failed on the old code
+  first); independent implementation review **APPROVE** (0 P0/P1; 2×P3 —
+  comment phrasing accepted as-is, the `start()`-helper "unused" note
+  refuted on recheck (its single call site is the new no-op test); the
+  optional subagent-level `getTimerCount` addition declined — other
+  subsystems own timers there, and the unit-level pin already covers the
+  monitor). Merged to main `--no-ff`.

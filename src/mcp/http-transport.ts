@@ -1,5 +1,5 @@
 /**
- * Streamable HTTP transport (M19 D4/D5, docs/m19-mcp-http-design.md).
+ * Streamable HTTP transport (M19 D4/D5, docs/design/m19-mcp-http-design.md).
  *
  * One POST per JSON-RPC message; responses arrive as application/json or
  * text/event-stream (the stream may interleave the reply with server

@@ -1,6 +1,6 @@
 // test/guardian.test.ts — behavior pins for the minimal guardian example
 // extension (examples/extensions/guardian.mjs). Binding spec:
-// docs/guardian-design.md (rev 3.0).
+// docs/design/guardian-design.md (rev 3.0).
 //
 // Pattern: the real example runs against a fake api — a confirm spy, captured
 // statuses, an audit-file reader, and the registered /guardian command

@@ -1,5 +1,5 @@
 /**
- * SA-07 resume helpers (design: docs/sa-07-child-resume-design.md).
+ * SA-07 resume helpers (design: docs/design/sa-07-child-resume-design.md).
  *
  * Pure/semi-pure pieces of the resume pipeline: argument validation, the
  * current-environment assembly for SA-06's validator, the provider-identity

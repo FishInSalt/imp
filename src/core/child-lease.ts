@@ -1,6 +1,6 @@
 /**
  * SA-07 single-writer lease — INTENT + VERIFY protocol (design §7,
- * docs/sa-07-child-resume-design.md; revised after owner round 3).
+ * docs/design/sa-07-child-resume-design.md; revised after owner round 3).
  *
  * There is no shared mutable lease path. The artifact is a DIRECTORY
  * `<child>.jsonl.lease/` holding one candidate file per acquisition:

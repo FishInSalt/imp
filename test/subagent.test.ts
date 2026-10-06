@@ -317,7 +317,7 @@ describe("runSubagent", () => {
 	});
 });
 
-describe("#overflow-recovery (child): one compact-and-retry (docs/overflow-pagination-design.md §3)", () => {
+describe("#overflow-recovery (child): one compact-and-retry (docs/design/overflow-pagination-design.md §3)", () => {
 	/** Settings that make tiny test histories compactable/threshold-crossing:
 	 *  keepRecentTokens 1 → cut > 0 on a 3-message history; small window for
 	 *  the breaker test's onBeforeTurn path. */

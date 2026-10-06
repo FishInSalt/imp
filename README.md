@@ -91,9 +91,9 @@ read, adopted or deleted). New records and leases use Ink names
 `ink-worktree-*` / `ink/task-*` while historical `imp-worktree-*`
 directories stay listed. Codex plan requests now carry `originator: "ink"`.
 
-See the [local installation and acceptance record](docs/ink-local-install.md)
+See the [local installation and acceptance record](docs/design/ink-local-install.md)
 and [release instructions](RELEASING.md). The original
-[rename design](docs/ink-rename-design.md) is historical; its full-state
+[rename design](docs/design/ink-rename-design.md) is historical; its full-state
 migration and source-linked activation proposal was superseded.
 Do not copy credentials, migrate state, or publish when updating a source
 checkout; for a normal install use the npm package above. The repository is
@@ -566,11 +566,11 @@ retried once. `/mcp` shows per-server status; `INK_MCP=0` or
 
 **Scope** (tools only; deliberate, each deferral has a trigger): no OAuth
 (GitHub/Tushare authenticate with a PAT / a URL token; OAuth evaluation and
-triggers: `docs/mcp-oauth-evaluation.md`), no sampling or elicitation, no
+triggers: `docs/design/mcp-oauth-evaluation.md`), no sampling or elicitation, no
 resources/prompts surfaces, no per-call approval gates, no cross-vendor
 config import (cursor/claude/windsurf), and no `mcp` proxy tool (flat
 registration until a server with ≥10 tools shows up). Design + trigger table:
-`docs/m18-mcp-design.md`; HTTP design: `docs/m19-mcp-http-design.md`.
+`docs/design/m18-mcp-design.md`; HTTP design: `docs/design/m19-mcp-http-design.md`.
 
 ## Extensions
 

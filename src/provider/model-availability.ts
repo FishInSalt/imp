@@ -11,7 +11,7 @@ import type { ProviderName } from "./resolve.js";
  * install with no credentials anywhere, the hardcoded startup default
  * (`claude-sonnet-4-5`, cli.ts defaultModel) must NOT render as if it
  * were usable — the surfaces show "no model available — run /login"
- * instead (design docs/fresh-install-model-hint-design.md, P1/P2).
+ * instead (design docs/design/fresh-install-model-hint-design.md, P1/P2).
  *
  * LIVE probe, not cached (design §3.1, round-1 F4): callers probe at
  * render time. `familyConfigured` reads one small JSON file (redirected

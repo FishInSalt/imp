@@ -1,5 +1,5 @@
 /**
- * #bash-abort regression pins (design docs/bash-abort-design.md §6).
+ * #bash-abort regression pins (design docs/design/bash-abort-design.md §6).
  * Real process trees — no child_process mocks.
  */
 

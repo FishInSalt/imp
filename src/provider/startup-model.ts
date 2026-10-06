@@ -4,7 +4,7 @@ import { configuredFamilies } from "./model-availability.js";
 import type { ProviderName } from "./resolve.js";
 
 /**
- * #startup-model-resolution (design docs/startup-model-resolution-design.md):
+ * #startup-model-resolution (design docs/design/startup-model-resolution-design.md):
  * resolving a USABLE startup model when nobody configured one.
  *
  * The problem: the hardcoded builtin default (`claude-sonnet-4-5`, family

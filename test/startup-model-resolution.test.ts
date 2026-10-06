@@ -14,7 +14,7 @@ import {
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 /**
- * #startup-model-resolution (design docs/startup-model-resolution-design.md):
+ * #startup-model-resolution (design docs/design/startup-model-resolution-design.md):
  * D1 credential-source uniqueness, D2 startup resolution, D3 restore-path
  * resolution, D4 login-time selection, D5 the /settings defaultModel hint,
  * and the D6 print copy variants. Hermetic: credential env scrubbed +

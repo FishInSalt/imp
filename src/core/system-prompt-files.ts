@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * #system-md: SYSTEM.md / APPEND_SYSTEM.md discovery (docs/system-md-design.md).
+ * #system-md: SYSTEM.md / APPEND_SYSTEM.md discovery (docs/design/system-md-design.md).
  *
  * Two files, two tiers each — project `<cwd>/.ink/<name>` (behind the
  * session-resolved trust bit, see D2) and global `~/.ink/<name>`. One file

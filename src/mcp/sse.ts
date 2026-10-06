@@ -1,5 +1,5 @@
 /**
- * Minimal SSE parser (M19 D5, docs/m19-mcp-http-design.md) for
+ * Minimal SSE parser (M19 D5, docs/design/m19-mcp-http-design.md) for
  * text/event-stream responses. Server-sent events split on blank lines;
  * `data:` lines join with \n; comments (`:`) are ignored; `event:`/`id:`
  * are parsed but unused in v1 (no Last-Event-ID resumability).

@@ -255,7 +255,7 @@ export function renderMarkdownLite(text: string, ansi = process.stdout.isTTY ===
  *  session lines. `$0.123` = complete; `~$0.123` = partial pricing (counted
  *  tokens without a known rate); `…!` = known-missing usage; `$?` / `$?!` =
  *  nothing could be priced. Rates are the current catalog's — an estimate,
- *  not an invoice. null = nothing to show. See docs/sa-05-usage-totals-design.md §4.5. */
+ *  not an invoice. null = nothing to show. See docs/design/sa-05-usage-totals-design.md §4.5. */
 export function usageMoneySegment(args: {
 	usd: number;
 	subscription: boolean;

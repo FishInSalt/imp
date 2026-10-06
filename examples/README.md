@@ -41,11 +41,11 @@ See [docs/extensions.md](../docs/extensions.md) for the extension API
 |---------|-------------|
 | [`scout.md`](agents/scout.md) | Read-only research subagent: explores a codebase to answer questions |
 
-## Agents
+## Skills
 
 | Example | Description |
 |---------|-------------|
-| [`scout.md`](agents/scout.md) | Read-only research subagent: explores a codebase to answer questions |
+| [`ledger/`](skills/ledger/) | Ledger-style bookkeeping for `PROJECT_PLAN.md`: append dated work entries, never rewrite history |
 
 The `web-search/` extension has its own detailed README (install, credentials,
 tool contracts, troubleshooting):

@@ -8,12 +8,12 @@
 
 An open-source AI assistant and agent harness for the terminal. Use Ink for
 research, writing, analysis, software development, and other tool-assisted
-tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi-mono).
+tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
 Adapt Ink to your workflows, not the other way around: extend it with
 [extensions](docs/extensions.md), [skills](docs/skills.md), [named
 subagents](docs/subagents.md), and [MCP servers](docs/mcp.md) — the bundled
-[examples](examples/README.md) show how.
+[examples](examples/README.md) (extensions, a subagent, a skill) show how.
 
 ## Getting started
 
@@ -40,9 +40,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 or `/login` inside a session (ChatGPT-plan OAuth included). Give Ink a task.
-
-For a full walkthrough see the [documentation](docs/index.md) — start at
-[docs/index.md](docs/index.md) for a topic map.
+For a full walkthrough, start at the [documentation](docs/index.md) topic
+map.
 
 Working from a source checkout instead:
 
@@ -72,8 +71,9 @@ sessions, and extensible tools:
 - Tools: `bash` (timeout, truncation), `read` (offset/limit, images), `edit`
   (exact-match multi-edit), `write`, `grep` (ripgrep), `find` (fd), `ls`,
   `task` (subagents) — search tools respect .gitignore
-- Providers: Anthropic, Z.AI (GLM), DeepSeek, Moonshot/Kimi, OpenAI (API key
-  or ChatGPT-plan OAuth) — credentials from environment variables or `/login`
+- Providers: Anthropic, OpenAI (API key or ChatGPT-plan OAuth), Z.AI (GLM),
+  DeepSeek, Moonshot/Kimi (international and CN endpoints) — credentials
+  from environment variables or `/login`
 - Extensions, skills, named subagents, MCP servers, markdown quick commands,
   and custom system prompts (SYSTEM.md)
 
@@ -124,8 +124,8 @@ a topic map:
 - [Images](docs/images.md) — vision models, paste, the resize ladder
 
 The npm package ships this documentation; the agent routes its own questions
-through it. The bundled [examples](examples/README.md) (extensions, a named
-subagent) install alongside.
+through it. The bundled [examples](examples/README.md) — extensions, a named
+subagent, a skill — install alongside.
 
 ## Platform support
 

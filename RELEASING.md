@@ -51,6 +51,8 @@ Remaining external actions, each requiring explicit approval:
 - publish `ink-agent@0.2.2` by tag push from reviewed `main` (gates are
   enabled: `INK_NPM_PUBLISH_ENABLED=true`, `INK_NPM_PACKAGE=ink-agent`) — the
   second OIDC run, carrying provenance;
+- publish the `v0.2.2` GitHub Release page from the dated CHANGELOG section
+  (separate approval, like the earlier release pages);
 - re-verify the publisher binding after any further repository rename.
 
 The binding must match `release.yml`: GitHub Actions, repository

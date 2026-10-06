@@ -8,6 +8,8 @@ their original release identity.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-06
+
 ### Changed
 
 - **Identifier follow-through (rename design Amendment A1, D1/D2).** New

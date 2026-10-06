@@ -216,7 +216,8 @@ owner approval. Do not batch them.
    6×10s). A publish can fail *after* the registry created the version; before
    any retry run `npm view ink-agent@0.2.0 version` and never re-publish a
    version that exists.
-5. **Post-publish verification.** Perform §8.
+5. **Post-publish verification.** Perform §8. If a *content* check fails, stop
+   here — skip steps 6–8 and go to §9.
 6. **Bind publisher.** Perform §5. (Package now exists; the settings page is
    available.)
 7. **Tag.** Create and push the annotated tag at `R`:
@@ -233,9 +234,10 @@ owner approval. Do not batch them.
    hiccup (registry propagation, `npm view` lag) or binding failure occurs,
    **still push the tag (7)**: the tag records the already-published commit and
    a lag does not invalidate the published bytes. A **content** verification
-   failure is different — if the downloaded `dist.tarball` SHA-256 does not
-   equal the frozen §3 value, or the name/version/package is wrong, the
-   published bytes are *not* the reviewed bytes: do not treat it as a normal
+   failure is different — if any §8 check shows the artifact or its metadata is
+   wrong (downloaded `dist.tarball` SHA-256 ≠ the frozen §3 value, wrong
+   name/version/package, an unusable install, or a wrong repository/README),
+   the published bytes are *not* the reviewed bytes: do not treat it as a normal
    release, and follow §9.
 
    If binding (6) failed, retry/complete §5 before step L; the variables stay
@@ -275,9 +277,10 @@ owner approval. Do not batch them.
   nothing has been published; stop and re-plan.
 - If `0.2.0` is public and only a transient verification/binding issue
   occurred, complete step 7 (push the tag).
-- If a **content** check failed (the published SHA-256 ≠ the frozen value, or
-  the package/version is wrong), the release is not the reviewed one: deprecate
-  it, or `npm unpublish` within the 24-hour window with approval, then prepare a
+- If a **content** check failed (any §8 check shows the artifact or its
+  metadata is wrong: digest mismatch, wrong package/version, unusable install,
+  wrong repository/README), the release is not the reviewed one: deprecate it,
+  or `npm unpublish` within the 24-hour window with approval, then prepare a
   newly reviewed patch version.
 - Never reuse a tag or overwrite a package version.
 
@@ -367,4 +370,11 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
   mismatch (the latter triggers §9 deprecate/unpublish, never a normal release);
   NEW-9 requires completing/retrying §5 before step L; NEW-10 moves the
   never-re-publish guidance into step 4.
-- r4 re-review: pending.
+- r4 re-review (same child session): **APPROVE** — NEW-8/NEW-9/NEW-10 closed,
+  §7/§8/§9 mutually consistent, no new blockers. Two optional NITs (NEW-11,
+  NEW-12) were also folded: the content-failure definition now names every §8
+  check, and step 5 stops to §9 on a content failure.
+
+Independent review is closed. Implementation (release preparation, tag,
+publish, binding, variables) still requires the separate owner approvals in
+§10; reviewer approval does not authorize any external action.

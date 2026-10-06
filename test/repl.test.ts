@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
+import { VERSION } from "../src/format.js";
 import { loadApiKey } from "../src/provider/auth-store.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { Renderer } from "../src/render.js";
@@ -136,7 +137,9 @@ describe("runRepl welcome panel", () => {
 		expect(out).toContain("2. Be specific for the best results.");
 		expect(out).toContain("3. /help for more information.");
 		// identity line: version + session id + model
-		expect(out).toMatch(/Ink 0\.2\.1 · session [0-9a-f]{8} · test-model/);
+		expect(out).toMatch(
+			new RegExp(`Ink ${VERSION.replace(/\./g, "\\.")} · session [0-9a-f]{8} · test-model`),
+		);
 		// the old compact banner line is gone on fresh sessions
 		expect(out).not.toContain("/help for commands");
 		env.fake.eof();
@@ -198,7 +201,7 @@ describe("runRepl welcome panel", () => {
 		});
 		await waitUntil(() => second.output().includes("replayed"));
 		const out = second.output();
-		expect(out).toContain("Ink 0.2.1 — /help for commands"); // legacy banner on resume
+		expect(out).toContain(`Ink ${VERSION} — /help for commands`); // legacy banner on resume
 		expect(out).toContain("▪ replayed");
 		expect(out).not.toContain("Welcome to Ink");
 		second.fake.eof();

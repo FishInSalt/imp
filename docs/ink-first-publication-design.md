@@ -1,9 +1,9 @@
 # Ink first-publication design: `ink-agent@0.2.0`
 
-Status: **draft — pending fresh-context adversarial review closure.** No external
-action (registry write, tag push, account or repository-variable change,
-publisher binding) is authorized by this document until the review closes and
-each step below receives its own explicit owner approval.
+Status: **r4 APPROVE; A2 §14 APPROVE (independent review closed — see §13 and
+§14.2).** No external action (registry write, tag push, account or
+repository-variable change, publisher binding) is authorized by this document
+alone; each step requires its own explicit owner approval.
 
 - Branch: `design/ink-first-publication`
 - Contract references: [`RELEASING.md`](../RELEASING.md),
@@ -421,9 +421,12 @@ as pending, this governs:
   `ink-agent@0.2.0` is live, byte-identical to the frozen artifact (SHA-256
   `a0f40e64…b507`), no provenance; §7 step 6 (trusted publisher bound to
   GitHub Actions / `FishInSalt/ink` / `release.yml` / no environment, confirmed
-  via `npm trust list`); step 7 (tag `v0.2.0` at `R`); step 8 (GitHub Release
+  via `npx npm@latest trust list ink-agent` — `npm trust` needs npm ≥11.15.0,
+  above the ≥11.5.1 publish floor — or the npmjs.com package settings page);
+  step 7 (tag `v0.2.0` at `R`); step 8 (GitHub Release
   `v0.2.0`); the A2 repository rename; and the `0.0.0-stage` placeholder
-  deprecation.
+  (npm's stub package created so the trusted-publisher page could exist)
+  deprecated.
 - **Remaining:** §7 step L — enable `INK_NPM_PUBLISH_ENABLED` /
   `INK_NPM_PACKAGE` and publish the next version (`0.2.1`) by tag push, the
   first OIDC run with provenance. §10 gates 8 and the first-OIDC part of gate 9

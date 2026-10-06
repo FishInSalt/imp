@@ -11,20 +11,18 @@ agree. Never publish as `imp-agent` or plain `ink`, and never reuse `v0.1.0`.
 No publication, tag push, workflow dispatch, account configuration, or global
 installation is authorized by these instructions alone.
 
-## Historical capability: retire separately before release probing
+## Historical capability: the legacy gate is retired
 
 Changing the current workflow does **not** change workflows at historical
-refs. The retained `v0.1.0` workflow can still reach its legacy real-publish
-path through a tag dispatch with `dry_run=false` while the existing
-`NPM_PUBLISH_ENABLED` variable is enabled. An already-published-version error
-is not a safety gate.
+refs. The retained `v0.1.0` workflow could reach its legacy real-publish path
+through a tag dispatch with `dry_run=false` **only while** the
+`NPM_PUBLISH_ENABLED` repository variable was enabled. That variable has been
+**deleted** (2026-10-06), so the legacy path is inert. Do not re-enable it.
 
-Before any external release probe or cutover, request explicit approval to
-disable/remove the legacy `NPM_PUBLISH_ENABLED` repository variable and
-assess old npm trusted-publisher bindings for retirement. Do not dispatch
-historical refs or rerun historical publishing events until that capability
-is disabled. Preserve historical tags/workflow files and `imp-agent@0.1.0`;
-old-package deprecation/unpublication is not included in this rename.
+Remaining legacy item: assess and retire the old `imp-agent` npm
+trusted-publisher binding. Until that is done, do not dispatch historical refs
+or rerun historical publishing events. Preserve historical tags/workflow files
+and `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 
@@ -39,6 +37,9 @@ record are [`docs/ink-first-publication-design.md`](docs/ink-first-publication-d
 
 Remaining external actions, each requiring explicit approval:
 
+- retire the legacy capability: assess and retire the old `imp-agent`
+  trusted-publisher binding (the legacy `NPM_PUBLISH_ENABLED` gate is already
+  deleted) — required before any release probe or tag push;
 - enable `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` and publish the next
   version by tag push — the first OIDC trusted-publishing run, carrying
   provenance;
@@ -49,9 +50,9 @@ The binding must match `release.yml`: GitHub Actions, repository
 publishability of `ink-agent` are established (registry presence is not
 reservation or trademark clearance, which remains a separate legal question).
 
-No npm token, account settings, legacy variable, or publisher binding is
-changed by implementation. Global state migration/source-linked cutover is
-a separate operation governed by the rename design and reviewed runbook.
+Following these instructions alone performs no external action; every external
+step above is separately approved. Global state migration/source-linked cutover
+is a separate operation governed by the rename design and reviewed runbook.
 
 ## Revised workflow truth table
 

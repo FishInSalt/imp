@@ -16,6 +16,8 @@ their original release identity.
   unchanged), and the child lease machine-id file is `.ink-machine-id`
   (orphaned `.imp-machine-id` files are never read, rewritten or deleted).
   No migration is needed or performed.
+- **Codex originator (Amendment A1, D3).** Codex (ChatGPT plan) requests now
+  carry `originator: "ink"` instead of `"imp"`.
 
 ## [0.2.1] - 2026-10-06
 

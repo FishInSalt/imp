@@ -220,7 +220,7 @@ export function createCodexResponsesProvider(options: CodexResponsesProviderOpti
 					accept: "text/event-stream",
 					authorization: `Bearer ${credential.accessToken}`,
 					"chatgpt-account-id": credential.accountId,
-					originator: "imp",
+					originator: "ink",
 					"OpenAI-Beta": "responses=experimental",
 				},
 				JSON.stringify(body),

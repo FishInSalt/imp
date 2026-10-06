@@ -87,9 +87,8 @@ for deep imports. Historical records stay readable but are never rewritten
 or migrated: legacy launch records (`impVersion`) stay readable through a
 normalization arm, and old `.imp-machine-id` files are left untouched (never
 read, adopted or deleted). New records and leases use Ink names
-(`inkVersion`, `.ink-machine-id`). The Codex `originator: "imp"` header is
-unchanged for now; its rename is gated on live verification (see the rename
-design's Amendment A1).
+(`inkVersion`, `.ink-machine-id`). Codex plan requests now carry
+`originator: "ink"`.
 
 See the [local installation and acceptance record](docs/ink-local-install.md)
 and [release instructions](RELEASING.md). The original

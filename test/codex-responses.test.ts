@@ -128,7 +128,7 @@ describe("codex-responses provider", () => {
 		const headers = captured.at(-1)?.headers ?? {};
 		expect(headers.authorization).toBe("Bearer fake-access");
 		expect(headers["chatgpt-account-id"]).toBe("acct-9");
-		expect(headers.originator).toBe("imp");
+		expect(headers.originator).toBe("ink");
 		expect(headers["openai-beta"]).toBe("responses=experimental");
 	});
 

@@ -19,7 +19,7 @@ import { assertIdentity } from "./release-guards.mjs";
 
 const required = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js", "docs/index.md"];
 const allowed =
-	/^(?:package\.json|README\.md|LICENSE|CHANGELOG\.md|bin\/ink\.js|docs\/[a-z0-9-]+\.md|examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+|dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.js(?:\.map)?|\.d\.ts))$/;
+	/^(?:package\.json|README(?:\.zh-CN)?\.md|LICENSE|CHANGELOG\.md|bin\/ink\.js|docs\/[a-z0-9-]+\.md|examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+|dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.js(?:\.map)?|\.d\.ts))$/;
 
 function expectedFiles(root) {
 	const paths = new Set(required);
@@ -50,6 +50,10 @@ function expectedFiles(root) {
 		}
 	};
 	visit(join(root, "src"));
+	// npm packs every root README* automatically regardless of the files
+	// field — README.zh-CN.md ships by npm's own rule, so expected paths
+	// include it explicitly (readme-zh batch).
+	paths.add("README.zh-CN.md");
 	// Self-docs: publish docs/ top level only (design/ excluded, mirroring
 	// the package.json files entry `!docs/design`) and the examples/ tree.
 	collectTop(join(root, "docs"), "docs");

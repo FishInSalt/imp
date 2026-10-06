@@ -6,6 +6,8 @@
 
 # Ink
 
+**English** | [简体中文](README.zh-CN.md)
+
 An open-source AI assistant and agent harness for the terminal. Use Ink for
 research, writing, analysis, software development, and other tool-assisted
 tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).

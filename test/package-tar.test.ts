@@ -7,6 +7,7 @@ const endBlocks = Buffer.alloc(2 * blockSize);
 const paths = [
 	"package.json",
 	"README.md",
+	"README.zh-CN.md",
 	"LICENSE",
 	"bin/ink.js",
 	"CHANGELOG.md",

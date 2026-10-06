@@ -213,7 +213,9 @@ owner approval. Do not batch them.
    `npm publish --ignore-scripts "<stable path>/<artifact>.tgz"`. Then verify
    registry visibility with `npm view ink-agent@0.2.0 version dist.integrity`
    (retry briefly; a fresh publish can lag — `release.yml` itself retries up to
-   6×10s).
+   6×10s). A publish can fail *after* the registry created the version; before
+   any retry run `npm view ink-agent@0.2.0 version` and never re-publish a
+   version that exists.
 5. **Post-publish verification.** Perform §8.
 6. **Bind publisher.** Perform §5. (Package now exists; the settings page is
    available.)
@@ -227,12 +229,17 @@ owner approval. Do not batch them.
    `origin/main` is required at tag time — `main` may have advanced past `R`
    between freeze and tagging.
 
-   If the publish (step 4) succeeds but verification (5) or binding (6) fails,
-   **still push the tag (7)**: the tag records the already-published commit, and
-   a verification/binding failure does not invalidate the published bytes.
-   Before any retry of a failed publish, run `npm view ink-agent@0.2.0 version`
-   to determine whether the version already exists; never re-publish a version
-   that exists.
+   If the publish (step 4) succeeds but a **transient/procedural** verification
+   hiccup (registry propagation, `npm view` lag) or binding failure occurs,
+   **still push the tag (7)**: the tag records the already-published commit and
+   a lag does not invalidate the published bytes. A **content** verification
+   failure is different — if the downloaded `dist.tarball` SHA-256 does not
+   equal the frozen §3 value, or the name/version/package is wrong, the
+   published bytes are *not* the reviewed bytes: do not treat it as a normal
+   release, and follow §9.
+
+   If binding (6) failed, retry/complete §5 before step L; the variables stay
+   unset until the binding is verified.
 8. **GitHub Release page (separate approval).** Publish the `v0.2.0` release
    with notes taken from the CHANGELOG's `0.2.0` section (single source of
    truth; do not use auto-generated notes).
@@ -266,8 +273,12 @@ owner approval. Do not batch them.
   an existing version.
 - If the publish aborts before step 7 and `0.2.0` is not on the registry,
   nothing has been published; stop and re-plan.
-- If `0.2.0` is public, still complete step 7 (push the tag) even if
-  verification or binding failed — the tag must record the published commit.
+- If `0.2.0` is public and only a transient verification/binding issue
+  occurred, complete step 7 (push the tag).
+- If a **content** check failed (the published SHA-256 ≠ the frozen value, or
+  the package/version is wrong), the release is not the reviewed one: deprecate
+  it, or `npm unpublish` within the 24-hour window with approval, then prepare a
+  newly reviewed patch version.
 - Never reuse a tag or overwrite a package version.
 
 ## 10. Approval gates
@@ -350,4 +361,10 @@ This list is unordered for approval purposes; §7 governs the actual sequence.
   §6 cross-reference; NEW-4 adds a propagation-retry note; NEW-5 re-verifies
   the frozen SHA immediately before publish; NEW-6 labels the `-g` line as
   downstream usage; NEW-7 clarifies ancestry at tag time.
-- r3 re-review: pending.
+- r3 re-review (same child session): NEEDS-FIXES. S3 and NEW-1..NEW-7 closed;
+  found NEW-8 (SERIOUS) and NEW-9/NEW-10. Folded in this revision: NEW-8
+  distinguishes a transient verification hiccup from a §8 content/digest
+  mismatch (the latter triggers §9 deprecate/unpublish, never a normal release);
+  NEW-9 requires completing/retrying §5 before step L; NEW-10 moves the
+  never-re-publish guidance into step 4.
+- r4 re-review: pending.

@@ -437,11 +437,11 @@ as pending, this governs:
   post-publish registry-visibility check inside the raised window), with
   provenance (`gitHead` `35f34b4`); the `v0.2.2` GitHub Release page is
   published from the dated CHANGELOG section.
-- **Done:** the legacy `imp-agent` trusted-publisher binding was retired by
-  the owner on 2026-10-06 (`npm trust revoke imp-agent`; the registry answered
-  `204` after owner web authentication, confirmed in the local npm log). A
-  post-revoke listing was not captured in the local log; if further
-  `imp-agent` bindings surface, revoke them the same way.
+- **Done:** the `imp-agent` trusted-publisher bindings were fully retired by
+  the owner on 2026-10-06 — the first revoke answered `204` (local npm log),
+  the last entry (id `8e7aba0e-…`, bound to the pre-rename `FishInSalt/imp`)
+  was revoked the same way, and the final `npm trust list imp-agent` reports
+  no trust configurations.
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 

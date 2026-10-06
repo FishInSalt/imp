@@ -25,6 +25,11 @@ cd /path/to/project
 ink
 ```
 
+Verify a non-interactive install with `ink --version` (prints `Ink <version>`)
+or `ink --help`; for scripted one-shot use `ink -p "question"` prints the
+answer and exits. The registry package runs no install lifecycle scripts.
+Uninstall with `npm uninstall -g ink-agent`.
+
 Or let npm infer the single `ink` executable from the explicit package:
 
 ```bash

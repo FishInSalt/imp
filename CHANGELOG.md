@@ -8,6 +8,12 @@ their original release identity.
 
 ## [Unreleased]
 
+### Added
+
+- Chinese README (`README.zh-CN.md`): full translation of the root README
+  with a language switch on both; npm packs it automatically (README* rule),
+  so it ships with the package and the smoke allowlist admits it.
+
 ## [0.2.3] - 2026-10-06
 
 ### Added

@@ -26,7 +26,7 @@ and `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 
-## OIDC publication is live; next release is `0.2.2`
+## OIDC publication is live (`0.2.2` published); remaining steps
 
 `ink-agent@0.2.0` was published manually from the reviewed artifact (no
 provenance); the trusted publisher is bound; the repository is
@@ -42,17 +42,19 @@ final post-publish registry-visibility check (a 60s window); the window was
 raised to 180s in `72f81fc`, and the published artifact was verified manually.
 Do not re-run the `v0.2.1` workflow: re-publishing the same version fails.
 
+`ink-agent@0.2.2` shipped on 2026-10-06 as the second OIDC run: tag `v0.2.2`
+was pushed from reviewed `main` and the run completed green end to end —
+including the post-publish registry-visibility check inside the raised 180s
+window — with provenance (`gitHead` `35f34b4`, attested on the registry); the
+`v0.2.2` GitHub Release page is published from the dated CHANGELOG section.
+
 Remaining external actions, each requiring explicit approval:
 
 - check first, then retire, the legacy `imp-agent` trusted-publisher binding
-  (the legacy `NPM_PUBLISH_ENABLED` gate is already deleted) — required before
-  any further release probe or tag push; its status at the time of the
-  `v0.2.1` push is not recorded;
-- publish `ink-agent@0.2.2` by tag push from reviewed `main` (gates are
-  enabled: `INK_NPM_PUBLISH_ENABLED=true`, `INK_NPM_PACKAGE=ink-agent`) — the
-  second OIDC run, carrying provenance;
-- publish the `v0.2.2` GitHub Release page from the dated CHANGELOG section
-  (separate approval, like the earlier release pages);
+  (the legacy `NPM_PUBLISH_ENABLED` gate is already deleted) — outstanding: a
+  2026-10-06 CLI check (`npx npm@latest trust list imp-agent`) answered EOTP,
+  i.e. it needs interactive 2FA from an owner terminal or the npmjs.com
+  settings page; required before any further release probe or tag push;
 - re-verify the publisher binding after any further repository rename.
 
 The binding must match `release.yml`: GitHub Actions, repository

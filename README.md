@@ -34,21 +34,18 @@ sessions, and extensible tools. Roadmap and historical implementation ledger:
 ## Setup
 
 Requires Node 22.19.0 or newer, matching the pinned TUI dependency.
-The selected package is `ink-agent@0.2.0`.
-Publication and local state cutover are separate approval-gated operations;
-this checkout does not imply that the package is available on npm yet.
-Once published, install it to provide the `ink` command:
+The package is published on npm as `ink-agent`. Install it to provide the
+`ink` command:
 
 ```bash
-npm install -g ink-agent@0.2.0
+npm install -g ink-agent@latest
 ink
 ```
 
-Or, once published, let npm infer the single `ink` executable from the
-explicit package:
+Or let npm infer the single `ink` executable from the explicit package:
 
 ```bash
-npm exec -- ink-agent@0.2.0 --help
+npm exec -- ink-agent@latest --help
 ```
 
 Do not use `npx ink`: plain `ink` is an unrelated npm package. There is no

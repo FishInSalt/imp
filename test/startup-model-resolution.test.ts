@@ -845,7 +845,7 @@ describe("#startup-model-resolution", () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		expect(noModelText(true)).toBe(NO_MODEL_SELECTED_SEGMENT);
 		const lines = welcomeLines("deadbeef", noModelText(true), false);
-		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink 0.2.1 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
 	});
 
 	it("D6 surfaces: the resumed line shows the /model pointer in the multi state", async () => {

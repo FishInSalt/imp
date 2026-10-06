@@ -136,7 +136,7 @@ describe("runRepl welcome panel", () => {
 		expect(out).toContain("2. Be specific for the best results.");
 		expect(out).toContain("3. /help for more information.");
 		// identity line: version + session id + model
-		expect(out).toMatch(/Ink 0\.2\.0 · session [0-9a-f]{8} · test-model/);
+		expect(out).toMatch(/Ink 0\.2\.1 · session [0-9a-f]{8} · test-model/);
 		// the old compact banner line is gone on fresh sessions
 		expect(out).not.toContain("/help for commands");
 		env.fake.eof();
@@ -198,7 +198,7 @@ describe("runRepl welcome panel", () => {
 		});
 		await waitUntil(() => second.output().includes("replayed"));
 		const out = second.output();
-		expect(out).toContain("Ink 0.2.0 — /help for commands"); // legacy banner on resume
+		expect(out).toContain("Ink 0.2.1 — /help for commands"); // legacy banner on resume
 		expect(out).toContain("▪ replayed");
 		expect(out).not.toContain("Welcome to Ink");
 		second.fake.eof();

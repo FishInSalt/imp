@@ -377,7 +377,7 @@ describe("copied Ink installation", () => {
 				env,
 				timeout: 5000,
 			});
-			expect(stdout.trim()).toBe("Ink 0.2.0");
+			expect(stdout.trim()).toBe("Ink 0.2.1");
 		} finally {
 			fixture.cleanup();
 		}

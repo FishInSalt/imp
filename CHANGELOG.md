@@ -8,6 +8,17 @@ their original release identity.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-06
+
+### Changed
+
+- **Repository renamed to `FishInSalt/ink`.** The GitHub repository moved from
+  `FishInSalt/imp` (old URLs redirect). Package metadata (`repository`,
+  `homepage`, `bugs`), the README and `RELEASING.md` now point at the new name,
+  and the README install commands use `ink-agent@latest`. No runtime, CLI, or
+  extension behaviour changed; this is a metadata-only release, published from
+  the reviewed tagged commit.
+
 ## [0.2.0] - 2026-10-06
 
 ### Added

@@ -334,7 +334,7 @@ function persistTask(parent: SessionStore, result: ToolExecuteResult): void {
 
 describe("child v1 version compatibility", () => {
 	it("inspects an old 0.1.0 child, but refuses before lease, torn-tail repair, mutation or provider calls", async () => {
-		expect(VERSION).toBe("0.2.0");
+		expect(VERSION).toBe("0.2.1");
 		const oldBase = resource(home, ".imp", "sessions");
 		const parent = createSession(cwd, oldBase);
 		const launch = childTask(parent, "0.1.0", [assistant([{ type: "text", text: "Old child answer" }])]);
@@ -370,7 +370,7 @@ describe("child v1 version compatibility", () => {
 		expect(result.isError).toBe(true);
 		expect(result.output).toContain("version-drift");
 		expect(result.output).toContain("0.1.0");
-		expect(result.output).toContain("0.2.0");
+		expect(result.output).toContain("0.2.1");
 		expect(result.output).not.toContain("system-drift");
 		expect(result.taskRecord?.launched).toBe(false);
 		expect(beforeLease).not.toHaveBeenCalled();
@@ -386,8 +386,8 @@ describe("child v1 version compatibility", () => {
 		expect(launch.sink).toHaveLength(1);
 	});
 
-	it("creates and continues a new 0.2.0 child, preserving the v1 impVersion and machine-id protocol", async () => {
-		expect(VERSION).toBe("0.2.0");
+	it("creates and continues a new 0.2.1 child, preserving the v1 impVersion and machine-id protocol", async () => {
+		expect(VERSION).toBe("0.2.1");
 		const parent = createSession(cwd);
 		const firstHost = childTask(parent, VERSION, [assistant([{ type: "text", text: "Ink child answer" }])]);
 		const first = await firstHost.task.execute({ prompt: "Ink task" }, new AbortController().signal, {
@@ -398,7 +398,7 @@ describe("child v1 version compatibility", () => {
 		if (transcript?.present !== true) throw new Error("Expected Ink child transcript");
 		const child = SessionStore.open(transcript.path);
 		expect(child.header.launch?.version).toBe(1);
-		expect(child.header.launch?.impVersion).toBe("0.2.0");
+		expect(child.header.launch?.impVersion).toBe("0.2.1");
 		expect(child.header.launch).not.toHaveProperty("inkVersion");
 		expect(transcript.path).toContain(`${path.sep}.ink${path.sep}`);
 		const machinePath = path.join(path.dirname(transcript.path), ".imp-machine-id");

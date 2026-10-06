@@ -99,7 +99,7 @@ describe("#fresh-install-hint availability seam", () => {
 		expect(output()).toContain("zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn");
 		// welcomeLines renders the segment the caller passes (D1)
 		const lines = welcomeLines("deadbeef", NO_MODEL_SEGMENT, false);
-		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink 0.2.1 · session deadbeef · ${NO_MODEL_SEGMENT}`);
 		expect(lines[lines.length - 1]).not.toContain("claude-sonnet-4-5");
 	});
 

@@ -1,4 +1,5 @@
 import os from "node:os";
+import { type SelfDocsPaths, selfDocsSection } from "./self-docs.js";
 
 export interface SystemPromptContext {
 	cwd: string;
@@ -23,6 +24,10 @@ export interface SystemPromptOptions {
 	/** APPEND_SYSTEM.md — lands after the body in both modes, before the
 	 *  runner's context/skills/agents appendages (pi's relative order). */
 	append?: string;
+	/** Self-docs paths — renders the docs routing section at the end of the
+	 *  default body, before append (self-docs-design D4). Undefined (or an
+	 *  override) omits it. The runner gates this on a `read` tool existing. */
+	selfDocs?: SelfDocsPaths;
 }
 
 /** One routing line per snippet-bearing tool. pi's snippets were too terse to
@@ -45,9 +50,13 @@ ${lines.join("\n")}`
 			: "";
 
 	const appendSection = opts?.append ? `\n\n${opts.append}` : "";
+	// Self-docs: routing block sits after the catalog / closing line, before
+	// the append section (pi order: docs section precedes the addendum).
+	const docsSection = opts?.selfDocs === undefined ? "" : `\n\n${selfDocsSection(opts.selfDocs)}`;
 	if (opts?.override) {
 		// The only machine fact that must survive replacement (D4): platform
-		// is discoverable via one bash call; cwd is not.
+		// is discoverable via one bash call; cwd is not. Self-docs stays out —
+		// a custom prompt owns the identity (pi parity: no docs section).
 		return `${opts.override}${appendSection}\n\nCurrent working directory: ${context.cwd}`;
 	}
 	return `You are Ink, an open-source AI assistant and agent harness for the terminal.
@@ -68,7 +77,7 @@ ${catalog}
 
 In addition to the tools above, you may have access to other tools depending on the project.
 
-Use tools proactively to establish facts; base your answers on observed output, not assumptions.${appendSection}`;
+Use tools proactively to establish facts; base your answers on observed output, not assumptions.${docsSection}${appendSection}`;
 }
 
 /** prompt-audit P7: MCP catalog entries — per-tool one-liners while the

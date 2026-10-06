@@ -112,7 +112,16 @@ describe("release guards", () => {
 	});
 });
 
-const files = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js"].map((path) => ({
+const files = [
+	"package.json",
+	"README.md",
+	"LICENSE",
+	"CHANGELOG.md",
+	"bin/ink.js",
+	"dist/cli.js",
+	"docs/index.md",
+	"examples/agents/scout.md",
+].map((path) => ({
 	path,
 	mode: path === "bin/ink.js" ? 0o755 : 0o644,
 	size: 10,

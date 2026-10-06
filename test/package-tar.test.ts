@@ -4,7 +4,17 @@ import { parseTar } from "../scripts/package-smoke.mjs";
 
 const blockSize = 512;
 const endBlocks = Buffer.alloc(2 * blockSize);
-const paths = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js"];
+const paths = [
+	"package.json",
+	"README.md",
+	"LICENSE",
+	"bin/ink.js",
+	"CHANGELOG.md",
+	"docs/index.md",
+	"docs/cli.md",
+	"examples/agents/scout.md",
+	"dist/cli.js",
+];
 const permittedPaths = new Set([...paths, "dist/format.js"]);
 
 interface TarFile {

@@ -58,7 +58,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	// whole cap. 0.8 × reserve = 26214 covers the worst observed combination
 	// (~13k thinking + ~6k text). Trigger impact: 1M windows unchanged (850k);
 	// 131k-200k windows compact 1.6-14% earlier. See
-	// docs/compaction-thinking-retry-design.md.
+	// docs/design/compaction-thinking-retry-design.md.
 	reserveTokens: 32768,
 	keepRecentTokens: envInt("INK_KEEP_RECENT", 20000),
 	contextWindow: envInt("INK_CONTEXT_WINDOW", 131072),

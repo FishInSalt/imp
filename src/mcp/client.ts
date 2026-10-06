@@ -1,5 +1,5 @@
 /**
- * MCP protocol core (M19 D1, docs/m19-mcp-http-design.md).
+ * MCP protocol core (M19 D1, docs/design/m19-mcp-http-design.md).
  *
  * Owns the pending table, request/notify, timeouts, abort, the initialize
  * handshake, tools/list cursor pagination (10-page cap) and tools/call

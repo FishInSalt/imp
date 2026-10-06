@@ -6,7 +6,7 @@ import type { LLMEvent } from "../src/provider/types.js";
 /**
  * SA-04 round 2 (acceptance P1): the anthropic adapter must carry "no usage
  * data was received" structurally instead of emitting initialization zeros
- * as if they were an explicit report. See docs/sa-04-attempt-usage-design.md
+ * as if they were an explicit report. See docs/design/sa-04-attempt-usage-design.md
  * §10.
  */
 

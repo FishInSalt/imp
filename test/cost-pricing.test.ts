@@ -15,7 +15,7 @@ import { assistant, scriptedProvider } from "./helpers/fakes.js";
  * SA-05 round 2 (owner acceptance P2): pricing identity is the fully qualified
  * producer reference, and the static rate table is provider-scoped — a
  * reference never picks up another provider's rates, and a bare legacy id is
- * never inferred. See docs/sa-05-usage-totals-design.md §11.
+ * never inferred. See docs/design/sa-05-usage-totals-design.md §11.
  */
 
 beforeEach(() => {

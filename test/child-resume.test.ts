@@ -1,5 +1,5 @@
 /**
- * SA-07 resume tests (design: docs/sa-07-child-resume-design.md).
+ * SA-07 resume tests (design: docs/design/sa-07-child-resume-design.md).
  *
  * The R* cases were the red-evidence set (committed before implementation);
  * the T* cases complete the design's test plan.

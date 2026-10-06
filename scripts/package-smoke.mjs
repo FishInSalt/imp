@@ -17,9 +17,9 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { assertIdentity } from "./release-guards.mjs";
 
-const required = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js"];
+const required = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js", "docs/index.md"];
 const allowed =
-	/^(?:package\.json|README\.md|LICENSE|bin\/ink\.js|dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.js(?:\.map)?|\.d\.ts))$/;
+	/^(?:package\.json|README\.md|LICENSE|CHANGELOG\.md|bin\/ink\.js|docs\/[a-z0-9-]+\.md|examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+|dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.js(?:\.map)?|\.d\.ts))$/;
 
 function expectedFiles(root) {
 	const paths = new Set(required);
@@ -33,7 +33,28 @@ function expectedFiles(root) {
 			}
 		}
 	};
+	// Editor/Finder noise that npm's gitignore-aware packer excludes —
+	// collecting them would make the "Missing build output" assertion fail
+	// on developer machines (implementation review N5).
+	const NOISE = /^\.DS_Store$|^Thumbs\.db$|(^|\/)node_modules\//;
+	const collect = (directory, relative = "") => {
+		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			const name = relative ? `${relative}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) collect(join(directory, entry.name), name);
+			else if (entry.isFile() && !NOISE.test(name)) paths.add(name);
+		}
+	};
+	const collectTop = (directory, prefix) => {
+		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			if (entry.isFile() && !NOISE.test(entry.name)) paths.add(`${prefix}/${entry.name}`);
+		}
+	};
 	visit(join(root, "src"));
+	// Self-docs: publish docs/ top level only (design/ excluded, mirroring
+	// the package.json files entry `!docs/design`) and the examples/ tree.
+	collectTop(join(root, "docs"), "docs");
+	paths.add("CHANGELOG.md");
+	collect(join(root, "examples"), "examples");
 	return paths;
 }
 

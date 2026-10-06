@@ -1,6 +1,6 @@
 /**
  * stdio transport — the M18 wire behavior moved behind McpTransport
- * (M19 D1, docs/m19-mcp-http-design.md). One line = one JSON-RPC message on
+ * (M19 D1, docs/design/m19-mcp-http-design.md). One line = one JSON-RPC message on
  * the server's stdout; stray non-JSON lines are skipped; a >10MB line kills
  * the connection (design R3); stderr keeps a 2KB ring for /mcp diagnosis.
  *

@@ -3,7 +3,7 @@ import type { HealthCode } from "./health.js";
 import type { SessionEntry } from "./session/store.js";
 
 /**
- * SA-03 design (docs/sa-03-task-record-design.md): the runtime-produced
+ * SA-03 design (docs/design/sa-03-task-record-design.md): the runtime-produced
  * account of ONE task-tool call — identity, launch facts, terminal outcome,
  * transcript/worktree references and the usage slot.
  *

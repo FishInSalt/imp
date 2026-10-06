@@ -1,6 +1,6 @@
 /**
  * #login-dialog: the exclusive login dialog (pi's LoginDialogComponent,
- * scoped to Ink's flows — see docs/login-dialog-design.md §2.1 and the
+ * scoped to Ink's flows — see docs/design/login-dialog-design.md §2.1 and the
  * pi behavior parity table §2.1.1).
  *
  * A bordered dialog that owns focus and keys for a whole login flow

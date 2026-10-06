@@ -424,7 +424,7 @@ export function createTaskTool(options: TaskToolOptions): Tool {
 			});
 
 			// --- SA-07: resume a settled child ---------------------------------
-			// Design: docs/sa-07-child-resume-design.md. Everything below runs
+			// Design: docs/design/sa-07-child-resume-design.md. Everything below runs
 			// BEFORE fresh-dispatch resolution (agent/model/tools/worktree), and
 			// every path either refuses with no side effect or runs the attempt.
 			if (args.resume !== undefined) {

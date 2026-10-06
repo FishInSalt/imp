@@ -46,6 +46,7 @@ export type NavigateTreeForkResult =
 	| { editorText?: string; editorTextDroppedImages?: boolean; preview: string; messages: number };
 
 import type { LaunchContextFile, LaunchEnvironmentFacts, LaunchPromptFile } from "./core/child-launch.js";
+import { resolveInstallRoot } from "./core/self-docs.js";
 import { escapeXml, formatSkillsForPrompt, type Skill } from "./core/skills.js";
 import {
 	buildSystemPrompt,
@@ -765,9 +766,23 @@ class RunnerImpl implements Runner {
 						]),
 			],
 		};
+		// Self-docs (D4): resolve install paths once; gate on a read tool
+		// existing (no read → the paths are dead text; skills use the same
+		// gate). A missing docs tree (old-install upgrade) yields undefined and
+		// the section is simply omitted.
+		const installRoot = resolveInstallRoot();
+		const selfDocs =
+			installRoot !== undefined && this.tools.some((tool) => tool.name === "read")
+				? {
+						readme: path.join(installRoot, "README.md"),
+						docs: path.join(installRoot, "docs"),
+						examples: path.join(installRoot, "examples"),
+					}
+				: undefined;
 		let system = buildSystemPrompt({ ...defaultSystemPromptContext(), cwd: this.options.cwd }, catalogTools, {
 			override: promptFiles.override?.text,
 			append: promptFiles.append?.text,
+			selfDocs,
 		});
 		if (notify) {
 			const sources = [promptFiles.override, promptFiles.append]

@@ -1,5 +1,5 @@
 /**
- * MCP server orchestration (M18, docs/m18-mcp-design.md §5).
+ * MCP server orchestration (M18, docs/design/m18-mcp-design.md §5).
  *
  * Owns one McpClient + bridged tool set per configured server and keeps the
  * shared runner.tools array current. Two self-review rules shape it:

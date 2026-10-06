@@ -1,6 +1,6 @@
 /**
- * MCP config discovery (M18, docs/m18-mcp-design.md §2; M19 D2/D7,
- * docs/m19-mcp-http-design.md).
+ * MCP config discovery (M18, docs/design/m18-mcp-design.md §2; M19 D2/D7,
+ * docs/design/m19-mcp-http-design.md).
  *
  * Five locations in pi-mcp-adapter's order (adapter config.ts:15-21):
  * generic global ~/.config/mcp/mcp.json → ~/.agents/mcp.json →
@@ -131,7 +131,7 @@ function coerceServerEntry(
 		}
 		if (declared === "sse") {
 			return {
-				error: `server "${name}" type "sse" is not supported yet (SSE-legacy — see docs/m19-mcp-http-design.md §6)`,
+				error: `server "${name}" type "sse" is not supported yet (SSE-legacy — see docs/design/m19-mcp-http-design.md §6)`,
 			};
 		}
 	}
@@ -243,7 +243,7 @@ export function discoverMcpConfig(options: {
 	cwd: string;
 	/** Full override of the discovery paths (hermetic tests). */
 	paths?: string[];
-	/** M19 F1 (docs/m19-mcp-http-design.md D7): the M8 trust bit for the
+	/** M19 F1 (docs/design/m19-mcp-http-design.md D7): the M8 trust bit for the
 	 *  project tier. REQUIRED — fail-closed plumbing: every caller must decide
 	 *  explicitly; false means the two project-tier files are not even read. */
 	projectAllowed: boolean;

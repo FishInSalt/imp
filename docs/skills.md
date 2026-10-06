@@ -5,6 +5,8 @@ the [Agent Skills](https://agentskills.io) standard (same shape as Claude
 Code and pi skills). Only a one-line catalog entry (name + description +
 location) enters the system prompt; the full body is read when a task
 actually matches. That is *progressive disclosure*: zero-cost until used.
+Related pages: [extensions.md](extensions.md) (code, not markdown),
+[settings.md](settings.md) (the `skills` key).
 
 ## Layout
 

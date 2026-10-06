@@ -10,7 +10,7 @@
  *
  * Precedence everywhere: env var > project > global > code default.
  *
- * pi parity notes (docs/m15-settings-design.md): load is forgiving (a
+ * pi parity notes (docs/design/m15-settings-design.md): load is forgiving (a
  * corrupt or wrong-typed file never blocks startup — unknown keys are
  * PRESERVED through read-modify-write for forward compat), writes are
  * atomic (tmp+rename) but not locked (D16: single-user CLI,
@@ -39,7 +39,7 @@ export interface InkSettings {
 	/** /skill:name command registration (default true; M12 batch 2 consumes it). */
 	enableSkillCommands?: boolean;
 	/** M17 queue drain modes (pi settings keys, same literals). Defaults are a
-	 *  DELIBERATE divergence from pi (docs/m17-followup-runs-design.md §2):
+	 *  DELIBERATE divergence from pi (docs/design/m17-followup-runs-design.md §2):
 	 *  steering batches (timely supplementary info — one boundary delivers
 	 *  the complete correction set; a one-at-a-time backlog would delay newer
 	 *  messages), follow-ups run one per boundary (independent next tasks —

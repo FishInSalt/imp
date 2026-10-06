@@ -1,5 +1,5 @@
 // #login-dialog: the exclusive login dialog — TUI-level tests
-// (docs/login-dialog-design.md §3, items 1-16). The oauth tests budget
+// (docs/design/login-dialog-design.md §3, items 1-16). The oauth tests budget
 // ≥5000ms: codex-auth's poll floor is 1000ms (Math.max(intervalSeconds,1)),
 // even with the fake server's interval: 0.
 

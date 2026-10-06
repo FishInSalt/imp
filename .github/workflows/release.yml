@@ -1,6 +1,6 @@
 # Ordinary Ink publication is tag-push only and uses TWO new repo variables.
 # Every dispatch is dry-run, even a tag dispatch with dry_run=false.
-# Design: docs/ink-rename-design.md r3; process and historical risks: RELEASING.md.
+# Design: docs/design/ink-rename-design.md r3; process and historical risks: RELEASING.md.
 # Changing this file does NOT disable legacy workflows at historical refs.
 name: release
 

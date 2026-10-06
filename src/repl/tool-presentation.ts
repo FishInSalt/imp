@@ -112,7 +112,7 @@ export interface ToolBlock {
 	 *  interrupted blocks, never on output blocks). The renderer shows the
 	 *  bare marker for any measured call and adds the time text only ≥1000ms
 	 *  (Amendment 2). Presentation-only: not persisted, never sent to the
-	 *  model. See docs/tui-tool-elapsed-design.md. */
+	 *  model. See docs/design/tui-tool-elapsed-design.md. */
 	elapsedMs?: number;
 	/** #tui-tool-elapsed (Amendment 3): true when the completed call's result
 	 *  was an error, so the renderer draws the red ✗ marker instead of the

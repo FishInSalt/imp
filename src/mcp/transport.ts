@@ -1,5 +1,5 @@
 /**
- * MCP transport interface (M19 D1, docs/m19-mcp-http-design.md).
+ * MCP transport interface (M19 D1, docs/design/m19-mcp-http-design.md).
  *
  * The protocol core (src/mcp/client.ts) owns the pending table, timeouts,
  * aborts, the initialize handshake, pagination and result mapping. A

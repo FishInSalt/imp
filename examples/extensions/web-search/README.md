@@ -228,4 +228,5 @@ npm test -- test/web-search.test.ts test/web-search-config.test.ts test/web-sear
 
 Tests use temporary config files and mocked responses; discovery checks use the
 actual extension loader. No real credentials or paid search calls are required.
-Design and remaining scope: `docs/web-search-extension-design.md`.
+Design and remaining scope:
+[docs/design/web-search-extension-design.md](https://github.com/FishInSalt/ink/blob/main/docs/design/web-search-extension-design.md).

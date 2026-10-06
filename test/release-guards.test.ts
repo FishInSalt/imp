@@ -112,7 +112,16 @@ describe("release guards", () => {
 	});
 });
 
-const files = ["package.json", "README.md", "LICENSE", "bin/ink.js", "dist/cli.js"].map((path) => ({
+const files = [
+	"package.json",
+	"README.md",
+	"LICENSE",
+	"CHANGELOG.md",
+	"bin/ink.js",
+	"dist/cli.js",
+	"docs/index.md",
+	"examples/agents/scout.md",
+].map((path) => ({
 	path,
 	mode: path === "bin/ink.js" ? 0o755 : 0o644,
 	size: 10,
@@ -130,7 +139,7 @@ describe("artifact strict file allowlist", () => {
 		".imp/sessions/history.jsonl",
 		"src/cli.ts",
 		"test/x.test.ts",
-		"docs/x.md",
+		"docs/design/x.md",
 		"scripts/package-smoke.mjs",
 		"dist/.env",
 		"dist/../../auth.json",

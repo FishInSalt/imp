@@ -10,7 +10,7 @@ import { type Component, matchesKey, sliceByColumn, Text, truncateToWidth, visib
  * output. The TUI component (below) and the legacy shell's numbered text
  * tree both render from it, so the two cannot drift (design §3.3/§3.4).
  *
- * Batch C (docs/tree-c-design.md) closes the polish pool: the selector opens
+ * Batch C (docs/design/tree-c-design.md) closes the polish pool: the selector opens
  * ON the current position (nearest visible ancestor when filtered), the
  * window re-centers on the selection (pi's model), ←/→/PgUp/PgDn page,
  * alt+←/→ run pi's fold-or-up / unfold-or-down over the nearest-VISIBLE-

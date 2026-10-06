@@ -15,7 +15,7 @@
  * /model open. Disk cache (~/.ink/models-catalog.json) is the fallback when
  * pi.dev is unreachable; ETag revalidation keeps 304s bodyless.
  *
- * Divergences recorded in docs/m14-model-catalog-design.md §4: no
+ * Divergences recorded in docs/design/m14-model-catalog-design.md §4: no
  * localGeneratedAt guard (static tables frozen → remote always wins),
  * single-flight instead of pi's per-runtime coordinator, module overlay +
  * atomic write instead of pi's publish/store transaction.

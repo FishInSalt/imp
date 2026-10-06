@@ -11,6 +11,10 @@
 	"files": [
 		"bin/ink.js",
 		"dist",
+		"docs",
+		"!docs/design",
+		"examples",
+		"CHANGELOG.md",
 		"README.md",
 		"LICENSE"
 	],
@@ -38,7 +42,7 @@
 		"prepare": "npm run build",
 		"typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
 		"lint": "biome check . && npm run lint:scripts",
-		"lint:scripts": "node --check scripts/package-smoke.mjs && node --check scripts/release-guards.mjs",
+		"lint:scripts": "node --check scripts/package-smoke.mjs && node --check scripts/release-guards.mjs && node --check scripts/check-docs.mjs && node scripts/check-docs.mjs",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
 		"test:watch": "vitest"

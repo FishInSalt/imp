@@ -1,8 +1,8 @@
 # Releasing Ink
 
-Current contract: this file plus [`docs/ink-rename-design.md`](docs/ink-rename-design.md)
+Current contract: this file plus [`docs/design/ink-rename-design.md`](docs/design/ink-rename-design.md)
 r3 (its repository-name row was superseded by the executed rename — see
-[`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md) §14).
+[`docs/design/ink-first-publication-design.md`](docs/design/ink-first-publication-design.md) §14).
 The selected package/version is **`ink-agent@0.2.2`**, with the sole `ink`
 executable. The repository is **`FishInSalt/ink`** (renamed from
 `FishInSalt/imp`; old URLs redirect). Package metadata,
@@ -29,7 +29,7 @@ caveat — do not dispatch historical refs or re-run historical publishing
 events until the binding is retired — accordingly lapses; those actions still
 require their ordinary approvals. Preserve historical tags/workflow files and
 `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
-[`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
+[`docs/design/publishing-design.md`](docs/design/publishing-design.md) is an archival design,
 not the current release procedure.
 
 ## OIDC publication is live (`0.2.2` published); remaining steps
@@ -38,7 +38,7 @@ not the current release procedure.
 provenance); the trusted publisher is bound; the repository is
 `FishInSalt/ink`; and tag `v0.2.0` plus its GitHub Release exist. The
 bootstrap design and its review record are
-[`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md)
+[`docs/design/ink-first-publication-design.md`](docs/design/ink-first-publication-design.md)
 (§14 records what was executed).
 
 `ink-agent@0.2.1` then shipped through the first OIDC trusted-publishing run:

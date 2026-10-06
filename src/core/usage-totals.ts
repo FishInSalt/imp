@@ -3,7 +3,7 @@ import type { SessionEntry } from "./session/store.js";
 import { parseTaskRecord } from "./task-record.js";
 
 /**
- * SA-05 (docs/sa-05-usage-totals-design.md): the durable work-cost aggregate.
+ * SA-05 (docs/design/sa-05-usage-totals-design.md): the durable work-cost aggregate.
  *
  * A *derived view* over the session's append-only entries — not a ledger of
  * its own. Whole-session scope (every entry, all branches: switching branches

@@ -83,7 +83,16 @@ describe("package metadata (release identity)", () => {
 		expect(readFileSync(bin, "utf8").startsWith("#!/usr/bin/env node\n")).toBe(true);
 		expect(statSync(bin).mode & 0o777).toBe(0o755);
 		expect(existsSync(new URL("../bin/imp.js", import.meta.url))).toBe(false);
-		expect(pkg.files).toEqual(["bin/ink.js", "dist", "README.md", "LICENSE"]);
+		expect(pkg.files).toEqual([
+			"bin/ink.js",
+			"dist",
+			"docs",
+			"!docs/design",
+			"examples",
+			"CHANGELOG.md",
+			"README.md",
+			"LICENSE",
+		]);
 	});
 
 	it("describes a general assistant and points at the Ink repository URLs", () => {

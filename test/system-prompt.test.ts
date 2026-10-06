@@ -184,6 +184,41 @@ describe("buildSystemPrompt override/append (#system-md)", () => {
 	});
 });
 
+describe("buildSystemPrompt selfDocs (self-docs-design D4)", () => {
+	const docs = {
+		readme: "/usr/local/lib/node_modules/ink-agent/README.md",
+		docs: "/usr/local/lib/node_modules/ink-agent/docs",
+		examples: "/usr/local/lib/node_modules/ink-agent/examples",
+	};
+
+	it("renders the docs section after the catalog line, before append", () => {
+		const prompt = buildSystemPrompt(CTX, [{ name: "read", promptSnippet: "x" }], {
+			selfDocs: docs,
+			append: "Answer in Chinese.",
+		});
+		const docsAt = prompt.indexOf("Ink documentation");
+		expect(docsAt).toBeGreaterThan(-1);
+		expect(docsAt).toBeGreaterThan(prompt.indexOf("Use tools proactively")); // catalog section last line
+		expect(docsAt).toBeLessThan(prompt.indexOf("Answer in Chinese.")); // before append
+		expect(prompt).toContain(`- Main documentation: ${docs.readme}`);
+		expect(prompt).toContain(`- Full docs index: ${docs.docs}/index.md`);
+	});
+
+	it("override mode omits the docs section (pi parity)", () => {
+		const prompt = buildSystemPrompt(CTX, [], {
+			override: "You are my Rust reviewer.",
+			append: "Answer in Chinese.",
+			selfDocs: docs,
+		});
+		expect(prompt).not.toContain("Ink documentation");
+	});
+
+	it("undefined selfDocs omits the section (old-install degradation)", () => {
+		const prompt = buildSystemPrompt(CTX, [], {});
+		expect(prompt).not.toContain("Ink documentation");
+	});
+});
+
 describe("runner SYSTEM.md integration (#system-md)", () => {
 	async function makeBase(): Promise<string> {
 		const base = await mkdtemp(path.join(tmpdir(), "imp-sysmd-"));
@@ -290,6 +325,25 @@ describe("runner SYSTEM.md integration (#system-md)", () => {
 		await chmod(locked, 0o000);
 		const { output } = await makeRunner(base, { systemPromptProjectAllowed: true });
 		expect(output()).toContain("▪ could not read .ink/APPEND_SYSTEM.md — skipped");
+	});
+
+	it("self-docs section is present when a read tool exists, absent without one (self-docs D4 gate)", async () => {
+		// The repo checkout this test runs in carries docs/index.md, so
+		// resolveInstallRoot() finds a root and the read gate is the only
+		// variable. Default loadout includes read → section present.
+		const base = await makeBase();
+		await mkdir(join(base, "home"), { recursive: true });
+		const withRead = await makeRunner(base, {});
+		expect(withRead.runner.system).toContain("Ink documentation");
+
+		// A read-less pool drops the section: the paths are dead text without
+		// a reader. options.tools replaces the default pool entirely (runner
+		// "test seam", design §8.1) — bash alone carries no read tool.
+		const { createBashTool } = await import("../src/core/tools/bash.js");
+		const noRead = await makeRunner(base, {
+			tools: [createBashTool({ cwd: base })],
+		});
+		expect(noRead.runner.system).not.toContain("Ink documentation");
 	});
 
 	it("untrusted + global takeover renders the superseded note (D6 copy)", async () => {

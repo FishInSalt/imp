@@ -1,6 +1,6 @@
 /**
  * SA-07 single-writer lease tests — intent + verify protocol
- * (design docs/sa-07-child-resume-design.md §7, revised after owner round 3).
+ * (design docs/design/sa-07-child-resume-design.md §7, revised after owner round 3).
  */
 import {
 	existsSync,

@@ -11,7 +11,7 @@ import { type CliFixture, createCliFixture } from "./helpers/cli-fixture.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 
 /**
- * #fresh-install-hint (design docs/fresh-install-model-hint-design.md §3.4
+ * #fresh-install-hint (design docs/design/fresh-install-model-hint-design.md §3.4
  * tests 1–4, 12): the no-credential startup UX — banner identity line,
  * footer segments, the D2 teaching note (generic + targeted + F5
  * suppression), the availability seam, and the D7 test-seam

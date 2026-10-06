@@ -28,7 +28,7 @@ their original release identity.
   `homepage`, `bugs`), the README and `RELEASING.md` now point at the new name,
   and the README install commands use `ink-agent@latest`. No runtime, CLI, or
   extension behaviour changed other than the version string; this is a
-  metadata-only release, to be published from the reviewed tagged commit.
+  metadata-only release, published from the reviewed tagged commit.
 
 ## [0.2.0] - 2026-10-06
 

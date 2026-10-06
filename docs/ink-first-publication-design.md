@@ -422,7 +422,8 @@ as pending, this governs:
   `a0f40e64…b507`), no provenance. §10 gate 4 is done.
 - Remaining: §7 step 6 (bind publisher, to `FishInSalt/ink`), step 7 (tag push),
   step 8 (GitHub Release page), and step L (variables + next version for
-  provenance). §10 gates 5–7 remain.
+  provenance). §10 gates 5–8 remain, plus the first-OIDC-publish part of gate 9
+  (gate 9's rename component was the executed 2026-10-06 rename).
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 

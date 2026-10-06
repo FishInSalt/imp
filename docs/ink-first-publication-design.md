@@ -1,9 +1,9 @@
 # Ink first-publication design: `ink-agent@0.2.0`
 
-Status: **draft — pending fresh-context adversarial review closure.** No external
-action (registry write, tag push, account or repository-variable change,
-publisher binding) is authorized by this document until the review closes and
-each step below receives its own explicit owner approval.
+Status: **r4 APPROVE; A2 §14 APPROVE (independent review closed — see §13 and
+§14.2).** No external action (registry write, tag push, account or
+repository-variable change, publisher binding) is authorized by this document
+alone; each step requires its own explicit owner approval.
 
 - Branch: `design/ink-first-publication`
 - Contract references: [`RELEASING.md`](../RELEASING.md),
@@ -388,7 +388,7 @@ publish, binding, variables) still requires the separate owner approvals in
 
 ## 14. Amendment A2 — repository renamed to `FishInSalt/ink`
 
-Status: **pending its own independent review.** On 2026-10-06 the GitHub
+Status: **A2 APPROVE (r2; see §14.2).** On 2026-10-06 the GitHub
 repository was renamed `FishInSalt/imp` → **`FishInSalt/ink`** (owner-approved;
 the old URLs redirect). Consequences for this design:
 
@@ -412,18 +412,25 @@ the old URLs redirect). Consequences for this design:
 - Re-verify the publisher binding after the rename (§11) — done by binding to
   the new name in the first place, since the binding had not yet been created.
 
-### 14.1 Execution status (the bootstrap is partly done)
+### 14.1 Execution status
 
 The body's §6/§7/§9/§10/§12 are retained as the reviewed plan; where they read
 as pending, this governs:
 
-- §7 step 4 (manual first publish) and step 5 (verification): **done** —
+- **Done:** §7 step 4 (manual first publish) and step 5 (verification) —
   `ink-agent@0.2.0` is live, byte-identical to the frozen artifact (SHA-256
-  `a0f40e64…b507`), no provenance. §10 gate 4 is done.
-- Remaining: §7 step 6 (bind publisher, to `FishInSalt/ink`), step 7 (tag push),
-  step 8 (GitHub Release page), and step L (variables + next version for
-  provenance). §10 gates 5–8 remain, plus the first-OIDC-publish part of gate 9
-  (gate 9's rename component was the executed 2026-10-06 rename).
+  `a0f40e64…b507`), no provenance; §7 step 6 (trusted publisher bound to
+  GitHub Actions / `FishInSalt/ink` / `release.yml` / no environment, confirmed
+  via `npx npm@latest trust list ink-agent` — `npm trust` needs npm ≥11.15.0,
+  above the ≥11.5.1 publish floor — or the npmjs.com package settings page);
+  step 7 (tag `v0.2.0` at `R`); step 8 (GitHub Release
+  `v0.2.0`); the A2 repository rename; and the `0.0.0-stage` placeholder
+  (npm's stub package created so the trusted-publisher page could exist)
+  deprecated.
+- **Remaining:** §7 step L — enable `INK_NPM_PUBLISH_ENABLED` /
+  `INK_NPM_PACKAGE` and publish the next version (`0.2.1`) by tag push, the
+  first OIDC run with provenance. §10 gates 8 and the first-OIDC part of gate 9
+  remain (gate 9's rename component was the executed 2026-10-06 rename).
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 
@@ -431,4 +438,7 @@ as pending, this governs:
 
 - A2 r1: NEEDS-FIXES (documentation consistency — §8 made a claim false for the
   live `0.2.0` page, and §7/§10/§12 still framed the first publish as pending).
-  Folded in this revision. Re-review pending.
+  Folded in commit `a6ffc12`.
+- A2 r2: **APPROVE** (same reviewer session): SERIOUS-1/SERIOUS-2 and the NITs
+  closed; one further cosmetic NIT folded in `7d5f552`. Independent review is
+  closed; implementation still requires §10's separate owner approvals.

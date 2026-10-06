@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { VERSION } from "../src/format.js";
 import { createRunner } from "../src/runner.js";
 import {
 	type CliFixture,
@@ -845,7 +846,7 @@ describe("#startup-model-resolution", () => {
 		const { welcomeLines } = await import("../src/repl/repl.js");
 		expect(noModelText(true)).toBe(NO_MODEL_SELECTED_SEGMENT);
 		const lines = welcomeLines("deadbeef", noModelText(true), false);
-		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink ${VERSION} · session deadbeef · ${NO_MODEL_SELECTED_SEGMENT}`);
 	});
 
 	it("D6 surfaces: the resumed line shows the /model pointer in the multi state", async () => {

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../../src/format.js";
 import { createCliFixture, NETWORK_PRELOAD, startRejectingProvider } from "./cli-fixture.js";
 
 const run = promisify(execFile);
@@ -377,7 +378,7 @@ describe("copied Ink installation", () => {
 				env,
 				timeout: 5000,
 			});
-			expect(stdout.trim()).toBe("Ink 0.2.0");
+			expect(stdout.trim()).toBe(`Ink ${VERSION}`);
 		} finally {
 			fixture.cleanup();
 		}

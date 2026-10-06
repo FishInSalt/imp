@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { VERSION } from "../src/format.js";
 import { modelAvailability } from "../src/provider/model-availability.js";
 import { NO_MODEL_SEGMENT, NO_MODEL_SHORT, welcomeLines } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
@@ -99,7 +100,7 @@ describe("#fresh-install-hint availability seam", () => {
 		expect(output()).toContain("zai, anthropic, openai, openai-codex, deepseek, moonshotai, moonshotai-cn");
 		// welcomeLines renders the segment the caller passes (D1)
 		const lines = welcomeLines("deadbeef", NO_MODEL_SEGMENT, false);
-		expect(lines[lines.length - 1]).toBe(`Ink 0.2.0 · session deadbeef · ${NO_MODEL_SEGMENT}`);
+		expect(lines[lines.length - 1]).toBe(`Ink ${VERSION} · session deadbeef · ${NO_MODEL_SEGMENT}`);
 		expect(lines[lines.length - 1]).not.toContain("claude-sonnet-4-5");
 	});
 

@@ -3,7 +3,7 @@
 Current contract: this file plus [`docs/ink-rename-design.md`](docs/ink-rename-design.md)
 r3 (its repository-name row was superseded by the executed rename — see
 [`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md) §14).
-The selected package/version is **`ink-agent@0.2.0`**, with the sole `ink`
+The selected package/version is **`ink-agent@0.2.1`**, with the sole `ink`
 executable. The repository is **`FishInSalt/ink`** (renamed from
 `FishInSalt/imp`; old URLs redirect). Package metadata,
 lockfile (including its root package), app `VERSION`, and release tag must
@@ -11,46 +11,48 @@ agree. Never publish as `imp-agent` or plain `ink`, and never reuse `v0.1.0`.
 No publication, tag push, workflow dispatch, account configuration, or global
 installation is authorized by these instructions alone.
 
-## Historical capability: retire separately before release probing
+## Historical capability: the legacy gate is retired
 
 Changing the current workflow does **not** change workflows at historical
-refs. The retained `v0.1.0` workflow can still reach its legacy real-publish
-path through a tag dispatch with `dry_run=false` while the existing
-`NPM_PUBLISH_ENABLED` variable is enabled. An already-published-version error
-is not a safety gate.
+refs. The retained `v0.1.0` workflow could reach its legacy real-publish path
+through a tag dispatch with `dry_run=false` **only while** the
+`NPM_PUBLISH_ENABLED` repository variable was enabled. That variable has been
+**deleted** (2026-10-06), so the legacy path is inert. Do not re-enable it.
 
-Before any external release probe or cutover, request explicit approval to
-disable/remove the legacy `NPM_PUBLISH_ENABLED` repository variable and
-assess old npm trusted-publisher bindings for retirement. Do not dispatch
-historical refs or rerun historical publishing events until that capability
-is disabled. Preserve historical tags/workflow files and `imp-agent@0.1.0`;
-old-package deprecation/unpublication is not included in this rename.
+Remaining legacy item: assess and retire the old `imp-agent` npm
+trusted-publisher binding. Until that is done, do not dispatch historical refs
+or rerun historical publishing events. Preserve historical tags/workflow files
+and `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 
-## First Ink-package publication is blocked pending a separate design
+## First Ink-package publication is done; remaining steps
 
-First publication is outside the ordinary tag-push CI contract. It requires
-its own **independently reviewed release design**, then explicit approval
-for each external action. There is deliberately no executable bootstrap
-recipe here; do not mechanically rename the old manual-publish instructions.
+The first-publication bootstrap is complete in substance: `ink-agent@0.2.0`
+was published manually from the reviewed artifact (no provenance), the trusted
+publisher is bound, the repository is renamed to `FishInSalt/ink`, and tag
+`v0.2.0` plus its GitHub Release exist. The bootstrap design and its review
+record are [`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md)
+(§14 records what was executed).
 
-The bootstrap design must establish:
+Remaining external actions, each requiring explicit approval:
 
-- ownership/publishability of `ink-agent` (registry absence is not reservation
-  or trademark clearance);
-- exact package/lock/app/tag identity, reviewed tarball, and public access;
-- first-publication authentication and its actual provenance guarantees
-  (a manual first publish is not a tag-push trusted-publishing event);
-- the selected package's npm trusted-publisher binding: GitHub Actions,
-  repository `FishInSalt/ink`, workflow filename `release.yml`, and any
-  configured environment matching the workflow;
-- enabling the new variables only after publisher binding is verified;
-  rechecking the binding after any separately approved repository rename.
+- retire the legacy capability: assess and retire the old `imp-agent`
+  trusted-publisher binding (the legacy `NPM_PUBLISH_ENABLED` gate is already
+  deleted) — required before any release probe or tag push;
+- enable `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` and publish the next
+  version by tag push — the first OIDC trusted-publishing run, carrying
+  provenance;
+- re-verify the publisher binding after any further repository rename.
 
-No npm token, account settings, legacy variable, or publisher binding is
-changed by implementation. Global state migration/source-linked cutover is
-a separate operation governed by the rename design and reviewed runbook.
+The binding must match `release.yml`: GitHub Actions, repository
+`FishInSalt/ink`, workflow filename `release.yml`, no environment. Ownership and
+publishability of `ink-agent` are established (registry presence is not
+reservation or trademark clearance, which remains a separate legal question).
+
+Following these instructions alone performs no external action; every external
+step above is separately approved. Global state migration/source-linked cutover
+is a separate operation governed by the rename design and reviewed runbook.
 
 ## Revised workflow truth table
 
@@ -108,7 +110,7 @@ shebang, required `dist/cli.js`/`bin/ink.js`,
 and absence of old launcher, runtime roots, dotenv, credentials, source,
 tests, docs, or unexpected artifacts. It installs locally in a private
 temporary prefix with temporary HOME/cache, no credentials, no install
-scripts, and no network. It executes help and exact `Ink 0.2.0` version
+scripts, and no network. It executes help and exact `Ink 0.2.1` version
 (for this release), then checks npm-exec's single-bin inference against the
 **local tarball from a neutral cwd**. It never invokes `npx ink` or modifies
 shared dependencies. The optional cache source is read-only; missing cached

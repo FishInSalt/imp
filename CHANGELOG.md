@@ -8,19 +8,32 @@ their original release identity.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-06
+
 ### Added
 
-- Self-documentation: the npm package now ships `docs/` (ten user-facing
-  pages), `examples/`, and `CHANGELOG.md`; the default system prompt carries
-  a docs routing section (absolute install paths + topic table) so the
-  model can look up Ink's own documentation on demand. Design archive
-  moved to `docs/design/` (not published). README slimmed to an overview
-  that links the docs.
+- **Self-documentation.** The npm package now ships `docs/` (ten
+  user-facing pages), `examples/`, and `CHANGELOG.md`; the default system
+  prompt carries a docs routing section (absolute install paths plus a
+  topic table) so the model can look up Ink's own documentation on demand.
+  `ink --version` / `ink --help` verify an install non-interactively, and
+  this page is the published changelog.
+- `examples/README.md`: an index of everything the examples directory
+  ships (six extensions, the `scout` subagent, the `ledger` skill).
 
 ### Changed
 
-- `package.json` files now publish `docs`, `!docs/design`, `examples`,
-  `CHANGELOG.md`; the package smoke allowlist admits them.
+- README restructured: getting-started first, the rename-from-imp section
+  retired (its facts live in `docs/cli.md`, this changelog, and the design
+  archive), npm/license/release badges, the full provider family list, and
+  an agent-friendly install path (verify, one-shot `-p`, uninstall,
+  no-lifecycle-scripts declaration, EACCES and trust-gate guidance).
+- `package.json` files now publish `docs` (with `!docs/design`),
+  `examples`, `CHANGELOG.md`; the package smoke allowlist admits them.
+- Design archive moved to `docs/design/` — historical design documents
+  and review records no longer ship in the package.
+- web-search example README: reference sections compressed to summaries;
+  full contracts remain in the design document.
 ## [0.2.2] - 2026-10-06
 
 ### Changed

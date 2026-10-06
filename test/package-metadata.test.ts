@@ -33,7 +33,7 @@ const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta
 describe("package metadata (release identity)", () => {
 	it("src/format.ts VERSION and lockfile match the selected package", () => {
 		expect(pkg.name).toBe("ink-agent");
-		expect(pkg.version).toBe("0.2.2");
+		expect(pkg.version).toBe("0.2.3");
 		expect(VERSION).toBe(pkg.version);
 		expect(lock.name).toBe(pkg.name);
 		expect(lock.version).toBe(pkg.version);

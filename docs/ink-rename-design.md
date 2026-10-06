@@ -56,7 +56,7 @@ The proposed final local installation remains **source-linked to `/Users/z/Z/Age
 | Public type | Rename `ImpSettings` to `InkSettings` and update repository consumers; no deprecated alias needed in this single-user breaking release. Explain the deep-import source break. |
 | Codex HTTP originator | Retain the existing `originator: "imp"` compatibility identifier for this cutover. Mocked tests cannot establish provider acceptance of a new value. A later change needs independent protocol evidence or separately approved live verification. |
 
-Package name, version and workspace implementation are explicitly owner-approved. External cutover authorization is not included. If an input changes the cutover semantics or release security, review the amendment before implementation. Amendment A1 (§11, draft) revisits the three retained-identifier rows above.
+Package name, version and workspace implementation are explicitly owner-approved. External cutover authorization is not included. If an input changes the cutover semantics or release security, review the amendment before implementation. Amendment A1 (§11) revisits the three retained-identifier rows above.
 
 ## 3. Rename inventory and exception policy
 
@@ -100,7 +100,7 @@ Update tests' sandbox variables **before** changing defaults. `.env` is loaded f
 
 ### 3.4 Deliberately retained history and formats
 
-Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not. **Amended by §11 (Amendment A1, draft)** for the launch-record version field; the lease machine-id rename is specified in §11 (A1-D2).
+Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not. **Amended by §11 (Amendment A1)** for the launch-record version field; the lease machine-id rename is specified in §11 (A1-D2).
 
 Keep prior Git tags, released changelog sections and ledger/design records describing imp. Add a clear current-name pointer to archival onboarding material rather than replacing old events. An implementation audit must explain each remaining active `imp` match; an empty search result is not the success criterion.
 
@@ -247,10 +247,11 @@ it is now superseded by [the local installation record](ink-local-install.md).
 
 ## 11. Amendment A1 — identifier follow-through (2026-10-06)
 
-> **DRAFT FOR REVIEW.** Implementation is not authorized until this amendment
-> passes an independent adversarial review. It revisits the three deliberately
-> retained identifiers of §2 now that the rename is complete and published
-> (`ink-agent@0.2.x`; see [ink-local-install.md](ink-local-install.md)).
+> **REVIEW CLOSED (r3 CONFIRMED, 2026-10-06).** The independent adversarial
+> review of this amendment is closed (see §11.7); implementation may proceed,
+> with A1-D3 still waiting for its live check. It revisits the three
+> deliberately retained identifiers of §2 now that the rename is complete and
+> published (`ink-agent@0.2.x`; see [ink-local-install.md](ink-local-install.md)).
 
 For these identifiers only, this section supersedes: the §2 rows "Historical
 child sessions", "Lease identity" and "Codex HTTP originator"; the
@@ -456,9 +457,11 @@ retained").
 
 ### 11.7 Review record
 
-- A1 r1 (independent adversarial review, fresh context): **NEEDS-FIXES** —
-  3×P2 (lease-contention argument precision; A1-D3 sequencing; legacy-fixture
-  construction) + 7×P3; all folded into this amendment revision.
-- A1 r2: **CONFIRMED** — all r1 folds verified; two new P3 documentation
-  nits (§3.4 inline marker wording; the A1-D2 "new-name" clause) folded in
-  the follow-up commit.
+Independent adversarial review (fresh context), session
+`a83d1580-9b5f-4f2b-898c-b739f17c81c5`, rounds r1–r3:
+
+- A1 r1: **NEEDS-FIXES** — 3×P2 (lease-contention argument precision; A1-D3
+  sequencing; legacy-fixture construction) + 7×P3; all folded.
+- A1 r2: **CONFIRMED** — all r1 folds verified; two new P3 documentation nits
+  (§3.4 inline marker wording; the A1-D2 "new-name" clause) folded.
+- A1 r3: nit folds verified; **review closed** (2026-10-06).

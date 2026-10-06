@@ -11,6 +11,10 @@
 	"files": [
 		"bin/ink.js",
 		"dist",
+		"docs",
+		"!docs/design",
+		"examples",
+		"CHANGELOG.md",
 		"README.md",
 		"LICENSE"
 	],

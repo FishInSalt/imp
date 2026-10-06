@@ -34,19 +34,11 @@ not the current release procedure.
 
 ## OIDC publication is live (`0.2.2` published); remaining steps
 
-<<<<<<< HEAD
 `ink-agent@0.2.0` was published manually from the reviewed artifact (no
 provenance); the trusted publisher is bound; the repository is
 `FishInSalt/ink`; and tag `v0.2.0` plus its GitHub Release exist. The
 bootstrap design and its review record are
-[`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md)
-=======
-The first-publication bootstrap is complete in substance: `ink-agent@0.2.0`
-was published manually from the reviewed artifact (no provenance), the trusted
-publisher is bound, the repository is renamed to `FishInSalt/ink`, and tag
-`v0.2.0` plus its GitHub Release exist. The bootstrap design and its review
-record are [`docs/design/ink-first-publication-design.md`](docs/design/ink-first-publication-design.md)
->>>>>>> 503409d (docs: split docs/ — design archive moved to docs/design/ (unpublished))
+[`docs/design/ink-first-publication-design.md`](docs/design/ink-first-publication-design.md)
 (§14 records what was executed).
 
 `ink-agent@0.2.1` then shipped through the first OIDC trusted-publishing run:

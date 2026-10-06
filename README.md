@@ -91,9 +91,9 @@ See the [local installation and acceptance record](docs/ink-local-install.md)
 and [release instructions](RELEASING.md). The original
 [rename design](docs/ink-rename-design.md) is historical; its full-state
 migration and source-linked activation proposal was superseded.
-Do not copy credentials, install globally, migrate state, or publish as part
-of an ordinary checkout update. The repository is `FishInSalt/ink`; the old
-`FishInSalt/imp` URLs redirect to it.
+Do not copy credentials, migrate state, or publish when updating a source
+checkout; for a normal install use the npm package above. The repository is
+`FishInSalt/ink`; the old `FishInSalt/imp` URLs redirect to it.
 
 ### Signing in (/login)
 

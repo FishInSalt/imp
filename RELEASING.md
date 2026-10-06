@@ -3,7 +3,7 @@
 Current contract: this file plus [`docs/ink-rename-design.md`](docs/ink-rename-design.md)
 r3 (its repository-name row was superseded by the executed rename — see
 [`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md) §14).
-The selected package/version is **`ink-agent@0.2.1`**, with the sole `ink`
+The selected package/version is **`ink-agent@0.2.2`**, with the sole `ink`
 executable. The repository is **`FishInSalt/ink`** (renamed from
 `FishInSalt/imp`; old URLs redirect). Package metadata,
 lockfile (including its root package), app `VERSION`, and release tag must
@@ -26,23 +26,33 @@ and `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 
-## First Ink-package publication is done; remaining steps
+## OIDC publication is live; next release is `0.2.2`
 
-The first-publication bootstrap is complete in substance: `ink-agent@0.2.0`
-was published manually from the reviewed artifact (no provenance), the trusted
-publisher is bound, the repository is renamed to `FishInSalt/ink`, and tag
-`v0.2.0` plus its GitHub Release exist. The bootstrap design and its review
-record are [`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md)
+`ink-agent@0.2.0` was published manually from the reviewed artifact (no
+provenance); the trusted publisher is bound; the repository is
+`FishInSalt/ink`; and tag `v0.2.0` plus its GitHub Release exist. The
+bootstrap design and its review record are
+[`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md)
 (§14 records what was executed).
+
+`ink-agent@0.2.1` then shipped through the first OIDC trusted-publishing run:
+pushing tag `v0.2.1` (2026-10-06) published the package with provenance
+(`gitHead` `23cb91f`, attested on the registry). That run ended red at its
+final post-publish registry-visibility check (a 60s window); the window was
+raised to 180s in `72f81fc`, and the published artifact was verified manually.
+Do not re-run the `v0.2.1` workflow: re-publishing the same version fails.
 
 Remaining external actions, each requiring explicit approval:
 
-- retire the legacy capability: assess and retire the old `imp-agent`
-  trusted-publisher binding (the legacy `NPM_PUBLISH_ENABLED` gate is already
-  deleted) — required before any release probe or tag push;
-- enable `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` and publish the next
-  version by tag push — the first OIDC trusted-publishing run, carrying
-  provenance;
+- check first, then retire, the legacy `imp-agent` trusted-publisher binding
+  (the legacy `NPM_PUBLISH_ENABLED` gate is already deleted) — required before
+  any further release probe or tag push; its status at the time of the
+  `v0.2.1` push is not recorded;
+- publish `ink-agent@0.2.2` by tag push from reviewed `main` (gates are
+  enabled: `INK_NPM_PUBLISH_ENABLED=true`, `INK_NPM_PACKAGE=ink-agent`) — the
+  second OIDC run, carrying provenance;
+- publish the `v0.2.2` GitHub Release page from the dated CHANGELOG section
+  (separate approval, like the earlier release pages);
 - re-verify the publisher binding after any further repository rename.
 
 The binding must match `release.yml`: GitHub Actions, repository
@@ -110,7 +120,7 @@ shebang, required `dist/cli.js`/`bin/ink.js`,
 and absence of old launcher, runtime roots, dotenv, credentials, source,
 tests, docs, or unexpected artifacts. It installs locally in a private
 temporary prefix with temporary HOME/cache, no credentials, no install
-scripts, and no network. It executes help and exact `Ink 0.2.1` version
+scripts, and no network. It executes help and exact `Ink 0.2.2` version
 (for this release), then checks npm-exec's single-bin inference against the
 **local tarball from a neutral cwd**. It never invokes `npx ink` or modifies
 shared dependencies. The optional cache source is read-only; missing cached
@@ -173,6 +183,10 @@ approval and an appropriate isolated/production acceptance plan.
   through a separately appropriate dependency-install step, or report that
   smoke verification is unavailable. Do not retry with network access or
   execute install scripts implicitly.
+- **Publish succeeded but a later step failed (e.g. the registry-visibility
+  check):** do not re-run the tag workflow — republishing an existing version
+  fails; verify the registry artifact and provenance manually, record the
+  outcome, and carry any fix in the next version.
 - **Already-published version/broken release:** use a newly reviewed patch
   release; do not reuse tags or overwrite package versions. Deprecation or
   unpublication is a separate externally visible operation requiring approval.

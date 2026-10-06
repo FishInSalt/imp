@@ -427,10 +427,14 @@ as pending, this governs:
   `v0.2.0`); the A2 repository rename; and the `0.0.0-stage` placeholder
   (npm's stub package created so the trusted-publisher page could exist)
   deprecated.
-- **Remaining:** §7 step L — enable `INK_NPM_PUBLISH_ENABLED` /
-  `INK_NPM_PACKAGE` and publish the next version (`0.2.1`) by tag push, the
-  first OIDC run with provenance. §10 gates 8 and the first-OIDC part of gate 9
-  remain (gate 9's rename component was the executed 2026-10-06 rename).
+- **Done for `0.2.1`:** §7 step L — gates enabled (`INK_NPM_PUBLISH_ENABLED`
+  / `INK_NPM_PACKAGE`) and tag `v0.2.1` pushed 2026-10-06; the first OIDC run
+  published the package with provenance (`gitHead` `23cb91f`) and was left red
+  only by its post-publish registry-visibility check (a 60s window, raised to
+  180s in `72f81fc`); the registry artifact was verified manually.
+- **Remaining:** retire the legacy `imp-agent` trusted-publisher binding
+  (status unrecorded at the `v0.2.1` push; required before the `0.2.2` tag
+  push); publish `0.2.2` by tag push from reviewed `main`.
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 

@@ -437,8 +437,11 @@ as pending, this governs:
   post-publish registry-visibility check inside the raised window), with
   provenance (`gitHead` `35f34b4`); the `v0.2.2` GitHub Release page is
   published from the dated CHANGELOG section.
-- **Remaining:** retire the legacy `imp-agent` trusted-publisher binding (the
-  2026-10-06 CLI check answered EOTP — interactive 2FA required).
+- **Done:** the legacy `imp-agent` trusted-publisher binding was retired by
+  the owner on 2026-10-06 (`npm trust revoke imp-agent`; the registry answered
+  `204` after owner web authentication, confirmed in the local npm log). A
+  post-revoke listing was not captured in the local log; if further
+  `imp-agent` bindings surface, revoke them the same way.
 - The §11 `npm trust`/staged-publishing note is resolved for `0.2.0` (already
   published); it applies only to future versions.
 

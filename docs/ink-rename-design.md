@@ -100,7 +100,7 @@ Update tests' sandbox variables **before** changing defaults. `.env` is loaded f
 
 ### 3.4 Deliberately retained history and formats
 
-Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not. **Amended by §11 (Amendment A1, draft)** for the launch-record version field and the lease machine-id file name.
+Retain `ChildLaunchRecord.version: 1`, `impVersion`, all saved IDs/cwd/branch/path fields, launch fingerprints, credentials and trust canonical-path keys. Package/app version changes, session format version does not. **Amended by §11 (Amendment A1, draft)** for the launch-record version field; the lease machine-id rename is specified in §11 (A1-D2).
 
 Keep prior Git tags, released changelog sections and ledger/design records describing imp. Add a clear current-name pointer to archival onboarding material rather than replacing old events. An implementation audit must explain each remaining active `imp` match; an empty search result is not the success criterion.
 
@@ -320,10 +320,10 @@ naming and the content format are unchanged.
 
 Safety argument: the lease is only ever touched after the continuation verdict
 accepts the child, and mutual exclusion rests on the directory scan of
-`lease-*` candidates — not on the machine-id file name. For children the new
-build creates, lease and machine-id file are both new-name; for pre-change
-children the version gate refuses before any lease, repair or provider call
-(pinned by the old-child case in `test/ink-rename.test.ts`). No dual-read: new
+`lease-*` candidates — not on the machine-id file name. For children the new build creates, the lease flow publishes and reads the
+new-name `.ink-machine-id`; for pre-change children the version gate refuses
+before any lease, repair or provider call (pinned by the old-child case in
+`test/ink-rename.test.ts`). No dual-read: new
 code never reads or adopts an old-name file. Existing `.imp-machine-id` files
 are left untouched and dormant; their semantics were never derived from the
 file name.
@@ -459,5 +459,6 @@ retained").
 - A1 r1 (independent adversarial review, fresh context): **NEEDS-FIXES** —
   3×P2 (lease-contention argument precision; A1-D3 sequencing; legacy-fixture
   construction) + 7×P3; all folded into this amendment revision.
-
-(reserved — the confirmation round is appended when the review closes)
+- A1 r2: **CONFIRMED** — all r1 folds verified; two new P3 documentation
+  nits (§3.4 inline marker wording; the A1-D2 "new-name" clause) folded in
+  the follow-up commit.

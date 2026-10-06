@@ -1,6 +1,6 @@
 {
 	"name": "ink-agent",
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"description": "Ink — an open-source AI assistant and agent harness for the terminal",
 	"type": "module",
 	"license": "MIT",

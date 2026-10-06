@@ -1,6 +1,8 @@
 # Releasing Ink
 
-Current contract: [`docs/ink-rename-design.md`](docs/ink-rename-design.md) r3.
+Current contract: this file plus [`docs/ink-rename-design.md`](docs/ink-rename-design.md)
+r3 (its repository-name row was superseded by the executed rename — see
+[`docs/ink-first-publication-design.md`](docs/ink-first-publication-design.md) §14).
 The selected package/version is **`ink-agent@0.2.0`**, with the sole `ink`
 executable. The repository is **`FishInSalt/ink`** (renamed from
 `FishInSalt/imp`; old URLs redirect). Package metadata,

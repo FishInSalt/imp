@@ -42,7 +42,9 @@ ordinary releases to the existing tag-push trusted-publishing path.
    first publish in §7 is therefore performed by the owner in their own
    terminal.
 3. **Repository state**: `main == origin/main`, working tree clean, CI green
-   at the reviewed commit `R` (see §3), no stale `dist/`.
+   at the reviewed commit `R` (see §3), no stale `dist/`. (Equality is the
+   precondition for the freeze; at tag time only `R`'s ancestry on
+   `origin/main` is required — see §7 step 7.)
 4. **Legacy capability already retired**: the repository variable
    `NPM_PUBLISH_ENABLED` has been deleted (verified during design
    preparation), and the old `imp-agent` trusted-publisher binding is assessed
@@ -115,6 +117,9 @@ scratch paths and the artifact path.
    the `typescript` version from the lockfile).
 3. This frozen file is the *only* thing published in §7 step 4; §8 compares the
    registry artifact against its SHA-256.
+4. Immediately before publishing (§7 step 4), re-run
+   `shasum -a 256 "<stable path>/<artifact>.tgz"` and confirm it still equals
+   the recorded value.
 
 Local checks on a non-CI Node version do not substitute for CI. `ci.yml` runs
 the exact supported floor (Node 22.19.0) and current major (24);
@@ -148,7 +153,8 @@ initial-publish constraint; see npm/cli issue #8544).
   or stored.
 - Public access: `ink-agent` is unscoped and therefore public by default;
   `--access public` is optional and, for an unscoped package, a no-op. The
-  install path is `npm install -g ink-agent` / `npx ink-agent`.
+  consumer install path is `npm install -g ink-agent` / `npx ink-agent`;
+  this procedure does not perform any global install.
 
 ## 5. Trusted-publisher binding
 
@@ -169,7 +175,7 @@ correct before the new repository variables are enabled (§6).
 ## 6. Repository variables
 
 Set only after the binding in §5 is verified, and — to avoid arming the
-already-pushed `v0.2.0` tag (see §7 note and §11) — as late as possible:
+already-pushed `v0.2.0` tag (see the hard rule below and §11) — as late as possible:
 immediately before the next version's tag push (§7 step L), not during this
 bootstrap.
 
@@ -197,13 +203,17 @@ owner approval. Do not batch them.
 2. **R — release preparation.** On a dedicated branch: finalize the CHANGELOG
    (`## [Unreleased]` → `## [0.2.0] - <date>`); confirm `package.json`,
    lockfile and `src/format.ts` all read `0.2.0`; run the full gates. Obtain an
-   **independent review of `R` and of the frozen artifact** (§10 gate 3), then
-   merge `--no-ff`. The resulting `main` HEAD is the reviewed commit `R`.
+   **independent code review of `R`** (§10 gate 2), then merge `--no-ff`. The
+   resulting `main` HEAD is the reviewed commit `R`.
 3. **Freeze.** At `R`, in an owned checkout, run §3; copy the artifact to a
-   stable path and record filename, SHA-256 and toolchain.
-4. **First publish (owner).** Publish the frozen tarball:
+   stable path and record filename, SHA-256 and toolchain. Then obtain an
+   **independent review of the frozen tarball** (§10 gate 3) before publishing.
+4. **First publish (owner).** Re-verify the stable-path artifact's SHA-256
+   against the §3 record, then publish the frozen tarball:
    `npm publish --ignore-scripts "<stable path>/<artifact>.tgz"`. Then verify
-   registry visibility with `npm view ink-agent@0.2.0 version dist.integrity`.
+   registry visibility with `npm view ink-agent@0.2.0 version dist.integrity`
+   (retry briefly; a fresh publish can lag — `release.yml` itself retries up to
+   6×10s).
 5. **Post-publish verification.** Perform §8.
 6. **Bind publisher.** Perform §5. (Package now exists; the settings page is
    available.)
@@ -213,7 +223,16 @@ owner approval. Do not batch them.
    The release workflow runs its gate; because the new variables are unset, the
    publish step is skipped and must show the explicit publication-skipped
    warning and summary. Verify that visible skip. If this tag push fails, retry
-   it (content is unchanged); never move or reuse the tag.
+   it (content is unchanged); never move or reuse the tag. Only ancestry on
+   `origin/main` is required at tag time — `main` may have advanced past `R`
+   between freeze and tagging.
+
+   If the publish (step 4) succeeds but verification (5) or binding (6) fails,
+   **still push the tag (7)**: the tag records the already-published commit, and
+   a verification/binding failure does not invalidate the published bytes.
+   Before any retry of a failed publish, run `npm view ink-agent@0.2.0 version`
+   to determine whether the version already exists; never re-publish a version
+   that exists.
 8. **GitHub Release page (separate approval).** Publish the `v0.2.0` release
    with notes taken from the CHANGELOG's `0.2.0` section (single source of
    truth; do not use auto-generated notes).
@@ -242,8 +261,13 @@ owner approval. Do not batch them.
 - `npm unpublish` only within the 24-hour window and only with explicit
   approval; the version number is permanently voided and it is disruptive to
   downstream consumers.
-- If the manual publish aborts before step 7, nothing has been pushed and no
-  tag exists — simply stop and re-plan; do not proceed to tagging.
+- A manual publish can fail *after* the registry has created the version, so
+  before any retry run `npm view ink-agent@0.2.0 version` and never re-publish
+  an existing version.
+- If the publish aborts before step 7 and `0.2.0` is not on the registry,
+  nothing has been published; stop and re-plan.
+- If `0.2.0` is public, still complete step 7 (push the tag) even if
+  verification or binding failed — the tag must record the published commit.
 - Never reuse a tag or overwrite a package version.
 
 ## 10. Approval gates
@@ -251,15 +275,18 @@ owner approval. Do not batch them.
 The following are each separately approved and are not implied by merging this
 design:
 
+This list is unordered for approval purposes; §7 governs the actual sequence.
+
 1. merge the reviewed release-preparation batch (`R`);
-2. push tag `v0.2.0`;
-3. independent review of the release-prep commit `R` and the frozen artifact;
+2. independent code review of `R`;
+3. independent review of the frozen tarball (after freeze, before publish);
 4. perform the manual first publish of the frozen tarball;
 5. bind the trusted publisher on npmjs.com;
-6. enable `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` (deferred to step L);
+6. push tag `v0.2.0`;
 7. create the GitHub Release page;
-8. any repository rename, remote change, or first OIDC publish;
-9. any `imp-agent` deprecation/unpublication.
+8. enable `INK_NPM_PUBLISH_ENABLED` / `INK_NPM_PACKAGE` (deferred to step L);
+9. any repository rename, remote change, or first OIDC publish;
+10. any `imp-agent` deprecation/unpublication.
 
 ## 11. Risks and open questions
 
@@ -294,7 +321,7 @@ design:
 | --- | --- |
 | Identity | `release-guards.mjs identity` passes; explicit `0.2.0` assertion passes; tag `v0.2.0` == package version and is an ancestor of `origin/main` |
 | Artifact | `package-smoke.mjs` passes at `R`; frozen tarball SHA-256 recorded; uploaded tarball path (not a source-tree repack) used for publish |
-| Independent review | `R` and the frozen artifact independently reviewed before publish |
+| Independent review | `R` code-reviewed before merge; frozen tarball independently reviewed after freeze and before publish |
 | Gate visibility | Tag push with variables unset is green and shows the publication-skipped warning + summary |
 | First publish | `ink-agent@0.2.0` visible; downloaded SHA-256 == frozen; no provenance badge (expected) |
 | Binding | npm trusted publisher = GitHub Actions / `FishInSalt/imp` / `release.yml` / no environment |
@@ -314,4 +341,13 @@ design:
   attribution and adds an exact-version assertion; N1–N7 addressed (dates,
   citation, lock fields, `--access`, provenance wording, specific-version
   check, CI floor note).
-- r2 re-review: pending.
+- r2 re-review (same child session): NEEDS-FIXES. B1/B2 closed, S1/S2/S4
+  closed, N1–N7 closed; found S3 still open (artifact review sequenced before
+  the artifact existed) and NEW-1..NEW-7. Folded in this revision: S3 splits
+  into a code review of `R` before merge and an independent review of the
+  frozen tarball after freeze; NEW-1 adds post-publish/tag handling and a
+  never-re-publish-existing-version rule; NEW-2 reorders §10; NEW-3 fixes the
+  §6 cross-reference; NEW-4 adds a propagation-retry note; NEW-5 re-verifies
+  the frozen SHA immediately before publish; NEW-6 labels the `-g` line as
+  downstream usage; NEW-7 clarifies ancestry at tag time.
+- r3 re-review: pending.

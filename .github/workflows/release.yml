@@ -110,16 +110,19 @@ jobs:
           PACKAGE: ${{ steps.plan.outputs.package }}
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          for attempt in 1 2 3 4 5 6; do
+          # After a successful publish npm may report "Your package is being
+          # processed and may take a few minutes to become available." Allow up
+          # to 3 minutes for registry visibility before failing.
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if npm view "$PACKAGE@$VERSION" version > /dev/null 2>&1; then
               echo "$PACKAGE@$VERSION is visible on the registry"
               npm view "$PACKAGE@$VERSION" version dist.tarball
               echo "Provenance: https://www.npmjs.com/package/$PACKAGE/v/$VERSION"
               exit 0
             fi
-            sleep 10
+            sleep 15
           done
-          echo "$PACKAGE@$VERSION not visible after 60s — check the registry" >&2
+          echo "$PACKAGE@$VERSION not visible after 180s — check the registry" >&2
           exit 1
 
       - name: publish skipped notice

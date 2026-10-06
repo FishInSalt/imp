@@ -19,10 +19,14 @@ through a tag dispatch with `dry_run=false` **only while** the
 `NPM_PUBLISH_ENABLED` repository variable was enabled. That variable has been
 **deleted** (2026-10-06), so the legacy path is inert. Do not re-enable it.
 
-Remaining legacy item: assess and retire the old `imp-agent` npm
-trusted-publisher binding. Until that is done, do not dispatch historical refs
-or rerun historical publishing events. Preserve historical tags/workflow files
-and `imp-agent@0.1.0`; old-package deprecation/unpublication is not included.
+The old `imp-agent` npm trusted-publisher binding was **retired by the owner
+on 2026-10-06**: `npm trust revoke imp-agent --id=…` was answered `204` by the
+registry after owner web authentication (confirmed in the local npm log). The
+former caveat — do not dispatch historical refs or re-run historical
+publishing events until the binding is retired — accordingly lapses; those
+actions still require their ordinary approvals. Preserve historical
+tags/workflow files and `imp-agent@0.1.0`; old-package
+deprecation/unpublication is not included.
 [`docs/publishing-design.md`](docs/publishing-design.md) is an archival design,
 not the current release procedure.
 
@@ -50,11 +54,6 @@ window — with provenance (`gitHead` `35f34b4`, attested on the registry); the
 
 Remaining external actions, each requiring explicit approval:
 
-- check first, then retire, the legacy `imp-agent` trusted-publisher binding
-  (the legacy `NPM_PUBLISH_ENABLED` gate is already deleted) — outstanding: a
-  2026-10-06 CLI check (`npx npm@latest trust list imp-agent`) answered EOTP,
-  i.e. it needs interactive 2FA from an owner terminal or the npmjs.com
-  settings page; required before any further release probe or tag push;
 - re-verify the publisher binding after any further repository rename.
 
 The binding must match `release.yml`: GitHub Actions, repository

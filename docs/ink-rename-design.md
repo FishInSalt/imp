@@ -465,3 +465,17 @@ Independent adversarial review (fresh context), session
 - A1 r2: **CONFIRMED** — all r1 folds verified; two new P3 documentation nits
   (§3.4 inline marker wording; the A1-D2 "new-name" clause) folded.
 - A1 r3: nit folds verified; **review closed** (2026-10-06).
+
+### 11.8 Implementation record (2026-10-06)
+
+- Branch `feat/ink-identifiers`; implementation commits `848e781` (code and
+  tests) and `1d05e32` (docs). Scope: A1-D1 and A1-D2 only; A1-D3 is not
+  implemented (its live gate has not been run).
+- Red-first: 84 failing tests across 7 files before the source change; after:
+  typecheck (both configs), lint, build, 141 files / 2995 tests, release
+  identity and the artifact smoke (340 files) all green. The remaining-match
+  audit matches §11.5(7).
+- Independent implementation review (fresh context, session
+  `ca145a00-cef5-4a46-b54e-64c8e8fb13f6`): **APPROVE** — three advisory P3:
+  README wording precision and two additional parser rows folded; the A1-D2
+  version-bump requirement remains a release-phase gate.

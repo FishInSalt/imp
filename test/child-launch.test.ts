@@ -147,10 +147,11 @@ describe("child launch record — normalization", () => {
 
 describe("child launch record — parse", () => {
 	const good = (): unknown => buildChildLaunch(buildInput());
-	const legacyOnly = (): Record<string, unknown> => {
+	const versionless = (): Record<string, unknown> => {
 		const { inkVersion, ...rest } = good() as Record<string, unknown>;
-		return { ...rest, impVersion: inkVersion };
+		return rest;
 	};
+	const legacyOnly = (): Record<string, unknown> => ({ ...versionless(), impVersion: "9.9.9" });
 
 	it("accepts a builder-produced record", () => {
 		const parsed = parseChildLaunch(good());
@@ -187,6 +188,8 @@ describe("child launch record — parse", () => {
 			"nope",
 			{ ...(good() as object), version: 2 },
 			{ ...(good() as object), impVersion: undefined },
+			{ ...(good() as object), inkVersion: undefined, impVersion: "9.9.9" },
+			versionless(),
 			{ ...(good() as object), inkVersion: "" },
 			{ ...(good() as object), inkVersion: 7 },
 			{ ...(good() as object), impVersion: "1.2.3" },

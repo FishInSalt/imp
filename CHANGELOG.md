@@ -8,6 +8,15 @@ their original release identity.
 
 ## [Unreleased]
 
+### Changed
+
+- **Identifier follow-through (rename design Amendment A1, D1/D2).** New
+  child launch records write `inkVersion` (legacy `impVersion` records stay
+  readable through a normalization arm; cross-version resume refusals are
+  unchanged), and the child lease machine-id file is `.ink-machine-id`
+  (orphaned `.imp-machine-id` files are never read, rewritten or deleted).
+  No migration is needed or performed.
+
 ## [0.2.1] - 2026-10-06
 
 ### Changed

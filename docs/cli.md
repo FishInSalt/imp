@@ -74,6 +74,7 @@ uncapped (a finite value applies when passed explicitly).
 |---|---|
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | Anthropic key / Bearer token |
 | `ANTHROPIC_BASE_URL` | Endpoint override for Anthropic-compatible services |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI key / endpoint override (any OpenAI-compatible service) |
 | `ZAI_API_KEY` | Z.ai key (GLM Coding Plan) |
 | `DEEPSEEK_API_KEY` | DeepSeek key |
 | `MOONSHOT_API_KEY` | Moonshot/Kimi key (both families) |

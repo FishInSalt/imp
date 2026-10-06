@@ -52,6 +52,16 @@ for (const doc of topicDocs) {
 	if (!existsSync(join(root, doc))) failures.push(`SELF_DOCS_TOPICS names a missing doc: ${doc}`);
 }
 
+// (b2) every topic doc must be reachable from docs/index.md (design D6
+// "topics ↔ index.md 一致" — implementation review N10).
+const indexText = readFileSync(join(docsDir, "index.md"), "utf8");
+for (const doc of topicDocs) {
+	const base = doc.replace(/^docs\//, "");
+	if (!indexText.includes(`(${base})`)) {
+		failures.push(`docs/index.md does not link topic doc: ${base}`);
+	}
+}
+
 // (c)+(d) relative markdown links in top-level docs resolve
 function checkLinks(file, label) {
 	const text = readFileSync(file, "utf8");

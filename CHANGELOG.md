@@ -8,6 +8,19 @@ their original release identity.
 
 ## [Unreleased]
 
+### Added
+
+- Self-documentation: the npm package now ships `docs/` (ten user-facing
+  pages), `examples/`, and `CHANGELOG.md`; the default system prompt carries
+  a docs routing section (absolute install paths + topic table) so the
+  model can look up Ink's own documentation on demand. Design archive
+  moved to `docs/design/` (not published). README slimmed to an overview
+  that links the docs.
+
+### Changed
+
+- `package.json` files now publish `docs`, `!docs/design`, `examples`,
+  `CHANGELOG.md`; the package smoke allowlist admits them.
 ## [0.2.2] - 2026-10-06
 
 ### Changed

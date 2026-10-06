@@ -3,16 +3,11 @@
  * budget, topic-table consistency with the shipped docs, and
  * resolveInstallRoot's three states.
  */
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-	resolveInstallRoot,
-	SELF_DOCS_MAX_CHARS,
-	SELF_DOCS_TOPICS,
-	selfDocsSection,
-} from "../src/core/self-docs.js";
+import { resolveInstallRoot, SELF_DOCS_TOPICS, selfDocsSection } from "../src/core/self-docs.js";
 
 const paths = {
 	readme: "/usr/local/lib/node_modules/ink-agent/README.md",
@@ -35,7 +30,16 @@ describe("selfDocsSection", () => {
 	});
 
 	it("stays within the length budget with realistic install paths", () => {
-		expect(selfDocsSection(paths).length).toBeLessThanOrEqual(SELF_DOCS_MAX_CHARS);
+		// Literal 1100, not SELF_DOCS_MAX_CHARS — the pin must fail if someone
+		// raises the constant alongside the copy (implementation review N9).
+		expect(selfDocsSection(paths).length).toBeLessThanOrEqual(1100);
+		// Long-path headroom: a deep Windows-style install must also fit.
+		const deep = {
+			readme: "C:/Users/EXAMPLEUSER/AppData/Roaming/npm/node_modules/ink-agent/README.md",
+			docs: "C:/Users/EXAMPLEUSER/AppData/Roaming/npm/node_modules/ink-agent/docs",
+			examples: "C:/Users/EXAMPLEUSER/AppData/Roaming/npm/node_modules/ink-agent/examples",
+		};
+		expect(selfDocsSection(deep).length).toBeLessThanOrEqual(1100);
 	});
 
 	it("names every topic doc in the routing line", () => {
@@ -57,9 +61,15 @@ describe("SELF_DOCS_TOPICS consistency with shipped docs", () => {
 		}
 	});
 
-	it("keeps the table literals greppable for check-docs.mjs (one doc per line)", () => {
-		// check-docs.mjs extracts doc: "..." literals per line — multi-line
-		// entries would silently drop out of that check.
+	it("keeps the table literals greppable for check-docs.mjs (one doc per line)", async () => {
+		// check-docs.mjs extracts doc: "..." literals from the SOURCE with a
+		// single-line regex — multi-line or template-literal entries would
+		// silently drop out of that check. The real pin: extraction count
+		// must equal the runtime table length.
+		const { readFile } = await import("node:fs/promises");
+		const source = await readFile(new URL("../src/core/self-docs.ts", import.meta.url), "utf8");
+		const extracted = [...source.matchAll(/doc:\s*"(docs\/[a-z0-9-]+\.md)"/g)].map((m) => m[1]);
+		expect(extracted).toHaveLength(SELF_DOCS_TOPICS.length);
 		const table = SELF_DOCS_TOPICS.map((t) => t.doc);
 		expect(new Set(table).size).toBe(table.length); // no duplicates
 	});
@@ -82,7 +92,7 @@ describe("resolveInstallRoot", () => {
 	afterAll(() => {
 		for (const root of roots) {
 			try {
-				rmRoot(root);
+				rmSync(root, { recursive: true, force: true });
 			} catch {
 				// best effort cleanup
 			}
@@ -109,15 +119,3 @@ describe("resolveInstallRoot", () => {
 		expect(resolveInstallRoot(join(root, "dist", "core"))).toBeUndefined();
 	});
 });
-
-// Recursive rm without node:fs/rm's global state dependency.
-function rmRoot(dir: string): void {
-	const { readdirSync, rmdirSync, unlinkSync, statSync } = require("node:fs") as typeof import("node:fs");
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) rmRoot(full);
-		else unlinkSync(full);
-	}
-	rmdirSync(dir);
-	void statSync; // keep the import used in both branches' toolchain shape
-}

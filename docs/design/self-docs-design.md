@@ -113,7 +113,7 @@ Ink documentation (read only when the user asks about ink itself, its tools, ext
 - When working on ink topics, read the docs and follow cross-references before implementing
 ```
 
-主题表保留 10 项（评审 Q2 裁决：主题表是机制核心，不可精简为一行索引）。
+主题表保留 9 项（评审 Q2 裁决：主题表是机制核心，不可精简为一行索引；D2 的 environment-variables.md 推迟后为 9 条——评审 N2 修正）。
 
 ### D6 校验与测试
 - 新增 `scripts/check-docs.mjs`（并入 `npm run lint:scripts`）：
@@ -158,7 +158,7 @@ Ink documentation (read only when the user asks about ink itself, its tools, ext
   - B3 预算矛盾（v1 文案 941 字符超 800 上限；pi 基线 150→400 token 修正）→ §1、D4 压缩文案 + 预算 1100 字符实测断言；
   - B4 smoke 改动具体化（双重收紧、expectedFiles 复刻）→ D3；
   - N1 注入点挪 buildSystemPrompt、N2 砍 docs.json、N3 表现层移出、N4 read 门控、N5 check-docs 机制、N6 风险补行 → 全部采纳。
-- 评审员裁决采纳：Q1 保留 `!docs/design` 方案；Q2 主题表保留 10 项；Q3 README 瘦身边界；Q4 不引入 docs.json；Q5 表现层独立分支；Q6 引用清单如 §2。
+- 评审员裁决采纳：Q1 保留 `!docs/design` 方案；Q2 主题表保留全部主题条目（实现为 9 项）；Q3 README 瘦身边界；Q4 不引入 docs.json；Q5 表现层独立分支；Q6 引用清单如 §2。
 
 ## 7. 评审记录（已关闭）
 

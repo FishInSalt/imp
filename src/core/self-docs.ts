@@ -68,10 +68,12 @@ export function selfDocsSection(paths: SelfDocsPaths | undefined): string {
  */
 export function resolveInstallRoot(startDir?: string): string | undefined {
 	// An explicit startDir is a cache bypass: tests exercise distinct roots.
-	if (startDir === undefined && cachedRoot !== null) return cachedRoot;
-	const result = findInstallRoot(startDir ?? dirname(fileURLToPath(import.meta.url)));
-	if (startDir === undefined) cachedRoot = result;
-	return result;
+	if (startDir === undefined) {
+		if (cacheSettled) return cachedRoot;
+		cachedRoot = findInstallRoot(dirname(fileURLToPath(import.meta.url)));
+		cacheSettled = true;
+	}
+	return startDir === undefined ? cachedRoot : findInstallRoot(startDir);
 }
 
 function findInstallRoot(startDir: string): string | undefined {
@@ -85,4 +87,7 @@ function findInstallRoot(startDir: string): string | undefined {
 		dir = parent;
 	}
 }
-let cachedRoot: string | undefined | null = null;
+// Two-state sentinel: the missing-docs result (undefined) caches too, so an
+// old-install process walks the filesystem once, not once per assembleSystem.
+let cachedRoot: string | undefined;
+let cacheSettled = false;

@@ -6,9 +6,9 @@ repository-variable change, publisher binding) is authorized by this document
 alone; each step requires its own explicit owner approval.
 
 - Branch: `design/ink-first-publication`
-- Contract references: [`RELEASING.md`](../RELEASING.md),
+- Contract references: [`RELEASING.md`](../../RELEASING.md),
   [`design/ink-rename-design.md`](ink-rename-design.md) §6.1/§6.2/§8.6,
-  [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+  [`.github/workflows/release.yml`](../../.github/workflows/release.yml).
 - [`design/publishing-design.md`](publishing-design.md) is the historical imp
   design and is not the current procedure; this document replaces its
   bootstrap section for Ink and must not be produced by mechanically renaming

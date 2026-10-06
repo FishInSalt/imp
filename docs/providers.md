@@ -61,7 +61,9 @@ export INK_MODEL=<id the endpoint serves>
 
 API key: `export OPENAI_API_KEY=...`, or `/login openai`. ChatGPT plan:
 `ink login` (CLI) or `/login` → OpenAI (ChatGPT plan) — device-code OAuth.
-`ink logout` removes only the ChatGPT-plan credential.
+`ink logout` removes only the ChatGPT-plan credential. Any
+OpenAI-compatible service (OpenRouter, MiniMax, …) works through
+`OPENAI_BASE_URL` + a model id that endpoint serves.
 
 ### DeepSeek
 

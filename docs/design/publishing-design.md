@@ -1,7 +1,7 @@
 # 发布设计：npm 首个公开版本与持续发布
 
 > Historical imp publishing design. For Ink, use [the rename design](ink-rename-design.md)
-> and [current release instructions](../RELEASING.md). New-package bootstrap needs
+> and [current release instructions](../../RELEASING.md). New-package bootstrap needs
 > a separate reviewed design; this historical document is not authorization.
 
 状态：已审批（2026-09-26，两轮独立评审：B×1/S×4 修复后经复核逐条闭合；N1/N2/N3/N6

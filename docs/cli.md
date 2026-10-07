@@ -34,7 +34,10 @@ see the npm docs on fixing permissions) and retry. A note for scripted
 runs: ink refuses `.ink/` project configuration in an untrusted directory
 (safe by default); pre-approve it with `ink --trust` once, per project.
 
-Sign in with an API key (or `/login` inside a session):
+Sign in with `/login` — the provider picker stores an API key in
+`~/.ink/auth.json` (0600), where it beats the environment variable; the
+ChatGPT plan signs in via OAuth device code. Or set an environment
+variable before launching:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...

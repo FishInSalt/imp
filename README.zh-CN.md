@@ -37,17 +37,10 @@ npm 包安装时不运行任何生命周期脚本。卸载用 `npm uninstall -g 
 npm exec -- ink-agent@latest --help
 ```
 
-不要用 `npx ink`：名为 `ink` 的那个 npm 包与本项目无关。没有 `imp` 这个
-可执行别名。要求 Node 22.19.0 或更新版本（与固定的 TUI 依赖一致）。
-
-然后用 API key 登录：
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-或者在会话内用 `/login`（含 ChatGPT 套餐的 OAuth 登录）。接着给 Ink 一个任务。
-完整的入门介绍请从[文档](docs/index.md)的主题地图开始。
+登录：启动后用 `/login`（含 ChatGPT 套餐的 OAuth 登录），或在会话外设好
+环境变量（如 `export ANTHROPIC_API_KEY=sk-ant-...`；全部提供商与凭据方式
+见[提供商文档](docs/providers.md)）。接着给 Ink 一个任务。完整的入门介绍
+请从[文档](docs/index.md)的主题地图开始。
 
 从源码检出运行：
 

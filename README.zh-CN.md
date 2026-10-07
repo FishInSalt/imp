@@ -37,10 +37,11 @@ npm 包安装时不运行任何生命周期脚本。卸载用 `npm uninstall -g 
 npm exec -- ink-agent@latest --help
 ```
 
-登录：启动后用 `/login`（含 ChatGPT 套餐的 OAuth 登录），或在会话外设好
-环境变量（如 `export ANTHROPIC_API_KEY=sk-ant-...`；全部提供商与凭据方式
-见[提供商文档](docs/providers.md)）。接着给 Ink 一个任务。完整的入门介绍
-请从[文档](docs/index.md)的主题地图开始。
+登录：启动后用 `/login`——选择提供商并输入 API key（存储到
+`~/.ink/auth.json`，优先于环境变量）；ChatGPT 套餐走 OAuth 设备码流程。
+也可以在启动前设环境变量（如 `export ANTHROPIC_API_KEY=sk-ant-...`；
+全部提供商与凭据方式见[提供商文档](docs/providers.md)）。接着给 Ink
+一个任务。完整的入门介绍请从[文档](docs/index.md)的主题地图开始。
 
 从源码检出运行：
 

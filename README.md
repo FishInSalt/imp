@@ -38,8 +38,10 @@ Or let npm infer the single `ink` executable from the explicit package:
 npm exec -- ink-agent@latest --help
 ```
 
-Sign in with `/login` inside a session (ChatGPT-plan OAuth included), or
-set an environment variable before launching (e.g.
+Sign in with `/login` inside a session — pick a provider and enter its
+API key (stored in `~/.ink/auth.json`, where it beats the environment
+variable); the ChatGPT plan signs in via OAuth device code. Or set an
+environment variable before launching (e.g.
 `export ANTHROPIC_API_KEY=sk-ant-...`; all providers and credential
 methods are in [providers.md](docs/providers.md)). Give Ink a task.
 For a full walkthrough, start at the [documentation](docs/index.md) topic

@@ -38,15 +38,10 @@ Or let npm infer the single `ink` executable from the explicit package:
 npm exec -- ink-agent@latest --help
 ```
 
-Do not use `npx ink`: plain `ink` is an unrelated npm package. There is no
-`imp` executable alias. Requires Node 22.19.0 or newer (matching the pinned
-TUI dependency). Then sign in with an API key:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-or `/login` inside a session (ChatGPT-plan OAuth included). Give Ink a task.
+Sign in with `/login` inside a session (ChatGPT-plan OAuth included), or
+set an environment variable before launching (e.g.
+`export ANTHROPIC_API_KEY=sk-ant-...`; all providers and credential
+methods are in [providers.md](docs/providers.md)). Give Ink a task.
 For a full walkthrough, start at the [documentation](docs/index.md) topic
 map.
 

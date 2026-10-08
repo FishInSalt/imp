@@ -166,6 +166,7 @@ describe("print-mode abort grace e2e (#abort-grace design §6 test-plan item 7)"
 			),
 		);
 		const resultPath = path.join(dir, "result.json");
+		let failed = false;
 		try {
 			// The sh hop matters: the CLI child must not descend from the
 			// vitest worker's (unreliable) signal lineage — see the file note.
@@ -182,17 +183,22 @@ describe("print-mode abort grace e2e (#abort-grace design §6 test-plan item 7)"
 			const raw = await readFile(resultPath, "utf8");
 			const result = JSON.parse(raw) as { code: number; note: string; stderr: string; stdout: string };
 			// Instrument must not destroy its own evidence (round-1 MINOR-3):
-			// full verdict to stderr before any assertion can fail.
-			console.error(`[grace-e2e] code=${result.code} note=${result.note}`);
-			console.error(`[grace-e2e] stdout tail: ${JSON.stringify(result.stdout.slice(-200))}`);
-			console.error(`[grace-e2e] stderr tail: ${JSON.stringify(result.stderr.slice(-300))}`);
+			// the FULL verdict goes to stderr BEFORE any assertion can fail,
+			// so a red run keeps its complete post-mortem in test output.
+			console.error(`[grace-e2e] verdict: ${raw}`);
 			expect(result.note).not.toBe("no claim");
 			expect(result.code).toBe(0); // single SIGINT resolves aborted → 0 (design §2.3)
 			expect(result.stdout).toContain("interrupt"); // the hint line — the handler ran
 			expect(result.stderr).toContain("did not respond to the interrupt"); // unref SENTINEL (§6c.0 item 1)
 			expect(result.stderr).toContain("abandoning its result");
+		} catch (error) {
+			// Keep the raw artifacts (result.json, env.json) on failure for
+			// post-mortem; printed path so nobody hunts tmpdirs.
+			console.error(`[grace-e2e] artifacts kept at ${dir}`);
+			failed = true;
+			throw error;
 		} finally {
-			rmSync(dir, { recursive: true, force: true });
+			if (!failed) rmSync(dir, { recursive: true, force: true });
 		}
 	}, 70_000);
 });

@@ -959,8 +959,9 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 			// future scope change is a conscious act, not a silent drift.
 			const registry = new ExtensionRegistry({ report: () => {} });
 			registry.beginExtension("guardian", "project");
-			// biome-ignore lint/suspicious/noConfusingVoidType: never-settling gate, design §6.1 handler union
-			registry.subscribe("tool_call", () => new Promise(() => {}) as unknown as void);
+			// subscribe() takes handler: unknown — a never-settling promise is
+			// the gate hang under test, no cast needed.
+			registry.subscribe("tool_call", () => new Promise(() => {}));
 			registry.commitExtension();
 			const ran: string[] = [];
 			const tool: Tool = {

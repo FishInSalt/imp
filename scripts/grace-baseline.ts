@@ -16,18 +16,19 @@ import { createCliFixture } from "../test/helpers/cli-fixture.js";
 
 const run = promisify(execFile);
 
-const testSource = readFileSync("test/cli-abort-grace.test.ts", "utf8");
+const repoRoot = path.resolve(import.meta.dirname, "..");
+const testSource = readFileSync(path.join(repoRoot, "test/cli-abort-grace.test.ts"), "utf8");
 const testLines = testSource.split("\n");
 function lineOf(marker: string): number {
 	const index = testLines.findIndex((line) => line.includes(marker));
 	if (index === -1) throw new Error(`marker not found: ${marker}`);
 	return index;
 }
-function slice(startMarker: string, endMarker: string): string {
-	return testLines.slice(lineOf(startMarker) + 1, lineOf(endMarker)).join("\n");
-}
 function lineAfter(startIndex: number, marker: string): number {
-	for (let i = startIndex; i < testLines.length; i++) if (testLines[i].includes(marker)) return i;
+	for (let i = startIndex; i < testLines.length; i++) {
+		const line = testLines[i];
+		if (line !== undefined && line.includes(marker)) return i;
+	}
 	throw new Error(`marker after ${startIndex} not found: ${marker}`);
 }
 const RUNNER_START = lineOf("const RUNNER = `");

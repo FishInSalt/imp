@@ -360,17 +360,19 @@ run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记
 
 ### 6c.3b MCP 连接期挂死——记档(本批不修,判据:出口现状未验证)
 
-`createMcpSetup`/`connectAll` 发生在 runTurn 之前(cli.ts);首次 Ctrl+C 的
-abort controller 是否能解开 connectAll 的 await 取决于其内部是否消费 signal
-——**未验证**。若挂死:REPL 出口为二次 Ctrl+C forceExit;print 出口为二次
+`createMcpSetup` 在 runTurn 之前调用(cli.ts);`connectAll()` 本身是同步
+fire-and-forget(print 模式 runTurn 不被连接阻塞),真正未验证的是
+connectServer/ensureClient 内部 await 是否消费 signal——连接期挂死时首次
+Ctrl+C 的 abort 能否解开它,**未验证**。若挂死:REPL 出口为二次 Ctrl+C forceExit;print 出口为二次
 SIGINT(SIGINT handler 直接 process.exit(130),不等待 run)。宽限(§2.5)不
 覆盖此阶段,属设计范围外。**后续批次若要收口,先验证 connectAll 是否透传
 signal,再决定是否单独立项。**
 
 ### 6c.4 测试与验收
 
-- 全量门禁:全量 vitest(**un-skip 后预期 143 文件 / 3024 测试**,
-  评审 NIT-1)、biome、双 tsconfig、build,全绿。
+- 全量门禁:全量 vitest(**un-skip + 门禁钉子后实测 143 文件 / 3025
+  测试**)、biome、双 tsconfig、build,全绿(3025 = 3023 既有 + e2e 1 +
+  gate 钉子 1)。
 - 判读表每行有归宿:结论(§6b.2 改记)+ 门禁(e2e)或挂起理由。
 - 交付物:①§6b.2 结论;②恢复的 e2e(或挂起说明);③清点表落进设计
   文档;④孤儿进程/临时目录零残留。

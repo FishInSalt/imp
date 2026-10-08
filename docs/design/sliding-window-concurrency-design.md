@@ -4,6 +4,8 @@ Batch: `feat/sliding-window-concurrency`. Base: `main@f7f040e`.
 
 ## 0. Status
 
+DESIGN REV 2 — round 1 findings folded (NEEDS-FIXES → 待确认复评).
+
 DESIGN DRAFT — 待独立评审（对抗性、新上下文）。实现未开始。
 
 ## 1. Problem
@@ -47,6 +49,11 @@ phase 1，排队调用要等整波排空才首次出现在屏幕上。
   启动（各自 emit `tool_running`）；任一 settle 后补位启动队头下一个
   （同样先 emit `tool_running`）。启动用 `clock()` 盖起点戳，settle 处
   计 `durationMs`、emit `tool_settled`（完成序）。
+  **顺序约束（MINOR-2）**：`tool_running` 的 emit（及 REPL tap 对
+  `startedAtMs` 的重写）必须先于 `plan.run()` 调用——子代理 source 行
+  继承父行 `startedAtMs`（repl.ts:1246）、task 计时基线取各源最小值
+  （shell.ts:795-800），旧戳先暴露给子事件会让 min() 永远取含排队时间
+  的旧值。
 - **Phase 3 — 前缀冲刷**：游标初始指向段首。任一调用 settle 后，把
   **已连续 settle 的最长前缀**立即 emit `tool_end` 并 push 进 results。
   非前缀的 settle 由 `tool_settled` 承担显示更新（既有语义），其
@@ -66,28 +73,45 @@ abort 检查保留在两处：phase 1 每调用循环内（未启动者不发事
 
 新 AgentEvent 成员：`{ type: "tool_running"; toolCallId: string }`。在
 槽位获取、真正开始执行的瞬间发出（完成无关；只有已批准且已过门禁的
-plan 才有）。与 `tool_settled` 同级：**显示专用**，tap 拦截，不进
-Renderer/print/扩展/health/history。扩展事件面零变化（两 dispatch 站点
-仍只认 `tool_end`）。
+plan 才有）。与 `tool_settled` 同级：**显示专用**。REPL tap 拦截；print
+模式下它直接到达 `Renderer.event`（cli.ts:1079 无 tap）——靠 default
+分支 no-op（render.ts:173-176）兼底，与 `tool_settled` 同路径（非
+"不进 Renderer"，见 tool-settle-design.md §5 的准确先例）；不进扩展
+（两 dispatch 站点仍只认 `tool_end`）、health、history。扩展事件面零
+变化。
+
+**计时归因注（NIT-1）**：`durationMs` 是 loop 在 settle 处盖的
+（loop.ts:539），非工具自带；所有经 chunk 执行路径 settle 的调用都带
+它，故 sink 回退窗口（entry.startedAt）对 chunk 路径不可达。例外：
+`failToolCallsFromTruncatedMessage`（loop.ts:336-346）的 tool_end 无
+durationMs、回退可达——该路径本设计不改，行为不受影响。
 
 ### 3.3 显示层（REPL tap + fold 行 + 计时）
 
 - **REPL tap**（`repl.ts:744` 先例）：`tool_running` 分支，仅顶层。
-  职责：a) 把对应调用行从 queued 升级 running（更新快照的 `startedAtMs`
-  与状态），b) `pushActivity()`。
-- **活动区快照**（`ActivitySnapshot`）每工具行增字段 `state:
-  "queued" | "running"`，默认 running（串行路径与既有快照测试不变）。
-  task 行同 `ActivityAgentLine` 增 state 字段；子行天然不涉及（子代理
-  内部无 safe 工具，子行的 `tool_start` 语义不变）。
-- **计时诚实**：fold 的 `running Ns` 文本由快照 `startedAtMs` 驱动
-  （shell 120ms ticker 重算），预发后该戳在 `tool_start` 盖——**改为由
-  `tool_running` 触发的 tap 写入**。fold 的 closing suffix
-  （`#call-closing-status` 的 running 计时）同样由 tap 在 `tool_running`
-  时通过 `setRunningSuffix` 更新为从执行起点计。
-- **caption 差异**：queued 行 caption `└─ queued`，running 行沿用现状
-  `└─ running Ns`。行通道完全复用 `#tool-inline-live-rows`/
-  `#call-closing-status` 机制（`setCallLiveRows` / `setRunningSuffix`），
-  仅新增枚举值。
+  职责：a) 把对应调用行从 queued 升级 running（重写快照行的
+  `startedAtMs` 为执行起点、state 置 running），b) `pushActivity()`。
+  tap **不直写 transcript**——suffix/live 行通道是单写者（renderActivity
+  每 120ms 从快照重建），直写会被下一次 tick 覆盖。
+- **活动区快照**（`ActivitySnapshot`）每工具行增可选字段 `state?:
+  "queued" | "running"`，缺省 running（串行路径与既有快照测试不变）。
+  `startedAtMs` 保持必填：queued 行写入 tool_start 时刻戳（仅作行序
+  占位，不驱动计时）。task 行同 `ActivityAgentLine` 增可选 state 字段；
+  子行天然不涉及（子代理内部无 safe 工具，子行的 `tool_start` 语义
+  不变）。
+- **计时诚实（单写者模型下）**：closing suffix 与 live 行的计时全部由
+  `renderActivity` 从快照推导。规则：`state === "queued"` 的行**不生成
+  closing suffix**（shell.ts:755-756 的 nextSuffixes 跳过 queued id），
+  live 行渲染 `└─ queued`（无计时）；tap 在 `tool_running` 时重写
+  `startedAtMs` 后，下一次快照推送/tick 自然从执行起点计。现状字节核
+  对：非 task 行 closing suffix 是裸 `Ns`（`#call-closing-status` A1.1
+  移除了 `└─ running` chrome，shell.ts:719-722）；task fold live 行是
+  `└─ pending #N <agent>`（shell.ts:778）。本设计的 queued 态是这两个
+  通道上的新枚举值，不改 running 态的既有字节。
+- **caption 差异**：queued 工具行 caption `└─ queued`；task queued 行
+  `└─ pending`。行通道完全复用 `#tool-inline-live-rows`/
+  `#call-closing-status` 机制（`setCallLiveRows` / `setRunningSuffix`）
+  的快照推导路径，仅新增枚举值。
 
 ### 3.4 行为漂移（接受并记档）
 
@@ -132,16 +156,21 @@ loop 层（`test/loop-concurrency.test.ts` 扩展）：
 8. 门禁呼叫序（既有 order-recording gate 测试保持绿）。
 9. print 模式：chunk print 输出两次运行一致；corpus 更新。
 10. 相邻波次（consecutive-run batching）既有测试：形状变化后修正预期。
+    特别地，"chunk cap 5" 用例（断言"释放一个调用不启动第 6 个"的
+    波次反属性）需**重写**为窗口语义（FIFO 补位：释放即启动），不是
+    修正预期能覆盖的。
 
 UI 层（`test/repl-tui.test.ts` / `test/repl-fold.test.ts`）：
 
 11. 预发后 queued→running 升级：断言行 caption 与计时起点。
 12. fold closing suffix 由 tool_running 更新（queued 期间 suffix 空）。
 13. task 行（activityAgents）queued 态与升级。
-13b. **红测试**：两个 task 并发（均运行中）+ 第三个排队：快照中前两个
-   state=running、第三个 state=queued 且 caption `└─ queued`；第三个的
-   tool_running 到来前 running 计时为空/不启动——波次下第三行不存在
-   （其 tool_start 未发），此断言必红；窗口下必绿。
+13b. **红测试（MAJOR-2 修正后的场景）**：6 个 safe 调用（6 个 gated
+   task，或 5 个占槽 + 1 个）：前 5 个 state=running、第 6 个
+   state=queued 且无 closing suffix；第 6 个的 `tool_running` 到来前其
+   计时不启动——波次下第 6 行不存在（其 tool_start 未发），此断言必
+   红；窗口下必绿。（3 个 safe 调用无论哪种实现都全部立即启动，不能
+   构成区分场景。）
 
 ## 5. 风险
 
@@ -152,9 +181,12 @@ UI 层（`test/repl-tui.test.ts` / `test/repl-fold.test.ts`）：
    "显示专用" 通道，tap 分支 2→3。税：tap 复杂度；换：排队可见性 +
    计时诚实。
 3. **potentially large chunks**：模型一次发 20+ task——phase 1 预发 20
-   头 + 20 次门禁串行。门禁本就是串行逐个（今天分波亦然），故唯一的
-   新暴露是 20 确认框同弹（pendingAsks FIFO 已支持）与 20 头同屏。接受；
-   cap 与配置面维持 non-goal。
+   头 + 20 次门禁串行。门禁本就是串行逐个 `await`（loop.ts:505-514），
+   确认框是**逐个串行出现**而非同弹（第 N+1 个 confirm 在第 N 个
+   resolve 后才发起；pendingAsks FIFO 只服务并发子代理的子提问，与本
+   路径无关）。真实新暴露：20 个串行阻塞确认全部前置在任何执行之前
+   （今天波次间至少有波 1 的执行穿插）与 20 头同屏。接受并记档；批量
+   确认（"approve all N"）是可能的后续优化，不在本批。
 4. **打印头集中**：print 下 20 头连续（不再 5-5 分组）——每一次运行仍
    确定，corpus 更新。交互模式 live 行会缓解观感。
 4b. **声明的非目标**：本批不解决 straggler 阻塞游标（a 未完则 b 的
@@ -179,13 +211,16 @@ UI 层（`test/repl-tui.test.ts` / `test/repl-fold.test.ts`）：
 
 ## 6. 评审待决点
 
-1. 门禁预评估（本设计 §3.1）是否引入新的滥用面（如 7 个确认同弹的
-   UX）——pendingAsks FIFO 已支持，倾向接受。
+1. 门禁预评估（本设计 §3.1）：真实代价是 §5.3 记档的串行前置确认
+   （非同弹）。接受预评估（保持串行呼叫序门禁的评审结论 #3）；若未来
+   UX 反馈强烈，批量确认是独立后续。
 2. 前缀冲刷 vs 等全体：本设计选前缀冲刷（print 收益），若评审认为
    print 形状漂移过大可退为等全体（实现删一行）。
 3. `tool_running` 的命名：备选 `tool_exec_start`、`tool_dispatch`。
 4. queued caption 文案：`└─ queued`（无计时）。
-5. 是否重命名常量（§5.5）。
+5. 是否重命名常量：采纳（机械重命名 `MAX_CONCURRENT_SAFE_CALLS`，
+   单独 commit）；§2 non-goal 2 指值不变（5），与重命名无冲突。从待决
+   点转为已决。
 
 ## 7. Test plan 内联锚点
 
@@ -194,5 +229,30 @@ UI 层（`test/repl-tui.test.ts` / `test/repl-fold.test.ts`）：
 - 回归：system-prompt、render、subagent corpus。
 
 ## 8. Review log
+
+**Round 1 — 独立对抗评审（新上下文，2026-10-08），verdict NEEDS-FIXES。**
+核心调度设计（滑动窗口、前缀冲刷、abort 闭合、事件面零变化）经逐行
+源码验证为健全（0 blocker）。4 个 MAJOR 全部折叠进本文档：
+
+- MAJOR-1（closing suffix 单写者冲突）：§3.3 重写为单写者模型——tap 只
+  重写快照 startedAtMs，不直写 transcript；state 为可选字段，queued 行
+  不生成 suffix。
+- MAJOR-2（测试 13b 场景不可能）：改为 6 调用场景（5 running + 1
+  queued）；3 个 safe 调用在两种实现下都全部启动，不能构成区分场景。
+- MAJOR-3（不存在的 `└─ running Ns` caption）：按真实表面重述（裸 `Ns`
+  suffix、task 行 `└─ pending #N`）。
+- MAJOR-4（"确认同弹"前提错误）：确认是串行逐个、全部前置；风险 3 与
+  待决点 1 重写；批量确认为后续可选。
+
+MINOR/NIT 一并折叠：MINOR-1（print 无 tap，"不进 Renderer"改为
+"到达 Renderer 但 default no-op"，补测试断言）；MINOR-2（tool_running
+emit + tap 戳重写必须先于 plan.run，写入 §3.1 顺序约束）；MINOR-3
+（"chunk cap 5" 用例需重写为窗口语义，写入 §4.10）；MINOR-4（重命名
+待决点矛盾，§6.5 转已决）；NIT-1（durationMs 是 loop 盖的、非工具自
+带；truncated-refusal 路径例外且不受本批影响——写入 §3.2 注）。
+评审另确认：(a) terminal guard + trackActivity 幂等使 settle+权威
+end 双到达安全；(b) print 字节确定性成立；(c) abort 语义无洞；(d)
+registry emitToolCall 链无状态，t=0 快照仅影响异型门禁（§3.4.1 已记
+档）；(e) FIFO 补位 + 游标活性论证成立。
 
 （待评审）

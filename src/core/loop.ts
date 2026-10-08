@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
-import { MAX_CONCURRENT_SAFE_CALLS } from "./constants.js";
+import { ABORT_GRACE_MS, MAX_CONCURRENT_SAFE_CALLS } from "./constants.js";
 import type { HealthSignal } from "./health.js";
 import {
 	type AgentMessage,
@@ -439,6 +439,117 @@ interface ToolCallRef {
 	arguments: unknown;
 }
 
+/** #abort-grace: bounded wait for signal-ignoring tool calls (design
+ *  docs/design/abort-grace-design.md). After the signal aborts, each
+ *  in-flight execution gets ABORT_GRACE_MS to settle on its own; at the
+ *  deadline the host resolves the call's grace deferred with a synthesized
+ *  isError result, so the waiting worker (or the serial caller) proceeds and
+ *  the run finishes cleanly. This rescues the WAITER, not the culprit — the
+ *  hung promise stays in the background (logged, never observed again).
+ *
+ *  Single-writer discipline (design §2.1, review MAJOR-1): the deadline timer
+ *  only resolves deferreds and logs; the worker/serial caller remains the only
+ *  writer of settled[index]/results/tool events. The resolver value IS the
+ *  synthesized ToolResult object, so the grace path is byte-identical to a
+ *  normal settle from the caller's perspective.
+ *
+ *  The timer exists ONLY after an abort AND while executions are in flight:
+ *  normal runs allocate one deferred per call and never arm anything. It is
+ *  unref'd (a pending grace timer must not hold the event loop open in print
+ *  mode) and cleared when the batch finishes.
+ *
+ *  Load-bearing invariant (design §2.1, review MAJOR-2): `runTool` never
+ *  rejects (it catches everything). The race loser stays pending forever in
+ *  the hang case; if that ever changes, the fire-and-forget observation below
+ *  must be re-audited for unhandledRejection. */
+interface GraceEntry {
+	/** Display name for the abandon log line. */
+	name: string;
+	/** The deferred raced against plan.run. Resolved by the deadline with the
+	 *  SAME synthesized result object the waiter will use. */
+	deferred: Promise<ToolResult>;
+	resolveGrace: (result: ToolResult) => void;
+	/** Memoized synthetic result (one object, resolved and awaited). */
+	synthesized?: ToolResult;
+}
+
+function createGraceRegistry(signal: AbortSignal | undefined): {
+	race: (run: Promise<ToolResult>, name: string) => Promise<ToolResult>;
+	settle: () => void;
+} {
+	const entries = new Set<GraceEntry>();
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let armed = false;
+	const fire = (): void => {
+		timer = setTimeout(() => {
+			timer = null;
+			for (const entry of entries) {
+				if (entry.synthesized === undefined) {
+					const seconds = Math.round(ABORT_GRACE_MS / 1000);
+					entry.synthesized = {
+						toolCallId: "",
+						toolName: entry.name,
+						content: `Tool ${entry.name} did not respond to the interrupt within ${seconds}s — result abandoned; the underlying process may still be running.`,
+						isError: true,
+					};
+					process.stderr.write(
+						`ink: tool ${entry.name} did not respond to the interrupt within ${seconds}s — abandoning its result\n`,
+					);
+				}
+				entry.resolveGrace(entry.synthesized);
+			}
+		}, ABORT_GRACE_MS);
+		timer.unref?.();
+	};
+	const arm = (): void => {
+		if (armed || entries.size === 0) return;
+		armed = true;
+		fire();
+	};
+	const onAbort = (): void => arm();
+	if (signal !== undefined) {
+		// Fast path: already-aborted signals never fire the event again
+		// (subagent.ts precedent) — arm immediately if anything is in flight.
+		if (signal.aborted) arm();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
+	return {
+		race: (run, name) => {
+			let resolveGrace!: (result: ToolResult) => void;
+			const deferred = new Promise<ToolResult>((resolve) => {
+				resolveGrace = resolve;
+			});
+			const entry: GraceEntry = { name, deferred, resolveGrace };
+			entries.add(entry);
+			const raced = Promise.race([run, deferred]);
+			// Fire-and-forget observation of the loser (design §2.1): with
+			// runTool never rejecting, this only silences the (impossible
+			// today) rejection path; a late real settle is logged and dropped.
+			run.then(
+				() => {
+					if (entries.has(entry)) entries.delete(entry);
+					else process.stderr.write(`ink: tool ${name} settled late, result dropped\n`);
+				},
+				() => {},
+			);
+			return raced.then((result) => {
+				entries.delete(entry);
+				return result;
+			});
+		},
+		settle: () => {
+			if (timer !== null) {
+				clearTimeout(timer);
+				timer = null;
+			}
+			if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+		},
+	};
+}
+
+// Arm-on-abort is wired per-batch by executeToolBatch (the registry itself is
+// signal-agnostic so both paths share it).
+
 /** One assistant message's tool calls, executed in order (M5b design §6;
  * #sliding-window).
  *
@@ -460,6 +571,38 @@ async function executeToolBatch(
 	clock: () => number,
 ): Promise<void> {
 	const isSafe = (name: string) => toolMap.get(name)?.concurrencySafe === true;
+	// #abort-grace: one registry per batch; both paths (serial + chunk) race
+	// plan.run against a grace deferred that only resolves after an abort (see
+	// createGraceRegistry). Normal runs never arm anything.
+	const grace = createGraceRegistry(signal);
+	try {
+		await executeToolBatchInner(
+			toolCalls,
+			toolMap,
+			signal,
+			onToolCall,
+			onEvent,
+			results,
+			clock,
+			isSafe,
+			grace,
+		);
+	} finally {
+		grace.settle();
+	}
+}
+
+async function executeToolBatchInner(
+	toolCalls: ToolCallRef[],
+	toolMap: Map<string, Tool>,
+	signal: AbortSignal | undefined,
+	onToolCall: RunAgentLoopOptions["onToolCall"],
+	onEvent: RunAgentLoopOptions["onEvent"],
+	results: ToolResult[],
+	clock: () => number,
+	isSafe: (name: string) => boolean,
+	grace: ReturnType<typeof createGraceRegistry>,
+): Promise<void> {
 	let i = 0;
 	while (i < toolCalls.length) {
 		if (signal?.aborted) return;
@@ -467,7 +610,15 @@ async function executeToolBatch(
 		if (!isSafe(call.name)) {
 			// Serial path — event order and behavior identical to pre-M5b.
 			onEvent?.({ type: "tool_start", toolCallId: call.id, name: call.name, args: call.arguments });
-			const result = await executeToolCall(call.id, call.name, call.arguments, toolMap, signal, onToolCall);
+			const result = await executeToolCall(
+				call.id,
+				call.name,
+				call.arguments,
+				toolMap,
+				signal,
+				onToolCall,
+				grace,
+			);
 			results.push(persistableResult(result));
 			onEvent?.({ type: "tool_end", result });
 			i++;
@@ -479,7 +630,7 @@ async function executeToolBatch(
 			run.push(toolCalls[i] as ToolCallRef);
 			i++;
 		}
-		await executeChunk(run, toolMap, signal, onToolCall, onEvent, results, clock);
+		await executeChunk(run, toolMap, signal, onToolCall, onEvent, results, clock, grace);
 	}
 }
 
@@ -519,6 +670,7 @@ async function executeChunk(
 	onEvent: RunAgentLoopOptions["onEvent"],
 	results: ToolResult[],
 	clock: () => number,
+	grace: ReturnType<typeof createGraceRegistry>,
 ): Promise<void> {
 	// Phase 1 — serial, in call order: tool_start, validation, gate. Gates see
 	// a deterministic, non-interleaved sequence instead of racing under Promise.all.
@@ -589,11 +741,17 @@ async function executeChunk(
 			// row's startedAtMs from it, and child rows inherit that stamp.
 			onEvent?.({ type: "tool_running", toolCallId: chunk[index]?.id as string });
 			const startedAt = clock();
-			const result = await plan.run(signal);
+			// #abort-grace: race the execution against its grace deferred —
+			// after an abort, a signal-ignoring tool is abandoned at the
+			// deadline and the synthesized result flows the exact same path
+			// (single writer: this worker). toolCallId is stamped here (the
+			// registry is name-only; the object identity is stable).
+			const result = await grace.race(plan.run(signal), chunk[index]?.name as string);
+			const stamped = { ...result, toolCallId: chunk[index]?.id as string };
 			// #tool-settle: own execution time (queue wait excluded by
 			// construction) + real-time completion display; the authoritative
 			// tool_end still follows via the prefix flush in call order.
-			const measured: ToolResult = { ...result, durationMs: clock() - startedAt };
+			const measured: ToolResult = { ...stamped, durationMs: clock() - startedAt };
 			settled[index] = measured;
 			onEvent?.({ type: "tool_settled", result: measured });
 			flush();
@@ -714,6 +872,7 @@ async function executeToolCall(
 	toolMap: Map<string, Tool>,
 	signal: AbortSignal | undefined,
 	onToolCall: RunAgentLoopOptions["onToolCall"],
+	grace: ReturnType<typeof createGraceRegistry>,
 ): Promise<ToolResult> {
 	const call: ToolCallRef = { id, name, arguments: args };
 	const prepared = prepareToolCall(call, toolMap);
@@ -732,5 +891,9 @@ async function executeToolCall(
 			isError: true,
 		};
 	}
-	return prepared.run(signal);
+	// #abort-grace: the race covers ONLY the execution (design §2.5 — the gate
+	// await above stays outside, matching the chunk's phase-1 scope decision).
+	// Stamp the id: the grace result is synthesized name-only.
+	const result = await grace.race(prepared.run(signal), name);
+	return { ...result, toolCallId: id };
 }

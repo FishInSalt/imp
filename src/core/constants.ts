@@ -31,6 +31,15 @@ export function defaultChildTimeoutMs(): number | undefined {
  *  next queued call in call order. */
 export const MAX_CONCURRENT_SAFE_CALLS = 5;
 
+/** #abort-grace: after the user aborts (Ctrl+C), a tool call that ignores
+ *  its AbortSignal gets this long to settle on its own; at the deadline the
+ *  host synthesizes an isError result and finishes the run (rescuing the
+ *  waiter, not the culprit — the hung promise stays in the background).
+ *  Not a hard timeout: the window exists ONLY after the signal aborted, so
+ *  legitimate long-running work (a 20-minute build) is never interrupted
+ *  until the user asks. Constant, no env knob (same policy as the cap). */
+export const ABORT_GRACE_MS = 10_000;
+
 /** Ink's built-in tool names (M18: moved here from extensions/registry so the
  *  MCP bridge shares the exact same hand list — the M16 P1 lesson was this
  *  list drifting between checkers, letting an extension register `ls` over

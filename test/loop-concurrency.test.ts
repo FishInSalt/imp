@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
@@ -685,5 +685,304 @@ describe("#sliding-window", () => {
 		// Claimed-but-aborted calls keep their computed results (holdTool returns output).
 		for (const id of ["c1", "c2", "c3", "c4", "c5"])
 			expect(historyResults.find((r) => r.toolCallId === id)?.isError).toBe(false);
+	});
+});
+
+describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
+	/** A tool that never settles and never observes its signal — the culprit. */
+	function hangTool(name: string): Tool {
+		return {
+			name,
+			description: "hangs forever, ignores the signal",
+			parameters: Type.Object({ message: Type.String() }),
+			concurrencySafe: true,
+			async execute() {
+				await new Promise<void>(() => {});
+				return { output: "never" };
+			},
+		};
+	}
+
+	it("abandons a hung safe call at the deadline; the run finishes with a complete history (test 1)", async () => {
+		vi.useFakeTimers();
+		try {
+			const tool = hangTool("stuck");
+			const events: AgentEvent[] = [];
+			const controller = new AbortController();
+			const history: AgentMessage[] = [];
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["stuck"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [tool],
+				history,
+				userMessage: "go",
+				signal: controller.signal,
+				onEvent: (e) => events.push(e),
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			// Before the deadline: nothing settles — the run is stuck (the red
+			// baseline this batch exists to fix: without grace, pending never
+			// resolves at all).
+			await vi.advanceTimersByTimeAsync(9_000);
+			const settledSoFar = events.filter((e) => e.type === "tool_settled");
+			expect(settledSoFar).toHaveLength(0);
+			await vi.advanceTimersByTimeAsync(1_500);
+			const result = await pending;
+			expect(result.stopReason).toBe("aborted");
+			const settled = events.flatMap((e) => (e.type === "tool_settled" ? [e.result] : []));
+			expect(settled).toHaveLength(1);
+			expect(settled[0]?.isError).toBe(true);
+			expect(settled[0]?.content).toContain("did not respond to the interrupt");
+			// History complete: the tool_use → tool_result pair closes.
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults.map((r) => r.toolCallId)).toEqual(["c1"]);
+			expect(historyResults[0]?.isError).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("late real settle does not overwrite the synthesized result; the loser is observed (test 2)", async () => {
+		vi.useFakeTimers();
+		try {
+			const lateErrors: unknown[] = [];
+			const lateLog: string[] = [];
+			const unhandled = (err: unknown): void => {
+				lateErrors.push(err);
+			};
+			const writeStream = process.stderr.write.bind(process.stderr);
+			vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+				if (typeof chunk === "string" && chunk.includes("settled late")) lateLog.push(chunk);
+				return writeStream(chunk as string);
+			});
+			process.on("unhandledRejection", unhandled);
+			onTestFinished(() => {
+				process.off("unhandledRejection", unhandled);
+				vi.restoreAllMocks();
+			});
+			let releaseTool: (() => void) | undefined;
+			const tool: Tool = {
+				name: "late",
+				description: "settles after the grace deadline",
+				parameters: Type.Object({ message: Type.String() }),
+				concurrencySafe: true,
+				async execute() {
+					await new Promise<void>((resolve) => {
+						releaseTool = resolve;
+					});
+					return { output: "late real result" };
+				},
+			};
+			const events: AgentEvent[] = [];
+			const controller = new AbortController();
+			const history: AgentMessage[] = [];
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["late"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [tool],
+				history,
+				userMessage: "go",
+				signal: controller.signal,
+				onEvent: (e) => events.push(e),
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(10_500);
+			await pending;
+			// The real execution settles AFTER the deadline — dropped, logged.
+			releaseTool?.();
+			await vi.advanceTimersByTimeAsync(50);
+			const ends = events.flatMap((e) => (e.type === "tool_end" ? [e.result] : []));
+			expect(ends).toHaveLength(1);
+			expect(ends[0]?.content).toContain("did not respond");
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults[0]?.content).toContain("did not respond");
+			expect(lateErrors).toEqual([]);
+			// The loser's late real settle is logged and dropped (design §6.2).
+			expect(lateLog.some((l) => l.includes("settled late, result dropped"))).toBe(true);
+			process.off("unhandledRejection", unhandled);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("serial path: a hung serial tool is abandoned the same way (test 3)", async () => {
+		vi.useFakeTimers();
+		try {
+			const tool: Tool = {
+				name: "serialstuck",
+				description: "serial tool that hangs",
+				parameters: Type.Object({ message: Type.String() }),
+				async execute() {
+					await new Promise<void>(() => {});
+					return { output: "never" };
+				},
+			};
+			const controller = new AbortController();
+			const history: AgentMessage[] = [];
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["serialstuck"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [tool],
+				history,
+				userMessage: "go",
+				signal: controller.signal,
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(10_500);
+			const result = await pending;
+			expect(result.stopReason).toBe("aborted");
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults[0]?.isError).toBe(true);
+			expect(historyResults[0]?.content).toContain("did not respond to the interrupt");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("normal run: a legitimate slow tool is NEVER interrupted — no timer arms before an abort (test 4)", async () => {
+		vi.useFakeTimers();
+		try {
+			// A tool slower than the grace window, with NO abort: it must run
+			// to completion. A mis-armed grace timer (the mutation this pins —
+			// arming on registration instead of on abort) synthesizes an
+			// isError result at the 10s checkpoint and the history goes wrong.
+			const events: AgentEvent[] = [];
+			const history: AgentMessage[] = [];
+			let releaseSlow: (() => void) | undefined;
+			const tool: Tool = {
+				name: "slow",
+				description: "legitimate 30s work, no abort ever fires",
+				parameters: Type.Object({ message: Type.String() }),
+				concurrencySafe: true,
+				async execute() {
+					await new Promise<void>((resolve) => {
+						releaseSlow = resolve;
+					});
+					return { output: "slow but fine" };
+				},
+			};
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["slow"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [tool],
+				history,
+				userMessage: "go",
+				onEvent: (e) => events.push(e),
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			// Checkpoint past ABORT_GRACE_MS with no abort: nothing abandoned.
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(events.filter((e) => e.type === "tool_settled")).toHaveLength(0);
+			releaseSlow?.();
+			const result = await pending;
+			expect(result.stopReason).toBe("completed");
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults[0]?.isError).toBe(false);
+			expect(historyResults[0]?.content).toBe("slow but fine");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("abort landing inside a serial gate await still bounds a post-gate hung tool (MAJOR-1 regression)", async () => {
+		vi.useFakeTimers();
+		try {
+			// The window: the previous serial call settled (registry empty),
+			// this call's gate is awaiting, the abort fires HERE — the
+			// {once:true} listener is consumed while entries is empty. The
+			// post-gate hung tool must still be abandoned at the deadline
+			// (signal.aborted latch at registration arms it).
+			const hangGate = gate();
+			const events: AgentEvent[] = [];
+			const controller = new AbortController();
+			const history: AgentMessage[] = [];
+			const quick: Tool = {
+				name: "quick",
+				description: "settles instantly",
+				parameters: Type.Object({ message: Type.String() }),
+				async execute() {
+					return { output: "q" };
+				},
+			};
+			const stuck: Tool = {
+				name: "postgate",
+				description: "hangs after a gate that spans the abort",
+				parameters: Type.Object({ message: Type.String() }),
+				async execute() {
+					await new Promise<void>(() => {});
+					return { output: "never" };
+				},
+			};
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["quick", "postgate"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [quick, stuck],
+				history,
+				userMessage: "go",
+				signal: controller.signal,
+				onEvent: (e) => events.push(e),
+				onToolCall: (call) => {
+					if (call.name === "postgate") return hangGate.promise.then(() => undefined);
+					return undefined;
+				},
+			});
+			await vi.advanceTimersByTimeAsync(0); // quick settles; postgate awaits its gate
+			controller.abort(); // fires inside the gate await (registry empty)
+			hangGate.resolve();
+			await vi.advanceTimersByTimeAsync(10_500); // grace deadline passes
+			const result = await pending;
+			expect(result.stopReason).toBe("aborted");
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults.map((r) => r.toolName)).toEqual(["quick", "postgate"]);
+			expect(historyResults[1]?.isError).toBe(true);
+			expect(historyResults[1]?.content).toContain("did not respond to the interrupt");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("mixed batch: responsive siblings settle normally, only the hung one is abandoned (test 5)", async () => {
+		vi.useFakeTimers();
+		try {
+			const events: AgentEvent[] = [];
+			const controller = new AbortController();
+			const history: AgentMessage[] = [];
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["ok1", "stuck", "ok2"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [delayTool("ok1", 5), hangTool("stuck"), delayTool("ok2", 5)],
+				history,
+				userMessage: "go",
+				signal: controller.signal,
+				onEvent: (e) => events.push(e),
+			});
+			await vi.advanceTimersByTimeAsync(20); // both ok tools settle naturally
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(10_500);
+			const result = await pending;
+			expect(result.stopReason).toBe("aborted");
+			const settled = events.flatMap((e) => (e.type === "tool_settled" ? [e.result] : []));
+			expect(
+				settled
+					.filter((r) => r.isError !== true)
+					.map((r) => r.toolName)
+					.sort(),
+			).toEqual(["ok1", "ok2"]);
+			const abandoned = settled.filter((r) => r.isError === true);
+			expect(abandoned.map((r) => r.toolName)).toEqual(["stuck"]);
+			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+			expect(historyResults.map((r) => r.toolCallId)).toEqual(["c1", "c2", "c3"]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

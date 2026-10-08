@@ -949,6 +949,55 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 		}
 	});
 
+	it("gate hang is out of grace scope: a gate await that never resolves suspends the run even after abort (§2.5 pin)", async () => {
+		vi.useFakeTimers();
+		try {
+			// A tool_call handler that NEVER resolves: the gate await — not the
+			// execution — is what hangs. Grace deliberately does not cover this
+			// (design §2.5); the exit is the user's second Ctrl+C. This PINS
+			// current behavior (run stays suspended, tool never executes) so a
+			// future scope change is a conscious act, not a silent drift.
+			const registry = new ExtensionRegistry({ report: () => {} });
+			registry.beginExtension("guardian", "project");
+			// subscribe() takes handler: unknown — a never-settling promise is
+			// the gate hang under test, no cast needed.
+			registry.subscribe("tool_call", () => new Promise(() => {}));
+			registry.commitExtension();
+			const ran: string[] = [];
+			const tool: Tool = {
+				name: "gated",
+				description: "its gate never resolves",
+				parameters: Type.Object({}),
+				concurrencySafe: true,
+				async execute() {
+					ran.push("gated");
+					return { output: "unreachable" };
+				},
+			};
+			const controller = new AbortController();
+			const pending = runAgentLoop({
+				provider: scriptedProvider([calls(["gated"]), finalText]),
+				model: "m",
+				system: "",
+				tools: [tool],
+				history: [],
+				userMessage: "go",
+				signal: controller.signal,
+				onToolCall: (call) => registry.emitToolCall({ type: "tool_call", ...call }),
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			// Far past any grace window: the gate await still holds — grace
+			// never fires for it, the run never settles.
+			await vi.advanceTimersByTimeAsync(60_000);
+			const settled = await Promise.race([pending.then(() => true), Promise.resolve(false)]);
+			expect(settled).toBe(false); // still suspended — the pinned boundary
+			expect(ran).toEqual([]); // the tool never executed
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("mixed batch: responsive siblings settle normally, only the hung one is abandoned (test 5)", async () => {
 		vi.useFakeTimers();
 		try {

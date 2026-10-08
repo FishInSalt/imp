@@ -263,14 +263,20 @@ loop 层(loop-concurrency.test.ts 新 describe):
    记档:哨兵只对"纯 Promise 挂死"形状成立;真实 bash 子进程管道句柄
    自身保活,unref 对其无害——钉住的是 §6b.1 原案形状。窗口期内若仍
    有其他句柄(provider 连接池等)由 6c.1 实验顺带发现,不加第二个
-   fixture。
+   fixture。**若实验发现窗口内确有第二个 ref'd 句柄**:优先让 fixture
+   provider 以 `Connection: close` 应答消除之;无法消除则降级哨兵声明
+   为"仅纯 Promise 形状、句柄清点见实验记录",并同步改 6c.4 红线措辞
+   (哨兵失效必须显式记档,不允许静默作废)。
 2. **claim 握手**:`execute()` 入口写 marker 文件,runner 轮询到 marker
    再发 SIGINT(有界轮询,超时即失败退出)——消除"信号落在 claim 前"
-   的良性竞态(判读表旧第五行),保证测的确实是"工具在途"场景。
+   的良性竞态(round-1 评审所列 claim 前竞态组合,现判读表第 3 行),
+   保证测的确实是"工具在途"场景。
 3. **架构**(评审 MINOR-2):fixture 在 vitest 进程内用 `createCliFixture()`
    构建(拷贝安装、env allowlist、本地 catalog 铆扎、网络封锁),经 argv
    传给 plain-node RUNNER;RUNNER 只负责 spawn CLI 子进程 + 发信号 +
-   收集 verdict。不在 RUNNER 字符串里复刻 allowlist 逻辑。
+   收集 verdict。不在 RUNNER 字符串里复刻 allowlist 逻辑。direct 血统的
+   独立基线无 vitest 宿主,用仓库既有 tsx devDependency 驱动的小 harness
+   导入 createCliFixture 构建后传 argv——不得退回手工拼环境。
 4. **仪器不自毁数据**(评审 MINOR-3):重基线化以独立脚本运行 RUNNER
    (bash 硬超时),result.json 落在仓库外临时目录、判读后再清理;测试
    外壳的 `finally rmSync` 之前,失败路径先把 result.json 复制到测试
@@ -315,8 +321,10 @@ run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记
 ### 6c.2 工作项 2:e2e 恢复包
 
 1. **hermetic 化**:已并入 6c.0/6c.1(顺序前置,评审 MAJOR-2)。
-2. **un-skip**:依 6c.1 判读——第 1 行直接翻 `it.skip`;第 2 行修好再翻;
-   第 6 行挂起(升级路径);血统分歧按表外协议处置。
+2. **un-skip**:依 6c.1 判读——第 1 行直接翻 `it.skip`;第 2 行修好再翻
+   (超时间盒则单开小批);**第 4 行同第 2 行处置**(宽限链完整但 run 后
+   进程悬是真缺陷类,修好再翻);第 3/5 行为仪器问题,修仪器后重判读再
+   定;第 6 行挂起(升级路径);血统分歧按表外协议处置。
 3. **unref 哨兵**:un-skip 后的 e2e 即钉住"计时器不许 unref"(因果链见
    6c.0 第 1 条,哨兵 = stderr "did not respond" 断言)。测试内注释写明
    这条因果链,防后人看不懂 e2e 为何同时是 unref 回归的哨兵。不为此新建
@@ -336,7 +344,7 @@ run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记
 | 扩展 `tool_call` 门禁挂死 | Ctrl+C / exit 130 / 同左 | §2.5 | 记档核对;**补一条 loop 层现状钉子**(gate await 不受宽限保护,fake-timer 一行) |
 | 嵌套双重死角(子 gate 挂死 + 子时钟耗尽) | Ctrl+C / exit 130 / 同左 | §2.6 | 记档核对,缺则补 |
 | **MCP connect/registry 加载期挂死**(评审 MAJOR-3 补;cli.ts `createMcpSetup` 在 runTurn 前,首 Ctrl+C 未必能解开 connectAll 的 await) | 待清点 | 无(缺档) | 本批记档出口;若出口不明,单记待查,不恋战 |
-| 无 abort 纯挂死 | 等(设计不设机制) | §4 | 记档核对 |
+| 无 abort 纯挂死 | 等(设计不设机制) | §4;sliding-window 设计 §2 non-goal 6(loop 级单调用 hang 兜底) | 记档核对 |
 
 ### 6c.4 测试与验收
 
@@ -360,6 +368,17 @@ run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记
 - **时间盒**:总计 ≤ 半个工作日当量;任一工作项超出即停下来汇报。
 
 ## 7. Review log
+
+**§6c 计划 — Round 1(独立对抗评审,新上下文,2026-10-08),NEEDS-FIXES。**
+11 项:BLOCKER-1(unref 哨兵被 fixture 保活句柄掩蔽,零断言会红)、
+MAJOR-1(判读表不穷尽/无血统列/无 claim 握手)、MAJOR-2(顺序应倒排:
+先 hermetic 再测基线)、MAJOR-3(清点表不可操作/漏 MCP connect 行/
+出口未按模式拆)+ MINOR-1..4 + NIT-1..3。rev 2(6ea8caf)全部折叠。
+
+**§6c 计划 — Round 2(同评审员复核,2026-10-08),APPROVE。**
+11 项全部实质闭合;残留 R1(本节审计轨迹)、R2(6c.2 补第 3/4/5 行
+处置映射)、R3(哨兵失效分支预定义动作)+ NIT-1..3,要求随本轮折叠
+落盘后动工。R1/R2/R3/NIT 已随本 commit 折叠(见 §6c rev 2 内嵌)。
 
 **Round 1 — 独立对抗评审(新上下文,2026-10-08),verdict NEEDS-FIXES。**
 架构方向(宽限窗 + race + 前缀冲刷 + fillMissing 分工)被确认正确;排序

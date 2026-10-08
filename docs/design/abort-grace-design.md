@@ -403,6 +403,14 @@ MAJOR-1(判读表不穷尽/无血统列/无 claim 握手)、MAJOR-2(顺序应倒
 处置映射)、R3(哨兵失效分支预定义动作)+ NIT-1..3,要求随本轮折叠
 落盘后动工。R1/R2/R3/NIT 已随本 commit 折叠(见 §6c rev 2 内嵌)。
 
+**实施 — 独立代码评审(新上下文,2026-10-08),APPROVE-TO-MERGE。**
+四项 MINOR 已折叠(1ae3e6b):基线仪器纳入 tsconfig.test 覆盖、e2e 失败
+路径保全完整 verdict 与 artifacts、验收数字改 143/3025、两处措辞。
+MINOR-1(commit 叙事:hermetic 重建与 un-skip 同 commit 落地、message 尾注
+"still skip" 与 diff 不符、un-skip 先于判读确认一步)如实记档:终态双血统
+判读表第 1 行已由 cd82ec2 确认,历史不重写。评审员独立实测 e2e
+dt=10018ms,与设计记录一致;哨兵因果链、gate 钉子无假阳性论证被确认。
+
 **Round 1 — 独立对抗评审(新上下文,2026-10-08),verdict NEEDS-FIXES。**
 架构方向(宽限窗 + race + 前缀冲刷 + fillMissing 分工)被确认正确;排序
 担忧(§5.3)经独立论证关闭。5 MAJOR 全部折叠:

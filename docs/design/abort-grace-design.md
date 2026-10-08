@@ -4,7 +4,7 @@ Batch: `feat/abort-grace`. Base: `main@83e7f9d`.
 
 ## 0. Status
 
-DESIGN DRAFT — 待独立评审(对抗性、新上下文)。
+DESIGN REV 2 — round 1 findings folded (见 §7)。待 round 2 复核。
 
 ## 1. Problem
 
@@ -185,4 +185,27 @@ loop 层(loop-concurrency.test.ts 新 describe):
 
 ## 7. Review log
 
-(待评审)
+**Round 1 — 独立对抗评审(新上下文,2026-10-08),verdict NEEDS-FIXES。**
+架构方向(宽限窗 + race + 前缀冲刷 + fillMissing 分工)被确认正确;排序
+担忧(§5.3)经独立论证关闭。5 MAJOR 全部折叠:
+
+- MAJOR-1(写者二义/resolve 值未定义):§2.1 重写为单写者——registry
+  条目携带 deferred+synthesize,resolve 值即合成结果对象,worker 唯一
+  写 settled[index];计时器只 resolve+记日志。
+- MAJOR-2(晚 settle 守卫是幻影路径):§2.1 改为显式输家处置
+  (fire-and-forget 观测位 + 真 settle 记日志丢弃)+ 声明 runTool 永不
+  reject 为承载不变量;原测试 2 改为断言输家无 unhandledRejection 与
+  日志行。
+- MAJOR-3(gate 挂死破不变量):新增 §2.5 范围声明——收窄到工具执行,
+  门禁挂死仍由二次 Ctrl+C 出口;门禁移入 worker 被否(推翻滑动窗口既定
+  不变量)。
+- MAJOR-4(计时器挂住 print 退出):§2.1 钉死——registry 非空才创建、
+  创建即 unref、finally clear。
+- MAJOR-5(exit code 130 前提为假):§2.3 更正——单 SIGINT resolve-0
+  语义不变,测试 7 断言 0;fixture 需新增投递 SIGINT 能力。
+
+MINOR 折叠:MINOR-1(stderr 日志先例);MINOR-2(嵌套信号形态更正:
+无 AbortSignal.any,子超时会武装宽限——§2.6 记档);MINOR-3(settle
+路径名更正,结论"无新状态"被核实);MINOR-4(删除失实的健康监测器类
+比)。NIT 折叠:零输出字节差别措辞、红基线配 fake timers、registry
+条目携带 index。

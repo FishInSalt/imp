@@ -126,7 +126,7 @@ describe("tool concurrency (M5b design §6)", () => {
 		expect(result.stopReason).toBe("completed");
 	});
 
-	it("chunk cap 5: the 6th call starts only after a slot frees", async () => {
+	it("sliding window: every tool_start pre-issued; the 6th runs only when a slot frees, then immediately", async () => {
 		const gates = Array.from({ length: 6 }, () => gate());
 		const events: AgentEvent[] = [];
 		const tools = gates.map((g, i) => holdTool(`t${i + 1}`, g));
@@ -140,16 +140,18 @@ describe("tool concurrency (M5b design §6)", () => {
 			userMessage: "go",
 			onEvent: (e) => events.push(e),
 		});
-		await waitUntil(() => events.filter((e) => e.type === "tool_start").length === 5);
-		await new Promise((r) => setTimeout(r, 20));
-		expect(events.filter((e) => e.type === "tool_start")).toHaveLength(5); // 6th queued
-		// Wave semantics (design §6): chunks are fixed waves of 5, not a rolling
-		// slot pool — freeing ONE call does not start the 6th.
-		gates[0]?.resolve();
-		await new Promise((r) => setTimeout(r, 30));
-		expect(events.filter((e) => e.type === "tool_start")).toHaveLength(5);
-		for (const g of gates.slice(1)) g.resolve();
+		// #sliding-window phase 1 pre-issues tool_start for the WHOLE run — the
+		// queued 6th call is visible from the start (wave semantics retired).
 		await waitUntil(() => events.filter((e) => e.type === "tool_start").length === 6);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(events.filter((e) => e.type === "tool_running")).toHaveLength(5); // cap 5
+		expect(events.some((e) => e.type === "tool_running" && e.toolCallId === "c6")).toBe(false);
+		// Window semantics: freeing ONE slot immediately admits the queued head
+		// in call order (the 6th), with tool_running fired before its execution.
+		gates[0]?.resolve();
+		await waitUntil(() => events.some((e) => e.type === "tool_running" && e.toolCallId === "c6"));
+		await new Promise((r) => setTimeout(r, 30));
+		expect(events.filter((e) => e.type === "tool_running")).toHaveLength(6);
 		for (const g of gates.slice(1)) g.resolve();
 		await pending;
 		const order = events
@@ -473,5 +475,180 @@ describe("#tool-settle: calls that never ran", () => {
 		expect(ends.map((r) => r.toolCallId)).toEqual(["bad", "good"]);
 		expect(ends[0]?.durationMs).toBeUndefined();
 		expect(ends[0]?.isError).toBe(true);
+	});
+});
+
+describe("#sliding-window", () => {
+	it("convoy relief: [60, 10x6] finishes near the straggler, not wave-delayed (test 1)", async () => {
+		// Injected fake clock: the loop's clock() is only consulted around
+		// plan.run, so durationMs reflects each call's own runtime. Total wall
+		// time is asserted via the 6th call's tool_running arriving BEFORE the
+		// 1st call's tool_end — impossible under waves (wave 2 waits for the
+		// straggler), required under the window (a slot frees at t=10).
+		const gates = Array.from({ length: 7 }, () => gate());
+		const events: AgentEvent[] = [];
+		const tools = gates.map((g, i) => holdTool(`t${i + 1}`, g));
+		const history: AgentMessage[] = [];
+		const pending = runAgentLoop({
+			provider: scriptedProvider([calls(tools.map((t) => t.name)), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+		});
+		await waitUntil(() => events.filter((e) => e.type === "tool_start").length === 7);
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 5);
+		// t2..t5 finish (slots free); the 6th and 7th claims must start while
+		// t1 (the straggler) is still running.
+		for (const g of gates.slice(1, 5)) g.resolve();
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 7);
+		const stragglerEnd = events.findIndex((e) => e.type === "tool_end" && e.result.toolName === "t1");
+		const sixthRun = events.findIndex((e) => e.type === "tool_running" && e.toolCallId === "c6");
+		expect(stragglerEnd).toBe(-1); // t1 not finished yet
+		expect(sixthRun).toBeGreaterThan(-1);
+		gates[0]?.resolve();
+		for (const g of gates.slice(5)) g.resolve();
+		await pending;
+		const order = events
+			.filter((e) => e.type === "tool_end")
+			.map((e) => (e as { result: { toolName: string } }).result.toolName);
+		expect(order).toEqual(["t1", "t2", "t3", "t4", "t5", "t6", "t7"]);
+	});
+
+	it("prefix flush: completion [b,a,c] emits tool_end [a,b,c]; b's end waits for a (test 3)", async () => {
+		const ga = gate();
+		const gb = gate();
+		const gc = gate();
+		const events: AgentEvent[] = [];
+		const tools = [holdTool("a", ga), holdTool("b", gb), holdTool("c", gc)];
+		const history: AgentMessage[] = [];
+		const pending = runAgentLoop({
+			provider: scriptedProvider([calls(["a", "b", "c"]), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+		});
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 3);
+		gb.resolve(); // b settles first: settle event yes, tool_end NO (cursor blocked at a)
+		await new Promise((r) => setTimeout(r, 30));
+		expect(events.some((e) => e.type === "tool_settled" && e.result.toolName === "b")).toBe(true);
+		expect(events.some((e) => e.type === "tool_end" && e.result.toolName === "b")).toBe(false);
+		ga.resolve(); // a settles: prefix [a,b] flushes in call order
+		await waitUntil(() => events.some((e) => e.type === "tool_end" && e.result.toolName === "b"));
+		const endsAfterA = events
+			.filter((e) => e.type === "tool_end")
+			.map((e) => (e as { result: { toolName: string } }).result.toolName);
+		expect(endsAfterA).toEqual(["a", "b"]);
+		gc.resolve();
+		await pending;
+		const order = events
+			.filter((e) => e.type === "tool_end")
+			.map((e) => (e as { result: { toolName: string } }).result.toolName);
+		expect(order).toEqual(["a", "b", "c"]);
+	});
+
+	it("event order: all tool_starts precede any tool_running; tool_running precedes its tool_end (test 4)", async () => {
+		const events: AgentEvent[] = [];
+		const tools = Array.from({ length: 7 }, (_, i) => delayTool(`d${i + 1}`, 5 + i));
+		await runAgentLoop({
+			provider: scriptedProvider([calls(tools.map((t) => t.name)), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history: [],
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+		});
+		const firstRunning = events.findIndex((e) => e.type === "tool_running");
+		const lastStart = events.map((e) => e.type).lastIndexOf("tool_start");
+		expect(firstRunning).toBeGreaterThan(lastStart);
+		for (const id of ["c1", "c2", "c3", "c4", "c5", "c6", "c7"]) {
+			const runIdx = events.findIndex((e) => e.type === "tool_running" && e.toolCallId === id);
+			const endIdx = events.findIndex((e) => e.type === "tool_end" && e.result.toolCallId === id);
+			expect(runIdx).toBeGreaterThan(-1);
+			expect(endIdx).toBeGreaterThan(runIdx);
+		}
+	});
+
+	it("queued time excluded from durationMs (test 6)", async () => {
+		// 6 calls; the 6th queues behind 5 gated siblings. Injected clock only
+		// ticks while plan.run is awaited (before/after), so the 6th's
+		// durationMs measures its own 5-tick run — not the queue wait.
+		const gates = Array.from({ length: 5 }, () => gate());
+		const events: AgentEvent[] = [];
+		const held = gates.map((g, i) => holdTool(`h${i + 1}`, g));
+		const delayed = delayTool("d6", 0);
+		const tools = [...held, delayed];
+		const history: AgentMessage[] = [];
+		const pending = runAgentLoop({
+			provider: scriptedProvider([calls(tools.map((t) => t.name)), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+		});
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 5);
+		await new Promise((r) => setTimeout(r, 50)); // the 6th queues through this window
+		for (const g of gates) g.resolve();
+		await pending;
+		const settled = events.find((e) => e.type === "tool_settled" && e.result.toolCallId === "c6");
+		expect(settled).toBeDefined();
+		expect((settled as { result: { durationMs?: number } }).result.durationMs).toBeLessThan(50); // ~0: queue wait excluded
+	});
+
+	it("abort mid-window: claimed calls settle+flush; queued calls get synthesized results only (test 5)", async () => {
+		const gates = Array.from({ length: 7 }, () => gate());
+		const events: AgentEvent[] = [];
+		const tools = gates.map((g, i) => holdTool(`t${i + 1}`, g));
+		const controller = new AbortController();
+		const history: AgentMessage[] = [];
+		const pending = runAgentLoop({
+			provider: scriptedProvider([calls(tools.map((t) => t.name)), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history,
+			userMessage: "go",
+			signal: controller.signal,
+			onEvent: (e) => events.push(e),
+		});
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 5);
+		controller.abort(); // holdTools honor the signal and settle
+		await pending;
+		// All 7 tool_starts pre-issued; 5 tool_runnings; the queued 6th/7th
+		// never ran and emit no tool_settled. tool_end events: the claimed five
+		// only — synthesized results enter history but never fire events (the
+		// existing synthesis contract).
+		expect(events.filter((e) => e.type === "tool_start")).toHaveLength(7);
+		expect(events.filter((e) => e.type === "tool_running")).toHaveLength(5);
+		expect(events.filter((e) => e.type === "tool_settled")).toHaveLength(5);
+		const ends = events.flatMap((e) => (e.type === "tool_end" ? [e.result] : []));
+		expect(ends.map((r) => r.toolCallId)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+		// History carries ALL SEVEN results — claimed five computed, queued two
+		// synthesized — keeping the session resumable (tool_use→tool_result pairs).
+		const historyResults = history
+			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
+			.flatMap((turns) => turns);
+		expect(historyResults.map((r) => r.toolCallId)).toEqual([
+			"c1",
+			"c2",
+			"c3",
+			"c4",
+			"c5",
+			"c6",
+			"c7",
+		]);
+		const interrupted = historyResults.filter((r) => r.content === "(interrupted before this tool ran)");
+		expect(interrupted.map((r) => r.toolCallId)).toEqual(["c6", "c7"]);
+		// Claimed-but-aborted calls keep their computed results (holdTool returns output).
+		for (const id of ["c1", "c2", "c3", "c4", "c5"])
+			expect(historyResults.find((r) => r.toolCallId === id)?.isError).toBe(false);
 	});
 });

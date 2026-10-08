@@ -4,8 +4,10 @@ Batch: `feat/sliding-window-concurrency`. Base: `main@f7f040e`.
 
 ## 0. Status
 
-DESIGN REV 2 — round 1 findings folded; round 2: 9/9 closed, residuals
-folded（见 §8）。可进入实现。
+SHIPPED — 设计评审关闭后实现于分支 feat/sliding-window-concurrency
+（c2a8bb8 重命名 / b5c0312 loop 滑动窗口 / b0b16dc 排队可见性）。
+门禁：142 文件 3015 测试、lint 0、typecheck 双配置 0、build 0。
+待实现后代码评审 + 合入 main（--no-ff）。
 
 ## 1. Problem
 

@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
-import { MAX_CONCURRENT_TASKS } from "./constants.js";
+import { MAX_CONCURRENT_SAFE_CALLS } from "./constants.js";
 import type { HealthSignal } from "./health.js";
 import {
 	type AgentMessage,
@@ -434,7 +434,7 @@ interface ToolCallRef {
  *
  * Non-safe tools run strictly serially — the exact pre-M5b path. Maximal runs
  * of consecutive concurrency-safe calls run as chunks of up to
- * MAX_CONCURRENT_TASKS: gates evaluate serially in call order first
+ * MAX_CONCURRENT_SAFE_CALLS: gates evaluate serially in call order first
  * (deterministic, non-interleaved extension state), then the approved subset
  * executes concurrently, then tool_end fires in call order with all results
  * in hand — byte-stable output regardless of completion timing. A finished
@@ -468,10 +468,10 @@ async function executeToolBatch(
 			run.push(toolCalls[i] as ToolCallRef);
 			i++;
 		}
-		for (let c = 0; c < run.length; c += MAX_CONCURRENT_TASKS) {
+		for (let c = 0; c < run.length; c += MAX_CONCURRENT_SAFE_CALLS) {
 			if (signal?.aborted) return; // later chunks never start; fillMissing closes them
 			await executeChunk(
-				run.slice(c, c + MAX_CONCURRENT_TASKS),
+				run.slice(c, c + MAX_CONCURRENT_SAFE_CALLS),
 				toolMap,
 				signal,
 				onToolCall,

@@ -347,6 +347,26 @@ run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记
 | **MCP connect/registry 加载期挂死**(评审 MAJOR-3 补;cli.ts `createMcpSetup` 在 runTurn 前,首 Ctrl+C 未必能解开 connectAll 的 await) | 待清点 | 无(缺档) | 本批记档出口;若出口不明,单记待查,不恋战 |
 | 无 abort 纯挂死 | 等(设计不设机制) | §4;sliding-window 设计 §2 non-goal 6(loop 级单调用 hang 兜底) | 记档核对 |
 
+### 6c.3a 挂死场景清点结果(2026-10-08,本批产出)
+
+| 场景 | 出口(REPL/print/headless) | 核对节 | 本批动作 |
+|---|---|---|---|
+| abort 时在途工具不理信号 | 宽限合成,一次退出(全模式) | §6 计划 1/2 | 已覆盖(loop test 1/2/3/5) |
+| chunk worker 池 / 前缀冲刷(abort 时) | 同上 | §6 计划 1/5 | 已覆盖(loop test 1/5) |
+| 扩展 `tool_call` 门禁挂死 | 二次 Ctrl+C / 二次 SIGINT→exit 130 / 同左 | §2.5 | **已补现状钉子**(loop 层,gate await 不受宽限保护,26 测试之一) |
+| 嵌套双重死角(子 gate 挂死 + 子时钟耗尽) | Ctrl+C / exit 130 / 同左 | §2.6 | 记档已核对完整,无动作 |
+| MCP connect/registry 加载期挂死 | 待查(见 §6c.3b) | §6c.3b | 本批记档 |
+| 无 abort 纯挂死 | 等(设计不设机制) | §4;sliding-window §2 non-goal 6 | 记档已核对完整,无动作 |
+
+### 6c.3b MCP 连接期挂死——记档(本批不修,判据:出口现状未验证)
+
+`createMcpSetup`/`connectAll` 发生在 runTurn 之前(cli.ts);首次 Ctrl+C 的
+abort controller 是否能解开 connectAll 的 await 取决于其内部是否消费 signal
+——**未验证**。若挂死:REPL 出口为二次 Ctrl+C forceExit;print 出口为二次
+SIGINT(SIGINT handler 直接 process.exit(130),不等待 run)。宽限(§2.5)不
+覆盖此阶段,属设计范围外。**后续批次若要收口,先验证 connectAll 是否透传
+signal,再决定是否单独立项。**
+
 ### 6c.4 测试与验收
 
 - 全量门禁:全量 vitest(**un-skip 后预期 143 文件 / 3024 测试**,

@@ -205,17 +205,18 @@ loop 层(loop-concurrency.test.ts 新 describe):
    活性来源);"不滞留"由 finally clear 保证。教训:评审建议的 unref 方向
    在本场景恰好是错的——它防的是"多余句柄拖住退出",但这里句柄正是用来
    撑住等待的。
-2. **保活句柄 × SIGINT 的未解竞态(未解,e2e 因此 skip)**:给挂死工具加
-   一个 ref'd `setInterval`(模拟真实工具的在途 IO)后,SIGINT 后进程**完全
-   不响应**——无 interrupt 行、宽限不武装、进程活到外部强杀;direct shell
-   与 vitest 血统**同样失败**,排除了测试基建因素。而无保活版本则是进程在
-   SIGINT 前 drain-exit(设计边界)。两者合并的含义:此前所有"成功"验证
-   (SIGINT→10s→宽限→exit 0)依赖的时序窗口是:信号在 drain 前、且无其他
-   ref'd 句柄。真实场景(bash 子进程、MCP socket 保活)落在哪一侧**未经
-   验证**。怀疑方向:Node 信号回调需要事件循环的检查点,纯 interval 空转 +
-   挂死 await 的形状可能无限推迟信号处理;需要在受控环境(如 Linux VM)用
-   strace/dtrace 级工具定位。**后续批次必须先解此题,再考虑扩大
-   concurrencySafe 名单**——若信号处理本身不可靠,宽限的地基不稳。
+2. **保活句柄 × SIGINT 的未解竞态(已解——系坏 fixture 假象,§6c.1
+   重基线化,2026-10-08)**:原始观察("挂死工具带保活 interval 时 SIGINT
+   后进程完全不响应")产生自 round-2 MAJOR-1 证明已坏的 fixture(模块级
+   interval 永不清除 → 子进程按构造不可能退出;stdout 被丢弃 → interrupt
+   行无观测通道)。**§6c 后续批用修订 fixture(保活随工具自身 abort 释放 +
+   claim 握手 + 双流捕获 + hermetic 环境)重测:direct 与 vitest 双血统均
+   判读表第 1 行**——code=0、dt≈10.02s、stdout 有 interrupt 行、stderr 有
+   abandoning 行,宽限完整工作。"interval 空转推迟信号处理"的怀疑方向已被
+   静态证伪(同形状普通 node 子进程正常响应);真实场景(bash 管道、MCP
+   socket)虽未逐一实测,但机制疑云已除——扩大 concurrencySafe 名单的
+   前置已满足。unref 哨兵经变异验证(加回 `.unref()` ⇒ e2e stderr 断言
+   红、dt=21ms drain-exit,恢复后绿)。
 3. 附带发现(测试基建):vitest worker thread 血统下 spawn 的 CLI 子进程,
    信号行为与 direct 不同(普通 node 子进程不受影响);e2e 采用中间
    plain-node runner + sh 跳转亦未绕开。与问题 2 的相对权重未定,但 e2e

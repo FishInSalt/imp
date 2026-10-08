@@ -242,83 +242,121 @@ loop 层(loop-concurrency.test.ts 新 describe):
 ## 6c. 后续小批计划:§6b.2 重基线化 + e2e 恢复 + 挂死场景清点(2026-10-08)
 
 本节是三个遗留项(§6b.2 重基线化、e2e 恢复包、挂死场景清点)的工作计划,
-作为独立小批执行,目标产出:①对 §6b.2 的可信结论;②e2e 从 `it.skip`
-恢复为真实运行的门禁;③挂死场景清单的核对与测试补齐。**先决条件:本节
-计划须过独立对抗评审后才动工。**
+作为独立小批执行。**先决条件:本计划须过独立对抗评审后才动工**
+(已完成,一轮 NEEDS-FIXES,本版为折叠后 rev 2;见 §7)。
+
+执行顺序(评审 MAJOR-2 倒排):**先 hermetic 化,再重基线化,再 un-skip**
+——基线结论必须测在门禁将来运行的同一配置上,否则不构成解释。
+
+### 6c.0 fixture 形状修订(评审 BLOCKER-1 + MAJOR-1)
+
+重基线化与 e2e 恢复共用同一 fixture,先行修订:
+
+1. **保活句柄改为 abort 时释放**:hangtool 的 `execute(record, signal)`
+   内建立 `setInterval` 并挂 `signal.addEventListener("abort", () =>
+   clearInterval(io))`,`run_end` 清除保留作 backstop。效果:abort 前
+   interval 保活(信号可达);**宽限窗口内 grace timer 是唯一 ref'd
+   句柄**——unref 回归 ⇒ drain-exit ⇒ stderr 两条断言红。no-unref 决策
+   的前提(loop.ts 注释:"挂死执行只持一个 await")由此成立。
+   **哨兵职责明确落在 stderr 的 "did not respond" 断言上**(code===0 与
+   stdout interrupt 断言在 drain-exit 下仍会绿,不承担哨兵)。
+   记档:哨兵只对"纯 Promise 挂死"形状成立;真实 bash 子进程管道句柄
+   自身保活,unref 对其无害——钉住的是 §6b.1 原案形状。窗口期内若仍
+   有其他句柄(provider 连接池等)由 6c.1 实验顺带发现,不加第二个
+   fixture。
+2. **claim 握手**:`execute()` 入口写 marker 文件,runner 轮询到 marker
+   再发 SIGINT(有界轮询,超时即失败退出)——消除"信号落在 claim 前"
+   的良性竞态(判读表旧第五行),保证测的确实是"工具在途"场景。
+3. **架构**(评审 MINOR-2):fixture 在 vitest 进程内用 `createCliFixture()`
+   构建(拷贝安装、env allowlist、本地 catalog 铆扎、网络封锁),经 argv
+   传给 plain-node RUNNER;RUNNER 只负责 spawn CLI 子进程 + 发信号 +
+   收集 verdict。不在 RUNNER 字符串里复刻 allowlist 逻辑。
+4. **仪器不自毁数据**(评审 MINOR-3):重基线化以独立脚本运行 RUNNER
+   (bash 硬超时),result.json 落在仓库外临时目录、判读后再清理;测试
+   外壳的 `finally rmSync` 之前,失败路径先把 result.json 复制到测试
+   临时目录并 console.error 全文。runner 超时路径补 `dt=` 时长
+   (评审 NIT-2)。
 
 ### 6c.1 工作项 1:§6b.2 重基线化(信任测量,再下结论)
 
-**为什么**:§6b.2 的原始观察(保活句柄下 SIGINT 完全无响应)是用 round-2
-证明已坏的 fixture 测的,证据基座大部分是仪表假象;真实机制未知。真实
-工具(bash 管道、MCP socket、fetch)执行期恰持有保活句柄——结论直接决定
-宽限在现实场景是否可靠。
+**为什么**:§6b.2 的原始观察是用 round-2 证明已坏的 fixture 测的,证据
+基座大部分是仪表假象;真实机制未知。真实工具(bash 管道、MCP socket、
+fetch)执行期恰持有保活句柄——结论直接决定宽限在现实场景是否可靠。
 
-**方法**:用当前已修好的 fixture(运行期保活 + 双流捕获)直接运行
-`test/cli-abort-grace.test.ts` 的 runner——它**本身就是**重基线化实验:
-SIGINT 后有界等待(30s),记录四象限(stdout interrupt 行 × stderr
-abandoning 行)与退出码。判读表(评审 round 2 留下):
+**方法**:在 hermetic 配置(6c.0)上以独立脚本运行 RUNNER——它本身就是
+重基线化实验:claim 握手后 SIGINT,30s 有界等待,记录 stdout/stderr/
+exit code/时长。**双血统各测一次**(direct 与 vitest),判读表带血统列。
 
-| stdout interrupt | stderr abandoning | exit code | 结论 |
-|---|---|---|---|
-| 有 | 有 | 0 | 宽限完整工作(§6b.2 关闭) |
-| 有 | 无 | ≠0 或超时 | handler 跑了,宽限链断裂(真 bug) |
-| 无 | 无 | 0 | 进程在信号前 drain-exit(边界,记档) |
-| 无 | 无 | 超时 | 真信号投递问题(升级处理) |
+**判读表**(评审 MAJOR-1 补全;血统列:门禁以 vitest 血统为准,direct
+仅作机理参照;两血统结论不一致时不映射任何行,单记"血统分歧"条目,
+按原始 JSON 人工判读):
+
+| # | stdout interrupt | stderr abandoning | exit | 血统 | 结论 → 动作 |
+|---|---|---|---|---|---|
+| 1 | 有 | 有 | 0 | 两者一致 | 宽限完整工作 → §6b.2 改记"已解——系坏 fixture 假象" |
+| 2 | 有 | 无 | ≠0 或超时 | — | handler 跑了,宽限链断裂(真 bug)→ 修复;**超时间盒 ⇒ 记录断裂点证据,修复单开小批**(评审 MINOR-1) |
+| 3 | 有 | 无 | 0 | — | 信号落在 claim 前/批顶 aborted 短路——claim 握手后应不可达;若出现,仪器问题优先排查 |
+| 4 | 有 | 有 | 超时 | — | 宽限链完整但 run 后进程悬(扩展 close/renderer/持久化)——与第 2 行不同诊断,单记 |
+| 5 | 无 | — | — | — | 观测通道异常(stdout 丢失 interrupt 行)——排查仪器,不下机制结论 |
+| 6 | 无 | 无 | 超时 | — | 真信号投递问题 → **升级路径**:挂起本批 e2e 恢复,单开批次专项排障(受控环境 + 系统级工具),本批只完成清点与记档 |
+| — | 其他任何组合 / 血统分歧 | | | | **表外协议:停下,按原始 JSON 人工判读,不自动映射** |
+
+旧第三行("信号前 drain-exit")在已修 fixture 下**不可达**(保活从
+run_start 起撑住循环,SIGINT 必然晚于 run_start)——保留为边界记档并
+加注"仅 run_start 前可达"(评审 NIT-3)。
 
 执行纪律(血泪教训,不可协商):**所有探针/runner 一律带硬超时**
-(bash timeout 参数),禁止无限自旋轮询、禁止无界等待;run-direct 与
-run-under-vitest 双血统各测一次;每轮实验后 `pkill -f hangtool` 清理。
+(bash timeout 参数),禁止无限自旋轮询、禁止无界等待;每轮实验后
+`pkill -f hangtool` 清理。
 
-**判读规则**:若四象限为第一行(宽限完整),§6b.2 改记"已解——系坏
-fixture 假象";若为第二行,本批只修宽限链断裂点,不扩机制;第三行记
-边界;第四行触发升级路径(见 6c.3)。**无论哪种结果,均不修改
-`ABORT_GRACE_MS` 默认值与既有宽限语义**——本批是求证与门禁,不是改产品。
+**判读规则**:本批不修改 `ABORT_GRACE_MS` 默认值与既有宽限**语义设计**
+——缺陷修复(第 2 行)除外(评审 MINOR-1 措辞更正)。
 
-### 6c.2 工作项 2:e2e 恢复包(hermetic 化 + unref 钉子)
+### 6c.2 工作项 2:e2e 恢复包
 
-分三步,前一步的结论决定后一步的形态:
-
-1. **hermetic 化**(round-2 m3):e2e runner 改走 `createCliFixture`
-   (`test/helpers/cli-fixture.ts`)——拷贝安装而非引用仓库 bin/dist、
-   env 只留 allowlist + `NODE_OPTIONS` 网络封锁、`INK_CATALOG_BASE_URL`
-   铘扎本地。去除手工拼环境的部分。这一步无论 §6b.2 结论如何都做。
-2. **un-skip**:依 6c.1 判读——第一行结论直接翻 `it.skip` 为 `it`;
-   第二/四行则先修缺陷(修什么等评审定的范围),修好再翻。
-3. **unref 钉子**:un-skip 后的 e2e 即天然钉住"计时器不许 unref"
-   (unref 回归 ⇒ 进程在 10s 前 drain-exit ⇒ stdout/stderr 断言红)。
-   另补一个显式断言注释,把这条因果链写在测试里,防后人看不懂为何
-   e2e 同时是 unref 回归的哨兵。不为此新建单测(fake timers 建模不了
-   ref 语义,§6b.4 已记档)。
+1. **hermetic 化**:已并入 6c.0/6c.1(顺序前置,评审 MAJOR-2)。
+2. **un-skip**:依 6c.1 判读——第 1 行直接翻 `it.skip`;第 2 行修好再翻;
+   第 6 行挂起(升级路径);血统分歧按表外协议处置。
+3. **unref 哨兵**:un-skip 后的 e2e 即钉住"计时器不许 unref"(因果链见
+   6c.0 第 1 条,哨兵 = stderr "did not respond" 断言)。测试内注释写明
+   这条因果链,防后人看不懂 e2e 为何同时是 unref 回归的哨兵。不为此新建
+   单测(fake timers 建模不了 ref 语义,§6b.4 已记档)。
 
 ### 6c.3 工作项 3:挂死场景清点(审闭环节,不是新机制)
 
-逐场景核对"挂死后出口是什么",对便宜场景补测试,纯记档场景确认文档完整:
+逐场景核对"挂死后出口是什么"。每行产出可核对:应核对的设计节号 +
+一句"缺什么补什么"判据(评审 MAJOR-3)。"出口"按模式拆分(REPL:
+二次 Ctrl+C forceExit;print:二次 SIGINT → exit 130;headless:无键
+可按):
 
-| 场景 | 出口 | 本批动作 |
-|---|---|---|
-| abort 时在途工具不理信号 | 宽限合成(本批已实现) | 已覆盖,无动作 |
-| 门禁 handler 挍死(§2.5 范围外) | 用户 Ctrl+C | 确认记档完整 |
-| 嵌套双重死角(§2.6) | 用户 Ctrl+C | 确认记档完整 |
-| 无 abort 纯挂死 | 等(设计不设机制) | 确认记档完整 |
-| **升级路径**:若 6c.1 判读为第四行(真信号投递问题) | — | 挂起本批 e2e 恢复,单开批次专项排障(受控环境+系统级工具),本批只完成清点与记档 |
+| 场景 | 出口(REPL/print/headless) | 核对节 | 本批动作 |
+|---|---|---|---|
+| abort 时在途工具不理信号 | 宽限合成,一次退出 | §6 测试计划 1/2 | 已覆盖,无动作 |
+| chunk worker 池 / 前缀冲刷(abort 时) | 同上 | §6 测试计划 1/5 | 已覆盖(loop test 1/5),无动作 |
+| 扩展 `tool_call` 门禁挂死 | Ctrl+C / exit 130 / 同左 | §2.5 | 记档核对;**补一条 loop 层现状钉子**(gate await 不受宽限保护,fake-timer 一行) |
+| 嵌套双重死角(子 gate 挂死 + 子时钟耗尽) | Ctrl+C / exit 130 / 同左 | §2.6 | 记档核对,缺则补 |
+| **MCP connect/registry 加载期挂死**(评审 MAJOR-3 补;cli.ts `createMcpSetup` 在 runTurn 前,首 Ctrl+C 未必能解开 connectAll 的 await) | 待清点 | 无(缺档) | 本批记档出口;若出口不明,单记待查,不恋战 |
+| 无 abort 纯挂死 | 等(设计不设机制) | §4 | 记档核对 |
 
 ### 6c.4 测试与验收
 
-- 全量门禁:142 文件 / 3023+ 测试 + e2e(预期恢复后 3024+)、biome、双
-  tsconfig、build,全绿。
-- 判读表四行各有归宿:结论(§6b.2 改记) + 门禁(e2e)或挂起理由。
+- 全量门禁:全量 vitest(**un-skip 后预期 143 文件 / 3024 测试**,
+  评审 NIT-1)、biome、双 tsconfig、build,全绿。
+- 判读表每行有归宿:结论(§6b.2 改记)+ 门禁(e2e)或挂起理由。
 - 交付物:①§6b.2 结论;②恢复的 e2e(或挂起说明);③清点表落进设计
   文档;④孤儿进程/临时目录零残留。
-- 回归红线:e2e 恢复后,任何把 `.unref()` 加回宽限计时器的提交都应红。
+- 回归红线:e2e 恢复后,任何把 `.unref()` 加回宽限计时器的提交 ⇒
+  **stderr "did not respond" 断言红**(哨兵职责,见 6c.0)。
 
 ### 6c.5 风险与对策
 
 - **重基线化复现不出原现象**(最可能):大概率原现象=坏 fixture 假象。
   处置:如实记录,不追"消失的 bug"。
-- **判读为第四行**:升级路径(6c.3 表末行),本批不恋战——历史教训:
-  无界排障消耗过整个会话,时间盒死。
-- **vitest 血统差异**(§6b.3):e2e 已用中间 plain-node runner 隔离;
-  若仍差异,记档并保留 direct 断言路径(设计 §6.7 曾留此选项)。
+- **判读为第 6 行**:升级路径(6c.3 表),本批不恋战——历史教训:无界
+  排障消耗过整个会话,时间盒死。
+- **vitest 血统差异**(§6b.3):判读表血统列 + 分歧单记;若 vitest 血统
+  门禁长期不可行,保留 direct 断言路径(**本批新增决策**,非 §6 先例)
+  并在 §6 测试计划记档。
 - **时间盒**:总计 ≤ 半个工作日当量;任一工作项超出即停下来汇报。
 
 ## 7. Review log

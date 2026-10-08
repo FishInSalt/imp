@@ -1,4 +1,4 @@
-// print-mode abort-grace e2e (#abort-grace design §6.7).
+// print-mode abort-grace e2e (#abort-grace design §6 test-plan item 7).
 //
 // SHAPE NOTE (test infrastructure): the child must be spawned from a regular
 // (main-thread) process. Signal delivery to a child_process spawned from a
@@ -103,7 +103,7 @@ server.listen(0, "127.0.0.1", function () {
 });
 `;
 
-describe("print-mode abort grace e2e (#abort-grace design §6.7)", () => {
+describe("print-mode abort grace e2e (#abort-grace design §6 test-plan item 7)", () => {
 	// SKIPPED (open question, recorded in docs/design/abort-grace-design.md §6b.2):
 	// with a keep-alive handle inside the hung tool (a stand-in for real
 	// in-flight IO), the CLI child ignores SIGINT entirely — grace never arms —

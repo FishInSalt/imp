@@ -4,7 +4,7 @@ Batch: `feat/abort-grace`. Base: `main@83e7f9d`.
 
 ## 0. Status
 
-DESIGN REV 2 — round 1 findings folded (见 §7)。待 round 2 复核。
+DESIGN REV 3 — round 1 全折叠;round 2: 8/9 闭合 + 4 残留已折(§7)。设计关闭,可进实现。
 
 ## 1. Problem
 
@@ -35,7 +35,8 @@ honored (Ctrl+C kills tools)"),但**没有任何机制强制**:
 ### 2.1 机制(loop.ts)
 
 **单写者原则**(评审 MAJOR-1):每个被宽限保护的调用一个 registry 条目
-`{ index, id, name, deferred, synthesize }`;worker/串行调用方始终是
+`{ index, id, name, deferred, synthesize }`(`index` 仅 chunk 路径使用——
+串行路径不写 settled[],直接 return);worker/串行调用方始终是
 `settled[index]` / `tool_settled` / `flush` 的**唯一写者**;loop 级
 deadline 计时器只做两件事——为每个未收尾条目 resolve 其 deferred,并记
 日志。resolve 的值就是该条目构造的**同一个合成 ToolResult 对象**,因此
@@ -69,7 +70,7 @@ deadline 到:对 registry 中每条 entry:
   promise 若之后真 settle/reject 无人观测。处置:fire-and-forget
   `.then(() => {}, () => {})` 吞掉 rejection 观测位,并在真 settle 时
   记 stderr 一行(`tool X settled late, result dropped`)。**承载不变
-  量**:`runTool` 全量 try/catch(loop.ts:662-692)保证 plan.run 永不
+  量**:`runTool` 全量 try/catch(loop.ts:678-706)保证 plan.run 永不
   reject——race 输家不产生 unhandledRejection 依赖此不变量;将来 plan
   形态若可 reject,此处必须重审(记入代码注释)。
 - **串行路径同款**:`executeToolCall` 的 `prepared.run(signal)` 一行外包
@@ -117,8 +118,10 @@ executeToolCall 反而覆盖。三个选项(收窄声明 / 门禁移入 worker /
 级 deadline)中**选收窄声明**:门禁移入 worker 会推翻滑动窗口设计
 "gates 串行先于任何执行"的既定不变量(其评审 MAJOR #3 的修复正是串行
 评估);chunk 级 deadline 为一条未验证的边缘路径引入第二套计时语义。
-本批声明:宽限期覆盖**工具执行**;扩展 handler 挂死是扩展自身的 bug,
-REPL 二次 Ctrl+C / print 二次 SIGINT 仍是其出口,记档不改。
+本批声明:宽限期覆盖**工具执行**(`prepared.run`)。串行路径同款只包
+`prepared.run`——其门禁 await(loop.ts:726)与 chunk phase-1 一致地在范
+围外。扩展 handler 挂死是扩展自身的 bug,REPL 二次 Ctrl+C / print 二次
+SIGINT 仍是其出口,记档不改。
 
 ## 3. 与既有机制的关系
 
@@ -170,8 +173,9 @@ loop 层(loop-concurrency.test.ts 新 describe):
    runAgentLoop 永不 resolve(用 Promise.race 断言 100ms 内未 resolve
    作红基线);有宽限 → graceMs 后 resolve,history 7/7 配对,合成结果
    isError、文案含 "did not respond"。
-2. 晚 settle 不覆盖:挂死工具在合成后 50ms 才 settle → history 仍是合
-   成结果,无第二个 tool_end。
+2. 晚 settle 不覆盖 + 输家观测:挂死工具在合成后 50ms 才 settle →
+   history 仍是合成结果,无第二个 tool_end;输家 promise 不产生
+   unhandledRejection;stderr 有 late-settle 日志行。
 3. 串行路径:串行挂死工具 + abort → 同款有界收尾。
 4. 正常运行零计时器:fake timers 断言 abort 前无 timer 创建(健康监测
    器先例的测试形状)。
@@ -209,3 +213,10 @@ MINOR 折叠:MINOR-1(stderr 日志先例);MINOR-2(嵌套信号形态更正:
 路径名更正,结论"无新状态"被核实);MINOR-4(删除失实的健康监测器类
 比)。NIT 折叠:零输出字节差别措辞、红基线配 fake timers、registry
 条目携带 index。
+
+**Round 2 — 同评审员复核(2026-10-08),verdict NEEDS-FIXES(一句话级)。**
+9 项中 8 项实质闭合、机制复核站住;修订自身引入 1 MAJOR + 1 MINOR +
+2 NIT,全部折叠:NEW-1(§2.5 与 §2.1 就串行门禁覆盖矛盾——§2.5 更正
+为串行同款只包 prepared.run,门禁 await 与 chunk phase-1 一致在范围
+外);NEW-2(§6.2 补输家断言);NEW-3(runTool 行号 678-706 更正);
+NEW-4(registry index 注明仅 chunk 路径)。判定:改完即可进实现。

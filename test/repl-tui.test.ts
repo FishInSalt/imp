@@ -3056,6 +3056,149 @@ describe("runRepl with shell:tui", () => {
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});
+	it("#sliding-window: a queued task row upgrades to running on tool_running; the timer starts at admission (test 11/13/13b)", async () => {
+		// 6 concurrency-safe task calls: the loop would run 5 and queue the 6th.
+		// Here the run is mocked at runTurn, so the events drive the tap exactly
+		// as the real loop would (tool_start pre-issued for all, tool_running
+		// for the first five, the 6th admitted later).
+		const env = await startTuiRepl([reply("done")]);
+		const seen: Parameters<TuiShell["setActivity"]>[0][] = [];
+		const realSetActivity = TuiShell.prototype.setActivity;
+		const spy = vi.spyOn(TuiShell.prototype, "setActivity").mockImplementation(function (
+			this: TuiShell,
+			snapshot,
+		) {
+			seen.push(snapshot);
+			realSetActivity.call(this, snapshot);
+		});
+		onTestFinished(() => spy.mockRestore());
+		let queuedSnapshot: Parameters<TuiShell["setActivity"]>[0] | undefined;
+		let upgradedSnapshot: Parameters<TuiShell["setActivity"]>[0] | undefined;
+		const original = env.runner.runTurn.bind(env.runner);
+		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			for (let i = 1; i <= 6; i++)
+				emit({ type: "tool_start", toolCallId: `t${i}`, name: "task", args: { prompt: `p${i}` } });
+			// Only the first five are admitted immediately.
+			for (let i = 1; i <= 5; i++) emit({ type: "tool_running", toolCallId: `t${i}` });
+			queuedSnapshot = seen.at(-1);
+			// The 6th is admitted only now — its stamp must move.
+			emit({ type: "tool_running", toolCallId: "t6" });
+			upgradedSnapshot = seen.at(-1);
+			for (let i = 1; i <= 6; i++) {
+				emit({
+					type: "tool_settled",
+					result: {
+						toolCallId: `t${i}`,
+						toolName: "task",
+						content: `R${i}`,
+						isError: false,
+						durationMs: 100 * i,
+					},
+				});
+				emit({
+					type: "tool_end",
+					result: {
+						toolCallId: `t${i}`,
+						toolName: "task",
+						content: `R${i}`,
+						isError: false,
+						durationMs: 100 * i,
+					},
+				});
+			}
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("fan out\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("done"));
+		await settle();
+		// Queued phase (13b, the wave-red assertion): all six rows exist — the
+		// 6th is visible AND flagged queued; the first five are running.
+		const queuedRows = (queuedSnapshot?.agents ?? []).filter((a) => a.taskToolId !== "");
+		expect(queuedRows.map((a) => a.taskToolId)).toEqual(["t1", "t2", "t3", "t4", "t5", "t6"]);
+		expect(queuedRows.filter((a) => a.queued === true).map((a) => a.taskToolId)).toEqual(["t6"]);
+		// Upgrade phase: the 6th row loses the flag; its stamp moved (>= the
+		// admission moment — not the pre-issue moment). The five siblings keep
+		// their original stamps (tool_running for an already-running row is a
+		// no-op by the queued guard).
+		const upgradedRows = (upgradedSnapshot?.agents ?? []).filter((a) => a.taskToolId !== "");
+		expect(upgradedRows.every((a) => a.queued !== true)).toBe(true);
+		const q6 = queuedRows.find((a) => a.taskToolId === "t6");
+		const u6 = upgradedRows.find((a) => a.taskToolId === "t6");
+		expect(q6).toBeDefined();
+		expect(u6).toBeDefined();
+		if (q6 !== undefined && u6 !== undefined)
+			expect(u6.startedAtMs).toBeGreaterThanOrEqual(q6.startedAtMs);
+		env.terminal.data("/exit\r");
+		await expect(env.repl).resolves.toBe(0);
+	});
+
+	it("#sliding-window: renderActivity paints `└─ queued` and omits the closing suffix for queued calls (test 12)", async () => {
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink({});
+		const noop = (): void => {};
+		const shell = new TuiShell({
+			transcript,
+			terminal,
+			onLine: noop,
+			onInterrupt: noop,
+			onEof: noop,
+			onDequeue: noop,
+			onCycleThinking: noop,
+			onToggleThinking: noop,
+			onModelSelect: noop,
+		});
+		shell.start();
+		const liveRows = new Map<string, readonly string[]>();
+		const suffixes = new Map<string, string>();
+		transcript.setCallLiveRows = (key, rows) => liveRows.set(key, rows ?? []);
+		transcript.setCallSuffix = (key, text) => {
+			if (text === null) suffixes.delete(key);
+			else suffixes.set(key, text);
+		};
+		shell.setActivity({
+			phase: "working",
+			tools: [
+				{ id: "a", name: "task", label: "running one", startedAtMs: Date.now() - 4000 },
+				{ id: "b", name: "task", label: "queued one", startedAtMs: Date.now(), queued: true },
+			],
+			agents: [
+				{
+					agent: "scout",
+					task: "job a",
+					taskToolId: "a",
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now() - 4000,
+				},
+				{
+					agent: "scout",
+					task: "job b",
+					taskToolId: "b",
+					cwd: null,
+					lastTool: null,
+					toolCount: 0,
+					startedAtMs: Date.now(),
+					queued: true,
+				},
+			],
+		});
+		await settle(30); // first paint (16ms render interval), like the M10 B tests
+		// Task live rows are pushed to the call's fold via the resolver channel
+		// (this bare shell has no folds, so assert on the pushed payloads):
+		// the queued parent renders the `└─ queued` caption, NOT `└─ pending`.
+		expect(liveRows.get("a")?.[0]).toContain("└─ pending");
+		expect(liveRows.get("b")?.[0]).toContain("└─ queued");
+		expect(liveRows.get("b")?.[0]).not.toContain("└─ pending");
+		// The queued call gets NO closing suffix; the running one does.
+		expect(suffixes.has("a")).toBe(true);
+		expect(suffixes.has("b")).toBe(false);
+		shell.close();
+		await shell.whenSettled();
+	});
+
 	it("#tool-settle: a settled call clears its row and renders its result before the chunk ends", async () => {
 		const env = await startTuiRepl([reply("done")]);
 		// Observe the activity snapshots the shell receives (the region's own

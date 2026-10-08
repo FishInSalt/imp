@@ -736,6 +736,15 @@ class ReplMachine {
 						this.healthNote(event.signal, info);
 						return;
 					}
+					// #sliding-window: a queued call was admitted to the window —
+					// upgrade its activity row (snapshot rewrite only; no transcript
+					// writes, no Renderer bytes — display-only like tool_settled
+					// below). Top-level only: children have no concurrency-safe
+					// tools, and the loop never emits child-sourced tool_running.
+					if (event.type === "tool_running") {
+						if (info === undefined) this.trackActivity(event, info);
+						return;
+					}
 					// #tool-settle: a concurrency-safe chunk call settling updates its
 					// own display now (row, marker, result fold) instead of waiting for
 					// the call-ordered tool_end. Top-level only: a child's settle would
@@ -1286,6 +1295,11 @@ class ReplMachine {
 			const label = block.semantic
 				? [block.semantic.summary, ...(block.semantic.preview ?? [])].join("\n")
 				: block.lines.join("\n");
+			// #sliding-window: a concurrency-safe call's tool_start is pre-issued for
+			// the whole run — the row starts QUEUED (no timer) until its tool_running
+			// admits it. Serial tools keep today's shape exactly (no queued flag,
+			// and no tool_running will ever arrive for them).
+			const queued = this.runner.getTool(event.name)?.concurrencySafe === true ? (true as const) : undefined;
 			if (event.name === "task") {
 				const args = record?.rawArgs as Record<string, unknown> | null | undefined;
 				const agent =
@@ -1301,6 +1315,7 @@ class ReplMachine {
 					lastTool: null,
 					toolCount: 0,
 					startedAtMs: Date.now(),
+					...(queued !== undefined ? { queued } : {}),
 				};
 				this.activityParents.set(event.toolCallId, parent);
 				this.activityAgents.set(`task:${event.toolCallId}`, parent);
@@ -1310,8 +1325,34 @@ class ReplMachine {
 					name: event.name,
 					label,
 					startedAtMs: Date.now(),
+					...(queued !== undefined ? { queued } : {}),
 				});
 			this.pushActivity();
+		} else if (event.type === "tool_running") {
+			// #sliding-window: the call was admitted to the window — upgrade its
+			// row from queued to running. Single-writer discipline (design §3.3):
+			// the tap only rewrites the snapshot (startedAtMs + clear queued) and
+			// pushes; suffixes/live rows stay derived from the snapshot by
+			// renderActivity. Stamp ordering is guaranteed upstream (tool_running
+			// fires before plan.run), so child source rows inherit the
+			// execution-start stamp, keeping the taskStarts min() honest.
+			const toolRow = this.activityTools.get(event.toolCallId);
+			if (toolRow?.queued === true) {
+				this.activityTools.set(event.toolCallId, {
+					...toolRow,
+					startedAtMs: Date.now(),
+					queued: undefined,
+				});
+				this.pushActivity();
+			}
+			const parent = this.activityParents.get(event.toolCallId);
+			if (parent?.queued === true) {
+				const upgraded: ActivityAgentLine = { ...parent, startedAtMs: Date.now(), queued: undefined };
+				this.activityParents.set(event.toolCallId, upgraded);
+				const row = this.activityAgents.get(`task:${event.toolCallId}`);
+				if (row === parent) this.activityAgents.set(`task:${event.toolCallId}`, upgraded);
+				this.pushActivity();
+			}
 		} else if (event.type === "tool_end" || event.type === "tool_settled") {
 			// #tool-settle: a settle event runs this same arm, so a non-task
 			// concurrency-safe row is deleted here too — not only the task block.

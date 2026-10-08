@@ -184,6 +184,11 @@ export interface ActivityToolLine {
 	/** Pre-summarized args label (summarizeArgs at event time). */
 	label: string;
 	startedAtMs: number;
+	/** #sliding-window: a concurrency-safe call pre-issued at tool_start but
+	 *  not yet admitted to the window. Queued rows render no timer; the REPL
+	 *  tap rewrites startedAtMs and clears this on tool_running. Absent =
+	 *  running (serial path and pre-window snapshots unchanged). */
+	queued?: true;
 }
 
 /** One running subagent in the TUI activity region (the task tool's child). */
@@ -200,6 +205,11 @@ export interface ActivityAgentLine {
 	lastTool: string | null;
 	toolCount: number;
 	startedAtMs: number;
+	/** #sliding-window: the parent task call is pre-issued but not yet
+	 *  admitted to the window. Queued task rows render `└─ queued` with no
+	 *  timer and stay out of the taskStarts min-aggregation until tool_running
+	 *  rewrites the stamp. Absent = running. */
+	queued?: true;
 }
 
 /** Snapshot of live turn activity (M10 B: the activity region replaces the

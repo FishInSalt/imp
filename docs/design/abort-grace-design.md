@@ -143,6 +143,11 @@ childSignal relay 父 signal 与 timeout 的或门),不是 AbortSignal.any。
 展,记档声明。listener 生命周期:进入时快路径查 aborted、arm 用
 `{ once: true }`、runAgentLoop finally removeEventListener。
 
+**嵌套边界(评审 round 2 m4)**:若子代理的门禁 handler 挂死**且**子
+60min 时钟已耗尽——子宽限不覆盖门禁(§2.5)、父未 abort 故父宽限不武装
+——task 工具调用无限悬置,唯一出口是用户 Ctrl+C。§2.5 范围声明的嵌套
+推论,如实记档,不设额外机制。
+
 ## 4. 否决备选
 
 - **每调用硬超时**:打断合法长任务(bash 20 分钟),方向错误。
@@ -158,7 +163,7 @@ childSignal relay 父 signal 与 timeout 的或门),不是 AbortSignal.any。
    catch);输家以 fire-and-forget 观测位吞 rejection,真 settle 记日志
    丢弃。§2.1 已钉死。
 2. **僵尸 Promise 泄漏**:无法避免(JS 语义);stderr 记一行;计时器
-   创建即 unref 且 finally clear,进程退出不被拖住(§2.1/MAJOR-4)。
+   不 unref(§6b.1 更正)、批级 finally clear 保证不滞留。
 3. **race 改变 worker 循环的微任务结构**:认领序仍由同步 head++ 保证
    (评审 a 项独立论证:race resolve 后各续体按注册序入队,head 单调,
    被认领 index 序列不变);test 4b(顺序钉)继续钉。**已关闭**。
@@ -191,7 +196,7 @@ loop 层(loop-concurrency.test.ts 新 describe):
 
 ## 6b. 实现期发现与未决问题(2026-10-08,如实记档)
 
-实现与排障过程中发现两个**超出本设计预想**的问题,均已实测复现、未解决:
+实现与排障过程中发现的超出本设计预想的问题(已修/未解混合,逐条标注):
 
 1. **unref 计时器使宽限失效(已修)**:第一版实现把 grace timer `unref()`
    (照搬评审 MAJOR-4 的建议)——但挂死工具的 await 不保活事件循环,unref 的

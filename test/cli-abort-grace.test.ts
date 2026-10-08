@@ -127,9 +127,11 @@ describe("print-mode abort grace e2e (#abort-grace design §6.7)", () => {
 				code: number;
 				note: string;
 				stderr: string;
+				stdout: string;
 			};
 			expect(result.note).not.toBe("no request");
 			expect(result.code).toBe(0); // single SIGINT resolves aborted → 0 (design §2.3)
+			expect(result.stdout).toContain("interrupt"); // the hint line — the handler ran
 			expect(result.stderr).toContain("did not respond to the interrupt");
 			expect(result.stderr).toContain("abandoning its result");
 		} finally {

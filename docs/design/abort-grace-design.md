@@ -187,6 +187,33 @@ loop 层(loop-concurrency.test.ts 新 describe):
    exit code 0(单 SIGINT 的既有 resolve 语义,MAJOR-5 更正),stderr 含
    abandoning 行。
 
+## 6b. 实现期发现:两个未决问题(2026-10-08,如实记档)
+
+实现与排障过程中发现两个**超出本设计预想**的问题,均已实测复现、未解决:
+
+1. **unref 计时器使宽限失效(已修)**:第一版实现把 grace timer `unref()`
+   (照搬评审 MAJOR-4 的建议)——但挂死工具的 await 不保活事件循环,unref 的
+   计时器也不保活,结果是 print 模式进程在宽限触发前 drain-exit(exit 0、
+   无合成结果、无日志)。修复:计时器**不 unref**(它是窗口期内 run 的唯一
+   活性来源);"不滞留"由 finally clear 保证。教训:评审建议的 unref 方向
+   在本场景恰好是错的——它防的是"多余句柄拖住退出",但这里句柄正是用来
+   撑住等待的。
+2. **保活句柄 × SIGINT 的未解竞态(未解,e2e 因此 skip)**:给挂死工具加
+   一个 ref'd `setInterval`(模拟真实工具的在途 IO)后,SIGINT 后进程**完全
+   不响应**——无 interrupt 行、宽限不武装、进程活到外部强杀;direct shell
+   与 vitest 血统**同样失败**,排除了测试基建因素。而无保活版本则是进程在
+   SIGINT 前 drain-exit(设计边界)。两者合并的含义:此前所有"成功"验证
+   (SIGINT→10s→宽限→exit 0)依赖的时序窗口是:信号在 drain 前、且无其他
+   ref'd 句柄。真实场景(bash 子进程、MCP socket 保活)落在哪一侧**未经
+   验证**。怀疑方向:Node 信号回调需要事件循环的检查点,纯 interval 空转 +
+   挂死 await 的形状可能无限推迟信号处理;需要在受控环境(如 Linux VM)用
+   strace/dtrace 级工具定位。**后续批次必须先解此题,再考虑扩大
+   concurrencySafe 名单**——若信号处理本身不可靠,宽限的地基不稳。
+3. 附带发现(测试基建):vitest worker thread 血统下 spawn 的 CLI 子进程,
+   信号行为与 direct 不同(普通 node 子进程不受影响);e2e 采用中间
+   plain-node runner + sh 跳转亦未绕开。与问题 2 的相对权重未定,但 e2e
+   目前 `it.skip`(文件内注释指向本节)。
+
 ## 7. Review log
 
 **Round 1 — 独立对抗评审(新上下文,2026-10-08),verdict NEEDS-FIXES。**

@@ -483,9 +483,9 @@ function createGraceRegistry(signal: AbortSignal | undefined): {
 	const fire = (): void => {
 		timer = setTimeout(() => {
 			timer = null;
+			const seconds = Math.round(ABORT_GRACE_MS / 1000);
 			for (const entry of entries) {
 				if (entry.synthesized === undefined) {
-					const seconds = Math.round(ABORT_GRACE_MS / 1000);
 					entry.synthesized = {
 						toolCallId: "",
 						toolName: entry.name,
@@ -499,7 +499,14 @@ function createGraceRegistry(signal: AbortSignal | undefined): {
 				entry.resolveGrace(entry.synthesized);
 			}
 		}, ABORT_GRACE_MS);
-		timer.unref?.();
+		// DELIBERATELY NOT unref'd (review round 2 correction): an unref'd
+		// grace timer lets the event loop drain past it — with the hung
+		// execution's never-settling promise holding nothing but an await,
+		// the process would exit 0 BEFORE the deadline and the synthesized
+		// result (session closure, abandoning log) never happens. This timer
+		// IS the run's only liveness during the window, so it must keep the
+		// loop alive; the no-lingering guarantee comes from settle()'s finally
+		// clear on every normal completion path, not from unref.
 	};
 	const arm = (): void => {
 		if (armed || entries.size === 0) return;
@@ -521,6 +528,13 @@ function createGraceRegistry(signal: AbortSignal | undefined): {
 			});
 			const entry: GraceEntry = { name, deferred, resolveGrace };
 			entries.add(entry);
+			// #abort-grace review MAJOR-1: the abort listener is {once:true} —
+			// an abort that fired while this registry was EMPTY (e.g. during a
+			// serial gate await, before this registration) is already consumed
+			// and will never call arm() again. signal.aborted is a latch: arm
+			// here so a signal-ignoring tool registered post-abort is still
+			// bounded. The `armed` guard keeps a pending timer from doubling.
+			if (signal?.aborted) arm();
 			const raced = Promise.race([run, deferred]);
 			// Fire-and-forget observation of the loser (design §2.1): with
 			// runTool never rejecting, this only silences the (impossible

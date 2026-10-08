@@ -3128,8 +3128,7 @@ describe("runRepl with shell:tui", () => {
 		const u6 = upgradedRows.find((a) => a.taskToolId === "t6");
 		expect(q6).toBeDefined();
 		expect(u6).toBeDefined();
-		if (q6 !== undefined && u6 !== undefined)
-			expect(u6.startedAtMs).toBeGreaterThanOrEqual(q6.startedAtMs);
+		if (q6 !== undefined && u6 !== undefined) expect(u6.startedAtMs).toBeGreaterThanOrEqual(q6.startedAtMs);
 		env.terminal.data("/exit\r");
 		await expect(env.repl).resolves.toBe(0);
 	});

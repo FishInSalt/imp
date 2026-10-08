@@ -603,9 +603,14 @@ async function executeChunk(
 		worker(),
 	);
 	// runTool never rejects (it catches everything), so a rejection here can
-	// only come from a throwing onEvent observer — the same exposure the
-	// pre-window Promise.all had (tool-settle design §6.10). Await inside try
-	// so the final drain still runs for already-settled calls on the way out.
+	// only come from a throwing onEvent observer (tool-settle design §6.10's
+	// exposure). Wider than the pre-window Promise.all in one way: sibling
+	// workers keep claiming and flushing AFTER the first throw escapes this
+	// function — the cursor prevents duplicate emissions, but late settles can
+	// still push into `results` after the caller has seen the rejection. No
+	// caller reads `results` on that path today (the loop aborts the turn);
+	// recorded rather than guarded (a `broken` flag would only stop display
+	// updates, not the semantic abort already in flight).
 	try {
 		await Promise.all(workers);
 	} finally {

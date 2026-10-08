@@ -138,6 +138,13 @@ durationMs、回退可达——该路径本设计不改，行为不受影响。
 - **短任务优先/重排**：违反呼叫序发射契约。
 - **abort 宽限期**：独立后续批次（hang 兜底与窗口正交）。
 
+### 3.6 实现记档（代码评审 round 1）
+
+1. **Refusal 行显示**：被校验/门禁拒绝的 safe 调用行以 queued 态出现（repl.ts 对所有 safe 顶层调用置 queued），永远等不到 tool_running。leading refusal 即刻闭合无感；**middle refusal 被前缀 straggler 卡住期间，一行已被拒绝的调用会显示 "queued"** 直到其 tool_end 冲出。接受为已记档漂移（与 §3.4 同类）；长期修复 = refusal 时发一个显示事件让 tap 立即终态化。
+2. **快照字段形状**：实现用 `queued?: true`（缺省 running），与本文的 `state?: "queued"|"running"` 等价；以代码为准。
+3. **onEvent 抛错**：残余 worker 在首个异常逃逸后仍可能向 results 追加（游标防重复、不防事后写）；当前无调用方在该路径读 results，代码注释已如实改述。
+4. **测试足额度**：§4.7b 的中位 straggler 场景由 test 1（convoy）+ test 3（前缀阻塞）的并集覆盖；§4.9 的 tool_running print no-op 断言与 MINOR-2 顺序钉（test 4b）已在代码评审后补齐。
+
 ## 4. 测试计划
 
 loop 层（`test/loop-concurrency.test.ts` 扩展）：

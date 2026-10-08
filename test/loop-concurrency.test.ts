@@ -552,6 +552,51 @@ describe("#sliding-window", () => {
 		expect(order).toEqual(["a", "b", "c"]);
 	});
 
+	it("MINOR-2 pin: tool_running fires BEFORE the claimed call's execution starts (test 4b)", async () => {
+		// Stamp-ordering is load-bearing (design §3.1): the display rewrites the
+		// row's startedAtMs from tool_running, and child source rows inherit it —
+		// a tool_running emitted after plan.run would stamp queue-wait into every
+		// downstream timer. Pin the loop's emission order against the execution
+		// start itself (holdTool's onRun), not just against tool_end.
+		const trace: string[] = [];
+		const gates = Array.from({ length: 6 }, () => gate());
+		const events: AgentEvent[] = [];
+		const tools = gates.map((g, i) => holdTool(`t${i + 1}`, g, () => trace.push(`run:t${i + 1}`)));
+		const history: AgentMessage[] = [];
+		const pending = runAgentLoop({
+			provider: scriptedProvider([calls(tools.map((t) => t.name)), finalText]),
+			model: "m",
+			system: "",
+			tools,
+			history,
+			userMessage: "go",
+			onEvent: (e) => {
+				events.push(e);
+				if (e.type === "tool_running") trace.push(`running:${e.toolCallId}`);
+			},
+		});
+		await waitUntil(() => trace.filter((t) => t.startsWith("run:")).length === 5);
+		// The queued 6th: admit it and assert the SAME ordering on the
+		// post-queue admission (the case where a late stamp would smuggle in
+		// the queue wait — a wave-style or misplaced-emit implementation stamps
+		// at claim time BEFORE the previous settle, not at execution start).
+		gates[0]?.resolve();
+		await waitUntil(() => trace.includes("run:t6"));
+		const firstSixthRun = trace.indexOf("run:t6");
+		const sixthRunning = trace.indexOf("running:c6");
+		expect(sixthRunning).toBeGreaterThanOrEqual(0);
+		expect(sixthRunning).toBeLessThan(firstSixthRun); // running BEFORE its execution
+		for (const g of gates.slice(1)) g.resolve();
+		await pending;
+		// Every claim observed the same order.
+		for (let i = 1; i <= 6; i++) {
+			const runAt = trace.indexOf(`run:t${i}`);
+			const runningAt = trace.indexOf(`running:c${i}`);
+			expect(runningAt).toBeGreaterThanOrEqual(0);
+			expect(runningAt).toBeLessThan(runAt);
+		}
+	});
+
 	it("event order: all tool_starts precede any tool_running; tool_running precedes its tool_end (test 4)", async () => {
 		const events: AgentEvent[] = [];
 		const tools = Array.from({ length: 7 }, (_, i) => delayTool(`d${i + 1}`, 5 + i));
@@ -633,18 +678,8 @@ describe("#sliding-window", () => {
 		expect(ends.map((r) => r.toolCallId)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
 		// History carries ALL SEVEN results — claimed five computed, queued two
 		// synthesized — keeping the session resumable (tool_use→tool_result pairs).
-		const historyResults = history
-			.flatMap((m) => (m.role === "toolResult" ? m.results : []))
-			.flatMap((turns) => turns);
-		expect(historyResults.map((r) => r.toolCallId)).toEqual([
-			"c1",
-			"c2",
-			"c3",
-			"c4",
-			"c5",
-			"c6",
-			"c7",
-		]);
+		const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+		expect(historyResults.map((r) => r.toolCallId)).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]);
 		const interrupted = historyResults.filter((r) => r.content === "(interrupted before this tool ran)");
 		expect(interrupted.map((r) => r.toolCallId)).toEqual(["c6", "c7"]);
 		// Claimed-but-aborted calls keep their computed results (holdTool returns output).

@@ -4,9 +4,8 @@ Batch: `feat/sliding-window-concurrency`. Base: `main@f7f040e`.
 
 ## 0. Status
 
-DESIGN REV 2 — round 1 findings folded (NEEDS-FIXES → 待确认复评).
-
-DESIGN DRAFT — 待独立评审（对抗性、新上下文）。实现未开始。
+DESIGN REV 2 — round 1 findings folded; round 2: 9/9 closed, residuals
+folded（见 §8）。可进入实现。
 
 ## 1. Problem
 
@@ -51,8 +50,8 @@ phase 1，排队调用要等整波排空才首次出现在屏幕上。
   计 `durationMs`、emit `tool_settled`（完成序）。
   **顺序约束（MINOR-2）**：`tool_running` 的 emit（及 REPL tap 对
   `startedAtMs` 的重写）必须先于 `plan.run()` 调用——子代理 source 行
-  继承父行 `startedAtMs`（repl.ts:1246）、task 计时基线取各源最小值
-  （shell.ts:795-800），旧戳先暴露给子事件会让 min() 永远取含排队时间
+  继承父行 `startedAtMs`（repl.ts:1255）、task 计时基线取各源最小值
+  （shell.ts:762-766），旧戳先暴露给子事件会让 min() 永远取含排队时间
   的旧值。
 - **Phase 3 — 前缀冲刷**：游标初始指向段首。任一调用 settle 后，把
   **已连续 settle 的最长前缀**立即 emit `tool_end` 并 push 进 results。
@@ -101,17 +100,23 @@ durationMs、回退可达——该路径本设计不改，行为不受影响。
   不变）。
 - **计时诚实（单写者模型下）**：closing suffix 与 live 行的计时全部由
   `renderActivity` 从快照推导。规则：`state === "queued"` 的行**不生成
-  closing suffix**（shell.ts:755-756 的 nextSuffixes 跳过 queued id），
-  live 行渲染 `└─ queued`（无计时）；tap 在 `tool_running` 时重写
-  `startedAtMs` 后，下一次快照推送/tick 自然从执行起点计。现状字节核
-  对：非 task 行 closing suffix 是裸 `Ns`（`#call-closing-status` A1.1
-  移除了 `└─ running` chrome，shell.ts:719-722）；task fold live 行是
-  `└─ pending #N <agent>`（shell.ts:778）。本设计的 queued 态是这两个
-  通道上的新枚举值，不改 running 态的既有字节。
-- **caption 差异**：queued 工具行 caption `└─ queued`；task queued 行
-  `└─ pending`。行通道完全复用 `#tool-inline-live-rows`/
-  `#call-closing-status` 机制（`setCallLiveRows` / `setRunningSuffix`）
-  的快照推导路径，仅新增枚举值。
+  closing suffix**——两个循环都要跳过：非 task 行的 nextSuffixes
+  （shell.ts:755-756）与 task 行的 taskStarts 路径（shell.ts:762-766 取
+  各源 min、:799-803 推送；只跳前者会把排队时间计入 task fold 的
+  suffix，旗舰场景恰在此）。live 行渲染 `└─ queued`（无计时）；tap 在
+  `tool_running` 时重写 `startedAtMs` 后，下一次快照推送/tick 自然从
+  执行起点计。现状字节核对：非 task 行 closing suffix 是裸 `Ns`
+  （`#call-closing-status` A1.1 移除了 `└─ running` chrome，
+  shell.ts:719-722）；task fold live 行是 `└─ pending #N <agent>`
+  （shell.ts:778）。本设计的 queued 态是这两个通道上的新枚举值，不改
+  running 态的既有字节。
+- **caption 差异**：queued task 行 caption `└─ pending`（无计数）；
+  非 task 工具的 queued caption（`└─ queued`）今天无对应机制
+  （renderActivity 不为 activity.tools 发 live 行，只有 suffix）——需
+  新增快照推导，但该路径在 non-goal 7（roster 不扩）下不可达，随只读
+  工具标 safe 的批次落地，本批只定文案。行通道对 task 行完全复用
+  `#task-inline-live-rows`/`#call-closing-status` 的快照推导路径，
+  仅新增枚举值。
 
 ### 3.4 行为漂移（接受并记档）
 
@@ -154,7 +159,9 @@ loop 层（`test/loop-concurrency.test.ts` 扩展）：
    （tool_running）早于 a 完成——波次下 f 必须等 wave1 排空，这条在
    波次实现下必红，窗口下必绿。
 8. 门禁呼叫序（既有 order-recording gate 测试保持绿）。
-9. print 模式：chunk print 输出两次运行一致；corpus 更新。
+9. print 模式：chunk print 输出两次运行一致；corpus 更新；另加一条
+   断言——`Renderer.event` 对 `tool_running`/`tool_settled` 走 default
+   no-op（print 字节零变化，钉住 MINOR-1 的兼底机制）。
 10. 相邻波次（consecutive-run batching）既有测试：形状变化后修正预期。
     特别地，"chunk cap 5" 用例（断言"释放一个调用不启动第 6 个"的
     波次反属性）需**重写**为窗口语义（FIFO 补位：释放即启动），不是
@@ -254,5 +261,15 @@ emit + tap 戳重写必须先于 plan.run，写入 §3.1 顺序约束）；MINOR
 end 双到达安全；(b) print 字节确定性成立；(c) abort 语义无洞；(d)
 registry emitToolCall 链无状态，t=0 快照仅影响异型门禁（§3.4.1 已记
 档）；(e) FIFO 补位 + 游标活性论证成立。
+
+**Round 2 — 同评审员复核（2026-10-08），verdict 9/9 closed。**全部
+原发现在正文实质闭合（非仅 log 声明）。修订自身的残留已折叠：
+MINOR-N1（Review log 声称的 default-no-op 测试断言 → 已补入 §4.9）；
+MINOR-N2（suffix-skip 锚点漏掉 taskStarts 循环，旗舰场景恰在此 →
+§3.3 补双循环规则）；NIT-N1（§0 双状态行矛盾 → 已删）；NIT-N2
+（顺序约束行号 repl.ts:1255/shell.ts:762-766 → 已修正）；NIT-N3
+（非 task queued caption 无现状机制、roster 不扩下不可达 → §3.3 caption
+条目记档，随 roster 扩展批次落地）。评审结论：可进入实现，无需第三轮
+全面评审。
 
 （待评审）

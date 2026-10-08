@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import type { LLMEvent, LLMProvider } from "../provider/types.js";
-import { MAX_CONCURRENT_TASKS } from "./constants.js";
+import { MAX_CONCURRENT_SAFE_CALLS } from "./constants.js";
 import type { HealthSignal } from "./health.js";
 import {
 	type AgentMessage,
@@ -19,6 +19,15 @@ export type AgentEvent =
 	| LLMEvent
 	| { type: "tool_start"; toolCallId: string; name: string; args: unknown }
 	| { type: "tool_end"; result: ToolResult }
+	/** #sliding-window: a concurrency-safe call acquired a window slot and its
+	 *  execution is starting NOW (fired before plan.run — a child source row
+	 *  inherits the parent's startedAtMs, so the stamp must be the execution
+	 *  start, not the pre-issued tool_start). **Display-only** — same channel
+	 *  as `tool_settled`: the REPL tap upgrades the call's activity row from
+	 *  queued to running; print reaches it via Renderer.event's no-op default,
+	 *  extensions/health/history never see it. Emitted only for approved,
+	 *  gate-passed plans that actually execute. */
+	| { type: "tool_running"; toolCallId: string }
 	/** #tool-settle: one concurrency-safe chunk call settled. **Display-only** —
 	 *  the authoritative, call-ordered `tool_end` still follows in phase 3.
 	 *  Reaches no extension sink (the dispatchers gate on `tool_end`) and is
@@ -430,15 +439,17 @@ interface ToolCallRef {
 	arguments: unknown;
 }
 
-/** One assistant message's tool calls, executed in order (M5b design §6).
+/** One assistant message's tool calls, executed in order (M5b design §6;
+ * #sliding-window).
  *
- * Non-safe tools run strictly serially — the exact pre-M5b path. Maximal runs
- * of consecutive concurrency-safe calls run as chunks of up to
- * MAX_CONCURRENT_TASKS: gates evaluate serially in call order first
- * (deterministic, non-interleaved extension state), then the approved subset
- * executes concurrently, then tool_end fires in call order with all results
- * in hand — byte-stable output regardless of completion timing. A finished
- * call waits at most until its slowest predecessor in the chunk. */
+ * Non-safe tools run strictly serially — the exact pre-M5b path. A maximal
+ * run of consecutive concurrency-safe calls is ONE chunk: gates evaluate
+ * serially in call order first (deterministic, non-interleaved extension
+ * state), then the approved subset executes behind a sliding window of
+ * MAX_CONCURRENT_SAFE_CALLS slots — a released slot immediately admits the
+ * next queued call in call order — and tool_end fires in call order as a
+ * settled prefix advances (prefix flush), byte-stable output regardless of
+ * completion timing. */
 async function executeToolBatch(
 	toolCalls: ToolCallRef[],
 	toolMap: Map<string, Tool>,
@@ -462,24 +473,13 @@ async function executeToolBatch(
 			i++;
 			continue;
 		}
-		// Maximal run of consecutive safe calls → capped chunks.
+		// Maximal run of consecutive safe calls → one sliding-window chunk.
 		const run: ToolCallRef[] = [];
 		while (i < toolCalls.length && isSafe((toolCalls[i] as ToolCallRef).name)) {
 			run.push(toolCalls[i] as ToolCallRef);
 			i++;
 		}
-		for (let c = 0; c < run.length; c += MAX_CONCURRENT_TASKS) {
-			if (signal?.aborted) return; // later chunks never start; fillMissing closes them
-			await executeChunk(
-				run.slice(c, c + MAX_CONCURRENT_TASKS),
-				toolMap,
-				signal,
-				onToolCall,
-				onEvent,
-				results,
-				clock,
-			);
-		}
+		await executeChunk(run, toolMap, signal, onToolCall, onEvent, results, clock);
 	}
 }
 
@@ -487,6 +487,30 @@ async function executeToolBatch(
  *  or an approved, unstarted execution. */
 type ChunkPlan = { run: (signal: AbortSignal | undefined) => Promise<ToolResult> } | { result: ToolResult };
 
+/** A chunk is the WHOLE maximal run of consecutive concurrency-safe calls
+ *  (#sliding-window; waves retired). Three phases:
+ *
+ *  1. Serial, in call order: tool_start, validation, gate. Gates see a
+ *     deterministic, non-interleaved sequence instead of racing under
+ *     Promise.all. Every call of the run gets its tool_start here — queued
+ *     calls are visible from the start (the display marks them queued until
+ *     their tool_running arrives).
+ *  2. Sliding window: min(cap, runnable) workers claim calls from a shared
+ *     FIFO head — claim order is call order BY CONSTRUCTION (the synchronous
+ *     head++ loop), never a completion-order refill. Each claim emits
+ *     tool_running BEFORE plan.run (stamp ordering, see the event doc),
+ *     measures its own durationMs at settle, and emits tool_settled.
+ *  3. Prefix flush: a cursor emits tool_end/results for the longest settled
+ *     CALL-ORDER prefix as soon as any settle advances it — deterministic
+ *     order regardless of completion timing, without waiting for the whole
+ *     run (a straggler blocks only its own suffix's tool_end, never the
+ *     settled display updates).
+ *
+ * Abort: workers stop claiming at the head (unclaimed queued calls get no
+ * events and are closed by fillMissingToolResults as a call-order suffix);
+ * already-claimed calls settle via their AbortSignal (existing semantics).
+ * The post-Promise.all flush drains any settled-but-unflushed prefix so a
+ * killed run never drops computed events. */
 async function executeChunk(
 	chunk: ToolCallRef[],
 	toolMap: Map<string, Tool>,
@@ -525,26 +549,72 @@ async function executeChunk(
 			plans.push(prepared);
 		}
 	}
-	// Phase 2 — the approved subset runs concurrently. Abort-aware tools settle
-	// fast on Ctrl+C; a settled-but-unemitted result can never be dropped.
 	if (signal?.aborted) return; // approved, never executed: fillMissing closes
-	// #tool-settle: measure each call at its own settle point — the phase-3
-	// buffer otherwise makes every call report the batch's wall time — and let
-	// the display update now. The authoritative tool_end still follows in phase 3.
-	const settled = await Promise.all(
-		plans.map(async (plan) => {
-			if (!("run" in plan)) return plan.result;
+	// Per-index settle slots. Refusals (validation/gate) are settled NOW: they
+	// never ran, occupy no window slot, and emit no tool_running/tool_settled.
+	const settled: Array<ToolResult | undefined> = plans.map((plan) =>
+		"result" in plan ? plan.result : undefined,
+	);
+	// Phase 3 — prefix flush: emit the longest settled call-order prefix. Any
+	// settle (and the final drain below) advances it; a settled-but-unemitted
+	// result can never be dropped.
+	let cursor = 0;
+	const flush = (): void => {
+		while (cursor < settled.length && settled[cursor] !== undefined) {
+			const result = settled[cursor] as ToolResult;
+			cursor++;
+			results.push(persistableResult(result));
+			onEvent?.({ type: "tool_end", result });
+		}
+	};
+	flush(); // leading refusals close immediately
+	// Phase 2 — sliding window. Workers claim from the shared FIFO head in
+	// call order; up to cap run at any moment (safety: each claim follows a
+	// settle or an initial slot, so in-flight ≤ cap holds by induction).
+	const runnable = plans
+		.map((plan, index) => ({ plan, index }))
+		.filter(
+			(entry): entry is { plan: Extract<ChunkPlan, { run: unknown }>; index: number } => "run" in entry.plan,
+		);
+	let head = 0;
+	const worker = async (): Promise<void> => {
+		while (head < runnable.length) {
+			if (signal?.aborted) return; // queued, never claimed: no events; fillMissing closes
+			const { plan, index } = runnable[head++] as {
+				plan: { run: (s: AbortSignal | undefined) => Promise<ToolResult> };
+				index: number;
+			};
+			// Stamp ordering (#sliding-window MINOR-2): tool_running must reach
+			// observers BEFORE the execution starts — the display rewrites the
+			// row's startedAtMs from it, and child rows inherit that stamp.
+			onEvent?.({ type: "tool_running", toolCallId: chunk[index]?.id as string });
 			const startedAt = clock();
 			const result = await plan.run(signal);
+			// #tool-settle: own execution time (queue wait excluded by
+			// construction) + real-time completion display; the authoritative
+			// tool_end still follows via the prefix flush in call order.
 			const measured: ToolResult = { ...result, durationMs: clock() - startedAt };
+			settled[index] = measured;
 			onEvent?.({ type: "tool_settled", result: measured });
-			return measured;
-		}),
+			flush();
+		}
+	};
+	const workers = Array.from({ length: Math.min(MAX_CONCURRENT_SAFE_CALLS, runnable.length) }, () =>
+		worker(),
 	);
-	// Phase 3 — call-order emission: deterministic tool_end and result order.
-	for (const result of settled) {
-		results.push(persistableResult(result));
-		onEvent?.({ type: "tool_end", result });
+	// runTool never rejects (it catches everything), so a rejection here can
+	// only come from a throwing onEvent observer (tool-settle design §6.10's
+	// exposure). Wider than the pre-window Promise.all in one way: sibling
+	// workers keep claiming and flushing AFTER the first throw escapes this
+	// function — the cursor prevents duplicate emissions, but late settles can
+	// still push into `results` after the caller has seen the rejection. No
+	// caller reads `results` on that path today (the loop aborts the turn);
+	// recorded rather than guarded (a `broken` flag would only stop display
+	// updates, not the semantic abort already in flight).
+	try {
+		await Promise.all(workers);
+	} finally {
+		flush(); // settled-but-unflushed prefix (abort path included)
 	}
 }
 

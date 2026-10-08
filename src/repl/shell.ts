@@ -753,14 +753,21 @@ export class TuiShell implements LineInput {
 		// so a `running` claim would be false. Task rows and the task suffix
 		// (genuine progress) stay, exactly as D10 established.
 		if (this.selector === null) {
-			for (const tool of this.activity.tools) nextSuffixes.set(tool.id, runningText(tool.startedAtMs));
+			// #sliding-window: a queued call has no timer yet — its execution
+			// has not started (tool_running rewrites the stamp and admits it).
+			for (const tool of this.activity.tools)
+				if (tool.queued !== true) nextSuffixes.set(tool.id, runningText(tool.startedAtMs));
 		}
 		// #task-inline-live-rows (B1): one fold per task call, but several observer
 		// sources may share a parent — aggregate their row groups so the fold keeps
 		// every source (the old region rendered one row group per source).
 		for (const agent of this.activity.agents) {
 			const parentKey = agent.taskToolId || agent.sourceId || "";
-			if (agent.taskToolId !== "") {
+			// #sliding-window: the parent task call is still queued — no timer
+			// (stay out of the taskStarts min-aggregation: the stamp is the
+			// pre-issue tool_start time, not an execution start).
+			const agentQueued = agent.queued === true;
+			if (agent.taskToolId !== "" && !agentQueued) {
 				const previous = taskStarts.get(parentKey);
 				if (previous === undefined || agent.startedAtMs < previous)
 					taskStarts.set(parentKey, agent.startedAtMs);
@@ -775,7 +782,9 @@ export class TuiShell implements LineInput {
 			const source = agent.sourceId ? identity.sources.get(agent.sourceId) : undefined;
 			const discriminator = `#${identity.ordinal}${source ? `.${source}` : ""}`;
 			const taskRows = [
-				`└─ pending ${discriminator} ${activityText(agent.agent)}`,
+				// #sliding-window: queued parents render `└─ queued` (no count,
+				// no timer) until tool_running admits them.
+				`${agentQueued ? `└─ queued ${discriminator}` : `└─ pending ${discriminator}`} ${activityText(agent.agent)}`,
 				activityText(agent.task),
 				...(agent.toolCount > 0 || agent.lastTool !== null
 					? [

@@ -23,11 +23,13 @@ export function defaultChildTimeoutMs(): number | undefined {
 	return process.stdout.isTTY ? undefined : 60 * 60 * 1000;
 }
 
-/** Max concurrent executions per chunk of concurrency-safe calls (M5b).
- *  The cap queues work into waves — it never drops calls — so it trades
- *  turn latency against endpoint pressure and worst-case deterministic
- *  tool_end wait (a fast call reports behind at most cap-1 slow siblings). */
-export const MAX_CONCURRENT_TASKS = 5;
+/** Max concurrent executions within one concurrency-safe run (M5b; renamed
+ *  #sliding-window — it caps every concurrency-safe call, not just `task`).
+ *  The cap queues work — it never drops calls — so it trades turn latency
+ *  against endpoint pressure. Enforced by the sliding window: any moment
+ *  runs at most this many calls; a released slot immediately admits the
+ *  next queued call in call order. */
+export const MAX_CONCURRENT_SAFE_CALLS = 5;
 
 /** Ink's built-in tool names (M18: moved here from extensions/registry so the
  *  MCP bridge shares the exact same hand list — the M16 P1 lesson was this

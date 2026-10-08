@@ -427,4 +427,24 @@ describe("#tool-settle: the settle event is not printable", () => {
 		expect(replay(true)).toBe(without);
 		expect(without).toContain("out"); // the run rendered something to compare
 	});
+
+	it("#sliding-window Renderer.event ignores tool_running: bytes identical with and without it", () => {
+		const replay = (withRunning: boolean): string => {
+			const sink = collector();
+			const renderer = new Renderer({
+				write: sink.write,
+				ansi: false,
+				liveTools: false,
+				toolStyle: "one-line",
+			});
+			renderer.event({ type: "tool_start", toolCallId: "a", name: "task", args: { prompt: "go" } });
+			if (withRunning) renderer.event({ type: "tool_running", toolCallId: "a" });
+			renderer.event({ type: "tool_end", result: okResult("done", "a") });
+			renderer.endRun();
+			return sink.output();
+		};
+		const without = replay(false);
+		expect(replay(true)).toBe(without);
+		expect(without).toContain("done"); // the run rendered something to compare
+	});
 });

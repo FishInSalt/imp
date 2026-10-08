@@ -32,15 +32,17 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "ink-grace-e2e-"));
 fs.mkdirSync(path.join(root, "cwd"), { recursive: true });
 fs.mkdirSync(path.join(root, "home"), { recursive: true });
 // Hung extension tool: never settles, ignores its signal. The keep-alive
-// interval stands in for a real tool's in-flight IO — without ANY referenced
-// handle the print-mode child would drain-exit before the SIGINT (the loop's
-// documented boundary: grace arms only AFTER an abort), which is not the
-// behavior under test.
+// interval stands in for a real tool's in-flight IO during the run and is
+// CLEARED on run_end (task-timer precedent) — without a referenced handle the
+// print child drain-exits before the SIGINT, and with an uncleared one it can
+// never exit after the run; both would be fixture artifacts (review MAJOR-1).
 fs.writeFileSync(path.join(root, "cwd", "hangtool.mjs"),
-  'const io = setInterval(() => {}, 1 << 30);\\n' +
-  'export default function (api) {\\n' +
-  '  api.registerTool({ name: "hangtool", description: "never settles, ignores the signal", parameters: { type: "object", additionalProperties: true }, async execute() { await new Promise(() => {}); return { output: "never" }; } });\\n' +
-  '}\\n');
+  'let io = null;\n' +
+  'export default function (api) {\n' +
+  '  api.on("run_start", () => { io = setInterval(() => {}, 1 << 30); });\n' +
+  '  api.on("run_end", () => { if (io) clearInterval(io); });\n' +
+  '  api.registerTool({ name: "hangtool", description: "never settles, ignores the signal", parameters: { type: "object", additionalProperties: true }, async execute() { await new Promise(() => {}); return { output: "never" }; } });\n' +
+  '}\n');
 const firstResponse = [
   'event: message_start\\ndata: {"type":"message_start","message":{"id":"m1","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}\\n\\n',
   'event: content_block_start\\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"hang1","name":"hangtool"}}\\n\\n',
@@ -70,11 +72,15 @@ server.listen(0, "127.0.0.1", function () {
       NO_COLOR: "1",
     },
   });
+  // BOTH streams captured: the interrupt hint goes to stdout (cli.ts) and the
+  // abandoning line to stderr — asserting each on its real channel separates
+  // "handler ran" from "exit was impossible" (review MAJOR-1).
   let stderr = "";
+  let stdout = "";
   child.stderr.on("data", function (d) { stderr += d.toString(); });
-  child.stdout.on("data", function () {});
+  child.stdout.on("data", function (d) { stdout += d.toString(); });
   const finish = function (code, note) {
-    fs.writeFileSync(resultPath, JSON.stringify({ code: code, note: note || "", stderr: stderr }));
+    fs.writeFileSync(resultPath, JSON.stringify({ code: code, note: note || "", stderr: stderr, stdout: stdout }));
     try { child.kill("SIGKILL"); } catch {}
     server.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -98,7 +104,7 @@ server.listen(0, "127.0.0.1", function () {
 `;
 
 describe("print-mode abort grace e2e (#abort-grace design §6.7)", () => {
-	// SKIPPED (open question, recorded in docs/design/abort-grace-design.md §8):
+	// SKIPPED (open question, recorded in docs/design/abort-grace-design.md §6b.2):
 	// with a keep-alive handle inside the hung tool (a stand-in for real
 	// in-flight IO), the CLI child ignores SIGINT entirely — grace never arms —
 	// in BOTH direct-shell and vitest-lineage runs. Without the handle the

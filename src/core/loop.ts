@@ -455,8 +455,9 @@ interface ToolCallRef {
  *
  *  The timer exists ONLY after an abort AND while executions are in flight:
  *  normal runs allocate one deferred per call and never arm anything. It is
- *  unref'd (a pending grace timer must not hold the event loop open in print
- *  mode) and cleared when the batch finishes.
+ *  deliberately NOT unref'd — it is the run's only liveness during the window
+ *  (an unref'd timer lets the loop drain past it; see the comment at the
+ *  setTimeout call) — and is cleared when the batch finishes.
  *
  *  Load-bearing invariant (design §2.1, review MAJOR-2): `runTool` never
  *  rejects (it catches everything). The race loser stays pending forever in
@@ -512,6 +513,10 @@ function createGraceRegistry(signal: AbortSignal | undefined): {
 		if (armed || entries.size === 0) return;
 		armed = true;
 		fire();
+		// NOTE: after the deadline fires (armed stays true, timer cleared), a
+		// NEWLY registered entry would never resolve — unreachable in practice:
+		// both callers check signal.aborted before every new claim/serial call
+		// and stop claiming once aborted, so no registration follows the fire.
 	};
 	const onAbort = (): void => arm();
 	if (signal !== undefined) {
@@ -539,6 +544,10 @@ function createGraceRegistry(signal: AbortSignal | undefined): {
 			// Fire-and-forget observation of the loser (design §2.1): with
 			// runTool never rejecting, this only silences the (impossible
 			// today) rejection path; a late real settle is logged and dropped.
+			// Registration order is load-bearing: run.then is attached to the
+			// RACED promise's then-chain AFTER run.then, so when run settles the
+			// entry is still present here — the "settled late" log can only fire
+			// for a settle that truly lost the race to the grace deadline.
 			run.then(
 				() => {
 					if (entries.has(entry)) entries.delete(entry);

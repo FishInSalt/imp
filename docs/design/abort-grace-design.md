@@ -62,9 +62,11 @@ deadline 到:对 registry 中每条 entry:
 ```
 
 关键点:
-- **计时器只在 abort 后、且 registry 非空时创建**;创建即 `unref()`
-  (REPL 有 stdin 兜底;print 模式事件循环不被多余的 10s 挂住——评审
-  MAJOR-4),runAgentLoop 收尾 finally 中 clear。
+- **计时器只在 abort 后、且 registry 非空时创建**;**不 unref**(§6b.1
+  的现场更正:挂死工具的 await 不保活事件循环,unref 的计时器会让 print
+  模式在宽限触发前 drain-exit——评审 MAJOR-4 的建议在本场景恰好相反,
+  该计时器正是窗口期内 run 的唯一活性来源);"不滞留"由批级 finally clear
+  保证。
 - **race 输家的处置**(评审 MAJOR-2):race 输家的 continuation 在 race
   settle 后是 no-op,不存在"晚 settle 写入 settled[]"的路径;但输家
   promise 若之后真 settle/reject 无人观测。处置:fire-and-forget
@@ -187,7 +189,7 @@ loop 层(loop-concurrency.test.ts 新 describe):
    exit code 0(单 SIGINT 的既有 resolve 语义,MAJOR-5 更正),stderr 含
    abandoning 行。
 
-## 6b. 实现期发现:两个未决问题(2026-10-08,如实记档)
+## 6b. 实现期发现与未决问题(2026-10-08,如实记档)
 
 实现与排障过程中发现两个**超出本设计预想**的问题,均已实测复现、未解决:
 
@@ -213,6 +215,24 @@ loop 层(loop-concurrency.test.ts 新 describe):
    信号行为与 direct 不同(普通 node 子进程不受影响);e2e 采用中间
    plain-node runner + sh 跳转亦未绕开。与问题 2 的相对权重未定,但 e2e
    目前 `it.skip`(文件内注释指向本节)。
+
+### 6b.4 评审 round 2 折叠(2026-10-08)
+
+- **MAJOR-1(e2e fixture 自坏)**:原 fixture 的模块级 `setInterval` 永不清除
+  → 子进程按构造不可能自行退出;且 stdout 被丢弃 → "无 interrupt 行"在观测
+  通道上不存在。**§6b.2 的证据基座因此大部分是仪表假象**:已按
+  run_start/run_end 清理保活 + 双流捕获重建 fixture(仍 it.skip,un-skip
+  即翻);§6b.2 的怀疑方向("interval 空转推迟信号处理")已被静态证伪
+  (同形状普通 node 子进程在两种血统下正常响应 SIGINT),待用新 fixture
+  重新基线化。
+- **MAJOR-2(no-unref 零覆盖 + 矛盾注释)**:loop.ts 接口注释与 fire 处注释
+  相反、本文 §2.1 的 unref 表述过时——均已更正;fake timers 不建模 ref
+  语义,6 个 loop 测试对 unref 变异不红,唯一能钉的 e2e 处于 skip——
+  **pin 缺口记档**,un-skip e2e 时一并补。
+- m1(test 2 缺 "settled late" 断言)、m2(latch 场景宽限从注册起算,
+  略宽于"abort 后 10s")、m3(e2e fixture 待 hermetic 化)、m4(嵌套
+  双重范围外:子 gate 挂死 + 子时钟耗尽时父/子宽限双双失效——§2.5 的
+  嵌套推论,记入 §2.6 待补)、n1-n4 均已折叠或记档。
 
 ## 7. Review log
 

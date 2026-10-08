@@ -748,12 +748,19 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 		vi.useFakeTimers();
 		try {
 			const lateErrors: unknown[] = [];
+			const lateLog: string[] = [];
 			const unhandled = (err: unknown): void => {
 				lateErrors.push(err);
 			};
+			const writeStream = process.stderr.write.bind(process.stderr);
+			vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+				if (typeof chunk === "string" && chunk.includes("settled late")) lateLog.push(chunk);
+				return writeStream(chunk as string);
+			});
 			process.on("unhandledRejection", unhandled);
 			onTestFinished(() => {
 				process.off("unhandledRejection", unhandled);
+				vi.restoreAllMocks();
 			});
 			let releaseTool: (() => void) | undefined;
 			const tool: Tool = {
@@ -794,6 +801,8 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 			const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
 			expect(historyResults[0]?.content).toContain("did not respond");
 			expect(lateErrors).toEqual([]);
+			// The loser's late real settle is logged and dropped (design §6.2).
+			expect(lateLog.some((l) => l.includes("settled late, result dropped"))).toBe(true);
 			process.off("unhandledRejection", unhandled);
 		} finally {
 			vi.useRealTimers();

@@ -13,6 +13,7 @@ const paths = [
 	"CHANGELOG.md",
 	"docs/index.md",
 	"docs/cli.md",
+	"docs/zh-CN/index.md",
 	"examples/agents/scout.md",
 	"dist/cli.js",
 ];

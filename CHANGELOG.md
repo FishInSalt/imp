@@ -17,6 +17,13 @@ their original release identity.
   `_site/` from the README and the ten docs pages (link rewrites, heading
   anchors, sitemap); `.github/workflows/pages.yml` deploys it to
   https://fishinsalt.github.io/ink/, and the npm `homepage` now points there.
+- Full Simplified-Chinese mirror of the docs site: `docs/zh-CN/` (ten
+  pages) builds to `/zh/` with a per-page language switcher, `hreflang`
+  alternates, a translated sitemap, and a translations-may-lag footer
+  note; the npm package ships the mirror. `scripts/check-docs.mjs` now
+  enforces mirror completeness, en↔zh structural parity (heading level
+  sequences, byte-identical code fences, link-target multisets), and
+  anchor mappability; `test/docs-site.test.ts` exercises the built site.
 - Promotion assets: `assets/demo.tape` + `assets/demo-setup.sh` record the
   README demo GIF, and `assets/social-preview.html` →
   `assets/social-preview.png` is the repository social preview card.
@@ -25,6 +32,9 @@ their original release identity.
 
 - Docs site: the wordmark cursor now blinks like a terminal cursor; the
   animation is turned off under `prefers-reduced-motion: reduce`.
+- `README.zh-CN.md`: the site link now points at the Chinese home
+  (`.../ink/zh/`), and its two shell blocks carry the English comments
+  byte-identical to README.md (the code-fence parity rule).
 
 ## [0.2.3] - 2026-10-06
 

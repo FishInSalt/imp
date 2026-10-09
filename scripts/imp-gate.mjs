@@ -26,6 +26,8 @@ const SURVIVORS = [
 	"test/settings.test.ts",
 	// comments mentioning the legacy namespace
 	"src/core/messages.ts",
+	"scripts/imp-gate.mjs", // self (regex literal)
+	"test/fixture-sweep.test.ts", // foreign-decoy sweep-rule test inputs
 	"test/helpers/cli-fixture.ts",
 	"test/child-resume.test.ts",
 ];

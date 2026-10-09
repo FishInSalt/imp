@@ -163,6 +163,7 @@ describe("strict package tar bytes", () => {
 		"src/cli.ts",
 		"test/x.test.ts",
 		"docs/design/x.md",
+		"docs/zh-CN/nested/x.md",
 		"scripts/package-smoke.mjs",
 		"dist/.env",
 		"dist/../../auth.json",

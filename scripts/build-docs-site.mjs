@@ -19,9 +19,10 @@
  * Usage:  node scripts/build-docs-site.mjs   (also `npm run docs:site`)
  * Output: _site/ (gitignored; deployed by .github/workflows/pages.yml)
  */
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, posix, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { marked } from "marked";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,6 +139,7 @@ const PUBLISHED = {
 	]),
 	zh: new Map([
 		["README.md", "index.html"],
+		["README.zh-CN.md", "zh/index.html"],
 		...DOC_FILES.map((file) => [`docs/zh-CN/${file}`, `zh/docs/${file.replace(/\.md$/, ".html")}`]),
 		...DOC_FILES.map((file) => [`docs/${file}`, `zh/docs/${file.replace(/\.md$/, ".html")}`]),
 	]),
@@ -506,6 +508,10 @@ export async function buildSite({ outDir = defaultOutDir } = {}) {
 	return { pages };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	existsSync(process.argv[1]) &&
+	realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
 	await buildSite();
 }

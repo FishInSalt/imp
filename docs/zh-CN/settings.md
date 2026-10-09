@@ -43,7 +43,7 @@
 | `~/.ink/models-catalog.json` | 模型目录磁盘缓存（4 小时刷新窗口） |
 | `~/.ink/commands/` | Markdown 快捷命令（`/<filename>`） |
 | `~/.ink/extensions/` | 全局扩展 |
-| `~/.ink/agents/` | 全局具名代理 |
+| `~/.ink/agents/` | 全局具名 agent |
 | `~/.ink/skills/` | 全局技能 |
 | `~/.ink/SYSTEM.md` | 自定义系统提示（全局层级） |
 | `~/.ink/APPEND_SYSTEM.md` | 追加的提示段落（全局层级） |

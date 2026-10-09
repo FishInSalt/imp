@@ -80,7 +80,7 @@ for (const doc of topicDocs) {
 // (c)+(d) relative markdown links resolve
 function checkLinks(file, label) {
 	const text = readFileSync(file, "utf8");
-	for (const match of text.matchAll(/\]\(([^)#\s]+)(?:#[^)\s]*)?\)/g)) {
+	for (const match of text.matchAll(/\]\(([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\)/g)) {
 		const target = match[1];
 		if (/^[a-z]+:\/\//i.test(target) || target.startsWith("/")) continue; // external/absolute
 		const resolved = resolve(dirname(file), target);
@@ -132,7 +132,7 @@ function fencedBlocks(text) {
 }
 
 function linkTargets(text) {
-	return [...text.matchAll(/\]\(([^)\s]+)\)/g)].map((match) => match[1]);
+	return [...text.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((match) => match[1]);
 }
 
 function removeOnce(list, value) {
@@ -219,7 +219,7 @@ function enCounterpart(relPath) {
 async function checkAnchors(relPath) {
 	const text = readFileSync(join(root, relPath), "utf8");
 	const isZh = relPath.startsWith("docs/zh-CN/") || relPath === "README.zh-CN.md";
-	for (const match of text.matchAll(/\]\(([^)\s#]*)#([^)\s]+)\)/g)) {
+	for (const match of text.matchAll(/\]\(([^)\s#]*)#([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
 		const [, pathPart, anchor] = match;
 		let target;
 		if (pathPart === "") {

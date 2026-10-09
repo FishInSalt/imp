@@ -112,7 +112,7 @@ alt 系列快捷键的终端说明：iTerm2、Ghostty、Kitty 和较新的 VS Co
 - [扩展](docs/extensions.md)——工具、命令、事件门控、配色、内置示例
 - [技能](docs/skills.md)——SKILL.md 包、发现层级
 - [MCP](docs/mcp.md)——stdio 与 Streamable HTTP 服务器、配置发现
-- [子代理](docs/subagents.md)——`task` 工具、具名代理、worktree 隔离
+- [子代理](docs/subagents.md)——`task` 工具、具名 agent、worktree 隔离
 - [图片](docs/images.md)——视觉模型、粘贴、缩放阶梯
 
 npm 包会随包发布这些文档；agent 会把自己的问题路由到文档里。内置的

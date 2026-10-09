@@ -1,6 +1,6 @@
 # Test Fixture Hygiene & Zero-imp New Artifacts — Design
 
-Status: round 2 folded (owner Track C decision recorded); implementation pending
+Status: APPROVED (3 rounds: NEEDS-FIXES → NEEDS-FIXES → APPROVE); round-3 implementation notes folded; implementation pending
 Branch: `feat/test-fixture-hygiene`
 Date: 2026-10-09
 
@@ -41,15 +41,16 @@ This batch therefore has two tracks that share one code touch:
 |---|---|---|
 | `mkdtemp*("imp-…")` | 298 calls (295 quoted + 3 template literals) | 72 files |
 | `mkdtemp*("ink-…")` | 15 calls | — |
-| TMPDIR top-level FILE writers via template literals (no mkdtemp): `imp-ds-catalog-*` deepseek:98, `imp-ms-catalog-*` moonshotai:124, `imp-fresh-auth-*` fresh-install-hint:53, `imp-fresh-tui-*` repl-tui:2335/2363/2393, `imp-auth-test-*` codex-auth:43 | 8 sites / 5 files | **Currently leaking** (no unlink/rmSync in 3 of the files) — renamed + lifecycle'd in A1/B; invisible to the draft's quote-only inventory (round-2 MAJOR-1) |
-| worktree-base dirs via template literals: `imp-wt-*` task-tool.test (16), worktree/startup/child-launch-validation (1 each) | ~19 sites | routed through mkTempDir |
+| TMPDIR top-level FILE writers via template literals (no mkdtemp): `imp-ds-catalog-*` deepseek:98, `imp-ms-catalog-*` moonshotai:124, `imp-fresh-auth-*` fresh-install-hint:53, `imp-smr-auth-*` startup-model-resolution:53, `imp-fresh-tui-*` repl-tui:2335/2363/2393/2424, `imp-auth-test-*` codex-auth:43 | 9 sites / 6 files | **Currently leaking** (5 of 6 files have no cleanup; codex-auth unlinks at :44/:96/:160) — renamed + lifecycle'd in A1/B; invisible to the draft's quote-only inventory (round-2 MAJOR-1, split corrected round-3 MINOR-A) |
+| worktree-base dirs via template literals: `imp-wt-*` task-tool.test (16), worktree + child-launch-validation (1 each) | 18 sites | routed through mkTempDir (startup-model-resolution's writer is a FILE, not a wt-base — MINOR-A). NOTE: child-launch-validation:389 stays a §5 survivor (test INPUT forging legacy names; has its own afterEach cleanup — round-3 MINOR-B), so 17 of 18 rename, 1 survives |
 | non-mkdtemp `imp-` dir writers (`freshDir`/`setup("imp-…")`) | ~30 | child-lease-scripts.test.ts (4), child-lease.test.ts (26) |
 | `IMP_LEASE_WORKER` / `IMP_LEASE_SCRIPT` env IPC markers | 10 lines | 5 files (settings-setup.ts :15/:21, both lease-worker helpers ×2 sites, multiprocess :17, scripts :16) |
 | `/tmp` hardcoded snapshot writer | 2 sites (:331 sentinel-only, :396 real) | builtin-visual-verification.test.ts |
 | `impVersion` write arm | 0 (already ink-only; builder writes `inkVersion`) | — |
 
-Distinct tmpdir fixture prefixes in test code: **225** (enum used verbatim
-for §A2's sweep list).
+Distinct tmpdir fixture prefixes: authoritative count = generated
+`fixture-prefixes.ts` (the draft's "225" was a double-quote-era tally;
+regenerate at implementation and record in the file header).
 
 ### 1.2 Prefix provenance (corrected after review M-1)
 
@@ -244,7 +245,7 @@ physical objects but zero harm; removal is a separate decision) — see
 | `IMP_MODEL` / `IMP_HEALTH_TOOL_OPEN_MS` / `IMP_AUTH_PATH` etc. env-var TEST INPUTS | test INPUT | Prove obsolete config is ignored/cleared (settings-setup.ts env scrub); they are inputs naming the LEGACY env, not artifacts this repo writes |
 | child-launch-validation.test.ts:389 `imp-wt-` | test INPUT | Forges legacy-named child fixture |
 | `/nonexistent-imp-auth.json` literals | test INPUT | Nonexistent-path sentinel |
-| codex-auth.test.ts:43 `imp-auth-test-${pid}.json` | test INPUT (written to disk) | Deniable: SHOULD be renamed in this batch — exception only if the test asserts on the literal; implementation must check and prefer rename |
+| (removed — renamed in this batch) | — | Round-3 MINOR-C: verified no assertion on the literal; definitively renamed to `ink-auth-test-*`, not a survivor |
 
 Everything else this repo writes is `ink-` after this batch (codex-auth's
 disk-written sentinel is renamed, not exempted). The §7.3 gate's allowlist
@@ -287,7 +288,7 @@ batch adds none).
 2. **Leak gate**: before/after TMPDIR snapshot — full-suite run adds 0
    new entries matching the committed prefix inventory (visual snapshots
    now land in TMPDIR with 24h TTL instead of accumulating).
-3. **imp gate**: `git grep -nE "[\"\`']imp-|IMP_" -- test/ src/
+3. **imp gate**: `git grep -nE "[\"\`']\.?imp-|IMP_" -- test/ src/
    scripts/` — the quote-class includes backticks (round-2 MAJOR-1; the
    draft's `'"imp-'` regex was blind to template-literal writers) —
    matches ONLY the enumerated §5 survivor sites; the gate script

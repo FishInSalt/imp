@@ -10,6 +10,11 @@ their original release identity.
 
 ### Added
 
+- `/sessions prune`: sweep orphaned child sessions (subagent transcripts
+  whose parent session file no longer exists) after an interactive
+  confirm — header.id matching (never filename), live-lease exemption
+  via child-lease semantics.
+
 - Chinese README (`README.zh-CN.md`): full translation of the root README
   with a language switch on both; npm packs it automatically (README* rule),
   so it ships with the package and the smoke allowlist admits it.

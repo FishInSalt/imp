@@ -4,7 +4,9 @@
 import { execFileSync } from "node:child_process";
 
 const SURVIVORS = [
-	"scripts/imp-gate.mjs", // audited survivor (gate-managed)
+	"scripts/imp-gate.mjs", // audited survivor (gate-managed; regex literal + header docs)
+	"test/helpers/fixture-prefixes.ts", // audited survivor (header documents exclusion audit)
+	"test/helpers/mktemp.ts", // audited survivor (header documents the ink- prefix rule)
 	"scripts/release-guards.mjs", // audited survivor (gate-managed)
 	"src/core/worktree.ts", // audited survivor (gate-managed)
 	"test/child-launch-validation.test.ts", // audited survivor (gate-managed)
@@ -20,11 +22,21 @@ const SURVIVORS = [
 	"test/repl-commands.test.ts", // audited survivor (gate-managed)
 ];
 
-const out = execFileSync(
-	"git",
-	["grep", "-nE", '["\'`]\\.?imp-|IMP_', "--", "test/", "src/", "scripts/"],
-	{ encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
-);
+let out;
+try {
+	out = execFileSync(
+		"git",
+		["grep", "-nE", '["\'`]\\.?imp-|IMP_', "--", "test/", "src/", "scripts/"],
+		{ encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+	);
+} catch (err) {
+	const e = err;
+	if (e.status === 1) {
+		console.log("imp gate: OK (0 matches — no imp bytes anywhere)");
+		process.exit(0);
+	}
+	throw err;
+}
 const lines = out.split("\n").filter((l) => l.trim() !== "");
 const offenders = lines.filter((l) => {
 	const file = l.split(":")[0];

@@ -222,7 +222,7 @@ async function gitRepoWithSeed(base: string, sub?: string): Promise<string> {
 		if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 	};
 	rgit(["init", "-q", "-b", "main"]);
-	rgit(["config", "user.email", "t@imp.dev"]);
+	rgit(["config", "user.email", "t@ink.invalid"]);
 	rgit(["config", "user.name", "t"]);
 	writeFileSync(path.join(seedDir, "seed.txt"), "committed\n", "utf8");
 	rgit(["add", "."]);
@@ -1275,7 +1275,7 @@ describe("SA-07 resume", () => {
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 		};
 		rgit(["init", "-q", "-b", "main"]);
-		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.email", "t@ink.invalid"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(repo, "seed.txt"), "committed\n", "utf8");
 		rgit(["add", "."]);

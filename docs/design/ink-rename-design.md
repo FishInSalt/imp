@@ -367,7 +367,7 @@ amendment authorizes none.
 
 | Reader | New record (`inkVersion`) | Pre-change record (`impVersion`) |
 | --- | --- | --- |
-| New Ink (this change) | Normal path; the version gate decides resume | Parses via the legacy arm; normalized in memory; under the A1-D2 version requirement all pre-change records are version-drift; refusal text unchanged |
+| New Ink (this change) | Normal path; the version gate decides resume | ~~Parses via the legacy arm; normalized in memory~~ **(superseded 2026-10-09: legacy arm removed — parses invalid; see §11.5 amendment)**; under the A1-D2 version requirement all pre-change records are version-drift; refusal text unchanged |
 | Pre-change builds (all shipped versions) | Refused as schema-invalid (missing `impVersion`), before lease/repair/provider | Unchanged pre-change behavior |
 
 No on-disk coexistence of the two field names is produced; old names appear
@@ -418,10 +418,12 @@ retained").
    case asserts `.ink-machine-id` present and `.imp-machine-id` never created.
 2. Parser cases (in `test/child-launch.test.ts`): new key present and a
    nonempty string (accepted); present but empty/non-string (invalid, no
-   fallback); absent with a valid legacy string (accepted via fallback);
+   fallback); ~~absent with a valid legacy string (accepted via fallback);
    legacy present but empty/non-string (invalid); both present and equal
    (accepted, normalized); both present and unequal (invalid); the normalized
-   record has no own `impVersion` and the input object is not mutated.
+   record has no own `impVersion` and the input object is not mutated~~
+   **(these legacy-arm cases were superseded 2026-10-09 by Track C: any
+   `impVersion` carrier is invalid)**.
    `listChildLaunches` reuses the parser and needs no separate rule (stated).
 3. `test/child-lease*.ts`: with the new file name, publish-once/no-clobber,
    empty-file refusal and adopt behavior stay unchanged in strength; new code
@@ -463,8 +465,12 @@ retained").
   machine-id files may coexist in one children directory (A1-D2).
 - Server-side treatment of the new originator beyond authentication (quota,
   telemetry segmentation) is not observable from a successful run; recorded.
-- The legacy read arm is retained indefinitely: records live in user session
-  files and §3.4 forbids rewriting or deleting historical bytes.
+- ~~The legacy read arm is retained indefinitely: records live in user session
+  files and §3.4 forbids rewriting or deleting historical bytes.~~
+  **Superseded (2026-10-09, test-fixture-hygiene Track C, owner-approved):
+  the read arm was removed and the 12 imp-era records (with their 3 finished
+  parent sessions) deleted — see §11.5 amendment. inkVersion is the sole
+  accepted key; any impVersion carrier parses invalid.**
 - No migration is needed or performed; upgrading leaves old files untouched.
 
 ### 11.7 Review record

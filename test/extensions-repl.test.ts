@@ -97,7 +97,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 			if (r.status !== 0) throw new Error(`git ${flags.join(" ")}: ${r.stderr}`);
 		};
 		g(["init", "-q", "-b", "main"]);
-		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.email", "t@ink.invalid"]);
 		g(["config", "user.name", "t"]);
 		await writeFile(path.join(cwd, "seed.txt"), "committed\n", "utf8");
 		g(["add", "."]);

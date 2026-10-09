@@ -17,8 +17,8 @@ import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 async function makeRepo(): Promise<string> {
 	const root = await mkTempDirAsync("ink-wt-repo-");
 	git(root, ["init", "-q", "-b", "main"]);
-	git(root, ["config", "user.email", "test@imp.dev"]);
-	git(root, ["config", "user.name", "imp test"]);
+	git(root, ["config", "user.email", "test@ink.invalid"]);
+	git(root, ["config", "user.name", "ink test"]);
 	writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
 	git(root, ["add", "."]);
 	git(root, ["commit", "-qm", "seed"]);

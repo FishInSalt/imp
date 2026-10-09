@@ -1399,13 +1399,13 @@ describe("/sessions + /resume", () => {
 			`${JSON.stringify({ type: "session", id: "c1", timestamp: "2026-10-09T00:00:00.000Z", cwd: "/w", launch: { version: 1, parentSessionId: "gone", inkVersion: "9.9.9" } })}\n`,
 		);
 		env.ctx.sessionsRootPath = root;
-		// picker: cancel (index 1) → kept
-		env.ctx.select = async () => 1;
+		// picker: cancel (index 0, the highlighted default) → kept
+		env.ctx.select = async () => 0;
 		await dispatchCommand("/sessions prune", env.ctx);
 		expect(env.output()).toContain("prune cancelled");
 		expect(existsSync(childPath)).toBe(true);
-		// picker: delete (index 0) → gone
-		env.ctx.select = async () => 0;
+		// picker: delete (index 1) → gone
+		env.ctx.select = async () => 1;
 		await dispatchCommand("/sessions prune", env.ctx);
 		expect(env.output()).toContain("pruned 1 orphaned child session(s)");
 		expect(existsSync(childPath)).toBe(false);

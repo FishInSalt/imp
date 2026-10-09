@@ -1,6 +1,6 @@
 # Test Fixture Hygiene & Zero-imp New Artifacts — Design
 
-Status: APPROVED (3 rounds: NEEDS-FIXES → NEEDS-FIXES → APPROVE); round-3 implementation notes folded; implementation pending
+Status: IMPLEMENTED and MERGED (385d2fb, 2026-10-09); followup review A1-B5/C1-C4 folded in fix/fixture-hygiene-followup
 Branch: `feat/test-fixture-hygiene`
 Date: 2026-10-09
 
@@ -246,6 +246,8 @@ physical objects but zero harm; removal is a separate decision) — see
 | child-launch-validation.test.ts:389 `imp-wt-` | test INPUT | Forges legacy-named child fixture |
 | `/nonexistent-imp-auth.json` literals | test INPUT | Nonexistent-path sentinel |
 | (removed — renamed in this batch) | — | Round-3 MINOR-C: verified no assertion on the literal; definitively renamed to `ink-auth-test-*`, not a survivor |
+| package-smoke.mjs:396 `.bin/imp` absence check | test INPUT (anti-regression) | Asserts the OLD executable alias is NOT installed — renaming defeats the purpose (followup C4) |
+| fixture git identities | renamed | `t@imp.dev`/`"imp test"` (15 sites) → `t@ink.invalid`/`"ink test"` (followup C4; no assertion referenced the imp forms) |
 
 Everything else this repo writes is `ink-` after this batch (codex-auth's
 disk-written sentinel is renamed, not exempted). The §7.3 gate's allowlist
@@ -285,9 +287,12 @@ batch adds none).
 ## 7. Verification
 
 1. Full suite green (`npx vitest run`) — 143 files / 3040+ tests.
-2. **Leak gate**: before/after TMPDIR snapshot — full-suite run adds 0
-   new entries matching the committed prefix inventory (visual snapshots
-   now land in TMPDIR with 24h TTL instead of accumulating).
+2. **Leak gate**: before/after TMPDIR snapshot — a full-suite run adds 0
+   entries that OUTLIVE the 24h sweep (fixture dirs are removed
+   per-test; visual snapshots carry a 24h TTL; ink-output logs are swept
+   at 24h via the inventory's manual adds). Within-24h transient entries:
+   6 visual snapshots + 2 clipboard captures per run, all
+   designed-retention or sweep-covered.
 3. **imp gate**: `git grep -nE "[\"\`']\.?imp-|IMP_" -- test/ src/
    scripts/` — the quote-class includes backticks (round-2 MAJOR-1; the
    draft's `'"imp-'` regex was blind to template-literal writers) —

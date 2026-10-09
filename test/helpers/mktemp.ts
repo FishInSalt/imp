@@ -6,7 +6,7 @@
  * that case.
  *
  * Prefix discipline: must start with "ink-" (asserted). This is the
- * enforcement point for the zero-imp rule — a stray "ink-" prefix fails
+ * enforcement point for the zero-imp rule — a stray "imp-" prefix fails
  * loudly at authoring time. */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

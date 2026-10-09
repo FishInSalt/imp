@@ -19,7 +19,7 @@ const MODEL = {
 	wireModelId: "claude-sonnet-4-6",
 	reference: "anthropic/claude-sonnet-4-6",
 } as const;
-const SYSTEM_TEXT = "You are imp.\n\n- Date: 2026-09-28\n\nrest";
+const SYSTEM_TEXT = "You are the agent.\n\n- Date: 2026-09-28\n\nrest";
 const AGENT_BODY = "You are scout.";
 const CONTEXT_PATH = "/p/AGENTS.md";
 const PROMPT_PATH = "/p/.imp/SYSTEM.md";
@@ -366,7 +366,7 @@ function git(cwd: string, args: string[]): { status: number; stdout: string; std
 
 function seedRepo(dir: string): void {
 	git(dir, ["init", "-q", "-b", "main"]);
-	git(dir, ["config", "user.email", "t@imp.dev"]);
+	git(dir, ["config", "user.email", "t@ink.invalid"]);
 	git(dir, ["config", "user.name", "t"]);
 	writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
 	git(dir, ["add", "."]);
@@ -499,7 +499,7 @@ describe("child continuation — worktree probe", () => {
 		expect(init.status).toBe(0);
 		writeFileSync(path.join(world.wtPath, "f.txt"), "x\n", "utf8");
 		git(world.wtPath, ["add", "."]);
-		git(world.wtPath, ["-c", "user.email=t@imp.dev", "-c", "user.name=t", "commit", "-qm", "init"]);
+		git(world.wtPath, ["-c", "user.email=t@ink.invalid", "-c", "user.name=t", "commit", "-qm", "init"]);
 		const verdict = await validateChildContinuation(world.file, world.parent, world.current);
 		expect(codes(verdict.reasons)).toContain("worktree-replaced");
 	});

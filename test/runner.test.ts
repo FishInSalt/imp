@@ -793,7 +793,7 @@ describe("child model vision binding (SA-02)", () => {
 				if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
 			};
 			rgit(["init", "-q", "-b", "main"]);
-			rgit(["config", "user.email", "t@imp.dev"]);
+			rgit(["config", "user.email", "t@ink.invalid"]);
 			rgit(["config", "user.name", "t"]);
 			rgit(["add", "."]);
 			rgit(["commit", "-qm", "seed"]);

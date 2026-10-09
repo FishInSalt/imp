@@ -1,21 +1,28 @@
-/** Test-fixture tmpdir prefix inventory — GENERATED, do not hand-edit.
- * (test-fixture-hygiene-design §1.2/§A2; regenerated after code-review R2 N-1)
+/**
+ * Test-fixture tmpdir prefix inventory — GENERATED, do not hand-edit.
+ * (test-fixture-hygiene-design §1.2/§A2; followup review B1)
  *
- * Harvest method (quote-class, context-free, test/ + scripts/): every string
- * and template-literal prefix matching /^(imp|ink)-[a-z0-9-]+$/, minus 4
- * audited non-fixture inputs (imp-agent samples, imp-worktree-historical /
- * imp-worktree-task-* legacy payloads), plus 3 manually-audited
- * variable-constructed script prefixes (ink-grace-base-, ink-package-smoke-,
- * ink-isolation-static-). Indirect parameterized call sites are covered
- * because the harvest is context-free.
+ * Generator: scripts/gen-fixture-prefixes.mjs (committed — reproduce by
+ * running it and diffing). Harvest = ALL string and template-literal
+ * tokens matching /^(imp|ink)-[a-z0-9-]+$/ in test/ + scripts/ EXCLUDING
+ * this file (self-reference), then imp→ink rename mapping (this batch
+ * renamed every repo-written imp- prefix), then audited exclusions,
+ * then audited manual adds.
+ *
+ * Excluded (audited): package identity ("imp-agent"/"ink-agent");
+ * legacy-name test payloads (imp-worktree-historical, imp-worktree-task-*);
+ * sweep-test decoy/sample strings (imp-policy-xyz, imp-auth-foreign,
+ * ink-lease-s1-abc, ink-wt-base-123).
+ * Manual adds (variable-constructed or src/-side writers, grep-invisible
+ * in test/): ink-grace-base-, ink-package-smoke-, ink-isolation-static-,
+ * ink-output- (B2: truncated-output logs from src/core/tools/bash.ts).
  *
  * The §A2 stale-root sweep deletes tmpdir() entries matching one of these
- * prefixes AND mtime>24h. Regenerate after adding fixtures and diff.
+ * prefixes AND mtime>24h.
  */
 export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-abort-",
 	"ink-ac-",
-	"ink-agent",
 	"ink-agents-",
 	"ink-agents-home-",
 	"ink-ant-",
@@ -23,7 +30,6 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-arr-proj-",
 	"ink-ask-",
 	"ink-auth-",
-	"ink-auth-foreign",
 	"ink-auth-test-",
 	"ink-bash-escapee-",
 	"ink-builtin-presentation-",
@@ -55,7 +61,6 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-clv-",
 	"ink-clv-cwd-",
 	"ink-clv-elsewhere-",
-	"ink-clv-repo-",
 	"ink-cmds-",
 	"ink-compact-",
 	"ink-compaction-wiring-",
@@ -114,7 +119,6 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-lease-legacy4-",
 	"ink-lease-mp-",
 	"ink-lease-s1-",
-	"ink-lease-s1-abc",
 	"ink-lease-s2-",
 	"ink-lease-s3-",
 	"ink-lease-s4-",
@@ -159,9 +163,9 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-name-",
 	"ink-nested-",
 	"ink-nowt-",
+	"ink-output-",
 	"ink-package-smoke-",
 	"ink-parallel-",
-	"ink-policy-xyz",
 	"ink-pricing-e2e-",
 	"ink-prov-swap-",
 	"ink-prune-",
@@ -293,7 +297,6 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-wt-b2-",
 	"ink-wt-b2-base-",
 	"ink-wt-base-",
-	"ink-wt-base-123",
 	"ink-wt-cwd-",
 	"ink-wt-e2e-",
 	"ink-wt-e2e-base-",

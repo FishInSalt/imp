@@ -834,7 +834,7 @@ describe("worktree isolation (M6b)", () => {
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 		};
 		rgit(["init", "-q", "-b", "main"]);
-		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.email", "t@ink.invalid"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
 		rgit(["add", "."]);
@@ -946,7 +946,7 @@ describe("worktree isolation (M6b)", () => {
 			if (r.status !== 0) throw new Error(`git: ${r.stderr}`);
 		};
 		rgit(["init", "-q", "-b", "main"]);
-		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.email", "t@ink.invalid"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(root, "seed.txt"), "x\n", "utf8");
 		rgit(["add", "."]);
@@ -1067,7 +1067,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	async function seedRepo(dir: string): Promise<void> {
 		const g = gitAt(dir);
 		g(["init", "-q", "-b", "main"]);
-		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.email", "t@ink.invalid"]);
 		g(["config", "user.name", "t"]);
 		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
 		g(["add", "."]);
@@ -1306,7 +1306,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			parameters: Type.Object({}),
 			async execute() {
 				const g = gitAt(cwd);
-				g(["config", "user.email", "child@imp.dev"]);
+				g(["config", "user.email", "child@ink.invalid"]);
 				g(["config", "user.name", "child"]);
 				g(["add", "."]);
 				g(["commit", "-qm", "child work"]);
@@ -1417,7 +1417,7 @@ describe("cap-hit transcript handoff (e2e)", () => {
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 		};
 		rgit(["init", "-q", "-b", "main"]);
-		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.email", "t@ink.invalid"]);
 		rgit(["config", "user.name", "t"]);
 		const { writeFileSync: wf } = await import("node:fs");
 		wf(path.join(repo, "seed.txt"), "committed\n", "utf8");
@@ -1491,7 +1491,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	async function seedRepo(dir: string): Promise<void> {
 		const g = gitAt(dir);
 		g(["init", "-q", "-b", "main"]);
-		g(["config", "user.email", "t@imp.dev"]);
+		g(["config", "user.email", "t@ink.invalid"]);
 		g(["config", "user.name", "t"]);
 		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
 		g(["add", "."]);
@@ -1901,7 +1901,7 @@ describe("task model binding (SA-02)", () => {
 			if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
 		};
 		rgit(["init", "-q", "-b", "main"]);
-		rgit(["config", "user.email", "t@imp.dev"]);
+		rgit(["config", "user.email", "t@ink.invalid"]);
 		rgit(["config", "user.name", "t"]);
 		writeFileSync(path.join(root, "seed.txt"), "committed\n", "utf8");
 		rgit(["add", "."]);
@@ -2000,7 +2000,7 @@ describe("task record (SA-03)", () => {
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 		};
 		git(["init", "-q", "-b", "main"]);
-		git(["config", "user.email", "t@imp.dev"]);
+		git(["config", "user.email", "t@ink.invalid"]);
 		git(["config", "user.name", "t"]);
 		writeFileSync(path.join(dir, "seed.txt"), "committed\n", "utf8");
 		git(["add", "."]);

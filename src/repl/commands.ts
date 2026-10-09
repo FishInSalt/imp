@@ -1419,14 +1419,17 @@ export const COMMANDS: readonly SlashCommand[] = [
 				}
 				const preview =
 					names.slice(0, 5).join(", ") + (names.length > 5 ? `, … +${names.length - 5} more` : "");
+				// cancel is the highlighted default (index 0): destructive
+				// actions must not fire on a bare Enter (followup review C3;
+				// /tree's "No summary" precedent).
 				const pick = await ctx.select({
 					title: `delete ${orphans.length} orphaned child session(s)?`,
 					items: [
-						{ label: "delete", description: preview },
 						{ label: "cancel", description: "keep everything" },
+						{ label: "delete", description: preview },
 					],
 				});
-				if (pick !== 0) {
+				if (pick !== 1) {
 					ctx.renderer.note("▪ prune cancelled");
 					return "handled";
 				}

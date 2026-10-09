@@ -10,7 +10,7 @@
  * child-lease semantics: lease payload carries { pid, … } in JSON; a
  * lease is live iff its pid is alive (kill(pid,0)) OR its mtime is
  * within STALE_GRACE_MS (60s), mirroring child-lease.ts's rule. */
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 const STALE_GRACE_MS = 60_000;

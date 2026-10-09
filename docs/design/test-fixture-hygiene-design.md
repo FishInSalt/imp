@@ -78,8 +78,10 @@ repl-tui, model-catalog, settings-setup). Consequences for §A2:
   (verified by header.id read-back, review M-3 — an earlier draft claimed
   orphaning; that was a filename-matching artifact: session FILENAME uuids
   are independent randomUUID() calls, never equal to header ids). The
-  records are therefore REACHABLE: resuming one of those 4 parents and
-  resuming its child exercises the read arm.
+  records are therefore REACHABLE: resuming one of those 3 parents and
+  resuming its child exercises the read arm. Owner decision 2026-10-09:
+  the 3 parents are finished (56–77h idle, deliverables merged) — arm
+  removal + their deletion approved (§4).
 - Chat-text `impVersion` mentions: 7 files (prose; uncontrolled by design —
   the owner's rule governs code-written structured bytes, not conversation
   transcripts).
@@ -182,42 +184,35 @@ sa-07) gets a one-line pointer noting Track C's status (n-4). This is
 the document's own sanctioned path ("owner-approved follow-up amendment
 changing only what new code writes; historical bytes never rewritten").
 
-## 4. Track C — `impVersion` read arm removal — **PENDING OWNER DECISION**
+## 4. Track C — `impVersion` read arm removal (owner decision 2026-10-09: option 1)
 
 Earlier drafts justified removal by orphaned unreachable records. That
-rationale is REFUTED (§1.3): the 4 parents are alive; the 12 records are
-reachable through them. The arm writes nothing (zero-imp goal unaffected
-either way). The choice is the owner's:
+rationale was REFUTED (§1.3): the records are reachable through live
+parents. Fresh liveness data closes the question:
 
-- **Option 0 (recommended): drop Track C.** Keep the arm. Cost: ~20 lines
-  of legacy read code retained; zero behavioral risk. The arm dies
-  naturally whenever those 4 sessions are eventually pruned/deleted and a
-  later batch removes it with the now-standard evidence bar.
-- **Option 1: remove arm + delete the 4 parent sessions and their 24
-  children.** True zero; cost: destroying resumable session data (needs
-  explicit owner approval of that specific deletion).
-- **Option 2: remove arm + accept broken child-resume** on those 4 old
-  sessions (children listed but rejected as invalid). Cost: a visible
-  refusal if anyone resumes them.
+- The 12 `impVersion` records hang off exactly 3 parents
+  (`0a76cdd5`/`13fc2fa3`/`9e7ba78e`), which FINISHED their work 56–77h
+  ago (last writes 10-06 13:38 / 10-07 10:26 / 10-06 17:42; each ends on
+  a message/compaction event, not a kill; deliverables — the rename
+  batch b1deda4 etc. — are merged).
+- The 4th parent (`a2b206ba`, this batch's own session) is live but its
+  12 children are ink-era (`inkVersion`) — read-arm-irrelevant.
 
-If the owner picks 0, this batch carries no child-launch change and
-ink-rename.test.ts keeps its current legacy-arm coverage.
+**Chosen: remove the arm + delete the 3 finished parent sessions and
+their 12 imp-era children** (one-time script, §7.8; not Track D's
+mechanism). Session bytes deleted: 3 parent jsonl + 12 child jsonl +
+matching .lease sidecars. The transcripts' conclusions live on in
+git/docs.
 
-If 1/2 are chosen: the whole version-drift block at ink-rename.test.ts
+Behavior after removal: `inkVersion` required (absent → `invalid`); any
+record carrying an `impVersion` key → `invalid`. The blacklist is
+EXPLICIT (special-cased key), NOT the readers-ignore convention — which
+would leave dual-key-equal records valid (review m-5).
+
+Test changes: the whole version-drift block at ink-rename.test.ts
 :370-403 flips (not just :376) — every legacy record that parsed ok now
-rejects as invalid; and the implementation MUST special-case `impVersion`
-as an explicit blacklist key (readers-ignore convention would otherwise
-leave dual-key-equal records valid — review m-5).
-
-Test changes:
-- `test/ink-rename.test.ts:376` — flip from "historical record parses
-  ok" to "legacy-only record is rejected as invalid".
-- `test/child-launch.test.ts` — drop legacy-arm fixtures; keep
-  dual-key-equal acceptance? **No**: dual-key is deleted behavior too;
-  its test flips to rejected (both keys present but unequal AND equal —
-  both now invalid because `inkVersion`-only is the sole valid form…
-  equal-dual is degenerate; simplest honest contract: any record with
-  `impVersion` key → invalid).
+rejects as invalid; child-launch.test.ts legacy-arm fixtures flip the
+same way (any `impVersion`-bearing record → invalid).
 
 Retained read arms (unchanged, NOT in this batch's scope to remove):
 `worktree.ts:383` `imp-worktree-*` recognition (tests exercise it; 0
@@ -262,7 +257,10 @@ explicit user control, matching the project's interaction style):
   rule) — a live child mid-run must never be deleted.
 - Current data (review M-3, verified): **0 orphans exist today**. The
   feature's value is future-proofing against external/manual parent
-  deletion — the mechanism that produced the earlier miscount.
+  deletion — the mechanism that would produce orphans like the earlier
+  miscount alleged. Track C's §7.8 script (deleting 3 parents) MUST
+  delete their children in the same operation, else it manufactures the
+  first real orphans.
 
 Design constraint recorded for the future: any session-deletion feature
 MUST cascade children/ from its first version.
@@ -289,6 +287,14 @@ batch adds none).
    per-command timeouts and forbid unbounded directory listing — recorded
    in the readonly-parallel review log; this batch's own review prompts
    follow it.
+8. Track C deletion script (one-time, reviewed in this batch, executed
+   post-merge): deletes exactly the enumerated files — 3 parents
+   (`0a76cdd5-f943-42df-84ac-9e20836b98d2`,
+   `13fc2fa3-4684-44bb-82bd-5f69c9fe41b5`,
+   `9e7ba78e-c604-4715-b9bc-f465a8c41bfd`) by header.id, their 12
+   imp-era children by parentSessionId link, and matching .lease
+   sidecars. Dry-run prints the file list; refuses to run if any target
+   was modified within 48h (liveness belt).
 
 ## 8. Sequencing
 

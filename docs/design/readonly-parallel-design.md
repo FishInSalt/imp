@@ -38,7 +38,8 @@
 
 **结论**:并行规则一行渲染在 `# Available tools` 清单块**内部**(清单
 条目之后、"In addition…" 句之前),由工具数组的 `concurrencySafe ===
-true` 成员名单**派生**;**≥2 个时渲染**(单成员教不出并行,且措辞悬空)。
+true` 成员名单**派生**(计数口径:safe∩snippet ≥2,规范表述见 §2.2);
+**≥2 个时渲染**(单成员教不出并行,且措辞悬空)。
 渲染门与 catalog 一致(清单空则整段含并行行都不渲染——同一条件变量)。
 
 **理由**:
@@ -85,8 +86,8 @@ A call that depends on an earlier result must wait for that result.
 
 上限 5(超发只是排队)、结果按呼叫序返回(对模型不可见)、safe 调用需
 相邻(微观管理)——均不披露。过度批依赖调用是唯一风险,措辞的
-"no dependencies" + "must wait" 覆盖;即使过批,非 safe 按呼叫序严格
-串行,正确性由构造保证。
+"independent of each other" + "must wait" 覆盖;即使过批,非 safe 按
+呼叫序严格串行,正确性由构造保证。
 
 ## 2. 变更清单
 
@@ -128,13 +129,17 @@ sliding-window §3.3 caption 条目的落地:
   (`nextLiveRows` → `setCallLiveRows`),与 task 行先例同通道
   (shell.ts:784-798),**不是** closing-suffix 通道——sliding-window
   §3.3 原文的"复用快照推导"指快照→行的推导方式,非 suffix 通道。
-  具体落点:`for (const tool of this.activity.tools)` 循环内
-  (shell.ts:756-760),`tool.queued === true` 时
-  `nextLiveRows.set(tool.id, ["└─ queued"])`(running 态不进
-  live 行,现状不变)。
+  具体落点:**独立于守卫的 queued 遍历**(评审 R2-1:守卫外的第二个
+  `for (const tool of this.activity.tools)` 遍历,先于 suffix 循环;
+  守卫内现有循环不动)——`tool.queued === true` 时
+  `nextLiveRows.set(tool.id, ["└─ queued"])`(running 态不进 live 行,
+  现状不变)。注意 shell.ts:756-760 的现状循环包在
+  `if (this.selector === null)`(shell.ts:755)守卫内,而 D10 决策要求
+  queued 行豁免——**落点必须在守卫外**,字面钉死以防实施者把 queued
+  分支塞进守卫内循环(那会使 §4.9b 钉红)。
 - **选择器(D10)交互(评审 MAJOR-2b,已决)**:非 task 工具的
   closing-suffix 循环包在 `if (this.selector === null)` 守卫内
-  (shell.ts:753,D10 原则"picker 打开期间不绘制任何工具行,running
+  (shell.ts:755,D10 原则"picker 打开期间不绘制任何工具行,running
   声明会为假")。本批的 queued live 行**随 task 行先例豁免该守卫**
   (task/agent 行绘制在守卫外):`└─ queued` 不做 running 声明、无
   计时,"等待槽位"在 picker 打开期间依然为真,且与 task 行
@@ -198,8 +203,9 @@ loop 层(`test/loop-concurrency.test.ts` 增补):
 1. **roster 单元**:四个工具对象的 `concurrencySafe === true`(防回归
    的存在性断言,一眼可读)。
 2. **真实工具并行冒烟**:scripted provider 发 `[read a, read b, grep c,
-   find d]`(小 fixture 文件),断言:总耗时 < 串行和(时间采样或并发
-   观测点)、tool_end 序 = 呼叫序、durationMs 各自不含排队。
+   find d]`(小 fixture 文件),断言:并发真实发生(mkfifo 门控观测,
+   见 §4.8,非墙钟采样)、tool_end 序 = 呼叫序、durationMs 各自不含
+   排队。
 3. **abort**(评审 MINOR-7 修正措辞):并行 read 段中 abort → 真 read
    尊重 signal(readFile AbortError → isError 结果,**普通 settle 路径**,
    按前缀冲刷;宽限计时器只在 signal-ignoring 工具上武装——本用例
@@ -226,7 +232,7 @@ loop 层(`test/loop-concurrency.test.ts` 增补):
 
 8. **非 task queued 行**(与 sliding-window §4.13b 同场景、tools 通道
    对 agents 通道的对称用例;评审 MINOR-5 重写——套件不存在 "safe
-   read" 夹具,也不需要):bare-shell 合成快照测试(repl-tui.test.ts:3132
+   read" 夹具,也不需要):bare-shell 合成快照测试(repl-tui.test.ts:3136
    起的 test 12 形状)——推一个 5 running + 1 queued 的非 task 工具
    快照,断言 `liveRows.get("f")?.[0]` 含 `└─ queued`、
    `suffixes.has("f")` 为 false;升级路径用 runTurn-mock 模式
@@ -265,8 +271,10 @@ abort-grace 设计文档引用的既有测试全绿。
    缓冲(输出才 50KB 截断,缓冲不截断)×5。缓解:上限 5 不变;
    BUFFER_GUARD 每调用独立;无计划改(与串行 read 大文件的既有
    行为同级,只是并发度不同)。
-3. **显示形状变化**:print corpus 更新(4 头连续);非 task queued 行
-   是新增可见表面。接受并记档(§4.10 钉住)。
+3. **显示形状变化**:print 形状变化(4 头连续;新增 print 形状测试
+   钉住,见 §4.10——无 corpus 机制,该词仅存于 sliding-window 未落地
+   的 §4.9 半句);非 task queued 行是新增可见表面(§4.8 钉住)。
+   接受并记档。
 4. **middle-refusal queued 挂起**:已记档漂移(sliding-window §3.6.1),
    本批使其可达,钉子测试固定现状。
 5. **测不到的**:模型真实批处理行为(集成层)——不在本批验收,记为
@@ -274,7 +282,7 @@ abort-grace 设计文档引用的既有测试全绿。
 
 ## 6. 评审待决点
 
-1. 措辞草案(§1.1)——英文文案、名单呈现方式(括号 ≤6 个)。
+1. ~~措辞草案~~ 已决:采纳评审三句版(§1.1),括号 ≤6 个名单呈现。
 2. 规则行位置:清单条目后、块内(vs 块尾独立小节)。
 3. ~~§4.2 并行冒烟的并发观测方式~~ 已决:mkfifo 门控真 read
    (确定性,非墙钟;随评审 MINOR-5 折叠进 §4.8)。
@@ -311,4 +319,19 @@ abort-grace 设计文档引用的既有测试全绿。
   有意行为);middle-refusal 机制描述逐行准确(loop.ts:719-723/
   726-734);system-prompt 既有回归零碰撞。
 
-(待 round 2 复核)
+**Round 2 — 同评审员复核(2026-10-08),verdict NEEDS-FIXES(一句话级)。**
+round-1 的 14 项发现**全部在正文实质闭合,无虚报**。折叠自身引入/
+残留 5 项,均已随本 commit 修复:
+
+- MAJOR-R2-1(折叠引入,矛盾):§2.3 落点原钉"shell.ts:756-760 循环
+  内",但该循环在 D10 守卫(shell.ts:755)内,与同节 D10 豁免决策
+  字面冲突(照落点实施 §4.9b 必红)——落点改为**守卫外独立 queued
+  遍历**,守卫内循环不动,矛盾消除。
+- MINOR-R2-2:§5.3 残留 "print corpus 更新"——改为指向 §4.10 的
+  新增 print 形状测试(注明无 corpus 机制)。
+- NIT ×4:§6.1 措辞标已决;§4.2 观测方式同步为 mkfifo(原"时间采样"
+  与 §6.3 已决相抵);§1.1 计数口径同步 safe∩snippet、§1.3 措辞引用
+  同步三句版;锚点漂移 2 处(shell.ts:753→755、repl-tui:3132→3136)。
+
+修复后无新引入问题;评审确认无需第三轮全面评审。**设计就绪,进入
+实现。**

@@ -12,6 +12,8 @@
 以及其他需要工具辅助的任务。从零构建，设计灵感来自
 [pi](https://github.com/earendil-works/pi)。
 
+![Ink 演示——安装、启动、交给它一个任务](https://raw.githubusercontent.com/FishInSalt/ink/main/assets/demo.gif)
+
 让 Ink 适应你的工作流，而不是反过来：通过[扩展](docs/extensions.md)、
 [技能](docs/skills.md)、[具名子代理](docs/subagents.md)和
 [MCP 服务器](docs/mcp.md)来扩展它——内置的
@@ -97,7 +99,8 @@ alt 系列快捷键的终端说明：iTerm2、Ghostty、Kitty 和较新的 VS Co
 
 ## 文档
 
-完整文档在 [docs/index.md](docs/index.md)——主题地图从这里开始：
+完整文档在 [docs/index.md](docs/index.md)——主题地图从这里开始。
+同一套文档也发布为站点：[fishinsalt.github.io/ink](https://fishinsalt.github.io/ink/)：
 
 - [CLI 参考](docs/cli.md)——安装、打印模式、管道、全部命令行参数与环境变量
 - [提供商与模型](docs/providers.md)——登录、模型家族、`/model`、pi.dev

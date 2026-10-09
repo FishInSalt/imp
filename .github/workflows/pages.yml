@@ -1,0 +1,57 @@
+# Pages — builds and deploys the documentation site (README + top-level
+# docs) to https://fishinsalt.github.io/ink/ via scripts/build-docs-site.mjs.
+# Runs on main only; the published set is the same docs that ship in the
+# npm package (design archive excluded). npm publication is separate — see
+# RELEASING.md.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "scripts/build-docs-site.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - name: install (build-only; no lifecycle scripts needed)
+        run: npm ci --ignore-scripts
+      - name: build the docs site
+        run: node scripts/build-docs-site.mjs
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

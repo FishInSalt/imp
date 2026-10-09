@@ -6,6 +6,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Docs site output
+_site/
+
 # npm pack artifacts
 *.tgz
 

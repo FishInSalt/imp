@@ -32,7 +32,7 @@ require their ordinary approvals. Preserve historical tags/workflow files and
 [`docs/design/publishing-design.md`](docs/design/publishing-design.md) is an archival design,
 not the current release procedure.
 
-## OIDC publication is live (`0.2.3` published); remaining steps
+## OIDC publication is live (`0.3.0` published); remaining steps
 
 `ink-agent@0.2.0` was published manually from the reviewed artifact (no
 provenance); the trusted publisher is bound; the repository is
@@ -67,6 +67,23 @@ system-prompt routing (observed live). Do not re-run the `v0.2.3`
 workflow: re-publishing the same version fails. The `v0.2.3` GitHub
 Release page was published from the dated CHANGELOG section (2026-10-06,
 not prerelease, same shape as `v0.2.2`).
+
+`ink-agent@0.3.0` shipped on 2026-10-10 as the fourth OIDC run: tag
+`v0.3.0` was pushed from reviewed `main` (merge `924a7ac`); the publish
+itself succeeded with provenance (transparency-log index 3168131926,
+attested on the registry), but the run ended red at the post-publish
+registry-visibility check — the same 180s-window tail as `v0.2.1` and
+`v0.2.3` (the version became visible about four minutes after the publish,
+just past the window). Verified manually afterwards: `npm view
+ink-agent@0.3.0` shows the version, tarball and integrity, and the
+registry tarball's shasum matches the publish log byte for byte
+(`5f08bc3…`); `npm audit signatures` reports 7 verified registry
+signatures and 4 verified attestations; an isolated install runs `ink
+--version` → `Ink 0.3.0` and carries `docs/` (ten pages plus the zh-CN
+mirror). Do not re-run the `v0.3.0` workflow: re-publishing the same
+version fails. The `v0.3.0` GitHub Release page was published from the
+dated CHANGELOG section (2026-10-10, not prerelease, same shape as
+`v0.2.3`).
 
 Remaining external actions, each requiring explicit approval:
 

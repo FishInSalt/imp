@@ -81,7 +81,7 @@ describe("worktree isolation (M6b)", () => {
 		const wt = await createChildWorktree(state, "t2", await baseDir());
 		writeFileSync(path.join(wt.path, "committed.txt"), "clean tree, new commit\n", "utf8");
 		git(wt.path, ["add", "."]);
-		git(wt.path, ["config", "user.email", "child@imp.dev"]);
+		git(wt.path, ["config", "user.email", "child@ink.invalid"]);
 		git(wt.path, ["config", "user.name", "child"]);
 		git(wt.path, ["commit", "-qm", "child change"]);
 		// status is clean, but the HEAD/diff checks still see it

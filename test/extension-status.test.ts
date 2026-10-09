@@ -19,7 +19,6 @@ import { StdinBuffer, type Terminal } from "../src/tui.js";
 import { scriptedProvider, ticks, waitUntil } from "./helpers/fakes.js";
 import { mkTempDirAsync } from "./helpers/mktemp.js";
 
-
 // ── fakes (the repl-tui.test.ts harness, repeated for this suite) ─────────
 
 class FakeTerminal implements Terminal {

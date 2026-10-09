@@ -8,7 +8,21 @@ their original release identity.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-10
+
 ### Added
+
+- **Parallel read-only tools.** `read`, `grep`, `find` and `ls` are
+  concurrency-safe now: independent calls issued in one message run in
+  parallel behind the same five-slot window as `task` calls. The system
+  prompt's tool catalog gains a derived line telling the model this roster
+  can run concurrently (roster names in parentheses while the roster has
+  at most six entries).
+
+- **Queued-call visibility.** A concurrency-safe call's row shows as soon
+  as the call is issued — `└─ queued` for read-only tools, `└─ pending #N`
+  for task calls — with no timer until a slot admits it; queue time never
+  counts toward the call's duration.
 
 - `/sessions prune`: sweep orphaned child sessions (subagent transcripts
   whose parent session file no longer exists) after an interactive
@@ -34,6 +48,30 @@ their original release identity.
   `assets/social-preview.png` is the repository social preview card.
 
 ### Changed
+
+- **Concurrent tool scheduling: sliding window.** Consecutive
+  concurrency-safe calls now run behind a sliding window of five slots — a
+  freed slot immediately admits the next call in issue order — instead of
+  fixed chunks in which every call waited for the slowest member of its
+  chunk. Results still settle in call order.
+
+- **Abort grace.** After an interrupt, tool calls that ignore the abort
+  signal get a bounded ten-second wait; when it lapses the host synthesizes
+  the call's result (`did not respond to the interrupt within 10s — result
+  abandoned`) and the run concludes — Ctrl+C no longer hangs on a
+  signal-ignoring tool. Only the post-abort wait is bounded, not tool
+  runtime in general.
+
+- **Login docs.** README (both languages) leads with `/login` — environment
+  variables second, the npx caveat block retired to `docs/cli.md` — and the
+  `/login` listing now states where keys are stored (six API-key rows →
+  `~/.ink/auth.json`, stored key beats the environment variable) with OAuth
+  scoped to the ChatGPT-plan row.
+
+- **Legacy `impVersion` arm retired.** Child-launch records must carry
+  `inkVersion`; a record still carrying the legacy `impVersion` key is
+  rejected outright (cross-version resume was already refused; no
+  migration is performed).
 
 - Docs site: the wordmark cursor now blinks like a terminal cursor; the
   animation is turned off under `prefers-reduced-motion: reduce`.

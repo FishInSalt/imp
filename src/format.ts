@@ -4,7 +4,7 @@
  * identically.
  */
 
-export const VERSION = "0.2.3";
+export const VERSION = "0.3.0";
 
 export function dim(text: string, ansi = process.stdout.isTTY === true): string {
 	return ansi ? `\x1b[2m${text}\x1b[0m` : text;

@@ -3,7 +3,7 @@
 Current contract: this file plus [`docs/design/ink-rename-design.md`](docs/design/ink-rename-design.md)
 r3 (its repository-name row was superseded by the executed rename — see
 [`docs/design/ink-first-publication-design.md`](docs/design/ink-first-publication-design.md) §14).
-The selected package/version is **`ink-agent@0.2.2`**, with the sole `ink`
+The selected package/version is **`ink-agent@0.3.0`**, with the sole `ink`
 executable. The repository is **`FishInSalt/ink`** (renamed from
 `FishInSalt/imp`; old URLs redirect). Package metadata,
 lockfile (including its root package), app `VERSION`, and release tag must
@@ -137,7 +137,7 @@ shebang, required `dist/cli.js`/`bin/ink.js`,
 and absence of old launcher, runtime roots, dotenv, credentials, source,
 tests, docs, or unexpected artifacts. It installs locally in a private
 temporary prefix with temporary HOME/cache, no credentials, no install
-scripts, and no network. It executes help and exact `Ink 0.2.2` version
+scripts, and no network. It executes help and exact `Ink 0.3.0` version
 (for this release), then checks npm-exec's single-bin inference against the
 **local tarball from a neutral cwd**. It never invokes `npx ink` or modifies
 shared dependencies. The optional cache source is read-only; missing cached

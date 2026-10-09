@@ -116,7 +116,9 @@ durationMs、回退可达——该路径本设计不改，行为不受影响。
   shell.ts:719-722）；task fold live 行是 `└─ pending #N <agent>`
   （shell.ts:778）。本设计的 queued 态是这两个通道上的新枚举值，不改
   running 态的既有字节。
-- **caption 差异**：queued task 行 caption `└─ pending`（无计数）；
+- **caption 差异**：queued task 行 caption `└─ queued #N`（实现落定，
+  b0b16dc 起；获准入后为 `└─ pending #N`——本行原记草稿值
+  `└─ pending`（无计数），已被实现取代）；
   非 task 工具的 queued caption（`└─ queued`）今天无对应机制
   （renderActivity 不为 activity.tools 发 live 行，只有 suffix）——需
   新增快照推导，但该路径在 non-goal 7（roster 不扩）下不可达，随只读

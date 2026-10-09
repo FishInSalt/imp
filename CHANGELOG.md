@@ -13,16 +13,18 @@ their original release identity.
 ### Added
 
 - **Parallel read-only tools.** `read`, `grep`, `find` and `ls` are
-  concurrency-safe now: independent calls issued in one message run in
-  parallel behind the same five-slot window as `task` calls. The system
+  concurrency-safe now: a run of consecutive independent calls issued in
+  one message runs in parallel behind the same five-slot window as `task`
+  calls. The system
   prompt's tool catalog gains a derived line telling the model this roster
   can run concurrently (roster names in parentheses while the roster has
   at most six entries).
 
 - **Queued-call visibility.** A concurrency-safe call's row shows as soon
-  as the call is issued — `└─ queued` for read-only tools, `└─ pending #N`
-  for task calls — with no timer until a slot admits it; queue time never
-  counts toward the call's duration.
+  as the call is issued — `└─ queued` for read-only tools, `└─ queued #N`
+  for task calls — with no timer until a slot admits it (the task row then
+  continues as `└─ pending #N`). Queue time never counts toward the call's
+  duration.
 
 - `/sessions prune`: sweep orphaned child sessions (subagent transcripts
   whose parent session file no longer exists) after an interactive

@@ -1,10 +1,20 @@
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentEvent } from "../src/core/loop.js";
 import { runAgentLoop } from "../src/core/loop.js";
 import type { AgentMessage } from "../src/core/messages.js";
+import { runSubagent } from "../src/core/subagent.js";
+import { createFindTool } from "../src/core/tools/find.js";
+import { createGrepTool } from "../src/core/tools/grep.js";
+import { createLsTool } from "../src/core/tools/ls.js";
+import { createReadTool } from "../src/core/tools/read.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
+import type { LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
@@ -1032,6 +1042,207 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 			expect(historyResults.map((r) => r.toolCallId)).toEqual(["c1", "c2", "c3"]);
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+});
+
+describe("#readonly-parallel: real read-only tools in the window", () => {
+	it("roster: read/grep/find/ls carry concurrencySafe (design §4.1)", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "ink-roster-"));
+		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+		const probe: [string, Tool][] = [
+			["read", createReadTool({ cwd: dir })],
+			["grep", createGrepTool({ cwd: dir })],
+			["find", createFindTool({ cwd: dir })],
+			["ls", createLsTool({ cwd: dir })],
+		];
+		for (const [name, tool] of probe) expect(tool.concurrencySafe, name).toBe(true);
+	});
+
+	it("real tools overlap: a FIFO-gated read and a plain read run concurrently (design §4.2/§4.8)", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "ink-parallel-"));
+		// fifo-gated read: readFile blocks on a FIFO until the test writes —
+		// deterministic concurrency observation, no wall-clock sampling.
+		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+		const fifo = path.join(dir, "gate.fifo");
+		execFileSync("mkfifo", [fifo]);
+		const plain = path.join(dir, "plain.txt");
+		writeFileSync(plain, "plain content\n");
+		const read = createReadTool({ cwd: dir });
+		const events: AgentEvent[] = [];
+		const history: AgentMessage[] = [];
+		const readCalls = assistant(
+			[
+				{ type: "toolCall" as const, id: "c1", name: "read", arguments: { path: "gate.fifo" } },
+				{ type: "toolCall" as const, id: "c2", name: "read", arguments: { path: "plain.txt" } },
+			],
+			"tool_use",
+		);
+		const pending = runAgentLoop({
+			provider: scriptedProvider([readCalls, finalText]),
+			model: "m",
+			system: "",
+			tools: [read],
+			history,
+			userMessage: "go",
+			onEvent: (e) => events.push(e),
+		});
+		// Wait until both calls are IN FLIGHT: tool_running × 2, no tool_end.
+		// The first read is blocked on the FIFO (its result cannot exist),
+		// so the only way the second can be running is true concurrency.
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 2);
+		expect(events.filter((e) => e.type === "tool_end")).toHaveLength(0);
+		// unblock: write the FIFO content and close.
+		writeFileSync(fifo, "fifo content\n");
+		const result = await pending;
+		expect(result.stopReason).toBe("completed");
+		const ends = events.filter((e) => e.type === "tool_end");
+		expect(ends).toHaveLength(2);
+		// Call order preserved (c1 then c2) AND both results are the real
+		// tool outputs (not synthesized) — content order is the witness.
+		const results = history.find((m) => m.role === "toolResult");
+		expect(results && results.role === "toolResult" ? results.results.map((r) => r.content) : []).toEqual([
+			"fifo content",
+			"plain content",
+		]);
+	});
+
+	it("abort mid-read-batch: claimed reads settle with REAL results (pool-queued stragglers may ride the grace window — the designed bounded exit); queued ones synthesize (design §4.3)", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "ink-abort-"));
+		// 5 gated reads (FIFOs held open by spawned holders) + 2 plain files:
+		// the five claimed slots stay pending, c6/c7 remain queued.
+		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+		const fifos: string[] = [];
+		for (let i = 1; i <= 5; i++) {
+			const fifo = path.join(dir, `gate${i}.fifo`);
+			execFileSync("mkfifo", [fifo]);
+			fifos.push(fifo);
+		}
+		for (let i = 6; i <= 7; i++) writeFileSync(path.join(dir, `f${i}.txt`), `file ${i}\n`);
+		// `exec sleep` replaces the shell so killing the holder really closes
+		// the write end (a child sleep would inherit and keep it open).
+		// Holders live OUTSIDE the libuv threadpool on purpose: 5 reader opens
+		// + 5 in-process writer opens would exceed the 4-thread pool.
+		const holders = fifos.map((f) =>
+			spawn("sh", ["-c", `exec 9>"${f}"; exec sleep 300`], { stdio: "ignore" }),
+		);
+		// Belt-and-suspenders cleanup: an assertion failure before the kill
+		// below must not leak sleepers for 300s (review m-2).
+		onTestFinished(() => {
+			for (const holder of holders) holder.kill("SIGKILL");
+		});
+		const read = createReadTool({ cwd: dir });
+		const events: AgentEvent[] = [];
+		const controller = new AbortController();
+		const history: AgentMessage[] = [];
+		const readCalls = assistant(
+			Array.from({ length: 7 }, (_, i) => ({
+				type: "toolCall" as const,
+				id: `c${i + 1}`,
+				name: "read",
+				arguments: { path: i < 5 ? `gate${i + 1}.fifo` : `f${i + 1}.txt` },
+			})),
+			"tool_use",
+		);
+		const pending = runAgentLoop({
+			provider: scriptedProvider([readCalls, finalText]),
+			model: "m",
+			system: "",
+			tools: [read],
+			history,
+			userMessage: "go",
+			signal: controller.signal,
+			onEvent: (e) => events.push(e),
+		});
+		// 5 admitted (c1-c5 blocked reading their FIFOs), 2 queued.
+		await waitUntil(() => events.filter((e) => e.type === "tool_running").length === 5);
+		controller.abort();
+		// Close the gates so blocked pool reads see EOF. Observed semantics
+		// (darwin, node 25, probed): abort does NOT interrupt an in-flight
+		// threadpool read — it completes at EOF; a read whose pool op had not
+		// STARTED rejects with AbortError; and with 5 FIFO reads on a 4-thread
+		// pool the stragglers may not start before the 10s grace deadline —
+		// from the loop's view they are signal-ignoring, and grace synthesis
+		// is the DESIGNED bounded outcome for exactly that. The contract this
+		// pins: every claimed call gets a result (real OR grace-synthesized,
+		// never "(interrupted…)"), the never-started queued calls get exactly
+		// the interrupted marker, and the run resolves.
+		for (const holder of holders) holder.kill("SIGKILL");
+		await pending;
+		const historyResults = history.flatMap((m) => (m.role === "toolResult" ? m.results : []));
+		expect(historyResults).toHaveLength(7); // resumable: all pairs closed
+		const interrupted = historyResults.filter((r) => r.content === "(interrupted before this tool ran)");
+		expect(interrupted.map((r) => r.toolCallId)).toEqual(["c6", "c7"]); // queued: never started
+		for (const id of ["c1", "c2", "c3", "c4", "c5"]) {
+			const result = historyResults.find((r) => r.toolCallId === id);
+			expect(result, id).toBeDefined(); // claimed ⇒ present
+			expect(result?.content, id).not.toBe("(interrupted before this tool ran)"); // it ran
+		}
+	});
+});
+
+describe("#readonly-parallel: child-session parity (design §3 checkpoint)", () => {
+	it("the child loop runs safe calls concurrently — the roster flag travels with the tool pool", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "ink-child-"));
+		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+		const fifo = path.join(dir, "gate.fifo");
+		execFileSync("mkfifo", [fifo]);
+		// Holder outside the libuv pool (see the abort test's note).
+		const holder = spawn("sh", ["-c", `exec 9>"${fifo}"; exec sleep 60`], { stdio: "ignore" });
+		onTestFinished(() => {
+			holder.kill("SIGKILL");
+		});
+		try {
+			const read = createReadTool({ cwd: dir });
+			// A sibling safe tool that records WHEN it ran. k1 (index 0) is a
+			// read with no data until the holder dies; under SERIAL execution
+			// (call order) the probe would never run before k1 settles. The
+			// probe executing before the gate closes IS the concurrency proof.
+			let probeRanAt: number | undefined;
+			const probe: Tool = {
+				name: "probe",
+				description: "records execution timing",
+				parameters: Type.Object({ message: Type.String() }),
+				concurrencySafe: true,
+				async execute(args) {
+					probeRanAt = Date.now();
+					return { output: `probe:${String(args.message)}` };
+				},
+			};
+			const childTurn = assistant(
+				[
+					{ type: "toolCall" as const, id: "k1", name: "read", arguments: { path: "gate.fifo" } },
+					{ type: "toolCall" as const, id: "k2", name: "probe", arguments: { message: "go" } },
+				],
+				"tool_use",
+			);
+			const requests: LLMRequest[] = [];
+			const provider = scriptedProvider([childTurn, finalText], requests);
+			const pending = runSubagent({
+				provider,
+				model: "m",
+				system: "CHILD",
+				tools: [read, probe],
+				prompt: "run them",
+			});
+			// k1 blocks (no data): turn 1 cannot finish while it is pending.
+			// Give the child loop a moment to admit both calls, then mark the
+			// gate state before closing it.
+			await new Promise((r) => setTimeout(r, 300));
+			const closedAt = Date.now();
+			holder.kill("SIGKILL");
+			const outcome = await pending;
+			expect(outcome.status).toBe("completed");
+			// PARITY: the probe executed while the gated read was still pending
+			// (k1 could not have settled — its data did not exist until closedAt).
+			expect(probeRanAt).toBeDefined();
+			expect(probeRanAt! < closedAt).toBe(true);
+			// And the real read produced its real (empty) EOF output.
+			const second = requests[1]?.messages ?? [];
+			const results = second.flatMap((m) => (m.role === "toolResult" ? (m.results ?? []) : []));
+			expect(results.map((r) => r.content)).toEqual(["", "probe:go"]);
+		} finally {
+			holder.kill("SIGKILL");
 		}
 	});
 });

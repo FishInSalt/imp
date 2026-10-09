@@ -34,6 +34,9 @@ export function createLsTool(options: LsToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "ls",
+		// #readonly-parallel: read-only tool, safe for sliding-window
+		// concurrency (see docs/design/readonly-parallel-design.md §2.1).
+		concurrencySafe: true,
 		presentation: lsPresentation,
 		promptSnippet: "list one directory's entries (dotfiles included).",
 		description:

@@ -64,6 +64,86 @@ describe("buildSystemPrompt (prompt-audit P5/P6)", () => {
 	});
 });
 
+describe("buildSystemPrompt concurrency disclosure (#readonly-parallel)", () => {
+	const safeTool = (name: string, snippet = `${name} things`): PromptCatalogTool => ({
+		name,
+		promptSnippet: snippet,
+		concurrencySafe: true,
+	});
+
+	it("renders the derived line with roster names when ≥2 safe snippet tools exist", () => {
+		const prompt = buildSystemPrompt(CTX, [
+			{ name: "bash", promptSnippet: "run shell commands." },
+			safeTool("read"),
+			safeTool("grep"),
+			safeTool("find"),
+			safeTool("ls"),
+			safeTool("task"),
+		]);
+		expect(prompt).toContain(
+			"Several of the tools above (read, grep, find, ls, task) can run concurrently. When you need several of these calls and they are independent of each other, make all of them in the same message.",
+		);
+		expect(prompt).toContain("A call that depends on an earlier result must wait for that result.");
+		// exact shape (design §1.1 NIT-4): blank line + non-bullet paragraph,
+		// inside the catalog block, before the In-addition line
+		const catalog = prompt.slice(prompt.indexOf("# Available tools"), prompt.indexOf("In addition"));
+		expect(catalog).toContain(
+			"- task: task things\n\nSeveral of the tools above (read, grep, find, ls, task)",
+		);
+		expect(catalog).not.toContain("\n- Several of the tools");
+	});
+
+	it("no disclosure with a single safe tool — one member teaches nothing about batching", () => {
+		const prompt = buildSystemPrompt(CTX, [
+			{ name: "bash", promptSnippet: "run shell commands." },
+			safeTool("task"),
+		]);
+		expect(prompt).not.toContain("concurrently");
+	});
+
+	it("safe tools without a snippet do not count and are not named (no dangling references)", () => {
+		const prompt = buildSystemPrompt(CTX, [
+			safeTool("read"),
+			{ name: "ghost", promptSnippet: "", concurrencySafe: true }, // empty snippet: not listed
+			{ name: "unnamed", concurrencySafe: true }, // no snippet: not listed
+		]);
+		expect(prompt).not.toContain("concurrently"); // only one safe∩snippet tool
+	});
+
+	it("a safe roster larger than 6 drops the parenthesized name list (token budget)", () => {
+		const prompt = buildSystemPrompt(CTX, [
+			safeTool("a"),
+			safeTool("b"),
+			safeTool("c"),
+			safeTool("d"),
+			safeTool("e"),
+			safeTool("f"),
+			safeTool("g"),
+		]);
+		expect(prompt).toContain("Several of the tools above can run concurrently");
+		expect(prompt).not.toContain("(a, b");
+	});
+
+	it("MCP degraded entries (snippet, no flag) never enter the roster", () => {
+		const prompt = buildSystemPrompt(CTX, [
+			safeTool("read"),
+			{ name: "MCP server fetch", promptSnippet: "third-party tools." },
+			safeTool("grep"),
+		]);
+		expect(prompt).toContain("(read, grep) can run concurrently");
+	});
+
+	it("override drops the disclosure with the catalog; append-only keeps it", () => {
+		const tools = [safeTool("read"), safeTool("grep")];
+		const overridden = buildSystemPrompt(CTX, tools, { override: "Custom identity." });
+		expect(overridden).not.toContain("# Available tools");
+		expect(overridden).not.toContain("concurrently");
+		const appended = buildSystemPrompt(CTX, tools, { append: "APPEND-MARKER" });
+		expect(appended).toContain("(read, grep) can run concurrently");
+		expect(appended).toContain("APPEND-MARKER");
+	});
+});
+
 describe("mcpCatalogEntries (prompt-audit P7)", () => {
 	const mcpTool = (name: string, snippet: string): PromptCatalogTool & { mcpServer: string } => ({
 		name,
@@ -118,6 +198,9 @@ describe("runner system assembly (prompt-audit P4/P5/P7 integration)", () => {
 		expect(system).toContain("# Available tools");
 		expect(system).toMatch(/^- bash: /m);
 		expect(system).toMatch(/^- task: /m);
+		// #readonly-parallel (design §4.7b): zero-adaptation plumbing — the
+		// real tool objects carry concurrencySafe into the derived line.
+		expect(system).toContain("(read, grep, find, ls, task) can run concurrently");
 	});
 
 	it("refreshSystemPrompt re-assembles (MCP sync seam) without new notes", async () => {

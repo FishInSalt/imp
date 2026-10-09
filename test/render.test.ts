@@ -299,6 +299,43 @@ describe("concurrent live tools (M5b design §7)", () => {
 		r.event({ type: "tool_end", result: okResult("rb", "b") });
 		expect(out.output()).toBe("\n● task A\n" + "\n● task B\n" + "  → ra\n" + "  → rb\n");
 	});
+
+	// #readonly-parallel (design §4.10): the print shape for a REAL read-only
+	// batch — 4 read heads then call-ordered tails. tool_running/tool_settled
+	// stay no-ops in print (render.test.ts:431 precedent); this pins the
+	// byte shape of a read batch, mirroring the concurrent-task precedent above.
+	it("print mode with a read-only batch: 4 heads, call-ordered tails", () => {
+		const out = collector();
+		const r = new Renderer({ write: out.write, ansi: false, liveTools: false, toolStyle: "two-line" });
+		for (const [id, p] of [
+			["a", "f1"],
+			["b", "f2"],
+			["c", "f3"],
+			["d", "f4"],
+		] as const) {
+			r.event({ type: "tool_start", toolCallId: id, name: "read", args: { path: p } });
+		}
+		// Ends arrive in call order — the loop's prefix-flush contract
+		// (stragglers hold until the prefix advances; design §4.10).
+		for (const [id, res] of [
+			["a", "ra"],
+			["b", "rb"],
+			["c", "rc"],
+			["d", "rd"],
+		] as const) {
+			r.event({ type: "tool_end", result: okResult(res, id) });
+		}
+		expect(out.output()).toBe(
+			"\n● read f1\n" +
+				"\n● read f2\n" +
+				"\n● read f3\n" +
+				"\n● read f4\n" +
+				"  → ra\n" +
+				"  → rb\n" +
+				"  → rc\n" +
+				"  → rd\n",
+		);
+	});
 });
 
 describe("renderMarkdownLite", () => {

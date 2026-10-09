@@ -206,10 +206,16 @@ loop 层(`test/loop-concurrency.test.ts` 增补):
    find d]`(小 fixture 文件),断言:并发真实发生(mkfifo 门控观测,
    见 §4.8,非墙钟采样)、tool_end 序 = 呼叫序、durationMs 各自不含
    排队。
-3. **abort**(评审 MINOR-7 修正措辞):并行 read 段中 abort → 真 read
-   尊重 signal(readFile AbortError → isError 结果,**普通 settle 路径**,
-   按前缀冲刷;宽限计时器只在 signal-ignoring 工具上武装——本用例
-   不触发宽限),未启动者无事件、fillMissing 合成。
+3. **abort**(措辞经实现期实测修正,2026-10-08):并行 read 段中
+   abort。实测语义(darwin / node 25,5 个 FIFO 门控 read 探针):
+   abort **不中断**已进入 libuv 线程池的 read——它在门关闭(EOF)后
+   正常完成;尚未启动池操作的 read 以 AbortError 拒绝;而 5 个 FIFO
+   read 挤在 4 线程池上时,排队者可能 10s 宽限期内都未启动——从
+   loop 视角它们就是 signal-ignoring,宽限合成正是为此设计的**有界
+   出口**。测试钉住的契约:每个 claimed 调用必有结果(真实或宽限
+   合成,绝不是 "(interrupted…)");未启动的排队调用得到且仅得到
+   interrupted 标记;run 必然收敛。原设计文档"真 read 必走普通
+   settle、不触发宽限"的前提仅对已启动的池操作成立——已如实改记。
 
 系统提示层(`test/system-prompt.test.ts` 增补):
 

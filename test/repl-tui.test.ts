@@ -3198,6 +3198,92 @@ describe("runRepl with shell:tui", () => {
 		await shell.whenSettled();
 	});
 
+	it("#readonly-parallel: queued NON-task tool rows paint `└─ queued` (live row), running ones keep the suffix (design §4.8)", async () => {
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink({});
+		const noop = (): void => {};
+		const shell = new TuiShell({
+			transcript,
+			terminal,
+			onLine: noop,
+			onInterrupt: noop,
+			onEof: noop,
+			onDequeue: noop,
+			onCycleThinking: noop,
+			onToggleThinking: noop,
+			onModelSelect: noop,
+		});
+		shell.start();
+		const liveRows = new Map<string, readonly string[]>();
+		const suffixes = new Map<string, string>();
+		transcript.setCallLiveRows = (key, rows) => liveRows.set(key, rows ?? []);
+		transcript.setCallSuffix = (key, text) => {
+			if (text === null) suffixes.delete(key);
+			else suffixes.set(key, text);
+		};
+		shell.setActivity({
+			phase: "working",
+			tools: [
+				{ id: "a", name: "read", label: "reading a", startedAtMs: Date.now() - 4000 },
+				{ id: "f", name: "read", label: "sixth read", startedAtMs: Date.now(), queued: true },
+			],
+			agents: [],
+		});
+		await settle(30);
+		// The queued non-task row renders via the LIVE-ROW channel (task-row
+		// precedent) — NOT a closing suffix; the running row keeps its suffix.
+		expect(liveRows.get("f")?.[0]).toBe("└─ queued");
+		expect(suffixes.has("f")).toBe(false);
+		expect(suffixes.has("a")).toBe(true);
+		expect(liveRows.has("a")).toBe(false); // running non-task rows never enter live rows
+		shell.close();
+		await shell.whenSettled();
+	});
+
+	it("#readonly-parallel: queued rows survive an open picker (D10 exemption), running suffixes stay suppressed (design §4.9b)", async () => {
+		const terminal = new FakeTerminal();
+		const transcript = new TranscriptSink({});
+		const noop = (): void => {};
+		const shell = new TuiShell({
+			transcript,
+			terminal,
+			onLine: noop,
+			onInterrupt: noop,
+			onEof: noop,
+			onDequeue: noop,
+			onCycleThinking: noop,
+			onToggleThinking: noop,
+			onModelSelect: noop,
+		});
+		shell.start();
+		const liveRows = new Map<string, readonly string[]>();
+		const suffixes = new Map<string, string>();
+		transcript.setCallLiveRows = (key, rows) => liveRows.set(key, rows ?? []);
+		transcript.setCallSuffix = (key, text) => {
+			if (text === null) suffixes.delete(key);
+			else suffixes.set(key, text);
+		};
+		// Simulate an open picker the same way production opens one: an
+		// unresolved select() holds the selector until Enter/Esc.
+		const pick = shell.select({ title: "pick", items: [{ label: "x" }] });
+		await settle(30);
+		shell.setActivity({
+			phase: "working",
+			tools: [
+				{ id: "a", name: "read", label: "reading a", startedAtMs: Date.now() - 4000 },
+				{ id: "f", name: "read", label: "sixth read", startedAtMs: Date.now(), queued: true },
+			],
+			agents: [],
+		});
+		await settle(30);
+		// D10: no `running` claim while the picker is open — the running row's
+		// suffix is suppressed. The queued row makes no such claim and stays.
+		expect(suffixes.has("a")).toBe(false);
+		expect(liveRows.get("f")?.[0]).toBe("└─ queued");
+		shell.close(); // close() settles the open selector
+		await Promise.allSettled([pick, shell.whenSettled()]);
+	});
+
 	it("#tool-settle: a settled call clears its row and renders its result before the chunk ends", async () => {
 		const env = await startTuiRepl([reply("done")]);
 		// Observe the activity snapshots the shell receives (the region's own

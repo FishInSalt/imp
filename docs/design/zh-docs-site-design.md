@@ -1,9 +1,9 @@
 # Chinese docs site: full zh-CN mirror — design
 
-Status: draft. Design review rounds 1 and 2 (fresh-context, adversarial)
-returned "not ready"; all findings are folded below. Round 3 confirmation
-is under way — implementation must not start until round 3 closes with a
-ready verdict.
+Status: implemented and reviewed. The design review closed at round 3
+(ready for implementation), and the independent implementation review
+closed at round 2 ("ready to merge"). Implementation: commits a5a4e74 and
+7ade365 on the merged branch; see Review history below.
 
 ## Goal
 
@@ -243,7 +243,16 @@ Add `"README.zh-CN.md"` to `paths` (`docs/**` already covers
   failure), check-4 wording vs rule 2, heading-order rule, a vacuous
   doubled-path assertion, bare-anchor coverage, the README.zh-CN line
   number, batch-red rollout wording, and the README.md-map future note.
-  All folded; round 3 confirmation under way.
+  All folded.
+- Round 3 (same reviewer, confirmation): verdict "ready for
+  implementation" — design review closed.
+- Implementation code review (fresh-context, adversarial, commit a5a4e74):
+  round 1 — 8 findings (strict-typecheck guards, the symlinked-path
+  main-guard no-op, README switch-line pinning, anchor off-by-one
+  pinning, titled-link coverage, the zh-map README.zh-CN.md entry,
+  glossary drift, a nested-path reject case), folded in 7ade365;
+  round 2 — "ready to merge". Residual: reference-style link definitions
+  are outside the mechanical link checks (none exist in the corpus).
 
 ## Resolved open questions
 

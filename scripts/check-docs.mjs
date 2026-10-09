@@ -23,6 +23,10 @@
  *      slugs of its target's en counterpart (zh anchors are copied en
  *      slugs; the site builder re-slugs them by heading position, which
  *      the parity checks above make well-defined).
+ *
+ * Link extraction covers inline links (with optional quoted or
+ * parenthesized titles). Reference-style link definitions are not used in
+ * this corpus and are not covered by these extractors.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, posix, resolve } from "node:path";
@@ -80,7 +84,7 @@ for (const doc of topicDocs) {
 // (c)+(d) relative markdown links resolve
 function checkLinks(file, label) {
 	const text = readFileSync(file, "utf8");
-	for (const match of text.matchAll(/\]\(([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\)/g)) {
+	for (const match of text.matchAll(/\]\(([^)#\s]+)(?:#[^)\s]*)?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g)) {
 		const target = match[1];
 		if (/^[a-z]+:\/\//i.test(target) || target.startsWith("/")) continue; // external/absolute
 		const resolved = resolve(dirname(file), target);
@@ -132,7 +136,7 @@ function fencedBlocks(text) {
 }
 
 function linkTargets(text) {
-	return [...text.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((match) => match[1]);
+	return [...text.matchAll(/\]\(([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g)].map((match) => match[1]);
 }
 
 function removeOnce(list, value) {
@@ -219,7 +223,7 @@ function enCounterpart(relPath) {
 async function checkAnchors(relPath) {
 	const text = readFileSync(join(root, relPath), "utf8");
 	const isZh = relPath.startsWith("docs/zh-CN/") || relPath === "README.zh-CN.md";
-	for (const match of text.matchAll(/\]\(([^)\s#]*)#([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+	for (const match of text.matchAll(/\]\(([^)\s#]*)#([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g)) {
 		const [, pathPart, anchor] = match;
 		let target;
 		if (pathPart === "") {

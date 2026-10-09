@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LoadedExtensions } from "../src/extensions/loader.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const examples = path.resolve("examples/extensions");
 const canonical = path.join(examples, "web-search/index.mjs");
@@ -21,7 +22,7 @@ describe("web-search packaging through the real extension loader", () => {
 		"installed entry symlink",
 		"canonical CLI plus same-path discovery",
 	] as const)("%s registers each search tool exactly once", async (mode) => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-web-discovery-"));
+		const base = await mkTempDirAsync("ink-web-discovery-");
 		const cwd = path.join(base, "project");
 		const home = path.join(base, "home");
 		const installed = path.join(home, ".ink/extensions");

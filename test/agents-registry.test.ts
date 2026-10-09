@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadAgentDefinitions, parseAgentFile } from "../src/core/agents/registry.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 function tempProject(): { cwd: string; home: string; projectDir: string; homeDir: string } {
-	const root = mkdtempSync(path.join(tmpdir(), "imp-agents-"));
+	const root = mkTempDir("ink-agents-");
 	const cwd = path.join(root, "proj");
 	const home = path.join(root, "home");
 	const projectDir = path.join(cwd, ".ink", "agents");

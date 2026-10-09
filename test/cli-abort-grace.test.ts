@@ -39,6 +39,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliFixture, createCliFixture } from "./helpers/cli-fixture.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const run = promisify(execFile);
 const readFile = promisify(readFileCb);
@@ -151,7 +152,7 @@ describe("print-mode abort grace e2e (#abort-grace design §6 test-plan item 7)"
 	});
 
 	it("a SIGINT with a signal-ignoring tool exits bounded (code 0), abandon line on stderr", async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "ink-grace-out-"));
+		const dir = mkTempDir("ink-grace-out-");
 		const markerPath = path.join(fixture.cwd, "claimed.marker");
 		writeFileSync(path.join(fixture.cwd, "hangtool.mjs"), HANGTOOL(markerPath));
 		writeFileSync(path.join(dir, "runner.cjs"), RUNNER);

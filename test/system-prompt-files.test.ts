@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadSystemPromptFiles } from "../src/core/system-prompt-files.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function makeTree(): Promise<{ root: string; home: string }> {
-	const base = await mkdtemp(join(tmpdir(), "sp-files-"));
+	const base = await mkTempDirAsync("ink-sp-files-");
 	const root = join(base, "repo");
 	const home = join(base, "home");
 	await mkdir(join(root, ".ink"), { recursive: true });

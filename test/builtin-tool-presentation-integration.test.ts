@@ -13,11 +13,12 @@ import { createWriteTool } from "../src/core/tools/write.js";
 import { ToolBlockFold } from "../src/repl/components/tool-block.js";
 import { createToolSink, sanitizeDisplay, type ToolBlock } from "../src/repl/tool-presentation.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const roots: string[] = [];
 const signal = new AbortController().signal;
 async function scratch() {
-	const root = await mkdtemp(path.join(tmpdir(), "imp-builtin-presentation-"));
+	const root = await mkTempDirAsync("ink-builtin-presentation-");
 	roots.push(root);
 	return root;
 }

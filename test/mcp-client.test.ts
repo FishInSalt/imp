@@ -2,16 +2,17 @@ import { getEventListeners } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { McpClient } from "../src/mcp/client.js";
 import { StdioTransport } from "../src/mcp/stdio-transport.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const SERVER = join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 const FAST = { connectTimeoutMs: 2000, callTimeoutMs: 2000 };
 
 let tmp = "";
-beforeAll(() => {
-	tmp = mkdtempSync(join(tmpdir(), "imp-mcp-client-"));
+beforeEach(() => {
+	tmp = mkTempDir("ink-mcp-client-");
 });
 afterAll(() => {
 	if (tmp !== "") rmSync(tmp, { recursive: true, force: true });

@@ -1,29 +1,72 @@
 /** Test-only isolation. Production installation-root dotenv loading is unchanged. */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 import { NETWORK_PRELOAD } from "./cli-fixture.js";
+import { FIXTURE_PREFIXES } from "./fixture-prefixes.js";
 
 const require = createRequire(import.meta.url);
 const { takeBlockedAttempts } = require(NETWORK_PRELOAD) as { takeBlockedAttempts(): string[] };
 
 // Clear inherited harness configuration (including obsolete IMP_*), provider
 // credentials/endpoints and proxy settings before importing runtime modules.
-// IMP_LEASE_* are test-only IPC markers, not production configuration aliases.
+// INK_LEASE_* are test-only IPC markers, not production configuration aliases.
 for (const key of Object.keys(process.env)) {
 	if (
 		key === "INK" ||
 		key === "IMP" ||
-		key.startsWith("INK_") ||
-		(key.startsWith("IMP_") && key !== "IMP_LEASE_WORKER" && key !== "IMP_LEASE_SCRIPT") ||
+		(key.startsWith("INK_") && key !== "INK_LEASE_WORKER" && key !== "INK_LEASE_SCRIPT") ||
+		key.startsWith("IMP_") ||
 		/^(ANTHROPIC|OPENAI(?:_CODEX)?|ZAI|DEEPSEEK|MOONSHOT(?:_CN)?)_(API_KEY|AUTH_TOKEN|BASE_URL)$/.test(key) ||
 		/^(https?|all|no)_proxy$/i.test(key)
 	)
 		delete process.env[key];
 }
+
+// §A2 stale-fixture sweep (test-fixture-hygiene-design): ONE worker per run —
+// the main vitest worker (VITEST_WORKER_ID==="0"; pool workers set it to 1+,
+// verified empirically 2026-10-09) and never inside lease-spawned vitest
+// subprocesses (they inherit the lease marker). Deletes tmpdir() entries
+// matching the committed prefix inventory AND older than 24h; best-effort,
+// never fails the run. Backstops killed workers that skip onTestFinished.
+function sweepStaleFixtureRoots(): void {
+	if (process.env.VITEST_WORKER_ID !== "0") return;
+	if (process.env.INK_LEASE_WORKER !== undefined || process.env.INK_LEASE_SCRIPT !== undefined) return;
+	const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+	let swept = 0;
+	try {
+		for (const name of readdirSync(tmpdir())) {
+			if (!FIXTURE_PREFIXES.some((p) => name.startsWith(p))) continue;
+			try {
+				const full = join(tmpdir(), name);
+				if (statSync(full).mtimeMs < cutoff) {
+					rmSync(full, { recursive: true, force: true });
+					swept++;
+				}
+			} catch {
+				// ENOENT/EBUSY → skip this entry silently
+			}
+		}
+	} catch {
+		// enumeration failure → skip the sweep entirely
+	}
+	if (swept > 0) console.log(`[settings-setup] swept ${swept} stale fixture root(s) older than 24h`);
+}
+sweepStaleFixtureRoots();
+// The setup root is created OUTSIDE any test (setupFiles context —
+// onTestFinished is unavailable); its lifecycle is the afterAll below.
 const root = mkdtempSync(join(tmpdir(), "ink-tests-"));
 process.env.HOME = join(root, "home");
 mkdirSync(process.env.HOME);

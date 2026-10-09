@@ -11,6 +11,7 @@ import {
 	printExtensionDiagnostics,
 } from "../src/extensions/loader.js";
 import { writeExtensionFiles } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 /** A minimal valid fixture factory registering one named tool. */
 const toolFixture = (name: string): string => `export default function (api) {
@@ -31,7 +32,7 @@ interface Env {
 }
 
 async function setup(): Promise<Env> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-extload-"));
+	const baseDir = await mkTempDirAsync("ink-extload-");
 	// Neither dir needs to exist yet: writeExtensionFiles creates them on
 	// demand, and loadExtensions skips missing discovery dirs silently.
 	return { cwd: path.join(baseDir, "proj"), home: path.join(baseDir, "home") };
@@ -190,7 +191,7 @@ describe("-ne / --no-extensions (design §3.1)", () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, { "disc.mjs": toolFixture("disc_tool") });
 		await writeExtensionFiles(env.home, { "gdisc.mjs": toolFixture("gdisc_tool") });
-		const explicitDir = await mkdtemp(path.join(tmpdir(), "imp-ext-cli-"));
+		const explicitDir = await mkTempDirAsync("ink-ext-cli-");
 		const explicit = path.join(explicitDir, "explicit.mjs");
 		writeFileSync(explicit, toolFixture("explicit_tool"));
 		const { loaded, lines } = await load(env, { cliPaths: [explicit], noDiscovery: true });
@@ -201,7 +202,7 @@ describe("-ne / --no-extensions (design §3.1)", () => {
 
 	it("case 15: -e accepts a directory and applies the same entry rules", async () => {
 		const env = await setup();
-		const extra = await mkdtemp(path.join(tmpdir(), "imp-ext-dir-"));
+		const extra = await mkTempDirAsync("ink-ext-dir-");
 		writeFileSync(path.join(extra, "z.mjs"), toolFixture("z_tool"));
 		writeFileSync(path.join(extra, "_ignored.mjs"), toolFixture("ignored_tool"));
 		const { loaded, lines } = await load(env, { cliPaths: [extra], noDiscovery: true });
@@ -215,7 +216,7 @@ describe("M8 trust gate: projectDirAllowed=false", () => {
 		const env = await setup();
 		await writeExtensionFiles(env.cwd, { "proj.mjs": toolFixture("proj_tool") });
 		await writeExtensionFiles(env.home, { "glob.mjs": toolFixture("glob_tool") });
-		const explicitDir = await mkdtemp(path.join(tmpdir(), "imp-ext-cli-"));
+		const explicitDir = await mkTempDirAsync("ink-ext-cli-");
 		const explicit = path.join(explicitDir, "explicit.mjs");
 		writeFileSync(explicit, toolFixture("explicit_tool"));
 		const { loaded } = await load(env, { cliPaths: [explicit], projectDirAllowed: false });

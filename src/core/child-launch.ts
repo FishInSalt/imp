@@ -207,14 +207,13 @@ export function parseChildLaunch(value: unknown): ChildLaunchParse {
 	if (!isName(r.parentSessionId) || !isName(r.childId)) {
 		return { ok: false, reason: "invalid" };
 	}
-	// Presence is an own property: a present `inkVersion` must be a nonempty
-	// string (no fallback); the legacy `impVersion` is consulted only when the
-	// new key is absent; carrying both names requires equal values.
-	const hasInk = Object.hasOwn(r, "inkVersion");
-	const hasLegacy = Object.hasOwn(r, "impVersion");
-	const version = hasInk ? r.inkVersion : r.impVersion;
-	if (!isName(version)) return { ok: false, reason: "invalid" };
-	if (hasInk && hasLegacy && r.impVersion !== version) return { ok: false, reason: "invalid" };
+	// `inkVersion` is required (nonempty string, no fallback). The legacy
+	// `impVersion` key is an EXPLICIT blacklist: any record still carrying
+	// it is rejected as invalid (owner decision 2026-10-09, Track C — the
+	// 12 imp-era records and their 3 finished sessions were deleted;
+	// readers-ignore convention does NOT apply to this key).
+	if (!isName(r.inkVersion)) return { ok: false, reason: "invalid" };
+	if (Object.hasOwn(r, "impVersion")) return { ok: false, reason: "invalid" };
 	if (!isAbsolutePath(r.cwd)) return { ok: false, reason: "invalid" };
 	if (!isBinding(r.model)) return { ok: false, reason: "invalid" };
 	if (r.agent !== undefined && !isAgent(r.agent)) return { ok: false, reason: "invalid" };
@@ -225,12 +224,8 @@ export function parseChildLaunch(value: unknown): ChildLaunchParse {
 		return { ok: false, reason: "invalid" };
 	}
 	// Unknown extra fields are tolerated (readers-ignore convention); the
-	// builder never writes them, and nothing in the verdict reads them. One
-	// deliberate exception: the legacy `impVersion` key is consumed and dropped
-	// here, so every reader sees exactly one version field.
-	const launch: Record<string, unknown> = { ...r, inkVersion: version };
-	delete launch.impVersion;
-	return { ok: true, launch: launch as unknown as ChildLaunchRecord };
+	// builder never writes them, and nothing in the verdict reads them.
+	return { ok: true, launch: value as unknown as ChildLaunchRecord };
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;

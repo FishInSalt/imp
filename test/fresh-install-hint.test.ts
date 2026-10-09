@@ -9,6 +9,7 @@ import { NO_MODEL_SEGMENT, NO_MODEL_SHORT, welcomeLines } from "../src/repl/repl
 import { createRunner } from "../src/runner.js";
 import { type CliFixture, createCliFixture } from "./helpers/cli-fixture.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 /**
  * #fresh-install-hint (design docs/design/fresh-install-model-hint-design.md §3.4
@@ -41,17 +42,14 @@ describe("#fresh-install-hint availability seam", () => {
 	// Monotonic counter (round-2 review, same class as F6): two tests inside
 	// the same millisecond would otherwise share one INK_AUTH_PATH — a key
 	// stored by an earlier test leaks into the next one's probe.
-	let authSeq = 0;
+	const authSeq = 0;
 	beforeEach(() => {
 		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
 		for (const key of CREDENTIAL_ENV) {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(
-			tmpdir(),
-			`imp-fresh-auth-${process.pid}-${Date.now()}-${authSeq++}.json`,
-		);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-fresh-auth-");
 	});
 	afterEach(() => {
 		for (const fixture of fixtures.splice(0)) fixture.cleanup();
@@ -82,7 +80,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("test 1: banner identity line swaps the dead id for the /login pointer", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -107,7 +105,7 @@ describe("#fresh-install-hint availability seam", () => {
 	it("test 3 (targeted): another family configured → targeted note, not the generic one", async () => {
 		const { saveApiKey } = await import("../src/provider/auth-store.js");
 		saveApiKey("zai", "stored-key");
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const { renderer, output } = makeRenderer();
 		await createRunner({
 			cwd: path.join(root, "proj"),
@@ -127,7 +125,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("test 3 (F5 suppression): bare glm-* shows ONLY the zai-specific note", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const { renderer, output } = makeRenderer();
 		await createRunner({
 			cwd: path.join(root, "proj"),
@@ -144,7 +142,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("test 12 (D7 seam): injected provider stays usable with scrubbed env; a real provider is not", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -172,7 +170,7 @@ describe("#fresh-install-hint availability seam", () => {
 
 	it("usable path is byte-identical: a credential silences every new surface", async () => {
 		process.env.ANTHROPIC_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -192,7 +190,7 @@ describe("#fresh-install-hint availability seam", () => {
 	// ---- M2: D4 seed gating (design tests 6, 7, 9) ----
 
 	it("test 6: warmup + resume skip the seed while unusable — the session file has no model row", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const cwd = path.join(root, "proj");
 		mkdirSync(cwd);
 		const baseDir = path.join(root, "sessions");
@@ -222,7 +220,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("test 7: /new while unusable seeds nothing (third D4 site)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const cwd = path.join(root, "proj");
 		mkdirSync(cwd);
 		const { renderer } = makeRenderer();
@@ -242,7 +240,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("test 8: resume of a 0.1.0-shaped session (seeded dead model) does not rewrite the file", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const cwd = path.join(root, "proj");
 		mkdirSync(cwd);
 		const baseDir = path.join(root, "sessions");
@@ -343,7 +341,7 @@ describe("#fresh-install-hint availability seam", () => {
 		// gate must probe the model BEING persisted (anthropic → keyless →
 		// NO seed) — not the pre-switch live family (zai → keyed → seed,
 		// writing an unusable anthropic row, the pre-F2 bug).
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const cwd = path.join(root, "proj");
 		mkdirSync(cwd);
 		const baseDir = path.join(root, "sessions");
@@ -423,7 +421,7 @@ describe("#fresh-install-hint availability seam", () => {
 	});
 
 	it("round-2 F5: /status and legacy /model show the /login pointer while unusable (real dispatch)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-fresh-"));
+		const root = await mkTempDirAsync("ink-fresh-");
 		const cwd = path.join(root, "proj");
 		mkdirSync(cwd);
 		const { renderer, output } = makeRenderer();

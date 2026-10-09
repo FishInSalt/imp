@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBashTool } from "../src/core/tools/bash.js";
 import { createReadTool } from "../src/core/tools/read.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const noSignal = new AbortController().signal;
 
@@ -75,10 +76,9 @@ describe("bash tool", () => {
 });
 
 describe("read tool", () => {
-	let dir: string;
-
 	async function setupFile(name: string, lines: number): Promise<string> {
-		dir ??= await mkdtemp(path.join(tmpdir(), "imp-test-"));
+		// per-test dir: mkTempDir's onTestFinished removes it when THIS test ends
+		const dir = await mkTempDirAsync("ink-test-");
 		const file = path.join(dir, name);
 		const content = Array.from({ length: lines }, (_, i) => `line-${i + 1}`).join("\n");
 		await writeFile(file, content, "utf8");
@@ -121,7 +121,7 @@ describe("read tool", () => {
 	});
 
 	it("refuses binary files", async () => {
-		dir ??= await mkdtemp(path.join(tmpdir(), "imp-test-"));
+		const dir = await mkTempDirAsync("ink-test-");
 		const file = path.join(dir, "binary.bin");
 		await writeFile(file, Buffer.from([0x00, 0x01, 0x02, 0x00]));
 		const tool = createReadTool();
@@ -141,7 +141,7 @@ describe("read tool", () => {
 
 describe("read single-line-over-limit fallback (prompt-audit P9)", () => {
 	it("a line larger than the byte cap returns the bash sed hint", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-read-huge-"));
+		const root = await mkTempDirAsync("ink-read-huge-");
 		const file = path.join(root, "huge.txt");
 		const huge = `${"x".repeat(60 * 1024)}\nshort line\n`; // one 60KB line > 50KB cap
 		await writeFile(file, huge, "utf8");

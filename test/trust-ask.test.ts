@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { askTrustViaTui } from "../src/repl/trust-ask.js";
 import { StdinBuffer, type Terminal } from "../src/tui.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /** Mirrors the FakeTerminal in repl-tui.test.ts — that one is file-local. */
 class AskTerminal implements Terminal {
@@ -74,7 +75,7 @@ describe("askTrustViaTui (debt clearance: TUI picker, not readline)", () => {
 	it("Enter on the first item answers yes — and the ask writes NOTHING to the transcript", async () => {
 		const terminal = new AskTerminal();
 		const transcript = new TranscriptSink();
-		const dir = mkdtempSync(join(tmpdir(), "imp-ask-"));
+		const dir = mkTempDir("ink-ask-");
 		const asked = askTrustViaTui({ transcript, cwd: dir, resources: [".ink/commands"], terminal });
 		await settle();
 		expect(stripAnsi(terminal.writes.join(""))).toContain("Yes — trust and remember");

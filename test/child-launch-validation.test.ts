@@ -14,6 +14,7 @@ import {
 import { createSession } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 const MODEL = {
 	providerName: "anthropic",
@@ -36,8 +37,8 @@ interface World {
 /** Parent session (with a settled record) + child file with a launch block,
  *  plus a current-environment fixture that matches everything by default. */
 async function makeWorld(options: { noRecord?: boolean; noContent?: boolean } = {}): Promise<World> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-	const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
+	const base = await mkTempDirAsync("ink-clv-");
+	const cwd = mkTempDir("ink-clv-cwd-");
 	const parent = createSession(cwd, base);
 	parent.appendMessage({ role: "user", content: "parent message" });
 	const childId = "child-1";
@@ -169,8 +170,8 @@ describe("child continuation — verdict basics", () => {
 	});
 
 	it("records on an abandoned branch still count (all-entries basis) with onCurrentBranch false", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-		const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
+		const base = await mkTempDirAsync("ink-clv-");
+		const cwd = mkTempDir("ink-clv-cwd-");
 		const parent = createSession(cwd, base);
 		const childId = "child-fork";
 		const launch = buildChildLaunch({
@@ -349,7 +350,7 @@ describe("child continuation — drift matrix", () => {
 
 	it("shared-cwd child: moved parent cwd => cwd-drift; vanished cwd => cwd-missing", async () => {
 		const { parent, file, current, cwd } = await makeWorld();
-		const moved = mkdtempSync(path.join(tmpdir(), "imp-clv-elsewhere-"));
+		const moved = mkTempDir("ink-clv-elsewhere-");
 		const drift = await validateChildContinuation(file, parent, { ...current, cwd: moved });
 		expect(codes(drift.reasons)).toContain("cwd-drift");
 		rmSync(cwd, { recursive: true, force: true });
@@ -381,9 +382,9 @@ interface WorktreeWorld extends World {
 }
 
 async function makeWorktreeWorld(): Promise<WorktreeWorld> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-	const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
-	const repo = mkdtempSync(path.join(tmpdir(), "imp-clv-repo-"));
+	const base = await mkTempDirAsync("ink-clv-");
+	const cwd = mkTempDir("ink-clv-cwd-");
+	const repo = mkTempDir("ink-clv-repo-");
 	seedRepo(repo);
 	const baseline = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
 	const wtPath = path.join(repo, "..", `imp-wt-${path.basename(repo)}`);

@@ -13,6 +13,7 @@ import { createTaskTool } from "../src/core/tools/task.js";
 import type { Tool } from "../src/core/tools/types.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type ScriptStep } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 /**
  * Child (subagent) auto-compaction — the machinery mirroring the main loop's
@@ -271,7 +272,7 @@ describe("runSubagent between-turn compaction (no session — sessions disabled)
 
 describe("runSubagent between-turn compaction (session store wired)", () => {
 	it("appends a compaction entry; buildContext replays summary + tail; the reopened file agrees", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-child-compact-"));
+		const dir = await mkTempDirAsync("ink-child-compact-");
 		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
 		const routed = routingProvider(
 			[
@@ -324,7 +325,7 @@ describe("runSubagent between-turn compaction (session store wired)", () => {
 	});
 
 	it("SA-09 D5: the session-backed branch passes the resolved level to compactSession", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-sa09-compact-"));
+		const dir = await mkTempDirAsync("ink-sa09-compact-");
 		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
 		const routed = routingProvider(
 			[
@@ -353,7 +354,7 @@ describe("runSubagent between-turn compaction (session store wired)", () => {
 
 describe("task tool end-to-end (default settings, real session seam)", () => {
 	it("a context-overflowing child auto-compacts with DEFAULT settings; the children/ file gains a compaction entry", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-compact-"));
+		const baseDir = await mkTempDirAsync("ink-task-compact-");
 		const cwd = path.join(baseDir, "proj");
 		const parent = createSession(cwd, baseDir);
 		// ~115k estimated tokens: one tool result crosses the default threshold
@@ -416,7 +417,7 @@ describe("INK_AUTOCOMPACT=0 (main-loop parity)", () => {
 	it("disables child compaction: no entry, no splice, no summarizer call", async () => {
 		vi.stubEnv("INK_AUTOCOMPACT", "0");
 		try {
-			const dir = await mkdtemp(path.join(tmpdir(), "imp-child-nocompact-"));
+			const dir = await mkTempDirAsync("ink-child-nocompact-");
 			const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
 			const routed = routingProvider(
 				[
@@ -452,7 +453,7 @@ describe("INK_AUTOCOMPACT=0 (main-loop parity)", () => {
 
 describe("M7 review coverage: repeat compactions, session-path retry, failure cap, crash accounting", () => {
 	it("TWO consecutive compactions in one child run: both entries persist, replay honors the latest", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-child-compact2-"));
+		const dir = await mkTempDirAsync("ink-child-compact2-");
 		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
 		const routed = routingProvider(
 			[
@@ -509,7 +510,7 @@ describe("M7 review coverage: repeat compactions, session-path retry, failure ca
 	});
 
 	it("SESSION path: a failing summarizer retries at the next boundary and persists (mirror of the no-session test)", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-child-compact3-"));
+		const dir = await mkTempDirAsync("ink-child-compact3-");
 		const session = SessionStore.create(path.join(dir, "child.jsonl"), dir);
 		const routed = routingProvider(
 			[

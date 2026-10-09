@@ -12,6 +12,7 @@ import {
 	sessionsDirFor,
 } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string): AgentMessage => ({
@@ -22,7 +23,7 @@ const assistantText = (text: string): AgentMessage => ({
 });
 
 async function setup(): Promise<{ baseDir: string; cwd: string }> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-sessions-"));
+	const baseDir = await mkTempDirAsync("ink-sessions-");
 	const cwd = path.join(baseDir, "proj");
 	return { baseDir, cwd };
 }

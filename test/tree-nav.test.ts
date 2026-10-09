@@ -6,6 +6,7 @@ import type { AgentMessage } from "../src/core/messages.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 
@@ -13,7 +14,7 @@ const user = (content: string): AgentMessage => ({ role: "user", content });
  *  fork before q2-old. The runner resumes it; history = the forked (empty)
  *  position — call write() to add the new branch's turns. */
 async function navEnv(extra: { provider?: LLMProvider } = {}) {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-tree-"));
+	const base = await mkTempDirAsync("ink-tree-");
 	const cwd = path.join(base, "proj");
 	const requests: LLMRequest[] = [];
 	const { renderer } = makeRenderer();

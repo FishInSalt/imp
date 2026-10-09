@@ -1,3 +1,4 @@
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 // #login-dialog: the exclusive login dialog — TUI-level tests
 // (docs/design/login-dialog-design.md §3, items 1-16). The oauth tests budget
 // ≥5000ms: codex-auth's poll floor is 1000ms (Math.max(intervalSeconds,1)),
@@ -32,7 +33,7 @@ interface Env {
 }
 
 async function startDialogRepl(commands?: Parameters<typeof runRepl>[0]["commands"]): Promise<Env> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-login-dlg-"));
+	const baseDir = await mkTempDirAsync("ink-login-dlg-");
 	const authPath = path.join(baseDir, "auth.json");
 	process.env.INK_AUTH_PATH = authPath;
 	for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY"]) {

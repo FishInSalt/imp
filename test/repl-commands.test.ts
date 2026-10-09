@@ -21,6 +21,7 @@ import { buildTreeRows } from "../src/repl/components/tree-selector.js";
 import type { SelectOptions } from "../src/repl/line-input.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, scriptedProvider, user } from "./helpers/fakes.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 beforeEach(() => {
 	vi.stubEnv("INK_LOG", "0");
@@ -68,7 +69,7 @@ async function makeGitRepo(args?: {
 	path: string;
 	branch: string;
 }> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-wtlist-"));
+	const base = await mkTempDirAsync("ink-wtlist-");
 	const root = path.join(base, args?.repoDirName ?? "repo");
 	mkdirSync(root, { recursive: true });
 	const run = (cmd: string[], cwd: string) => execFileSync("git", cmd, { cwd, encoding: "utf8" });
@@ -154,7 +155,7 @@ async function makeEnv(args?: {
 	/** Trust the project dir — project settings participate (batch B P2-2). */
 	trusted?: boolean;
 }): Promise<TestEnv> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-cmds-"));
+	const baseDir = await mkTempDirAsync("ink-cmds-");
 	const settingsPath = path.join(baseDir, "settings.json");
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
@@ -622,7 +623,7 @@ describe("/copy and /name (M16)", () => {
 describe("/worktrees (M6b §7 follow-up)", () => {
 	it("outside a git repository: the teaching error, not a stack", async () => {
 		const env = await makeEnv();
-		const scratch = mkdtempSync(path.join(tmpdir(), "imp-nowt-"));
+		const scratch = mkTempDir("ink-nowt-");
 		env.ctx.worktreeCwd = scratch;
 		await dispatchCommand("/worktrees", env.ctx); // awaited command: output complete on return (M8 review F5)
 		expect(env.output()).toContain("worktree isolation requires a git repository");

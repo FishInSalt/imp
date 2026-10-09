@@ -10,6 +10,7 @@ import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.j
 import { resetCatalogForTest } from "../src/provider/catalog.js";
 import { costFor } from "../src/provider/models.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /**
  * SA-05 round 2 (owner acceptance P2): pricing identity is the fully qualified
@@ -20,7 +21,7 @@ import { assistant, scriptedProvider } from "./helpers/fakes.js";
 
 beforeEach(() => {
 	// Guarantee the static floor: no catalog overlay, no home-dir cache.
-	vi.stubEnv("INK_CATALOG_PATH", join(mkdtempSync(join(tmpdir(), "imp-cost-")), "missing.json"));
+	vi.stubEnv("INK_CATALOG_PATH", join(mkTempDir("ink-cost-"), "missing.json"));
 	resetCatalogForTest();
 });
 

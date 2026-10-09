@@ -11,6 +11,7 @@ import {
 	storedApiKeyFamilies,
 } from "../src/provider/auth-store.js";
 import { loadCodexCredential, logoutCodex } from "../src/provider/codex-auth.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 // The store redirects through INK_AUTH_PATH so tests never touch the host's
 // real ~/.ink/auth.json (same sandboxing rule as codex-auth's tests).
@@ -19,7 +20,7 @@ let file = "";
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-	dir = mkdtempSync(path.join(tmpdir(), "imp-auth-"));
+	dir = mkTempDir("ink-auth-");
 	file = path.join(dir, "auth.json");
 	savedEnv.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
 	process.env.INK_AUTH_PATH = file;

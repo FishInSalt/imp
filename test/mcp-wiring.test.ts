@@ -9,6 +9,7 @@ import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeConsole, scriptedProvider, waitUntil } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const SERVER = path.join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 
@@ -20,7 +21,7 @@ describe("runRepl wiring (review P1-1)", () => {
 	let notes: string[] = [];
 
 	beforeEach(async () => {
-		baseDir = await mkdtemp(path.join(tmpdir(), "imp-mcp-wire-"));
+		baseDir = await mkTempDirAsync("ink-mcp-wire-");
 		notes = [];
 	});
 

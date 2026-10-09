@@ -23,6 +23,7 @@ import {
 	ticks,
 	waitUntil,
 } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const reply = (text: string): AssistantMessage => assistant([{ type: "text", text }]);
 
@@ -57,7 +58,7 @@ async function startRepl(args: StartArgs): Promise<ReplEnv> {
 	// a shared sessionBaseDir implies a shared cwd too: session files are
 	// namespaced by the flattened working directory, so a "resume" test needs
 	// both from the same world
-	const baseDir = args.sessionBaseDir ?? (await mkdtemp(path.join(tmpdir(), "imp-repl-")));
+	const baseDir = args.sessionBaseDir ?? (await mkTempDirAsync("ink-repl-"));
 	const cwd = path.join(baseDir, "proj");
 	const requests: LLMRequest[] = [];
 	const provider: LLMProvider = args.provider ?? scriptedProvider(args.scripts ?? [reply("ok")], requests);
@@ -497,7 +498,7 @@ describe("runRepl", () => {
 	});
 
 	it("regression P1: scripted mode with a bad -r id reports a clean error, no unhandled rejection", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
+		const baseDir = await mkTempDirAsync("ink-repl-");
 		const fake = makeConsole({ tty: false });
 		const renderer = new Renderer({
 			write: (text) => fake.stdout.write(text),
@@ -570,7 +571,7 @@ describe("runRepl", () => {
 	});
 
 	it("regression m1: zero-line piped stdin (deferInit) creates no session and prints no banners", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-"));
+		const baseDir = await mkTempDirAsync("ink-repl-");
 		const fake = makeConsole({ tty: false });
 		const renderer = new Renderer({
 			write: (text) => fake.stdout.write(text),
@@ -853,7 +854,7 @@ describe("runRepl", () => {
 		const { createRunner: freshCreateRunner } = await import("../src/runner.js");
 		const { runRepl: freshRunRepl } = await import("../src/repl/repl.js");
 
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repl-c-"));
+		const baseDir = await mkTempDirAsync("ink-repl-c-");
 		const cwd = path.join(baseDir, "proj");
 		const requests: LLMRequest[] = [];
 		const bigReply = assistant([{ type: "text", text: "first reply" }], "end_turn", {
@@ -902,7 +903,7 @@ describe("runRepl", () => {
 
 describe("legacy-shell secret (the /login prompt, readline side)", () => {
 	it("a typed line answers the secret; empty and EOF cancel; the key never reaches the model", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-secret-"));
+		const baseDir = await mkTempDirAsync("ink-secret-");
 		const requests: LLMRequest[] = [];
 		const fake = makeConsole({ tty: true });
 		const renderer = new Renderer({
@@ -969,7 +970,7 @@ describe("legacy-shell secret (the /login prompt, readline side)", () => {
 
 describe("/login codex guarded state (batch B, machine level)", () => {
 	it("Ctrl+C aborts the OAuth poll (no force-quit counting); the REPL stays usable; nothing persists", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-loginb-"));
+		const baseDir = await mkTempDirAsync("ink-loginb-");
 		const requests: LLMRequest[] = [];
 		const fake = makeConsole({ tty: true });
 		const renderer = new Renderer({

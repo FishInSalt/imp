@@ -1,3 +1,4 @@
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 /**
  * #bash-abort regression pins (design docs/design/bash-abort-design.md §6).
  * Real process trees — no child_process mocks.
@@ -109,7 +110,7 @@ describe("#bash-abort: process-group kill + exit/idle wait", () => {
 
 	it("4c. continuously-writing escapee + abort → immediate finalize (abort-after-exit window)", async () => {
 		// Only this worker observes these markers in this test-owned directory.
-		const fixtureDir = await mkdtemp(join(tmpdir(), "ink-bash-escapee-"));
+		const fixtureDir = await mkTempDirAsync("ink-bash-escapee-");
 		const stop = join(fixtureDir, "stop");
 		const stopped = join(fixtureDir, "stopped");
 		const worker = [

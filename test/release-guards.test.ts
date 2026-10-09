@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const guard = fileURLToPath(new URL("../scripts/release-guards.mjs", import.meta.url));
 const smoke = fileURLToPath(new URL("../scripts/package-smoke.mjs", import.meta.url));
@@ -35,7 +36,7 @@ function decision(overrides: Record<string, unknown> = {}) {
 
 describe("release guards", () => {
 	it("supports direct CLI execution through a symlink", () => {
-		const directory = mkdtempSync(join(tmpdir(), "ink-release-guard-"));
+		const directory = mkTempDir("ink-release-guard-");
 		const link = join(directory, "guard.mjs");
 		symlinkSync(guard, link);
 		expect(run(link, ["npm-version", "11.5.1"]).stdout).toContain("satisfies >=11.5.1");

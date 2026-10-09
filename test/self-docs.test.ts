@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveInstallRoot, SELF_DOCS_TOPICS, selfDocsSection } from "../src/core/self-docs.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const paths = {
 	readme: "/usr/local/lib/node_modules/ink-agent/README.md",
@@ -79,7 +80,7 @@ describe("resolveInstallRoot", () => {
 	const roots: string[] = [];
 
 	function makeRoot(withDocs: boolean): string {
-		const root = mkdtempSync(join(tmpdir(), "ink-selfdocs-"));
+		const root = mkTempDir("ink-selfdocs-");
 		roots.push(root);
 		if (withDocs) {
 			mkdirSync(join(root, "docs"));

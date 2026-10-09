@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { McpServerConfig } from "../src/mcp/config.js";
 import { McpManager } from "../src/mcp/manager.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
@@ -9,12 +9,13 @@ import type { CommandContext } from "../src/repl/commands.js";
 import { dispatchCommand } from "../src/repl/commands.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const SERVER = join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 
 let tmp: string;
-beforeAll(() => {
-	tmp = mkdtempSync(join(tmpdir(), "imp-mcp-repl-"));
+beforeEach(() => {
+	tmp = mkTempDir("ink-mcp-repl-");
 });
 afterAll(() => {
 	rmSync(tmp, { recursive: true, force: true });

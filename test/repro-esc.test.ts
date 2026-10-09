@@ -7,6 +7,7 @@ import { runRepl } from "../src/repl/repl.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { assistant } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 /**
@@ -22,7 +23,7 @@ import { FakeTerminal, settle } from "./login-dialog.helpers.js";
  */
 describe("repro: subagent bash hung by a grandchild (esc semantics)", () => {
 	it("esc1 shows the interrupt note while the run is wedged; esc2 force-exits 130", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repro-esc-"));
+		const baseDir = await mkTempDirAsync("ink-repro-esc-");
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({

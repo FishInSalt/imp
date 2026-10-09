@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadMdCommands, parseMdFrontmatter, renderMdPrompt } from "../src/core/commands-md.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function scaffold(): Promise<{ home: string; cwd: string; reserved: Set<string> }> {
-	const root = await mkdtemp(path.join(tmpdir(), "imp-mdcmd-"));
+	const root = await mkTempDirAsync("ink-mdcmd-");
 	return { home: path.join(root, "home"), cwd: path.join(root, "proj"), reserved: new Set(["help", "exit"]) };
 }
 

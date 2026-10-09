@@ -3,7 +3,7 @@
  *
  * Spawned by test/child-lease-scripts.test.ts as
  * `node node_modules/vitest/vitest.mjs run test/helpers/lease-script-worker.test.ts` with
- * `IMP_LEASE_SCRIPT=<dir>|<role>`. Each role runs REAL acquire calls with
+ * `INK_LEASE_SCRIPT=<dir>|<role>`. Each role runs REAL acquire calls with
  * marker-file rendezvous controlling the interleaving, then appends
  * `R <role> <ok|code> <attemptId>` to `<dir>/results`. Without the env this
  * file is a no-op placeholder.
@@ -13,7 +13,7 @@ import path from "node:path";
 import { describe, it } from "vitest";
 import { acquireChildLease, type ChildLeaseOptions } from "../../src/core/child-lease.js";
 
-const scriptEnv = process.env.IMP_LEASE_SCRIPT;
+const scriptEnv = process.env.INK_LEASE_SCRIPT;
 
 function sleepSync(ms: number): void {
 	try {
@@ -43,7 +43,7 @@ describe("lease script worker", () => {
 	it("runs the role", async () => {
 		if (scriptEnv === undefined) return; // placeholder in the normal suite
 		const [dir, role] = scriptEnv.split("|");
-		if (dir === undefined || role === undefined) throw new Error("IMP_LEASE_SCRIPT must be <dir>|<role>");
+		if (dir === undefined || role === undefined) throw new Error("INK_LEASE_SCRIPT must be <dir>|<role>");
 		const child = path.join(dir, "child.jsonl");
 		const results = path.join(dir, "results");
 

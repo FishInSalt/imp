@@ -7,6 +7,7 @@ import { type SessionModel, SessionStore } from "../src/core/session/store.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import { createRunner, type RunnerOptions } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 // Replace every provider factory, including cross-family restoration. Parsing,
 // runner state transitions, context replay and JSONL persistence remain real.
@@ -52,7 +53,7 @@ const snapshot = (store: SessionStore) => ({
 const reopen = (store: SessionStore) => SessionStore.open(store.filePath);
 
 beforeEach(() => {
-	root = fs.mkdtempSync(path.join(tmpdir(), "imp-session-model-runner-"));
+	root = mkTempDir("ink-session-model-runner-");
 	cwd = path.join(root, "project");
 	baseDir = path.join(root, "sessions");
 	fs.mkdirSync(cwd);

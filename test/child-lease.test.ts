@@ -12,11 +12,11 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireChildLease } from "../src/core/child-lease.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const leaseOptions = {
 	pid: 4242,
@@ -59,13 +59,13 @@ function ageFile(file: string, ms: number): void {
 }
 
 async function setup(prefix: string): Promise<{ base: string; child: string }> {
-	const base = await mkdtemp(path.join(tmpdir(), prefix));
+	const base = await mkTempDirAsync(prefix);
 	return { base, child: path.join(base, "child.jsonl") };
 }
 
 describe("child lease (intent + verify)", () => {
 	it("T18: a second in-process acquire refuses while the first holds", async () => {
-		const { child } = await setup("imp-lease-");
+		const { child } = await setup("ink-lease-");
 		const first = acquireChildLease(child, "attempt-1", leaseOptions);
 		expect(first.ok).toBe(true);
 		const second = acquireChildLease(child, "attempt-2", leaseOptions);
@@ -75,7 +75,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T19a: a live foreign candidate refuses as busy", async () => {
-		const { child } = await setup("imp-lease19a-");
+		const { child } = await setup("ink-lease19a-");
 		seedCandidate(child, { pid: 8888 });
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: (pid) => pid === 8888 });
 		expect(result.ok).toBe(false);
@@ -86,7 +86,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T19b: a dead owner with a FRESH candidate still refuses (uncertain)", async () => {
-		const { child } = await setup("imp-lease19b-");
+		const { child } = await setup("ink-lease19b-");
 		seedCandidate(child, { pid: 999999 });
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: () => false });
 		expect(result.ok).toBe(false);
@@ -94,7 +94,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T19c: a dead owner with an AGED candidate is retired and the acquire proceeds", async () => {
-		const { child } = await setup("imp-lease19c-");
+		const { child } = await setup("ink-lease19c-");
 		const stale = seedCandidate(child, { pid: 999999 });
 		ageFile(stale, 120_000);
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: () => false });
@@ -104,7 +104,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T19d: a same-pid candidate with a FOREIGN nonce is refused and untouched", async () => {
-		const { child } = await setup("imp-lease19d-");
+		const { child } = await setup("ink-lease19d-");
 		const other = seedCandidate(child, { pid: leaseOptions.pid, nonce: "other-instance" });
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: () => true });
 		expect(result.ok).toBe(false);
@@ -113,13 +113,13 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T20: a different host or machine id refuses as owned-elsewhere", async () => {
-		const first = await setup("imp-lease20a-");
+		const first = await setup("ink-lease20a-");
 		seedCandidate(first.child, { host: "other-host" });
 		const byHost = acquireChildLease(first.child, "new", { ...leaseOptions, isAlive: () => false });
 		expect(byHost.ok).toBe(false);
 		if (!byHost.ok) expect(byHost.code).toBe("owned-elsewhere");
 
-		const second = await setup("imp-lease20b-");
+		const second = await setup("ink-lease20b-");
 		seedCandidate(second.child, { machineId: "other-machine" });
 		const byMachine = acquireChildLease(second.child, "new", { ...leaseOptions, isAlive: () => false });
 		expect(byMachine.ok).toBe(false);
@@ -127,7 +127,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T21: unreadable candidates are uncertain while fresh and retired once aged", async () => {
-		const first = await setup("imp-lease21a-");
+		const first = await setup("ink-lease21a-");
 		mkdirSync(leaseDirFor(first.child), { recursive: true });
 		const garbage = path.join(leaseDirFor(first.child), "lease-777-abcdef12-junk");
 		writeFileSync(garbage, "{not json");
@@ -135,7 +135,7 @@ describe("child lease (intent + verify)", () => {
 		expect(fresh.ok).toBe(false);
 		if (!fresh.ok) expect(fresh.code).toBe("busy");
 
-		const second = await setup("imp-lease21b-");
+		const second = await setup("ink-lease21b-");
 		mkdirSync(leaseDirFor(second.child), { recursive: true });
 		const debris = path.join(leaseDirFor(second.child), "lease-777-abcdef12-junk");
 		writeFileSync(debris, "{not json");
@@ -147,7 +147,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T25: release unlinks OWN candidate only", async () => {
-		const { child } = await setup("imp-lease25-");
+		const { child } = await setup("ink-lease25-");
 		const result = acquireChildLease(child, "attempt-1", leaseOptions);
 		expect(result.ok).toBe(true);
 		const own = path.join(
@@ -165,7 +165,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T28: the heartbeat touches the own candidate; its disappearance is an anomaly", async () => {
-		const { child } = await setup("imp-lease28-");
+		const { child } = await setup("ink-lease28-");
 		let fakeNow = Date.now();
 		const acquired = acquireChildLease(child, "attempt-hb", {
 			...leaseOptions,
@@ -194,7 +194,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T30b(iv): the own candidate survives from create through the scan decision (A1 invariant)", async () => {
-		const { child } = await setup("imp-lease-inv-");
+		const { child } = await setup("ink-lease-inv-");
 		seedCandidate(child, { pid: 8888 }); // a live blocker for the refusal path
 		const ownPath = path.join(leaseDirFor(child), candidateName(leaseOptions.pid, leaseOptions.nonce, "inv"));
 		let seenAtScan: boolean | undefined;
@@ -211,7 +211,7 @@ describe("child lease (intent + verify)", () => {
 
 		// Held path: with no blockers the candidate exists at scan time and
 		// after the acquire returns — only release removes it.
-		const clean = await setup("imp-lease-inv2-");
+		const clean = await setup("ink-lease-inv2-");
 		const cleanOwn = path.join(
 			leaseDirFor(clean.child),
 			candidateName(leaseOptions.pid, leaseOptions.nonce, "inv2"),
@@ -230,7 +230,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T34: a paused publisher never exposes an incomplete candidate; aged staging is cleaned", async () => {
-		const { child } = await setup("imp-lease-stage-");
+		const { child } = await setup("ink-lease-stage-");
 		const ownPath = path.join(
 			leaseDirFor(child),
 			candidateName(leaseOptions.pid, leaseOptions.nonce, "stage"),
@@ -268,7 +268,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T35 (P2): a post-publication verification failure leaves no blocking candidate", async () => {
-		const { child } = await setup("imp-lease-verify-");
+		const { child } = await setup("ink-lease-verify-");
 		let injected = false;
 		const failed = acquireChildLease(child, "verify-1", {
 			...leaseOptions,
@@ -293,7 +293,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T35b (P2): a READ-BACK throw (not just a content mismatch) cleans up the published candidate", async () => {
-		const { child } = await setup("imp-lease-verify2-");
+		const { child } = await setup("ink-lease-verify2-");
 		const failed = acquireChildLease(child, "verify-b", {
 			...leaseOptions,
 			// Delete the just-linked candidate: the read-back itself throws.
@@ -317,7 +317,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T35c (F1): a throw from the create notification is cleaned up like any post-publication failure", async () => {
-		const { child } = await setup("imp-lease-verify3-");
+		const { child } = await setup("ink-lease-verify3-");
 		const failed = acquireChildLease(child, "verify-c", {
 			...leaseOptions,
 			onAfterCreate: () => {
@@ -335,7 +335,7 @@ describe("child lease (intent + verify)", () => {
 	});
 
 	it("T26-fairness: exclusive access holds when the heartbeat is never started", async () => {
-		const { child } = await setup("imp-lease26-");
+		const { child } = await setup("ink-lease26-");
 		const first = acquireChildLease(child, "attempt-1", leaseOptions);
 		expect(first.ok).toBe(true);
 		// No startHeartbeat call at all: exclusion must not depend on it.
@@ -353,7 +353,7 @@ describe("child lease — legacy single-FILE migration", () => {
 	}
 
 	it("a live legacy artifact refuses with NO directory created", async () => {
-		const { child } = await setup("imp-lease-legacy1-");
+		const { child } = await setup("ink-lease-legacy1-");
 		writeLegacy(child, payload({ pid: 8888 }));
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: (pid) => pid === 8888 });
 		expect(result.ok).toBe(false);
@@ -362,7 +362,7 @@ describe("child lease — legacy single-FILE migration", () => {
 	});
 
 	it("a dead+aged legacy artifact is migrated away and the acquire proceeds", async () => {
-		const { child } = await setup("imp-lease-legacy2-");
+		const { child } = await setup("ink-lease-legacy2-");
 		const legacy = writeLegacy(child, payload({ pid: 999999 }));
 		ageFile(legacy, 120_000);
 		const result = acquireChildLease(child, "new", { ...leaseOptions, isAlive: () => false });
@@ -372,13 +372,13 @@ describe("child lease — legacy single-FILE migration", () => {
 	});
 
 	it("a fresh unreadable legacy artifact refuses; an aged one is retired", async () => {
-		const first = await setup("imp-lease-legacy3-");
+		const first = await setup("ink-lease-legacy3-");
 		writeFileSync(leaseDirFor(first.child), "{broken");
 		const fresh = acquireChildLease(first.child, "new", { ...leaseOptions, isAlive: () => false });
 		expect(fresh.ok).toBe(false);
 		if (!fresh.ok) expect(fresh.code).toBe("busy");
 
-		const second = await setup("imp-lease-legacy4-");
+		const second = await setup("ink-lease-legacy4-");
 		const debris = leaseDirFor(second.child);
 		writeFileSync(debris, "{broken");
 		ageFile(debris, 120_000);
@@ -394,7 +394,7 @@ describe("child lease — machine id (publish-once, §7.4)", () => {
 		path.join(leaseDirFor(child), candidateName(4242, "my-instance", attemptId));
 
 	it("T29/T33a: production init publishes once; a valid id is never rewritten", async () => {
-		const { child } = await setup("imp-mid-");
+		const { child } = await setup("ink-mid-");
 		const first = acquireChildLease(child, "a1", {
 			pid: 4242,
 			host: "test-host",
@@ -419,7 +419,7 @@ describe("child lease — machine id (publish-once, §7.4)", () => {
 	});
 
 	it("T33b: a concurrent ABSENT publisher loses the link race and ADOPTS the winner", async () => {
-		const { child } = await setup("imp-mid-race-");
+		const { child } = await setup("ink-mid-race-");
 		const competitor = "11111111-2222-4333-8444-555555555555";
 		const result = acquireChildLease(child, "a1", {
 			pid: 4242,
@@ -438,7 +438,7 @@ describe("child lease — machine id (publish-once, §7.4)", () => {
 	});
 
 	it("T33d: an EMPTY id file refuses with guidance and is never touched", async () => {
-		const { child } = await setup("imp-mid-empty-");
+		const { child } = await setup("ink-mid-empty-");
 		writeFileSync(idPathOf(child), "");
 		const refused = acquireChildLease(child, "a1", {
 			pid: 4242,
@@ -465,7 +465,7 @@ describe("child lease — machine id (publish-once, §7.4)", () => {
 	});
 
 	it("T33e: an id referenced by a live lease stays stable while another process initializes", async () => {
-		const { child } = await setup("imp-mid-stable-");
+		const { child } = await setup("ink-mid-stable-");
 		const first = acquireChildLease(child, "a1", {
 			pid: 4242,
 			host: "test-host",

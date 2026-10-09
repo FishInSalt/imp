@@ -45,6 +45,7 @@ import {
 	waitUntil,
 	writeExtensionFiles,
 } from "./helpers/fakes.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 // ── fakes ────────────────────────────────────────────────────────────────
 
@@ -1873,7 +1874,7 @@ describe("TuiShell autocomplete (M10)", () => {
 
 	it("@ lists files under basePath; Enter completes without submitting — a second Enter submits", async () => {
 		if (!(await fdReady)) return; // fd missing here — the @ fuzzy search is off, nothing to pin
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ac-"));
+		const dir = await mkTempDirAsync("ink-ac-");
 		await writeFile(path.join(dir, "alpha.txt"), "a", "utf-8");
 		await writeFile(path.join(dir, "beta.md"), "b", "utf-8");
 		const { terminal, shell, events } = makeShell({
@@ -2123,7 +2124,7 @@ describe("runRepl with shell:tui", () => {
 			clock?: () => number;
 		},
 	) {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-"));
+		const baseDir = await mkTempDirAsync("ink-tui-");
 		const seeded =
 			options?.seedSession !== undefined || (options?.seed !== undefined && options.seed.length > 0);
 		if (seeded) {
@@ -2195,7 +2196,7 @@ describe("runRepl with shell:tui", () => {
 	}
 
 	it("rejects a tui shell without the transcript (wiring guard)", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-tui-guard-"));
+		const baseDir = await mkTempDirAsync("ink-tui-guard-");
 		const renderer = new Renderer({ write: () => {}, ansi: false, liveTools: false, toolStyle: "one-line" });
 		const runner = await createRunner({
 			cwd: baseDir,
@@ -2332,7 +2333,7 @@ describe("runRepl with shell:tui", () => {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-fresh-tui-");
 		try {
 			// NO provider injection — the runner resolves a REAL anthropic
 			// provider; no turn is ever submitted, so nothing reaches the
@@ -2360,7 +2361,7 @@ describe("runRepl with shell:tui", () => {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-fresh-tui-");
 		try {
 			// start USABLE (env key on) so the initial footer shows the model;
 			// then drop the key and switch family — the live probe must flip it.
@@ -2390,7 +2391,7 @@ describe("runRepl with shell:tui", () => {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-fresh-tui-");
 		try {
 			const env = await startTuiRepl([], { model: "claude-sonnet-4-5", realProvider: true });
 			await settle();
@@ -2421,7 +2422,7 @@ describe("runRepl with shell:tui", () => {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(tmpdir(), `imp-fresh-tui-${process.pid}-${Date.now()}.json`);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-fresh-tui-");
 		try {
 			const env = await startTuiRepl([], { model: "deepseek/deepseek-v4-pro", realProvider: true });
 			await settle();
@@ -4041,7 +4042,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("real task shows generic pending input after unknown scout, before child completion", async () => {
-		const home = await mkdtemp(path.join(tmpdir(), "imp-task-live-"));
+		const home = await mkTempDirAsync("ink-task-live-");
 		const hold = gate();
 		let entered = false;
 		const fake: Tool = {
@@ -4129,7 +4130,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("a subagent paints a tree row held on screen; it leaves with the task", async () => {
-		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		const agentsHome = await mkTempDirAsync("ink-agents-");
 		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
 			path.join(agentsHome, ".ink", "agents", "scout.md"),
@@ -4176,7 +4177,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("the task slot timer never resets when the provisional row is replaced (#call-closing-status A1.2)", async () => {
-		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		const agentsHome = await mkTempDirAsync("ink-agents-");
 		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
 			path.join(agentsHome, ".ink", "agents", "scout.md"),
@@ -4369,7 +4370,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("the task call takes its hue from the shipped example theme (#tool-name-colors A1)", async () => {
-		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		const agentsHome = await mkTempDirAsync("ink-agents-");
 		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
 			path.join(agentsHome, ".ink", "agents", "scout.md"),
@@ -4404,7 +4405,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("child edit results never reach the Renderer or fold — zero ⎿, the one ▸ is the task result (P2#3)", async () => {
-		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-"));
+		const agentsHome = await mkTempDirAsync("ink-agents-");
 		await mkdir(path.join(agentsHome, ".ink", "agents"), { recursive: true });
 		await writeFile(
 			path.join(agentsHome, ".ink", "agents", "scout.md"),
@@ -4876,7 +4877,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("M11 #4: a submitted line persists and a NEW shell recalls it with up-arrow", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-hist-e2e-"));
+		const dir = await mkTempDirAsync("ink-hist-e2e-");
 		const file = path.join(dir, "history.jsonl");
 		const first = makeShell({ historyPath: file });
 		first.shell.start();
@@ -5413,7 +5414,7 @@ describe("runRepl with shell:tui", () => {
 				saved[key] = process.env[key];
 				delete process.env[key];
 			}
-			const authPath = path.join(await mkdtemp(path.join(tmpdir(), "imp-login-")), "auth.json");
+			const authPath = path.join(await mkTempDirAsync("ink-login-"), "auth.json");
 			process.env.INK_AUTH_PATH = authPath;
 			try {
 				const env = await startTuiRepl([reply("ok")]);
@@ -5470,7 +5471,7 @@ describe("runRepl with shell:tui", () => {
 	});
 
 	it("/skill:name echoes one summary line while the full block reaches the model", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-skill-tui-"));
+		const baseDir = await mkTempDirAsync("ink-skill-tui-");
 		const skillDir = path.join(baseDir, "ledger");
 		await mkdir(skillDir, { recursive: true });
 		const skillFile = path.join(skillDir, "SKILL.md");

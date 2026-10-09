@@ -1,18 +1,19 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { Tool } from "../src/core/tools/types.js";
 import type { McpStdioServerConfig } from "../src/mcp/config.js";
 import { McpManager } from "../src/mcp/manager.js";
 import type { Renderer } from "../src/render.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const SERVER = join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 const FAST = { connectTimeoutMs: 2000, callTimeoutMs: 1500 };
 
 let tmp: string;
-beforeAll(() => {
-	tmp = mkdtempSync(join(tmpdir(), "imp-mcp-mgr-"));
+beforeEach(() => {
+	tmp = mkTempDir("ink-mcp-mgr-");
 });
 afterAll(() => {
 	rmSync(tmp, { recursive: true, force: true });

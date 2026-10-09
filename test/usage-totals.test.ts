@@ -13,6 +13,7 @@ import {
 } from "../src/core/task-record.js";
 import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.js";
 import { usageMoneySegment } from "../src/format.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 /**
  * SA-05: the durable parent-plus-child work-usage aggregate.
@@ -287,7 +288,7 @@ describe("SA-05 usage totals", () => {
 	});
 
 	it("SA-08/F3-b: a tampered record identity survives neither reopen nor pricing", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-f3b-"));
+		const base = await mkTempDirAsync("ink-f3b-");
 		const filePath = path.join(base, "parent.jsonl");
 		const store = SessionStore.create(filePath, base, "parent-f3b");
 		store.appendMessage({

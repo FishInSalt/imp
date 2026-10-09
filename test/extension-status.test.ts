@@ -1,3 +1,4 @@
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 // test/extension-status.test.ts — the extension status channel end to end
 // (task-timer design §4.2-§4.6): TuiShell rendering, the ReplMachine sink
 // binding, the legacy-shell gate, and the shipped task-timer extension.
@@ -218,7 +219,7 @@ interface TuiEnv {
 }
 
 async function startTuiWithRegistry(registry: ExtensionRegistry, scripts = [reply("ok")]): Promise<TuiEnv> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-extstatus-"));
+	const baseDir = await mkTempDirAsync("ink-extstatus-");
 	const provider: LLMProvider = scriptedProvider(scripts);
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();
@@ -282,7 +283,7 @@ describe("ReplMachine status-sink binding", () => {
 	});
 
 	it("the legacy shell binds no sink (capability gate); writes stay storage-only", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-extstatus-legacy-"));
+		const baseDir = await mkTempDirAsync("ink-extstatus-legacy-");
 		const registry = new ExtensionRegistry();
 		const sinkSpy = vi.spyOn(registry, "setStatusSink");
 		const renderer = new Renderer({ write: () => {}, ansi: false, liveTools: false, toolStyle: "one-line" });

@@ -21,6 +21,7 @@ import { createOpenAICompletionsProvider } from "../src/provider/openai-completi
 import { downgradeUnsupportedImages } from "../src/provider/shared.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 // ---------------------------------------------------------------------------
 // Synthetic image fixtures (magic bytes only — the sniffer never reads past
@@ -164,7 +165,7 @@ describe("M13 magic-byte sniffing (pi image.ts parity)", () => {
 // ---------------------------------------------------------------------------
 
 async function tmpFixture(name: string, bytes: Buffer): Promise<string> {
-	const dir = await mkdtemp(path.join(tmpdir(), "imp-img-"));
+	const dir = await mkTempDirAsync("ink-img-");
 	const file = path.join(dir, name);
 	await writeFile(file, bytes);
 	return file;
@@ -626,7 +627,7 @@ describe("SA-08 F6 wire order (round 5)", () => {
 	});
 
 	it("F6-b: the crash-tail repair's synthetic result precedes the hoisted image", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-f6b-"));
+		const base = await mkTempDirAsync("ink-f6b-");
 		try {
 			const store = SessionStore.create(path.join(base, "child.jsonl"), base, "f6b");
 			store.appendMessage({ role: "user", content: "look at the files" });
@@ -764,7 +765,7 @@ describe("M13 e2e — image read through the loop", () => {
 describe("M13 session round-trip", () => {
 	it("blocks serialize to JSONL and parse back losslessly", async () => {
 		const { createSession } = await import("../src/core/session/manager.js");
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-imgsess-"));
+		const dir = await mkTempDirAsync("ink-imgsess-");
 		const store = createSession(dir, dir);
 		store.appendMessage({
 			role: "toolResult",

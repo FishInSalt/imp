@@ -7,10 +7,11 @@ import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.j
 import { compactionSettingsFor } from "../src/provider/compaction-settings.js";
 import { registerDiscoveredContextWindows, resetDiscoveredWindowsForTest } from "../src/provider/discover.js";
 import { contextWindowFor, contextWindowInfoFor } from "../src/provider/models.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 beforeEach(() => {
 	vi.stubEnv("INK_CONTEXT_WINDOW", undefined);
-	vi.stubEnv("INK_CATALOG_PATH", join(mkdtempSync(join(tmpdir(), "imp-threshold-")), "catalog.json"));
+	vi.stubEnv("INK_CATALOG_PATH", join(mkTempDir("ink-threshold-"), "catalog.json"));
 	resetCatalogForTest();
 	resetDiscoveredWindowsForTest();
 });

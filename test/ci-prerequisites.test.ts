@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { NETWORK_PRELOAD } from "./helpers/cli-fixture.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 interface WorkflowStep {
 	name?: string;
@@ -70,7 +71,7 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const vitest = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
 
 function childSearchTest(missing: readonly string[], required?: string) {
-	const root = mkdtempSync(join(tmpdir(), "ink-search-prerequisites-"));
+	const root = mkTempDir("ink-search-prerequisites-");
 	try {
 		for (const name of ["home", "bin", "tmp"]) mkdirSync(join(root, name), { mode: 0o700 });
 		// These stubs only prove collection-time binary availability. They never

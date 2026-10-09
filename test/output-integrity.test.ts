@@ -7,11 +7,12 @@ import { createEditTool } from "../src/core/tools/edit.js";
 import { createLsTool } from "../src/core/tools/ls.js";
 import { createReadTool } from "../src/core/tools/read.js";
 import { outputBlock } from "../src/repl/tool-presentation.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const signal = new AbortController().signal;
 const roots: string[] = [];
 async function fixture(text: string, name = "file") {
-	const root = await mkdtemp(path.join(tmpdir(), "imp-integrity-"));
+	const root = await mkTempDirAsync("ink-integrity-");
 	roots.push(root);
 	await writeFile(path.join(root, name), text);
 	return { root, tool: createReadTool({ cwd: root }) };

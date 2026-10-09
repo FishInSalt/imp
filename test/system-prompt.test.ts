@@ -7,6 +7,7 @@ import { buildSystemPrompt, mcpCatalogEntries, type PromptCatalogTool } from "..
 import type { Tool } from "../src/core/tools/types.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const CTX = { cwd: "/w", platform: "darwin", arch: "arm64", date: "2026-09-08" };
 
@@ -173,7 +174,7 @@ describe("mcpCatalogEntries (prompt-audit P7)", () => {
 });
 describe("runner system assembly (prompt-audit P4/P5/P7 integration)", () => {
 	it("context files land as <project_instructions> XML inside <project_context>", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-sys-"));
+		const base = await mkTempDirAsync("ink-sys-");
 		await writeFile(join(base, "AGENTS.md"), "Project rule: be terse.", "utf8");
 		const { renderer } = makeRenderer();
 		const runner = await createRunner({
@@ -204,7 +205,7 @@ describe("runner system assembly (prompt-audit P4/P5/P7 integration)", () => {
 	});
 
 	it("refreshSystemPrompt re-assembles (MCP sync seam) without new notes", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-sys2-"));
+		const base = await mkTempDirAsync("ink-sys2-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: base,
@@ -304,7 +305,7 @@ describe("buildSystemPrompt selfDocs (self-docs-design D4)", () => {
 
 describe("runner SYSTEM.md integration (#system-md)", () => {
 	async function makeBase(): Promise<string> {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-sysmd-"));
+		const base = await mkTempDirAsync("ink-sysmd-");
 		await mkdir(join(base, ".ink"), { recursive: true });
 		return base;
 	}

@@ -20,6 +20,7 @@ import { thinkingMetaFor } from "../src/provider/thinking.js";
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
 import { buildModelList, loginTargetFor } from "../src/repl/commands.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function collect(events: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
 	const out: LLMEvent[] = [];
@@ -95,7 +96,7 @@ afterEach(() => {
 function overlayCatalog(models: Record<string, object>): void {
 	if (process.env.INK_CATALOG_PATH === undefined) {
 		// lazily point at a temp file (path recorded in envBackup for restore)
-		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `imp-ds-catalog-${Date.now()}.json`);
+		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `ink-ds-catalog-${Date.now()}.json`);
 		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(
@@ -147,7 +148,7 @@ describe("deepseek provider (#deepseek-provider)", () => {
 	});
 
 	it("2. key resolution: stored > DEEPSEEK_API_KEY; no-key names the deepseek env var, never OPENAI_API_KEY", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ds-"));
+		const dir = await mkTempDirAsync("ink-ds-");
 		const authPath = path.join(dir, "auth.json");
 		setEnv("INK_AUTH_PATH", authPath);
 		setEnv("DEEPSEEK_API_KEY", "sk-env-ds");
@@ -376,7 +377,7 @@ describe("deepseek provider (#deepseek-provider)", () => {
 
 	it("9. session store accepts the family; the reference keeps its prefix", async () => {
 		const { SessionStore } = await import("../src/core/session/store.js");
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ds-sess-"));
+		const dir = await mkTempDirAsync("ink-ds-sess-");
 		const store = SessionStore.create(path.join(dir, "s.json"), dir);
 		store.setModel({ provider: "deepseek", modelId: "deepseek-v4-pro" });
 		expect(store.getModel()).toEqual({ provider: "deepseek", modelId: "deepseek-v4-pro" });

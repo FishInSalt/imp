@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LLMRequest } from "../src/provider/types.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /**
  * SA-05 round 2 (owner acceptance repro A, end to end): runner -> persistence
@@ -19,7 +20,7 @@ import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
 let base: string;
 
 beforeEach(() => {
-	base = mkdtempSync(path.join(tmpdir(), "imp-pricing-e2e-"));
+	base = mkTempDir("ink-pricing-e2e-");
 	vi.stubEnv("INK_LOG", "0");
 	vi.stubEnv("INK_AUTOCOMPACT", "0"); // compact manually — exactly one summarizer call
 	vi.stubEnv("INK_CONTEXT_WINDOW", "200000");

@@ -10,11 +10,11 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { runLeaseProcess } from "./helpers/lease-process.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 function runWorker(dir: string, tag: string): Promise<number> {
-	return runLeaseProcess("test/helpers/lease-worker.test.ts", { IMP_LEASE_WORKER: `${dir}|20|${tag}` });
+	return runLeaseProcess("test/helpers/lease-worker.test.ts", { INK_LEASE_WORKER: `${dir}|20|${tag}` });
 }
 
 async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Promise<void> {
@@ -28,7 +28,7 @@ async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Pro
 
 describe("child lease — real two-process mutual exclusion", () => {
 	it("F4/T30: two live processes never hold one child lease concurrently", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-lease-mp-"));
+		const dir = await mkTempDirAsync("ink-lease-mp-");
 		mkdirSync(dir, { recursive: true });
 		const a = runWorker(dir, "A");
 		const b = runWorker(dir, "B");

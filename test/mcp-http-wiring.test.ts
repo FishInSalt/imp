@@ -11,10 +11,11 @@ import { runRepl } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeConsole, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 import { startFakeMcpHttpServer } from "./helpers/mcp-fake-http-server.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 describe("runRepl wiring over http (M19)", () => {
 	it("/mcp renders the http server and /exit sends DELETE", async () => {
-		const baseDir = mkdtempSync(path.join(tmpdir(), "imp-mcp-http-wire-"));
+		const baseDir = mkTempDir("ink-mcp-http-wire-");
 		const fake = await startFakeMcpHttpServer();
 		try {
 			const notes: string[] = [];

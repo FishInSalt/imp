@@ -15,9 +15,10 @@ import {
 	type Skill,
 } from "../src/core/skills.js";
 import { trustRequiringResources } from "../src/core/trust.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 function tmp(name: string): string {
-	return mkdtempSync(join(tmpdir(), `imp-skills-${name}-`));
+	return mkTempDir(`ink-skills-${name}-`);
 }
 
 function writeSkill(
@@ -470,8 +471,7 @@ describe("system prompt injection (runner)", () => {
 	it("skills append to the system prompt and survive /new", async () => {
 		const { createRunner } = await import("../src/runner.js");
 		const { assistant, makeRenderer, scriptedProvider } = await import("./helpers/fakes.js");
-		const { mkdtemp } = await import("node:fs/promises");
-		const baseDir = await mkdtemp(join(tmpdir(), "imp-skills-run-"));
+		const baseDir = await mkTempDirAsync("ink-skills-run-");
 		const requests: unknown[] = [];
 		const runner = await createRunner({
 			cwd: join(baseDir, "proj"),

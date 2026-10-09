@@ -3,7 +3,7 @@
  * exact expansion bytes, display override, replay collapse, progressive
  * disclosure e2e.
  */
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import { type CommandContext, dispatchCommand, helpText } from "../src/repl/comm
 import { replaySession } from "../src/repl/replay.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 beforeEach(() => {
 	vi.stubEnv("INK_LOG", "0");
@@ -34,7 +35,7 @@ afterEach(() => {
 
 const ROOTS: string[] = [];
 function tmp(name: string): string {
-	const dir = mkdtempSync(join(tmpdir(), `imp-skill2-${name}-`));
+	const dir = mkTempDir(`ink-skill2-${name}-`);
 	ROOTS.push(dir);
 	return dir;
 }

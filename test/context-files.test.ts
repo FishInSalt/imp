@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findContextFiles, loadContextFiles } from "../src/core/context-files.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function makeTree(): Promise<{ root: string; home: string }> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-ctx-"));
+	const base = await mkTempDirAsync("ink-ctx-");
 	const root = path.join(base, "project");
 	const home = path.join(base, "home");
 	await mkdir(path.join(root, "src", "deep"), { recursive: true });

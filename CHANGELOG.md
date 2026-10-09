@@ -13,6 +13,13 @@ their original release identity.
 - Chinese README (`README.zh-CN.md`): full translation of the root README
   with a language switch on both; npm packs it automatically (README* rule),
   so it ships with the package and the smoke allowlist admits it.
+- GitHub Pages documentation site: `scripts/build-docs-site.mjs` builds
+  `_site/` from the README and the ten docs pages (link rewrites, heading
+  anchors, sitemap); `.github/workflows/pages.yml` deploys it to
+  https://fishinsalt.github.io/ink/, and the npm `homepage` now points there.
+- Promotion assets: `assets/demo.tape` + `assets/demo-setup.sh` record the
+  README demo GIF, and `assets/social-preview.html` →
+  `assets/social-preview.png` is the repository social preview card.
 
 ## [0.2.3] - 2026-10-06
 

@@ -95,10 +95,12 @@ describe("package metadata (release identity)", () => {
 		]);
 	});
 
-	it("describes a general assistant and points at the Ink repository URLs", () => {
+	it("describes a general assistant; npm home links the docs site, issues link the repository", () => {
 		expect(pkg.description).toBe("Ink — an open-source AI assistant and agent harness for the terminal");
 		expect(pkg.repository.url).toBe("git+https://github.com/FishInSalt/ink.git");
-		expect(pkg.homepage).toBe("https://github.com/FishInSalt/ink#readme");
+		// The published docs site — built by scripts/build-docs-site.mjs and
+		// deployed by .github/workflows/pages.yml.
+		expect(pkg.homepage).toBe("https://fishinsalt.github.io/ink/");
 		expect(pkg.bugs.url).toBe("https://github.com/FishInSalt/ink/issues");
 	});
 });

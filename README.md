@@ -12,6 +12,8 @@ An open-source AI assistant and agent harness for the terminal. Use Ink for
 research, writing, analysis, software development, and other tool-assisted
 tasks. Built from scratch, inspired by [pi](https://github.com/earendil-works/pi).
 
+![Ink demo — install, launch, hand it a task](https://raw.githubusercontent.com/FishInSalt/ink/main/assets/demo.gif)
+
 Adapt Ink to your workflows, not the other way around: extend it with
 [extensions](docs/extensions.md), [skills](docs/skills.md), [named
 subagents](docs/subagents.md), and [MCP servers](docs/mcp.md) — the bundled
@@ -109,7 +111,8 @@ or use esc+p.
 ## Documentation
 
 Full documentation lives in [docs/index.md](docs/index.md) — start there for
-a topic map:
+a topic map — and is published as a site at
+[fishinsalt.github.io/ink](https://fishinsalt.github.io/ink/):
 
 - [CLI reference](docs/cli.md) — install, print mode, piping, every flag and
   env var

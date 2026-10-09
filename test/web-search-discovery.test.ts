@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, mkdir, realpath, symlink } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";

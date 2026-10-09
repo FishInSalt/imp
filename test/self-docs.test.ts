@@ -3,8 +3,7 @@
  * budget, topic-table consistency with the shipped docs, and
  * resolveInstallRoot's three states.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveInstallRoot, SELF_DOCS_TOPICS, selfDocsSection } from "../src/core/self-docs.js";

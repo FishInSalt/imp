@@ -32,9 +32,8 @@
 // is genuinely in flight, never in the pre-claim window (verdict-table
 // row 3, §6c.1). Every wait has a deadline; nothing spins unbounded.
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFile as readFileCb, rmSync, writeFileSync } from "node:fs";
+import { readFile as readFileCb, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

@@ -1,7 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type AgentMessage, type AssistantBlock, emptyUsage } from "../src/core/messages.js";

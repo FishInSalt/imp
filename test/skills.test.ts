@@ -2,8 +2,7 @@
  * M12 skills batch 1 — loader, discovery, validation, trust wiring, and
  * system-prompt injection. The /skill:name command surface is batch 2.
  */
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/core/settings.js";

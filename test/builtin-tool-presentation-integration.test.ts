@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PhotonImage } from "@silvia-odwyer/photon-node";
 import { afterEach, describe, expect, it, vi } from "vitest";

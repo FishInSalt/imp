@@ -1,5 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { LLMProvider } from "../src/provider/types.js";

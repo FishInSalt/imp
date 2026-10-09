@@ -1,6 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAnthropicProvider } from "../src/provider/anthropic.js";

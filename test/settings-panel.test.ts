@@ -2,8 +2,8 @@
  * M15 #settings-panel — two-scope settings with deep merge, trust gating,
  * and the /settings command. Mirrors docs/design/m15-settings-design.md §4.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

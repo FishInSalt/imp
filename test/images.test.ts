@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildContinuationHistory } from "../src/core/child-resume.js";

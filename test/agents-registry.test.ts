@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadAgentDefinitions, parseAgentFile } from "../src/core/agents/registry.js";

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSession, listSessions } from "../src/core/session/manager.js";

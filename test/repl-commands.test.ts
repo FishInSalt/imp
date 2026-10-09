@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp, utimes } from "node:fs/promises";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { utimes } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 const { join } = path;

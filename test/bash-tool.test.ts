@@ -5,8 +5,7 @@ import { mkTempDirAsync } from "./helpers/mktemp.js";
  */
 
 import { existsSync } from "node:fs";
-import { mkdtemp, rmdir, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rmdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBashTool } from "../src/core/tools/bash.js";

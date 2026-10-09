@@ -1,6 +1,5 @@
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path, { join } from "node:path";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, mcpCatalogEntries, type PromptCatalogTool } from "../src/core/system-prompt.js";

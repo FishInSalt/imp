@@ -5,7 +5,7 @@
  * (design §7.3).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { hostname } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runLeaseProcess } from "./helpers/lease-process.js";

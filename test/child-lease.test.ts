@@ -12,7 +12,6 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireChildLease } from "../src/core/child-lease.js";

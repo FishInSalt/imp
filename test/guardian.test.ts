@@ -7,7 +7,6 @@
 // dispatched as the REPL would.
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

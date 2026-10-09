@@ -4,32 +4,20 @@
 import { execFileSync } from "node:child_process";
 
 const SURVIVORS = [
-	// production read arms
-	"src/core/worktree.ts", // imp-worktree- recognition (:383)
-	"scripts/release-guards.mjs", // imp-agent package-identity rejection (:17)
-	"test/child-lease.test.ts", // .imp-machine-id legacy seeding (:491)
-	// legacy-env scrubber arm (settings-setup) — line moves, match loosely
-	"test/helpers/settings-setup.ts",
-	// test INPUTS forging legacy shapes
-	"test/ink-rename.test.ts",
-	"test/child-launch-validation.test.ts",
-	"test/release-guards.test.ts",
-	"test/repl-commands.test.ts",
-	// legacy-semantics env inputs
-	"test/cli-model-explicit.test.ts",
-	"test/health.test.ts",
-	"test/helpers/isolation.test.ts",
-	"test/web-search-config.test.ts",
-	"test/mcp-config.test.ts",
-	"test/edit-write.test.ts",
-	"test/repl-confirm.test.ts",
-	"test/settings.test.ts",
-	// comments mentioning the legacy namespace
-	"src/core/messages.ts",
-	"scripts/imp-gate.mjs", // self (regex literal)
-	"test/fixture-sweep.test.ts", // foreign-decoy sweep-rule test inputs
-	"test/helpers/cli-fixture.ts",
-	"test/child-resume.test.ts",
+	"scripts/imp-gate.mjs", // audited survivor (gate-managed)
+	"scripts/release-guards.mjs", // audited survivor (gate-managed)
+	"src/core/worktree.ts", // audited survivor (gate-managed)
+	"test/child-launch-validation.test.ts", // audited survivor (gate-managed)
+	"test/child-lease.test.ts", // audited survivor (gate-managed)
+	"test/cli-model-explicit.test.ts", // audited survivor (gate-managed)
+	"test/fixture-sweep.test.ts", // audited survivor (gate-managed)
+	"test/health.test.ts", // audited survivor (gate-managed)
+	"test/helpers/cli-fixture.ts", // audited survivor (gate-managed)
+	"test/helpers/isolation.test.ts", // audited survivor (gate-managed)
+	"test/helpers/settings-setup.ts", // audited survivor (gate-managed)
+	"test/ink-rename.test.ts", // audited survivor (gate-managed)
+	"test/release-guards.test.ts", // audited survivor (gate-managed)
+	"test/repl-commands.test.ts", // audited survivor (gate-managed)
 ];
 
 const out = execFileSync(

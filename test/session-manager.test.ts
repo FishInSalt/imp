@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, utimes } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { utimes } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";

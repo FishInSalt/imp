@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { askTrustViaTui } from "../src/repl/trust-ask.js";

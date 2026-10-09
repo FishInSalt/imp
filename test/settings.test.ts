@@ -1,6 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path, { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { effectiveSettings, loadSettings, saveSettings, settingsFilePath } from "../src/core/settings.js";

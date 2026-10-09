@@ -3,7 +3,6 @@
  * rewiring, @file attachments, clipboard matrix, settings.
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { afterAll, afterEach, describe, expect, it } from "vitest";

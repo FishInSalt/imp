@@ -4,8 +4,7 @@
  * revalidation, disk round-trip) and every consult point it feeds
  * (windows, costs, thinking, vision, /model list).
  */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

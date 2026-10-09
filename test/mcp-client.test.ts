@@ -1,6 +1,5 @@
 import { getEventListeners } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { McpClient } from "../src/mcp/client.js";

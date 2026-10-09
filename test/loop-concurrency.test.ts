@@ -1,6 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, onTestFinished, vi } from "vitest";

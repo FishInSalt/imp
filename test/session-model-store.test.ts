@@ -1,7 +1,5 @@
 import * as fs from "node:fs";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSession, listSessions, resolveSession } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";

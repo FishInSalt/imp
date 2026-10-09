@@ -1,10 +1,3 @@
-import { mkTempDirAsync } from "./helpers/mktemp.js";
-// test/extension-status.test.ts — the extension status channel end to end
-// (task-timer design §4.2-§4.6): TuiShell rendering, the ReplMachine sink
-// binding, the legacy-shell gate, and the shipped task-timer extension.
-
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -20,6 +13,10 @@ import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { StdinBuffer, type Terminal } from "../src/tui.js";
 import { scriptedProvider, ticks, waitUntil } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
+// test/extension-status.test.ts — the extension status channel end to end
+// (task-timer design §4.2-§4.6): TuiShell rendering, the ReplMachine sink
+// binding, the legacy-shell gate, and the shipped task-timer extension.
 
 // ── fakes (the repl-tui.test.ts harness, repeated for this suite) ─────────
 

@@ -1,9 +1,7 @@
 // M19 wiring: runRepl renders an http server's status and /exit delivers the
 // DELETE (manager.close → client.close → transport.close). Mirrors
 // test/mcp-wiring.test.ts but with the http fixture — no child process.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { McpManager } from "../src/mcp/manager.js";
 import { Renderer } from "../src/render.js";

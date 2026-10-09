@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VERSION } from "../src/format.js";

@@ -3198,6 +3198,117 @@ describe("runRepl with shell:tui", () => {
 		await shell.whenSettled();
 	});
 
+	it("#readonly-parallel: a real-named read row derives queued from the roster flag and upgrades on tool_running (design §4.8, runTurn-mock)", async () => {
+		// The tap's non-task derivation (queued ← getTool(name).concurrencySafe)
+		// is live code this batch activates. Drive it with the REAL tool name
+		// "read" — 6 read calls, 5 admitted, the 6th queued then upgraded.
+		const env = await startTuiRepl([reply("done")]);
+		const seen: Parameters<TuiShell["setActivity"]>[0][] = [];
+		const realSetActivity = TuiShell.prototype.setActivity;
+		const spy = vi.spyOn(TuiShell.prototype, "setActivity").mockImplementation(function (
+			this: TuiShell,
+			snapshot,
+		) {
+			seen.push(snapshot);
+			realSetActivity.call(this, snapshot);
+		});
+		onTestFinished(() => spy.mockRestore());
+		let queuedSnapshot: Parameters<TuiShell["setActivity"]>[0] | undefined;
+		let upgradedSnapshot: Parameters<TuiShell["setActivity"]>[0] | undefined;
+		const original = env.runner.runTurn.bind(env.runner);
+		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			for (let i = 1; i <= 6; i++)
+				emit({ type: "tool_start", toolCallId: `r${i}`, name: "read", args: { path: `f${i}` } });
+			for (let i = 1; i <= 5; i++) emit({ type: "tool_running", toolCallId: `r${i}` });
+			queuedSnapshot = seen.at(-1);
+			emit({ type: "tool_running", toolCallId: "r6" });
+			upgradedSnapshot = seen.at(-1);
+			for (let i = 1; i <= 6; i++) {
+				const result = {
+					toolCallId: `r${i}`,
+					toolName: "read",
+					content: `R${i}`,
+					isError: false,
+					durationMs: 100 * i,
+				};
+				emit({ type: "tool_settled", result });
+				emit({ type: "tool_end", result });
+			}
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("fan out reads\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("done"));
+		await settle();
+		// The roster flag drove the queued derivation on the TOOLS channel:
+		// exactly the 6th row carries queued === true in the pre-admission snap.
+		const queuedRows = queuedSnapshot?.tools ?? [];
+		expect(queuedRows.map((t) => t.id)).toEqual(["r1", "r2", "r3", "r4", "r5", "r6"]);
+		expect(queuedRows.filter((t) => t.queued === true).map((t) => t.id)).toEqual(["r6"]);
+		// After admission nobody is queued.
+		expect((upgradedSnapshot?.tools ?? []).every((t) => t.queued !== true)).toBe(true);
+	});
+
+	it("#readonly-parallel: a middle refusal stays queued until the straggler settles — pinned drift (design §4.9/§5.4)", async () => {
+		// Shape: [gated straggler r1, refused middle r2 (invalid read args),
+		// trailing safe r3]. The refusal settles in phase 1 (settled[1] now),
+		// but its tool_end is held by the cursor behind r1; until then its
+		// row shows queued. Accepted-and-documented drift (sliding-window
+		// §3.6.1); this pins it so a future change is conscious.
+		const env = await startTuiRepl([reply("done")]);
+		const seen: Parameters<TuiShell["setActivity"]>[0][] = [];
+		const realSetActivity = TuiShell.prototype.setActivity;
+		const spy = vi.spyOn(TuiShell.prototype, "setActivity").mockImplementation(function (
+			this: TuiShell,
+			snapshot,
+		) {
+			seen.push(snapshot);
+			realSetActivity.call(this, snapshot);
+		});
+		onTestFinished(() => spy.mockRestore());
+		const original = env.runner.runTurn.bind(env.runner);
+		vi.spyOn(env.runner, "runTurn").mockImplementationOnce(async (options) => {
+			const emit = options.onEvent!;
+			// All three pre-issued; the middle one will be refused by the loop
+			// (validation), never admitted (no tool_running).
+			emit({ type: "tool_start", toolCallId: "r1", name: "read", args: { path: "a" } });
+			emit({ type: "tool_start", toolCallId: "r2", name: "read", args: { path: "b", offset: -1 } });
+			emit({ type: "tool_start", toolCallId: "r3", name: "read", args: { path: "c" } });
+			emit({ type: "tool_running", toolCallId: "r1" });
+			emit({ type: "tool_running", toolCallId: "r3" });
+			await settle(30);
+			// Straggler settles → the prefix (r1, refused r2, r3) flushes.
+			const mk = (id: string, content: string, isError: boolean) => ({
+				toolCallId: id,
+				toolName: "read",
+				content,
+				isError,
+			});
+			emit({ type: "tool_settled", result: mk("r1", "A", false) });
+			emit({ type: "tool_end", result: mk("r1", "A", false) });
+			emit({
+				type: "tool_end",
+				result: mk("r2", "Error: offset must be a positive safe integer (1-indexed), got -1", true),
+			});
+			emit({ type: "tool_settled", result: mk("r3", "C", false) });
+			emit({ type: "tool_end", result: mk("r3", "C", false) });
+			return original(options);
+		});
+		await settle();
+		env.terminal.data("mixed reads\r");
+		await waitUntil(() => env.transcript.completedLines().join().includes("done"));
+		// THE PIN: while the straggler held the cursor, the refused middle row
+		// displayed queued (it never gets a tool_running). Captured via the
+		// activity snapshot inside the mock.
+		const snapshot = seen.find(
+			(snap) =>
+				snap.tools.some((t) => t.id === "r2" && t.queued === true) &&
+				snap.tools.some((t) => t.id === "r1" && t.queued !== true),
+		);
+		expect(snapshot, "middle refusal was queued while the straggler ran").toBeDefined();
+	});
+
 	it("#readonly-parallel: queued NON-task tool rows paint `└─ queued` (live row), running ones keep the suffix (design §4.8)", async () => {
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink({});

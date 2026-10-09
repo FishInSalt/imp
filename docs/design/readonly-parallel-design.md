@@ -66,9 +66,10 @@ independent of each other, make all of them in the same message.
 A call that depends on an earlier result must wait for that result.
 ```
 
-**精确字节(NIT-4,评审定)**:规则行渲染为清单后**一个空行 +
-非 bullet 的三句段落**(无 `- ` 前缀、按上述换行断行、名单括号
-内逗号分隔、句点结尾)。名单部分程序化拼接;括号仅在名单 ≤6 时
+**精确字节(NIT-4,评审定;R2 补注)**:规则行渲染为清单后**一个
+空行 + 非 bullet 的三句段落**(无 `- ` 前缀、**按句断行**——上参考块
+的四行折行是排版,实现与测试钉的是每句一断行、第三句前换行、名单
+括号内逗号分隔、句点结尾)。名单部分程序化拼接;括号仅在名单 ≤6 时
 渲染,>6 时省略(防 token 膨胀;当前名单 5 个;>6 分支见 §4.7c)。
 
 ### 1.2 已考虑并否决的备选通道
@@ -341,3 +342,20 @@ round-1 的 14 项发现**全部在正文实质闭合,无虚报**。折叠自身
 
 修复后无新引入问题;评审确认无需第三轮全面评审。**设计就绪,进入
 实现。**
+
+**实现 — 独立代码评审(新上下文,2026-10-08),NEEDS-FIXES → 折叠。**
+2 MAJOR + 3 MINOR + 4 NIT,全部随实现评审 fold commit 闭合:
+
+- M-1(transcript.ts:108 注释虚报未改):455bf69 的 message 声称改了
+  transcript.ts 但 diff 为空(早期 python 编辑中断丢失)——注释已实际
+  改为不点名 roster;教训:commit message 逐文件核对再写。
+- M-2(测试计划三项无声丢弃):§4.8 升级路径(runTurn-mock 真名 read
+  驱动 tap 派生)、§4.9 middle-refusal 钉子、§3 子会话冒烟——三项
+  均已补齐(probe 工具计时证明子会话并发;串行下 probe 永远等不到
+  k1,执行即并发证据)。
+- m-1 abort 用例标题改为实测语义;m-2 两处 holder 加 onTestFinished
+  兜底 kill;m-3 注释/断言对齐 + 删无用重读。
+- n-1 设计补注按句断行;n-2 三个 mkdtemp 目录 onTestFinished rmSync;
+  n-3 10s 宽限实弹时长记档(对 15s testTimeout 余量 ~5s);n-4 评审
+  口径(设计文档记 2 轮+R3 快速确认;分支 5 commits)以本 Review log
+  为准。

@@ -105,8 +105,8 @@ export class TranscriptSink implements Component {
 				this.toolFolds.push(fold);
 				if (block.kind !== "input") {
 					// #tool-result-follows-call: a result belongs directly under its own
-					// call. Concurrency-safe calls (only `task`) emit every tool_start
-					// before any tool_end, so appending would strand all results below all
+					// call. Concurrency-safe calls emit every tool_start before any
+					// tool_end, so appending would strand all results below all
 					// headers. Falls back to append when the call has no known entry
 					// (orphan result) or the anchor was cleared.
 					const anchor = this.inputEntryById.get(block.id);

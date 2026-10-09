@@ -25,6 +25,9 @@ export function createFindTool(options: FindToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "find",
+		// #readonly-parallel: read-only tool, safe for sliding-window
+		// concurrency (see docs/design/readonly-parallel-design.md §2.1).
+		concurrencySafe: true,
 		presentation: findPresentation,
 		promptSnippet: "find files by name glob (respects .gitignore) — prefer over bash find.",
 		description:

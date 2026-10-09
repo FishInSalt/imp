@@ -9,6 +9,10 @@ SHIPPED — 设计评审关闭后实现于分支 feat/sliding-window-concurrency
 门禁：142 文件 3015 测试、lint 0、typecheck 双配置 0、build 0。
 待实现后代码评审 + 合入 main（--no-ff）。
 
+后续（#readonly-parallel）：non-goal 7 预留的 roster 扩展已由
+`readonly-parallel-design.md` 批次落地（read/grep/find/ls 标 safe +
+catalog 披露 + 非 task queued 行）。
+
 ## 1. Problem
 
 `executeToolBatch`（`src/core/loop.ts:443`）把一个极大连续段切成

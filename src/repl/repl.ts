@@ -739,8 +739,8 @@ class ReplMachine {
 					// #sliding-window: a queued call was admitted to the window —
 					// upgrade its activity row (snapshot rewrite only; no transcript
 					// writes, no Renderer bytes — display-only like tool_settled
-					// below). Top-level only: children have no concurrency-safe
-					// tools, and the loop never emits child-sourced tool_running.
+					// below). Top-level only: child-sourced display events are
+					// ignored — the child's own shell renders them.
 					if (event.type === "tool_running") {
 						if (info === undefined) this.trackActivity(event, info);
 						return;

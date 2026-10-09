@@ -36,6 +36,9 @@ export function createGrepTool(options: GrepToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "grep",
+		// #readonly-parallel: read-only tool, safe for sliding-window
+		// concurrency (see docs/design/readonly-parallel-design.md §2.1).
+		concurrencySafe: true,
 		presentation: grepPresentation,
 		promptSnippet: "find where code is defined or used (respects .gitignore) — prefer over bash grep.",
 		description:

@@ -748,6 +748,15 @@ export class TuiShell implements LineInput {
 		// start, inherited by source rows (repl.ts), so it never resets when the
 		// provisional parent row is replaced.
 		const taskStarts = new Map<string, number>();
+		// #readonly-parallel (design §2.3): queued non-task tool rows get a
+		// `└─ queued` live row — no timer, no running claim, so it is exempt
+		// from the D10 selector guard below exactly like the queued task row
+		// (waiting for a window slot stays true while a picker is open).
+		// Guard-OUT traversal on purpose: the suffix loop inside the guard
+		// stays byte-identical. Channel = live rows (task-row precedent),
+		// NOT closing suffixes.
+		for (const tool of this.activity.tools)
+			if (tool.queued === true) nextLiveRows.set(tool.id, ["└─ queued"]);
 		// #confirm-prompt (Phase 3 D10) + #tool-inline-live-rows: while a picker
 		// is open no tool row is painted anywhere. tool_start precedes the gate,
 		// so a `running` claim would be false. Task rows and the task suffix

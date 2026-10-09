@@ -49,6 +49,9 @@ export function createReadTool(options: ReadToolOptions = {}): Tool {
 	const cwd = options.cwd ?? process.cwd();
 	return {
 		name: "read",
+		// #readonly-parallel: read-only tool, safe for sliding-window
+		// concurrency (see docs/design/readonly-parallel-design.md §2.1).
+		concurrencySafe: true,
 		presentation: readPresentation,
 		promptSnippet: "read files (text or images); truncation notes tell you how to continue reading.",
 		description:

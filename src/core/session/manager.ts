@@ -13,6 +13,11 @@ import { SessionError, type SessionHeader, type SessionStats, SessionStore } fro
  * Layout (mirrors pi): ~/.ink/sessions/<cwd-with-slashes-dashed>/<timestamp>-<uuid>.jsonl
  */
 
+/** Root of all per-cwd session dirs (prune/orphan tooling). */
+export function sessionsRoot(baseDir?: string): string {
+	return baseDir ?? path.join(homedir(), ".ink", "sessions");
+}
+
 export function sessionsDirFor(cwd: string, baseDir?: string): string {
 	const base = baseDir ?? path.join(homedir(), ".ink", "sessions");
 	// Double existing dashes so "-" is an unambiguous path separator: /w/a-b and

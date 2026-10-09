@@ -14,6 +14,7 @@ import { createLsTool } from "../src/core/tools/ls.js";
 import { createReadTool } from "../src/core/tools/read.js";
 import type { Tool } from "../src/core/tools/types.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
+import type { LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
@@ -1215,8 +1216,8 @@ describe("#readonly-parallel: child-session parity (design §3 checkpoint)", () 
 				],
 				"tool_use",
 			);
-			const requests: { messages: AgentMessage[] }[] = [];
-			const provider = scriptedProvider([childTurn, finalText], requests as never[]);
+			const requests: LLMRequest[] = [];
+			const provider = scriptedProvider([childTurn, finalText], requests);
 			const pending = runSubagent({
 				provider,
 				model: "m",

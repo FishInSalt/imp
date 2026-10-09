@@ -359,3 +359,15 @@ round-1 的 14 项发现**全部在正文实质闭合,无虚报**。折叠自身
   n-3 10s 宽限实弹时长记档(对 15s testTimeout 余量 ~5s);n-4 评审
   口径(设计文档记 2 轮+R3 快速确认;分支 5 commits)以本 Review log
   为准。
+
+**Round 2 复核(2026-10-09,中断后续跑),verdict APPROVE-TO-MERGE。**
+全部 10 项在 34275dd 正文实质闭合(逐项验证,非 message 声明);三条
+新补测试(runTurn-mock 真名、middle-refusal 钉子、子会话冒烟)的论证
+经核查无假阳性。残留 2 NIT 已随后折叠:child 冒烟的 `as never[]` 强转
+改为 LLMRequest[] 正确类型;300ms 准入窗口 + POSIX 依赖记档(与套件
+既有模式一致)。**环境事故记档**:round 2 首跑被中止——评审员的 TMPDIR
+全量 ls 因 130 万历史泄漏目录(测试基建两月累积)每条耗时 4-13 分钟,
+~112 分钟耗在 19 条列举上;已清理(imp-* 128 万 + ink-* 2107 +
+parent-wt-* 1234,ls 恢复毫秒级),泄漏根因(夹具无清理 + 被杀 worker
+跳过 afterAll + macOS 兜底不追平)另立后续批次修复——本批全量跑亦
+实测出 14 个新泄漏(worktree/clipboard/output 等夹具),归入该批。

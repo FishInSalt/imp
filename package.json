@@ -43,7 +43,7 @@
 		"docs:site": "node scripts/build-docs-site.mjs",
 		"typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
 		"lint": "biome check . && npm run lint:scripts",
-		"lint:scripts": "node --check scripts/package-smoke.mjs && node --check scripts/release-guards.mjs && node --check scripts/check-docs.mjs && node --check scripts/build-docs-site.mjs && node scripts/check-docs.mjs && node scripts/imp-gate.mjs",
+		"lint:scripts": "node --check scripts/package-smoke.mjs && node --check scripts/release-guards.mjs && node --check scripts/check-docs.mjs && node --check scripts/build-docs-site.mjs && node --check scripts/gen-fixture-prefixes.mjs && node scripts/check-docs.mjs && node scripts/imp-gate.mjs",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
 		"test:watch": "vitest"

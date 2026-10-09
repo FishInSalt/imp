@@ -93,7 +93,9 @@ describe("child launch record — build", () => {
 		const record = buildChildLaunch(buildInput());
 		expect(record.agent?.roleSha256).toBe(sha("You are scout."));
 		expect(record.agent?.source).toBe("/agents/scout.md");
-		expect(record.system.sha256).toBe(sha(normalizeSystemText("You are the agent.\n\n- Date: 2026-09-28\n\nrest")));
+		expect(record.system.sha256).toBe(
+			sha(normalizeSystemText("You are the agent.\n\n- Date: 2026-09-28\n\nrest")),
+		);
 		expect(record.system.contextFiles).toEqual([{ path: "/p/AGENTS.md", sha256: sha("hello") }]);
 		expect(record.system.promptFiles).toEqual([
 			{ kind: "override", path: "/p/.imp/SYSTEM.md", sha256: sha("sys") },

@@ -247,7 +247,7 @@ physical objects but zero harm; removal is a separate decision) — see
 | `/nonexistent-imp-auth.json` literals | test INPUT | Nonexistent-path sentinel |
 | (removed — renamed in this batch) | — | Round-3 MINOR-C: verified no assertion on the literal; definitively renamed to `ink-auth-test-*`, not a survivor |
 | package-smoke.mjs:396 `.bin/imp` absence check | test INPUT (anti-regression) | Asserts the OLD executable alias is NOT installed — renaming defeats the purpose (followup C4) |
-| fixture git identities | renamed | `t@imp.dev`/`"imp test"` (15 sites) → `t@ink.invalid`/`"ink test"` (followup C4; no assertion referenced the imp forms) |
+| fixture git identities | renamed | `t@imp.dev`/`"imp test"` (16 sites incl. worktree.test.ts:84, followup round 2) → `t@ink.invalid`/`"ink test"` (no assertion referenced the imp forms) |
 
 Everything else this repo writes is `ink-` after this batch (codex-auth's
 disk-written sentinel is renamed, not exempted). The §7.3 gate's allowlist

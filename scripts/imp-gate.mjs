@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 const SURVIVORS = [
 	"scripts/imp-gate.mjs", // audited survivor (gate-managed; regex literal + header docs)
 	"test/helpers/fixture-prefixes.ts", // audited survivor (header documents exclusion audit)
+	"scripts/gen-fixture-prefixes.mjs", // audited survivor (generator: EXCLUDE list + imp→ink mapping are audit data)
 	"test/helpers/mktemp.ts", // audited survivor (header documents the ink- prefix rule)
 	"scripts/release-guards.mjs", // audited survivor (gate-managed)
 	"src/core/worktree.ts", // audited survivor (gate-managed)

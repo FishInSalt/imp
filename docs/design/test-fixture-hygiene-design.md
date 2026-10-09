@@ -307,6 +307,6 @@ batch adds none).
 | A2 deletes a foreign tool's dir (name collision with our prefixes) | Prefix list = repo inventory only; accepted residual: a REINSTALLED old imp binary's >24h dirs get swept (owner sign-off §1.2); decoy test §7.6 |
 | A2 sweep races across workers/processes | Single-sweeper guard (main worker only); 24h threshold makes fresh-dir deletion impossible; lease subprocesses skip |
 | B3 misses a consumer → silent slow lease tests | grep gate §7.3 + env passthrough test |
-| C flips behavior some hidden consumer relies on | Census §1.3: 0 reachable objects; grep gate |
+| C flips behavior some hidden consumer relies on | Census §1.3: 12 records on 3 owner-approved-deleted finished sessions; grep gate; dry-run script refuses on fresh mtime |
 | D deletes a live child | Active-lease exemption + interactive confirm + unit test |
 | Massive edit window (~80 files) conflicts with in-flight branches | No other in-flight branches exist today; single-batch policy per AGENTS.md |

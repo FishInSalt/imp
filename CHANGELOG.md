@@ -21,6 +21,11 @@ their original release identity.
   README demo GIF, and `assets/social-preview.html` →
   `assets/social-preview.png` is the repository social preview card.
 
+### Changed
+
+- Docs site: the wordmark cursor now blinks like a terminal cursor; the
+  animation is turned off under `prefers-reduced-motion: reduce`.
+
 ## [0.2.3] - 2026-10-06
 
 ### Added

@@ -155,7 +155,9 @@ a:hover{text-decoration:underline}
 .side{flex:0 0 218px;position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;padding:30px 20px 60px 0;border-right:1px solid var(--line)}
 .brand{display:block;font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--fg)}
 .brand:hover{text-decoration:none}
-.brand .cursor{color:var(--brand)}
+.brand .cursor{color:var(--brand);animation:cursor-blink 1.2s infinite}
+@keyframes cursor-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.brand .cursor{animation:none}}
 .tagline{font-size:12.5px;color:var(--dim);margin:6px 0 24px}
 .group{margin:0 0 22px}
 .group a{display:block;padding:4px 8px;margin-left:-8px;border-radius:6px;color:var(--fg);font-size:14px}

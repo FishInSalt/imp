@@ -1,7 +1,8 @@
 # Chinese docs site: full zh-CN mirror — design
 
-Status: draft — awaiting independent design review (fresh-context, adversarial).
-Implementation must not start until the review closes and its findings are folded.
+Status: draft. Design review round 1 (fresh-context, adversarial) returned
+"not ready"; all findings are folded below. Round 2 confirmation is under
+way — implementation must not start until round 2 closes with a ready verdict.
 
 ## Goal
 
@@ -15,48 +16,60 @@ page-for-page, with a language switcher on every page.
 - Any language beyond zh-CN. The mechanism must not preclude others, but
   only Chinese ships now.
 - Changing English docs content or the site's visual design.
+- Adding zh paths to `src/core/self-docs.ts` (canonical routing stays
+  English; `test/self-docs.test.ts` pins the extraction regex).
 
 ## Current state (verified at design time)
 
 - `scripts/build-docs-site.mjs` builds `_site/` from `README.md` + ten
-  top-level docs. It hard-codes `lang="en"`, English sidebar labels, and
-  English footer strings; rewrites links via a `PUBLISHED` map
-  (repo path → site path); generates heading ids with `slugify`; emits
-  canonical/og meta, sitemap.xml, robots.txt.
-- `README.zh-CN.md` exists at the root; its site link points at the site
-  root. Its header carries the language switch convention
-  `[English](README.md) | **简体中文**`.
-- `scripts/check-docs.mjs`: validates `REQUIRED_DOCS` exist, SELF_DOCS_TOPICS
-  in `src/core/self-docs.ts` name existing docs, topic docs are linked from
-  `docs/index.md`, and links resolve. Output: "10 docs, 9 topic routes".
+  top-level docs. Hard-codes `lang="en"`, English labels/strings; rewrites
+  links via `PUBLISHED`; heading ids come from `slugify` over RENDERED
+  heading text (tag-stripped, entity-decoded) via `addHeadingIds`; emits
+  canonical/og meta, sitemap.xml, robots.txt. `rewriteTarget` resolves a
+  target against the CURRENT SOURCE dir and emits an href relative to the
+  SAME dir — for en, source dirs and output dirs coincide (`""`/`docs`);
+  for zh they will not.
+- `README.md:9` carries `**English** | [简体中文](README.zh-CN.md)`;
+  `README.zh-CN.md:11` carries `[English](README.md) | **简体中文**`;
+  `README.zh-CN.md:103` links the site root.
+- The only anchors in the published set: `docs/settings.md:11` and
+  `docs/extensions.md:15` both link `index.md#project-trust` (targets
+  `## Project trust` in `docs/index.md`). There are no parent-directory
+  links outside code blocks.
+- `scripts/check-docs.mjs`: REQUIRED_DOCS exist; SELF_DOCS_TOPICS name
+  existing docs; topic docs are linked from `docs/index.md`; links resolve.
+  No test in `test/` runs the builder or check-docs; the builder runs only
+  in `.github/workflows/pages.yml` and via `npm run docs:site`.
+- `pages.yml` `paths`: `README.md`, `docs/**`, `scripts/build-docs-site.mjs`,
+  `package.json`, `package-lock.json`, the workflow file —
+  `README.zh-CN.md` is missing.
 - npm package ships `docs/` top level only: `scripts/package-smoke.mjs`
-  collects top level and its allowlist regex is `docs\/[a-z0-9-]+\.md`;
-  `test/package-tar.test.ts` asserts exact tar entries (and that
-  `docs/design/` is absent). `package.json` files: `docs`, `!docs/design`.
-- `lint:scripts` syntax-checks the scripts and runs check-docs.
+  collects top level; allowlist regex is `docs\/[a-z0-9-]+\.md`.
+  `test/package-tar.test.ts` is a synthetic fixture (representative
+  coverage; the real gate is package-smoke's `expectedFiles`).
+  `test/package-metadata.test.ts` pins `pkg.files` exactly and pins
+  `homepage` to the site root.
 
 ## Design
 
 ### Content
 
-- New `docs/zh-CN/` with the same ten file names as the top-level docs
-  (`index.md` … `images.md`). `README.zh-CN.md` (root) remains the zh home
-  source. Translations are committed files; the site is built at deploy
-  time as today. No runtime translation, no external service.
-- Translation rule set (binding for every file):
-  1. Fenced code blocks are byte-identical to the English source.
-  2. Link targets (paths and URLs) are copied from the English source
-     unchanged; only anchor text is translated. In-page anchors (`#…`)
-     must match the translated heading slugs.
-  3. Heading count matches the English source.
+- New `docs/zh-CN/` with the same ten file names as the top-level docs.
+  `README.zh-CN.md` (root) remains the zh home source. Translations are
+  committed files; the site is built at deploy time as today.
+- Translation rules (binding):
+  1. Fenced code blocks are byte-identical to the English source
+     (including info strings, order-sensitive).
+  2. Link targets are copied unchanged (paths and `#anchors`); only anchor
+     text is translated. The builder re-slugs anchors for zh (see Links).
+  3. Heading level sequence is identical to the English source.
   4. The glossary below is binding.
-- Glossary: anchored on `README.zh-CN.md` usage (counts from the current
-  file). Keep in English: Ink, npm, CLI, TUI, MCP, agent, token, JSON, and
-  all command names, flags, and paths. Translate exactly as follows:
+- Glossary, anchored on `README.zh-CN.md` usage; the README wins on
+  conflict. Keep in English: Ink, npm, CLI, TUI, MCP, agent, token, JSON,
+  and all command names, flags, and paths. Translate exactly:
   skill = 技能, subagent = 子代理, extension = 扩展, session = 会话,
   provider = 提供商, model = 模型, tool = 工具, context = 上下文,
-  settings = 设置, harness = 运行框架 (per the README tagline). Where the
-  README already made a choice for a term, the README wins.
+  settings = 设置, harness = 运行框架.
 
 ### Site structure and URLs
 
@@ -64,81 +77,154 @@ page-for-page, with a language switcher on every page.
 - zh (new): `/zh/index.html`, `/zh/docs/<name>.html`
 - Mechanical mapping: zh path = `/zh` + en path (home: `/` ⇄ `/zh/`).
 
-### Page template, per language
+### Link rewriting — contract (round-1 fix)
 
-- `lang="zh-CN"` on zh pages.
-- Switcher in the sidebar under the tagline, following the README
-  convention: `English | **简体中文**`, active language bold. Always links
-  to the SAME page in the other language (home ⇄ home, cli ⇄ cli).
-- zh labels: 首页 / 总览 / CLI 参考 / 提供商与模型 / 会话 / 设置 / 扩展 /
-  技能 / MCP / 子代理 / 图片. Sidebar extras: GitHub / npm / 更新日志.
-  Footer: 在 GitHub 上编辑此页; Ink 以 MIT 许可证发布; install command
-  unchanged.
-- zh pages carry a one-line canonicality note in the footer: 中文翻译可能
-  滞后于英文版本；如有出入，以英文版本为准。
-- "Edit this page" targets: zh pages → the zh source file
-  (`docs/zh-CN/<name>.md`, `README.zh-CN.md`).
-- Head: translated title (`<中文标题> — Ink`) and description (existing
-  `summarize()` over the zh file); per-language canonical URL; hreflang
-  alternates both ways plus `x-default` → en.
-- sitemap.xml: add the 11 zh URLs.
+- Resolution base and output base are separate. A target resolves against
+  the file's ACTUAL repo location (`README.zh-CN.md` → `""`;
+  `docs/zh-CN/<name>.md` → `docs/zh-CN`); the emitted href is relative to
+  the current page's OUTPUT dir (`zh`, `zh/docs`, or `""`/`docs` for en).
+  En keeps source == output and is unchanged.
+- zh map (source repo path → zh output path):
+  - `docs/zh-CN/<name>.md` → `zh/docs/<name>.html` (sibling links in zh docs)
+  - `docs/<name>.md` → `zh/docs/<name>.html` (the zh home's doc links,
+    copied from the en README)
+  - `README.md` → `index.html` (the zh home's English switch; the relative
+    computation yields `../index.html`)
+- en map gains one entry: `README.zh-CN.md` → `zh/index.html` (README.md's
+  简体中文 switch lands on `/zh/`, not a GitHub blob).
+- Fallback outside the published set is unchanged: GitHub blob of the
+  English original.
+- Anchor re-slugging: when a link carries `#anchor` into a file that has a
+  zh counterpart, map the en heading slug to the zh heading id BY POSITION:
+  find the anchor's index in `headingSlugs(en target)`, emit
+  `headingSlugs(zh target)[index]`. Heading-sequence parity (CI) makes the
+  alignment well-defined. If the anchor is not found among the en target's
+  slugs, keep it unchanged (same as today's en behavior). Anchors are
+  emitted as raw UTF-8 (no percent-encoding).
+- Concrete cases pinned by the build test: zh settings.html →
+  `index.html#<id of the translated "Project trust" heading>`; built zh
+  home English switch → `../index.html`; built en home 简体中文 switch →
+  `zh/index.html`.
+- Future note: if an en doc ever introduces a `../<root file>` link, the
+  zh resolution base must be adjusted; check-docs flags the missing target.
 
-### Link rewriting inside zh docs
+### Page template — per-language strings (single source in the builder)
 
-- Translation keeps the English source's link targets; the builder maps
-  them per language. For zh pages: `docs/<name>.md` → `/zh/docs/<name>.html`
-  and `README.md` → `/zh/index.html` via the zh `PUBLISHED` map. Targets
-  outside the published set keep the existing GitHub-blob fallback
-  (English originals).
-- In-page anchors: heading ids come from the existing `slugify` over
-  translated headings; zh in-page links must match. Enforced by CI (below).
+- `html lang`: `en` / `zh-CN`.
+- Home title: "Ink — an open-source AI assistant and agent harness for the
+  terminal" / "Ink — 开源终端 AI 助手与 agent 运行框架".
+- Home description: SITE_DESCRIPTION / "Ink —— 一个开源的终端 AI 助手与
+  agent 运行框架：会话、扩展、技能、子代理与 MCP；支持 Anthropic、
+  OpenAI、GLM、DeepSeek 和 Kimi。"
+- Doc title: `<label> — Ink` / `<中文 label> — Ink`; doc description:
+  existing `summarize()` over the file, fallback = that language's home
+  description.
+- Sidebar tagline: "an AI agent harness for the terminal" /
+  "面向终端的 AI agent 运行框架".
+- Nav labels (en / zh): Home / 首页; Overview / 总览; CLI reference /
+  CLI 参考; Providers & models / 提供商与模型; Sessions / 会话;
+  Settings / 设置; Extensions / 扩展; Skills / 技能; MCP / MCP;
+  Subagents / 子代理; Images / 图片. Sidebar extras: GitHub, npm,
+  Changelog / 更新日志.
+- Footer: "Edit this page on GitHub" / 在 GitHub 上编辑此页; "Ink ships
+  under the MIT license" / Ink 以 MIT 许可证发布; install command
+  unchanged. zh-only note: 中文翻译可能滞后于英文版本；如有出入，以英文
+  版本为准。
+- Switcher (sidebar, under the tagline): en pages `**English** | 简体中文`,
+  zh pages `English | **简体中文**`; always links the SAME page in the
+  other language.
+- Head: per-language canonical; hreflang alternates both ways plus
+  `x-default` → en; sitemap gains the 11 zh URLs.
+- "Edit this page" targets: zh pages → `docs/zh-CN/<name>.md`,
+  `README.zh-CN.md`.
+
+### Builder refactor (prerequisite)
+
+- Guard the entry point (main-guard) so importing the module never builds.
+- Export pure helpers: `slugify`, `headingSlugs(markdown)` (ids in document
+  order, reproducing `addHeadingIds` over rendered text), and the rewrite
+  functions. check-docs and the build test import these — no duplicated
+  slug logic (`slugify` alone is insufficient: ids come from rendered,
+  tag-stripped, entity-decoded heading text).
 
 ### Checks — extend `scripts/check-docs.mjs`
 
-1. Mirror completeness: every `REQUIRED_DOCS` name exists in `docs/zh-CN/`.
-2. Existing link checks run over zh docs and `README.zh-CN.md` too.
-3. Structural parity per file (en vs zh): equal fenced-code-block count,
-   byte-equal blocks, equal set of non-anchor link targets, equal heading
-   count. (Heading text and in-page anchors are excluded by design.)
-4. Anchor resolution: every in-page `#…` target in a zh file matches a
-   heading id the builder would generate for that file. Share `slugify`
-   with the builder (export it behind a main-guard, or duplicate it with a
-   test pinning the two copies equal).
+1. Mirror completeness: every REQUIRED_DOCS name exists in `docs/zh-CN/`.
+2. Link checks run over zh files and `README.zh-CN.md`, resolving in the
+   files' actual locations.
+3. Structural parity per language pair (all eleven: README pair + ten
+   docs): equal heading level sequences; fenced blocks pairwise byte-equal
+   including info strings; link-target path multiset equal. The two
+   language-switch lines are the single documented exemption from target
+   equality — they are validated instead by the build test (exact hrefs).
+4. Anchors: every anchor link's anchor exists among `headingSlugs` of its
+   resolved target (for zh, the zh file); heading parity guarantees the
+   built zh href resolves. The build test pins one concrete case.
+
+### Build-level test (new; round-1 fix)
+
+`test/docs-site.test.ts` runs the builder into a temporary out dir
+(builder gains an out-dir override; default stays `_site/`) and asserts:
+no doubled `/zh/zh/` paths; zh home English switch `../index.html`; en
+home 简体中文 switch `zh/index.html`; the zh settings→index anchor
+resolves via `headingSlugs`; `lang` attributes; hreflang pairs; sitemap
+contains the 11 zh URLs; switcher hrefs on a sample doc pair. Runs in
+vitest / CI.
 
 ### npm package
 
-Ship the translations. Update `scripts/package-smoke.mjs` (allowlist
-admits `docs\/zh-CN\/[a-z0-9-]+\.md`, collect the subdirectory) and
-`test/package-tar.test.ts` (expected entries). `package.json` files needs
-no change (`docs` already includes subdirectories). Rationale: the package
-already ships the user-facing docs; the mirror adds roughly 40 KB.
+Ship the translations. `scripts/package-smoke.mjs`: collect docs top level
+PLUS `docs/zh-CN` top level only (not recursively — recursion would pull
+`docs/design/` and contradict `!docs/design`); allowlist adds
+`docs\/zh-CN\/[a-z0-9-]+\.md`; update `expectedFiles`.
+`test/package-tar.test.ts`: extend the fixture entries for representative
+coverage. `package.json` unchanged (`docs` includes subdirectories; the
+files array is pinned exactly by package-metadata test).
+
+### pages.yml
+
+Add `"README.zh-CN.md"` to `paths` (`docs/**` already covers
+`docs/zh-CN/**`).
 
 ### README links
 
-- `README.zh-CN.md`: candidate change — site link becomes
-  `https://fishinsalt.github.io/ink/zh/`. On the built zh home this is
-  self-referential; acceptable, but keeping the root link is also viable
-  (the root has a switcher). Decide at review. `README.md` unchanged.
+- `README.zh-CN.md`: the site link becomes
+  `https://fishinsalt.github.io/ink/zh/` (self-reference on the built zh
+  home accepted). `README.md` unchanged.
 
 ### Rollout
 
-- Branch `docs/zh-docs-site`; design doc first (this file); implementation
-  only after the design review closes; independent code review before
-  merge; `--no-ff` merge; Pages redeploy verified; CHANGELOG Unreleased
-  entry.
-- Translation in batches of 3–4 files, done by fresh-context subagents
-  given the glossary and rule set; every batch must pass the structural
-  parity checks; full test suite; live spot-checks (switcher both ways,
-  anchors, sitemap).
+- Branch `docs/zh-docs-site`; this design first; implementation only after
+  the design review closes; independent code review before merge; `--no-ff`
+  merge; Pages redeploy verified; CHANGELOG Unreleased entry.
+- Translation in batches of 3–4 files by fresh-context subagents given the
+  glossary, the rules, and the anchor/map notes; every batch passes the
+  parity checks and the full test suite; live spot-checks (switchers both
+  ways, anchors, sitemap).
 
-## Open questions for the review
+## Review history
 
-1. Strict mirror policy: CI failing when a translated page is missing —
-   too rigid for future English-only pages? (Alternative: explicit
-   exemption list.)
-2. README.zh-CN self-referential link: root or `/zh/`?
-3. Structural checks: is heading-count parity strong enough, or should
-   top-level (##) heading counts be compared separately? Cost/benefit.
-4. hreflang `x-default` → en: any counter-argument?
-5. Anything else in the repo that pins site behavior and is not listed in
-   "Checks" or "npm package" (tests, workflows, scripts)?
+- Round 1 (fresh-context, adversarial): verdict "not ready — changes
+  required", 11 findings. Folded here: (F1) link contract split into
+  resolution base vs output base + explicit per-language map; (F2) anchor
+  re-slug policy + checks + pinned case; (F3) pages.yml paths; (F4)
+  switch-line hrefs specified + pinned by test; (F5) build-level test added;
+  (F6) main-guard + shared `headingSlugs`; (F7) smoke collection spelled
+  out; (F8) per-language strings table; (F9) parity checks strengthened
+  (level sequences, info strings, multisets, README pair); (F10) strict
+  mirror kept, cost accepted; (F11) no other pins; package-metadata pins
+  recorded.
+- Round 2: confirmation under way.
+
+## Resolved open questions
+
+1. Strict mirror: yes — a missing translation fails CI; no exemption list.
+   Cost accepted: a new REQUIRED_DOCS entry forces a translation, consistent
+   with the repo's docs rules.
+2. README.zh-CN site link: `/zh/`.
+3. Parity strength: heading level sequence + fenced blocks (with info
+   strings) + link-target multisets + README pair in scope.
+4. `x-default` → en: kept; no counter-argument found.
+5. Other pins: none beyond `pages.yml` and the new build test;
+   package-metadata pins respected (`files` unchanged; `homepage` stays the
+   site root).

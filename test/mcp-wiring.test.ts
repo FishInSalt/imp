@@ -1,6 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpManager } from "../src/mcp/manager.js";
@@ -9,6 +7,7 @@ import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeConsole, scriptedProvider, waitUntil } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const SERVER = path.join(import.meta.dirname, "helpers", "mcp-fake-server.mjs");
 
@@ -20,7 +19,7 @@ describe("runRepl wiring (review P1-1)", () => {
 	let notes: string[] = [];
 
 	beforeEach(async () => {
-		baseDir = await mkdtemp(path.join(tmpdir(), "imp-mcp-wire-"));
+		baseDir = await mkTempDirAsync("ink-mcp-wire-");
 		notes = [];
 	});
 

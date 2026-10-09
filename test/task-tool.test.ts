@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -28,6 +26,7 @@ import { VERSION } from "../src/format.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, gate, makeRenderer, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const echo: Tool = {
 	name: "echo",
@@ -152,7 +151,7 @@ describe("taskResult contract (§3)", () => {
 	});
 
 	it("aborted: isError + full transcript path (file exists on disk)", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const parent = createSession(baseDir, baseDir);
 		const child = createChildSession(parent, baseDir);
 		child.appendMessage(user("review the code"));
@@ -169,7 +168,7 @@ describe("taskResult contract (§3)", () => {
 	it.each(["aborted", "timeout", "crash", "max_iterations"] as const)(
 		"%s with an unpersisted session never advertises a transcript",
 		async (status) => {
-			const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+			const baseDir = await mkTempDirAsync("ink-task-");
 			const child = createChildSession(createSession(baseDir, baseDir), baseDir);
 			const result = taskResult(
 				outcome({ status, text: undefined, turns: 0, reason: "connection refused" }),
@@ -268,7 +267,7 @@ describe("taskResult contract (§3)", () => {
 
 describe("createTaskTool end-to-end", () => {
 	it("happy path: child transcript persisted under children/, linked by parent id, excluded from listing", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const cwd = path.join(baseDir, "proj");
 		const parent = createSession(cwd, baseDir);
 		parent.appendMessage(user("find the bug"));
@@ -304,7 +303,7 @@ describe("createTaskTool end-to-end", () => {
 	});
 
 	it("childSessions=false: works, no children/ dir, 'not persisted' in errors", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const parent = createSession(baseDir, baseDir);
 		const provider = scriptedProvider([
 			assistant([
@@ -345,7 +344,7 @@ describe("createTaskTool end-to-end", () => {
 	});
 
 	it("getters are read at spawn: a /model switch reaches the child", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const parent = createSession(baseDir, baseDir);
 		const sink: LLMRequest[] = [];
 		let model = "old-model";
@@ -368,7 +367,7 @@ describe("createTaskTool end-to-end", () => {
 	});
 
 	it("getProvider is read at spawn: a cross-family /model switch reaches the child (review P1-1)", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const parent = createSession(baseDir, baseDir);
 		const seen: string[] = [];
 		let current: LLMProvider = {
@@ -712,7 +711,7 @@ describe("named agents (M5c)", () => {
 
 describe("runner integration (default set)", () => {
 	it("task ships with the runner: parent → child → parent round trip, fresh child context, task excluded from child pool", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
+		const baseDir = await mkTempDirAsync("ink-runner-");
 		const cwd = path.join(baseDir, "proj");
 		const sink: LLMRequest[] = [];
 		// one shared provider: request 1 = parent (task call), request 2 = child
@@ -765,9 +764,9 @@ describe("runner integration (default set)", () => {
 	}, 20000);
 
 	it("M5c: runner discovers .ink/agents from cwd, warns on bad files, named agent reaches the child", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
+		const baseDir = await mkTempDirAsync("ink-runner-");
 		const cwd = path.join(baseDir, "proj");
-		const agentsHome = await mkdtemp(path.join(tmpdir(), "imp-agents-home-"));
+		const agentsHome = await mkTempDirAsync("ink-agents-home-");
 		const { mkdirSync, writeFileSync } = await import("node:fs");
 		mkdirSync(path.join(cwd, ".ink", "agents"), { recursive: true });
 		writeFileSync(
@@ -829,7 +828,7 @@ describe("worktree isolation (M6b)", () => {
 	/** A hermetic git repo cwd + a task tool whose worktree children get a real
 	 * write tool rooted at their worktree path (mirrors the runner wiring). */
 	async function repoTask(overrides?: Record<string, unknown>) {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-e2e-"));
+		const root = await mkTempDirAsync("ink-wt-e2e-");
 		const rgit = (args: string[]) => {
 			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
@@ -854,10 +853,7 @@ describe("worktree isolation (M6b)", () => {
 				childCwds.push(cwd);
 				return [createWriteTool({ cwd })];
 			},
-			worktreeBaseDir: path.join(
-				tmpdir(),
-				`imp-wt-e2e-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-			),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-e2e-base-`),
 			...overrides,
 		});
 		return { task, sink, root, childCwds, rgit };
@@ -944,7 +940,7 @@ describe("worktree isolation (M6b)", () => {
 
 	it("no per-cwd tool pool wired → teaching error (isolation would be silently violated)", async () => {
 		// a real repo, but a host that never wired getToolsForCwd
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-nopool-"));
+		const root = await mkTempDirAsync("ink-wt-nopool-");
 		const rgit = (args: string[]) => {
 			const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git: ${r.stderr}`);
@@ -975,7 +971,7 @@ describe("worktree isolation (M6b)", () => {
 	});
 
 	it("non-git cwd → teaching error, provider never called", async () => {
-		const nowhere = await mkdtemp(path.join(tmpdir(), "imp-wt-nogit-"));
+		const nowhere = await mkTempDirAsync("ink-wt-nogit-");
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
 			getProvider: () => scriptedProvider([], sink),
@@ -1079,7 +1075,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	}
 
 	it("B1: a misconfigured agent (worktree + unknown tools) leaks no worktree — the guard now runs before creation", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-b1-"));
+		const root = await mkTempDirAsync("ink-wt-b1-");
 		await seedRepo(root);
 		const sink: LLMRequest[] = [];
 		const task = createTaskTool({
@@ -1090,7 +1086,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [],
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-b1-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-b1-base-`),
 			agents: [
 				{
 					name: "builder",
@@ -1112,7 +1108,12 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("B2: a parent inside a linked worktree branches from the PARENT's HEAD — empty child worktree still cleans up", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-b2-"));
+		// base holds BOTH the repo and its linked parent worktree, so the
+		// sibling `parent-wt-*` dir dies with the test (fixture-hygiene; the
+		// pre-fix version leaked it at TMPDIR top level).
+		const base = await mkTempDirAsync("ink-wt-b2-");
+		const root = path.join(base, "repo");
+		mkdirSync(root, { recursive: true });
 		await seedRepo(root);
 		const g = gitAt(root);
 		g(["checkout", "-qb", "feature-x"]);
@@ -1122,7 +1123,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		// move the MAIN root back to main FIRST, then link a parent worktree on
 		// feature-x — now the two HEADs genuinely differ
 		g(["checkout", "-q", "main"]);
-		const parentCwd = path.join(root, "..", `parent-wt-${Date.now()}`);
+		const parentCwd = path.join(base, `parent-wt-${Date.now()}`);
 		g(["worktree", "add", "-q", parentCwd, "feature-x"]);
 
 		const sink: LLMRequest[] = [];
@@ -1138,7 +1139,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 				childCwds.push(cwd);
 				return [];
 			},
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-b2-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-b2-base-`),
 		});
 		const result = await task.execute({ prompt: "look", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("looked only");
@@ -1149,7 +1150,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("committed child work shows in the trailer stat (diff vs base, not HEAD)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-stat-"));
+		const root = await mkTempDirAsync("ink-wt-stat-");
 		await seedRepo(root);
 		const sink: LLMRequest[] = [];
 		const childCwds: string[] = [];
@@ -1179,7 +1180,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 				childCwds.push(cwd);
 				return [createWriteTool({ cwd }), commitTool(cwd)];
 			},
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-stat-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-stat-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "build and commit", worktree: true },
@@ -1191,7 +1192,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("abort mid-child: outcome aborted, empty worktree cleaned up (finally covers the abort path)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-abort-"));
+		const root = await mkTempDirAsync("ink-wt-abort-");
 		await seedRepo(root);
 		const sink: LLMRequest[] = [];
 		const controller = new AbortController();
@@ -1224,7 +1225,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [abortAware],
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-abort-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-abort-base-`),
 		});
 		const running = task.execute({ prompt: "go", worktree: true }, controller.signal);
 		await new Promise((r) => setTimeout(r, 60)); // let the child reach the tool
@@ -1237,10 +1238,11 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("two parallel worktree tasks: distinct branches, concurrent creation, no cross-talk", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-par-"));
+		const root = await mkTempDirAsync("ink-wt-par-");
 		await seedRepo(root);
 		const sink: LLMRequest[] = [];
 		const childCwds: string[] = [];
+		const parBase = await mkTempDirAsync("ink-wt-par-base-");
 		const make = () =>
 			createTaskTool({
 				getProvider: () => scriptedProvider([assistant([{ type: "text", text: "read-only" }])], sink),
@@ -1253,10 +1255,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 					childCwds.push(cwd);
 					return [];
 				},
-				worktreeBaseDir: path.join(
-					tmpdir(),
-					`imp-wt-par-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-				),
+				worktreeBaseDir: parBase,
 			});
 		const [r1, r2] = await Promise.all([
 			make().execute({ prompt: "a", worktree: true }, new AbortController().signal),
@@ -1274,7 +1273,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("node_modules NOT gitignored at the root: symlinked copy still counts as no changes", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-nm-"));
+		const root = await mkTempDirAsync("ink-wt-nm-");
 		await seedRepo(root);
 		// node_modules exists but is NOT in .gitignore and NOT committed
 		const { mkdirSync } = await import("node:fs");
@@ -1289,7 +1288,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [],
-			worktreeBaseDir: path.join(tmpdir(), `imp-wt-nm-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-nm-base-`),
 		});
 		const result = await task.execute({ prompt: "idle", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("idle");
@@ -1406,7 +1405,7 @@ describe("cap-hit transcript handoff (e2e)", () => {
 		const toolCallStep = assistant([
 			{ type: "toolCall", id: "c1", name: "echo", arguments: { message: "x" } },
 		]);
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-cap-"));
+		const baseDir = await mkTempDirAsync("ink-task-cap-");
 		const parent = createSession(baseDir, baseDir);
 		// A repo is needed for worktree creation — build a minimal one.
 		const repo = path.join(baseDir, "repo");
@@ -1458,7 +1457,7 @@ describe("cap-hit transcript handoff (e2e)", () => {
 		const boom = (): never => {
 			throw new Error("provider down");
 		};
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-task-"));
+		const baseDir = await mkTempDirAsync("ink-task-");
 		const parent = createSession(baseDir, baseDir);
 		const task = createTaskTool({
 			getProvider: () => scriptedProvider([toolCallStep, boom]),
@@ -1500,7 +1499,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	}
 
 	it("I1: an empty commit alone keeps the worktree and shows the merge trailer", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i1-"));
+		const root = await mkTempDirAsync("ink-sa01-i1-");
 		await seedRepo(root);
 		const task = createTaskTool({
 			getProvider: () =>
@@ -1527,7 +1526,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i1-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i1-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "commit nothing", worktree: true },
@@ -1541,7 +1540,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	});
 
 	it("I2: a child that corrupts its own worktree is kept for safety, not deleted", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i2-"));
+		const root = await mkTempDirAsync("ink-sa01-i2-");
 		await seedRepo(root);
 		const task = createTaskTool({
 			getProvider: () =>
@@ -1565,7 +1564,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i2-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i2-base-`),
 		});
 		const result = await task.execute({ prompt: "break it", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree kept for safety");
@@ -1575,7 +1574,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	});
 
 	it("I3: a failed removal surfaces instead of a silent leak (locked worktree)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i3-"));
+		const root = await mkTempDirAsync("ink-sa01-i3-");
 		await seedRepo(root);
 		const task = createTaskTool({
 			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "looked" }])]),
@@ -1589,7 +1588,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
 				return [createWriteTool({ cwd })];
 			},
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i3-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i3-base-`),
 		});
 		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree cleanup failed");
@@ -1599,7 +1598,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	});
 
 	it("I4: a setup-error rollback that fails is reported on the teaching error", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i4-"));
+		const root = await mkTempDirAsync("ink-sa01-i4-");
 		await seedRepo(root);
 		const task = createTaskTool({
 			getProvider: () => scriptedProvider([]),
@@ -1613,7 +1612,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
 				return [];
 			},
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i4-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i4-base-`),
 			agents: [
 				{
 					name: "builder",
@@ -1632,7 +1631,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	});
 
 	it("I6: an interrupted child keeps its written work (worktree + trailer)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i6-"));
+		const root = await mkTempDirAsync("ink-sa01-i6-");
 		await seedRepo(root);
 		const task = createTaskTool({
 			getProvider: () =>
@@ -1653,7 +1652,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: (cwd) => [createWriteTool({ cwd }), holdingTool(gate())],
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i6-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i6-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "write then hold", worktree: true, timeoutMs: 1000 },
@@ -1664,7 +1663,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	}, 30000);
 
 	it("I7: the timeout path keeps the child's written work (worktree + trailer)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i7-"));
+		const root = await mkTempDirAsync("ink-sa01-i7-");
 		await seedRepo(root);
 		const holdGate = gate();
 		const task = createTaskTool({
@@ -1703,7 +1702,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i7-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i7-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "write then hang", worktree: true, timeoutMs: 1000 },
@@ -1715,7 +1714,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 	}, 15000);
 
 	it("I8: gitignored node_modules content created by the child is kept, not deleted", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa01-i8-"));
+		const root = await mkTempDirAsync("ink-sa01-i8-");
 		await seedRepo(root);
 		const g = gitAt(root);
 		writeFileSync(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
@@ -1746,7 +1745,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: path.join(tmpdir(), `imp-sa01-i8-base-${Date.now()}`),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i8-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "install deps", worktree: true },
@@ -1842,7 +1841,7 @@ describe("task model binding (SA-02)", () => {
 		const { task, sink, bindings } = modelTask({
 			parentReference: () => "anthropic/claude-x",
 			agents: scoutWith("zai/glm-5.3"),
-			overrides: { cwd: await mkdtemp(path.join(tmpdir(), "imp-sa02-no-repo-")) },
+			overrides: { cwd: await mkTempDirAsync("ink-sa02-no-repo-") },
 		});
 		const result = await task.execute(
 			{ prompt: "go", agent: "scout", worktree: true },
@@ -1884,7 +1883,7 @@ describe("task model binding (SA-02)", () => {
 
 	it("A-vision-wiring: getToolsForChild receives the canonical child binding at the right cwd", async () => {
 		// Shared cwd: the seam is called with the parent cwd.
-		const parentCwd = await mkdtemp(path.join(tmpdir(), "imp-sa02-shared-"));
+		const parentCwd = await mkTempDirAsync("ink-sa02-shared-");
 		const shared = modelTask({
 			parentReference: () => "zai/glm-5v",
 			agents: scoutWith("glm-5.3"),
@@ -1896,7 +1895,7 @@ describe("task model binding (SA-02)", () => {
 		expect(shared.bindings).toEqual([{ cwd: parentCwd, providerName: "zai", modelId: "glm-5.3" }]);
 
 		// Worktree cwd: the seam is called with the worktree path (real git fixture).
-		const root = await mkdtemp(path.join(tmpdir(), "imp-sa02-wt-"));
+		const root = await mkTempDirAsync("ink-sa02-wt-");
 		const rgit = (a: string[]) => {
 			const r = spawnSync("git", a, { cwd: root, encoding: "utf8" });
 			if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
@@ -1912,7 +1911,7 @@ describe("task model binding (SA-02)", () => {
 			agents: scoutWith("glm-5.3"),
 			overrides: {
 				cwd: root,
-				worktreeBaseDir: path.join(tmpdir(), `imp-sa02-wt-base-${Date.now()}`),
+				worktreeBaseDir: await mkTempDirAsync(`ink-sa02-wt-base-`),
 			},
 		});
 		const wtResult = await wt.task.execute(
@@ -2009,8 +2008,8 @@ describe("task record (SA-03)", () => {
 	}
 
 	it("T1/T13/T14/T21: a completed run carries identity + references, survives reopen, and the child transcript exists", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-");
+		const cwd = await mkTempDirAsync("ink-rec-cwd-");
 		const parent = createSession(cwd, base);
 		const { task, sink } = recordHarness({ session: parent, childSessions: true, sessionBaseDir: base, cwd });
 		const result = await task.execute({ prompt: "go" }, new AbortController().signal, {
@@ -2180,9 +2179,9 @@ describe("task record (SA-03)", () => {
 	});
 
 	it("T9: a worktree rejection records the rollback disposition (SA-01 honesty in structured form)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-rec-wt-"));
+		const root = await mkTempDirAsync("ink-rec-wt-");
 		await seedRepo(root);
-		const wtBase = path.join(tmpdir(), `imp-rec-wt-base-${Date.now()}`);
+		const wtBase = await mkTempDirAsync("ink-rec-wt-base-");
 		const task = createTaskTool({
 			getProvider: () => scriptedProvider([assistant([{ type: "text", text: "never" }])]),
 			getModel: () => "m",
@@ -2206,8 +2205,8 @@ describe("task record (SA-03)", () => {
 	}, 20000);
 
 	it("T11: parallel attempts get distinct identities while correlating their calls", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-par-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-par-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-par-");
+		const cwd = await mkTempDirAsync("ink-rec-par-cwd-");
 		const parent = createSession(cwd, base);
 		const { task } = recordHarness({ session: parent, childSessions: true, sessionBaseDir: base, cwd });
 		const [a, b] = await Promise.all([
@@ -2239,8 +2238,8 @@ describe("task record (SA-03)", () => {
 	});
 
 	it("T16: a parent compaction keeps the record collectible from raw entries", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-cmp-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-cmp-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-cmp-");
+		const cwd = await mkTempDirAsync("ink-rec-cmp-cwd-");
 		const parent = createSession(cwd, base);
 		const { task } = recordHarness({ session: parent, childSessions: false, cwd });
 		const result = await task.execute({ prompt: "go" }, new AbortController().signal);
@@ -2258,8 +2257,8 @@ describe("task record (SA-03)", () => {
 	});
 
 	it("T19: a read-only children dir yields a crash outcome with an honest write-failed transcript", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-ro-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-ro-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-ro-");
+		const cwd = await mkTempDirAsync("ink-rec-ro-cwd-");
 		const parent = createSession(cwd, base);
 		const childrenDir = path.join(sessionsDirFor(cwd, base), "children");
 		mkdirSync(childrenDir, { recursive: true });
@@ -2282,10 +2281,10 @@ describe("task record (SA-03)", () => {
 	});
 
 	it("T19b: an execute throw leaves a generic error result with NO record (documented crash window)", async () => {
-		const scratch = await mkdtemp(path.join(tmpdir(), "imp-rec-crash-"));
+		const scratch = await mkTempDirAsync("ink-rec-crash-");
 		const notADir = path.join(scratch, "not-a-dir");
 		writeFileSync(notADir, "x", "utf8");
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-crash-cwd-"));
+		const cwd = await mkTempDirAsync("ink-rec-crash-cwd-");
 		const parent = createSession(cwd, path.join(scratch, "parent-base"));
 		const { task } = recordHarness({
 			session: parent,
@@ -2323,8 +2322,8 @@ describe("task record (SA-03)", () => {
 			throw new Error("disk full");
 		});
 		try {
-			const base = await mkdtemp(path.join(tmpdir(), "imp-rec-cw-"));
-			const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-cw-cwd-"));
+			const base = await mkTempDirAsync("ink-rec-cw-");
+			const cwd = await mkTempDirAsync("ink-rec-cw-cwd-");
 			const parent = createSession(cwd, base);
 			const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "x" } };
 			const { task } = recordHarness({
@@ -2368,8 +2367,8 @@ describe("task record (SA-03)", () => {
 	}, 30000);
 
 	it("acceptance P2: a zero-write attempt reports no-content, never a fabricated write failure", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-nw-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-nw-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-nw-");
+		const cwd = await mkTempDirAsync("ink-rec-nw-cwd-");
 		const parent = createSession(cwd, base);
 		const { task, sink } = recordHarness({ session: parent, childSessions: true, sessionBaseDir: base, cwd });
 		const controller = new AbortController();
@@ -2384,8 +2383,8 @@ describe("task record (SA-03)", () => {
 		const boom = (): never => {
 			throw new Error("summarizer down");
 		};
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-sum-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-sum-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-sum-");
+		const cwd = await mkTempDirAsync("ink-rec-sum-cwd-");
 		const parent = createSession(cwd, base);
 		const toolCall = { type: "toolCall" as const, id: "c1", name: "echo", arguments: { message: "x" } };
 		const { task } = recordHarness({
@@ -2411,8 +2410,8 @@ describe("task record (SA-03)", () => {
 	}, 30000);
 
 	it("SA-04: an interrupted request persists usage.incomplete; a clean attempt carries no flag", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-rec-inc-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-rec-inc-cwd-"));
+		const base = await mkTempDirAsync("ink-rec-inc-");
+		const cwd = await mkTempDirAsync("ink-rec-inc-cwd-");
 		const parent = createSession(cwd, base);
 		const controller = new AbortController();
 		let call = 0;
@@ -2566,8 +2565,8 @@ describe("child launch record (SA-06)", () => {
 	}
 
 	it("persists the launch block in the child header and resolves it after a parent restart", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-e2e-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-e2e-cwd-"));
+		const base = await mkTempDirAsync("ink-cl-e2e-");
+		const cwd = await mkTempDirAsync("ink-cl-e2e-cwd-");
 		const parent = createSession(cwd, base);
 		const { task } = launchHarness({ session: parent, sessionBaseDir: base, cwd });
 		const result = await task.execute({ prompt: "go" }, new AbortController().signal, {
@@ -2609,10 +2608,10 @@ describe("child launch record (SA-06)", () => {
 	});
 
 	it("the real runner retains assembly sources for getLaunchEnvironment", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-run-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-run-cwd-"));
+		const base = await mkTempDirAsync("ink-cl-run-");
+		const cwd = await mkTempDirAsync("ink-cl-run-cwd-");
 		writeFileSync(path.join(cwd, "AGENTS.md"), "project rules\n", "utf8");
-		const extDir = await mkdtemp(path.join(tmpdir(), "imp-cl-run-ext-"));
+		const extDir = await mkTempDirAsync("ink-cl-run-ext-");
 		const extPath = path.join(extDir, "ctx.mjs");
 		writeFileSync(
 			extPath,
@@ -2647,8 +2646,8 @@ describe("child launch record (SA-06)", () => {
 	});
 
 	it("a first-write failure leaves nothing resumable behind (no advertised child)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-ro-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-ro-cwd-"));
+		const base = await mkTempDirAsync("ink-cl-ro-");
+		const cwd = await mkTempDirAsync("ink-cl-ro-cwd-");
 		const parent = createSession(cwd, base);
 		const childrenDir = path.join(sessionsDirFor(cwd, base), "children");
 		mkdirSync(childrenDir, { recursive: true });
@@ -2672,8 +2671,8 @@ describe("child launch record (SA-06)", () => {
 	});
 
 	it("a host without the environment getter writes no launch block (conservative non-resumable)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-noenv-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-cl-noenv-cwd-"));
+		const base = await mkTempDirAsync("ink-cl-noenv-");
+		const cwd = await mkTempDirAsync("ink-cl-noenv-cwd-");
 		const parent = createSession(cwd, base);
 		const { findChildByLaunch } = await import("../src/core/child-launch.js");
 		const { task } = launchHarness({ session: parent, sessionBaseDir: base, cwd, withEnv: false });

@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentMessage, AssistantMessage, ToolResultMessage } from "../src/core/messages.js";
 import { createSession, SessionNotFoundError } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
@@ -14,6 +13,7 @@ import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import type { RunnerOptions } from "../src/runner.js";
 import { createRunner, type Runner, resolveRunMode } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 const userMsg = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
@@ -24,7 +24,7 @@ const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
 });
 
 async function setup(): Promise<{ baseDir: string; cwd: string }> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-runner-"));
+	const baseDir = await mkTempDirAsync("ink-runner-");
 	const cwd = path.join(baseDir, "proj");
 	return { baseDir, cwd };
 }
@@ -773,6 +773,14 @@ describe("child model vision binding (SA-02)", () => {
 		const { baseDir, cwd } = await setup();
 		await mkdir(cwd, { recursive: true });
 		await mkdir(path.join(baseDir, "agents-home", ".ink", "agents"), { recursive: true });
+		// pin worktree children inside the per-test base (fixture-hygiene §A1);
+		// restored when the test ends (code-review M-8)
+		const prevWtDir = process.env.INK_WORKTREE_DIR;
+		process.env.INK_WORKTREE_DIR = path.join(baseDir, "wts");
+		onTestFinished(() => {
+			if (prevWtDir === undefined) delete process.env.INK_WORKTREE_DIR;
+			else process.env.INK_WORKTREE_DIR = prevWtDir;
+		});
 		await writeFile(
 			path.join(baseDir, "agents-home", ".ink", "agents", "visionless.md"),
 			`---\nname: visionless\ndescription: test visionless\nmodel: ${args.childModel}\n---\nbody\n`,
@@ -890,7 +898,7 @@ describe("#output-truncation D3 (per-run maxTokens resolution + stop note)", () 
 	let savedCatalogPath: string | undefined;
 
 	function writeCatalog(models: Record<string, number>): void {
-		const dir = mkdtempSync(path.join(tmpdir(), "imp-trunc-catalog-"));
+		const dir = mkTempDir("ink-trunc-catalog-");
 		savedCatalogPath = process.env.INK_CATALOG_PATH;
 		process.env.INK_CATALOG_PATH = path.join(dir, "catalog.json");
 		const entries: Record<string, unknown> = {};

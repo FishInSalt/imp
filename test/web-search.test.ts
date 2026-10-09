@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 // @ts-expect-error Example extensions are JavaScript modules without declarations.
 const { default: register } = await import("../examples/extensions/web-search/index.mjs");
@@ -46,7 +46,7 @@ function streamed(bytes: Uint8Array, headers = { "content-type": "application/js
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "imp-web-search-tools-"));
+	dir = mkTempDir("ink-web-search-tools-");
 	config = join(dir, "config.json");
 	vi.stubEnv("TAVILY_API_KEY", secret);
 	vi.stubEnv("INK_WEB_SEARCH_CONFIG", config);

@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, utimes } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { utimes } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
@@ -12,6 +11,7 @@ import {
 	sessionsDirFor,
 } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string): AgentMessage => ({
@@ -22,7 +22,7 @@ const assistantText = (text: string): AgentMessage => ({
 });
 
 async function setup(): Promise<{ baseDir: string; cwd: string }> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-sessions-"));
+	const baseDir = await mkTempDirAsync("ink-sessions-");
 	const cwd = path.join(baseDir, "proj");
 	return { baseDir, cwd };
 }

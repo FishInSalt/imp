@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +12,7 @@ import {
 import { createSession } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
 import { buildTaskRecord } from "../src/core/task-record.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 const MODEL = {
 	providerName: "anthropic",
@@ -36,8 +35,8 @@ interface World {
 /** Parent session (with a settled record) + child file with a launch block,
  *  plus a current-environment fixture that matches everything by default. */
 async function makeWorld(options: { noRecord?: boolean; noContent?: boolean } = {}): Promise<World> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-	const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
+	const base = await mkTempDirAsync("ink-clv-");
+	const cwd = mkTempDir("ink-clv-cwd-");
 	const parent = createSession(cwd, base);
 	parent.appendMessage({ role: "user", content: "parent message" });
 	const childId = "child-1";
@@ -169,8 +168,8 @@ describe("child continuation — verdict basics", () => {
 	});
 
 	it("records on an abandoned branch still count (all-entries basis) with onCurrentBranch false", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-		const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
+		const base = await mkTempDirAsync("ink-clv-");
+		const cwd = mkTempDir("ink-clv-cwd-");
 		const parent = createSession(cwd, base);
 		const childId = "child-fork";
 		const launch = buildChildLaunch({
@@ -349,7 +348,7 @@ describe("child continuation — drift matrix", () => {
 
 	it("shared-cwd child: moved parent cwd => cwd-drift; vanished cwd => cwd-missing", async () => {
 		const { parent, file, current, cwd } = await makeWorld();
-		const moved = mkdtempSync(path.join(tmpdir(), "imp-clv-elsewhere-"));
+		const moved = mkTempDir("ink-clv-elsewhere-");
 		const drift = await validateChildContinuation(file, parent, { ...current, cwd: moved });
 		expect(codes(drift.reasons)).toContain("cwd-drift");
 		rmSync(cwd, { recursive: true, force: true });
@@ -381,12 +380,16 @@ interface WorktreeWorld extends World {
 }
 
 async function makeWorktreeWorld(): Promise<WorktreeWorld> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-clv-"));
-	const cwd = mkdtempSync(path.join(tmpdir(), "imp-clv-cwd-"));
-	const repo = mkdtempSync(path.join(tmpdir(), "imp-clv-repo-"));
+	const base = await mkTempDirAsync("ink-clv-");
+	const cwd = mkTempDir("ink-clv-cwd-");
+	// repo sits INSIDE the cleaned base so the sibling imp-wt-* legacy-name
+	// worktree (a §5 survivor test input) dies with the test instead of
+	// leaking at TMPDIR top (code-review M-7).
+	const repo = path.join(base, "repo");
+	mkdirSync(repo, { recursive: true });
 	seedRepo(repo);
 	const baseline = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
-	const wtPath = path.join(repo, "..", `imp-wt-${path.basename(repo)}`);
+	const wtPath = path.join(base, `imp-wt-${path.basename(repo)}`);
 	const branch = "imp/task-matrix";
 	const add = git(repo, ["worktree", "add", "--quiet", wtPath, "-b", branch, baseline]);
 	if (add.status !== 0) throw new Error(`worktree add failed: ${add.stderr}`);

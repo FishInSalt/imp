@@ -4,8 +4,7 @@
  * revalidation, disk round-trip) and every consult point it feeds
  * (windows, costs, thinking, vision, /model list).
  */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,6 +22,7 @@ import { registerDiscoveredContextWindows, resetDiscoveredWindowsForTest } from 
 import { contextWindowFor, costFor } from "../src/provider/models.js";
 import { supportedThinkingLevels, thinkingMetaFor } from "../src/provider/thinking.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 let clockMs = 1_000_000;
 const clock = () => clockMs;
@@ -99,7 +99,7 @@ describe("M14 catalog refresh", () => {
 		clockMs = 1_000_000;
 		setCatalogClockForTest(clock);
 		vi.stubEnv("INK_CATALOG_BASE_URL", catalogBaseUrl);
-		tmpDir = mkdtempSync(join(tmpdir(), "imp-catalog-test-"));
+		tmpDir = mkTempDir("ink-catalog-test-");
 		savedPath = process.env.INK_CATALOG_PATH;
 		process.env.INK_CATALOG_PATH = join(tmpDir, "models-catalog.json");
 	});
@@ -367,7 +367,7 @@ describe("M14 consult wiring", () => {
 		resetCatalogForTest();
 		resetDiscoveredWindowsForTest();
 		setCatalogClockForTest(() => 1_000_000);
-		const tmp = mkdtempSync(join(tmpdir(), "imp-catalog-consult-"));
+		const tmp = mkTempDir("ink-catalog-consult-");
 		savedPath = process.env.INK_CATALOG_PATH;
 		process.env.INK_CATALOG_PATH = join(tmp, "models-catalog.json");
 	});

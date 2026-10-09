@@ -2,8 +2,8 @@
  * M15 #settings-panel — two-scope settings with deep merge, trust gating,
  * and the /settings command. Mirrors docs/design/m15-settings-design.md §4.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +20,7 @@ import { COMMANDS } from "../src/repl/commands.js";
 import type { Runner } from "../src/runner.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 const settingsCommand = COMMANDS.find((c) => c.name === "settings");
 if (settingsCommand === undefined) throw new Error("settings command missing");
@@ -40,7 +41,7 @@ async function boot(options?: {
 	project?: unknown;
 	global?: unknown;
 }): Promise<Boot> {
-	const baseDir = mkdtempSync(join(tmpdir(), "imp-settings-test-"));
+	const baseDir = mkTempDir("ink-settings-test-");
 	const cwd = join(baseDir, "proj");
 	mkdirSync(cwd, { recursive: true });
 	const globalPath = join(baseDir, "settings.json");
@@ -92,9 +93,9 @@ afterEach(() => {
 
 describe("M15 two-scope merge", () => {
 	it("project wins; nested objects merge by key (siblings survive)", () => {
-		const globalDir = mkdtempSync(join(tmpdir(), "imp-merge-"));
+		const globalDir = mkTempDir("ink-merge-");
 		const globalPath = join(globalDir, "settings.json");
-		const projDir = mkdtempSync(join(tmpdir(), "imp-merge-proj-"));
+		const projDir = mkTempDir("ink-merge-proj-");
 		writeFileSync(
 			globalPath,
 			JSON.stringify({ defaultModel: "zai/glm-5.3", images: { autoResize: false } }),
@@ -117,8 +118,8 @@ describe("M15 two-scope merge", () => {
 	});
 
 	it("arrays replace, never concatenate (pi semantics)", () => {
-		const globalDir = mkdtempSync(join(tmpdir(), "imp-arr-"));
-		const projDir = mkdtempSync(join(tmpdir(), "imp-arr-proj-"));
+		const globalDir = mkTempDir("ink-arr-");
+		const projDir = mkTempDir("ink-arr-proj-");
 		writeFileSync(join(globalDir, "settings.json"), JSON.stringify({ skills: ["a.md"] }), "utf-8");
 		writeFileSync(join(projDir, "settings.json"), JSON.stringify({ skills: ["b.md"] }), "utf-8");
 		const merged = effectiveSettings({
@@ -131,7 +132,7 @@ describe("M15 two-scope merge", () => {
 	});
 
 	it("untrusted project settings are invisible (trust gate)", () => {
-		const projDir = mkdtempSync(join(tmpdir(), "imp-untrusted-"));
+		const projDir = mkTempDir("ink-untrusted-");
 		mkdirSync(join(projDir, ".ink"), { recursive: true });
 		writeFileSync(
 			join(projDir, ".ink", "settings.json"),
@@ -146,7 +147,7 @@ describe("M15 two-scope merge", () => {
 	});
 
 	it(".ink/settings.json presence triggers the trust gate", () => {
-		const projDir = mkdtempSync(join(tmpdir(), "imp-gate-"));
+		const projDir = mkTempDir("ink-gate-");
 		expect(trustRequiringResources(projDir, homedir())).not.toContain(".ink/settings.json");
 		mkdirSync(join(projDir, ".ink"), { recursive: true });
 		writeFileSync(join(projDir, ".ink", "settings.json"), "{}", "utf-8");
@@ -154,7 +155,7 @@ describe("M15 two-scope merge", () => {
 	});
 
 	it("unknown keys survive a read-modify-write (forward compat)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-unknown-"));
+		const dir = mkTempDir("ink-unknown-");
 		const file = join(dir, "settings.json");
 		writeFileSync(file, JSON.stringify({ futureKey: { nested: 1 }, autoCompact: true }), "utf-8");
 		saveSettings({ autoCompact: false }, file);
@@ -164,7 +165,7 @@ describe("M15 two-scope merge", () => {
 	});
 
 	it("nested patch merges into the raw tree without clobbering siblings", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-nested-"));
+		const dir = mkTempDir("ink-nested-");
 		const file = join(dir, "settings.json");
 		writeFileSync(file, JSON.stringify({ images: { autoResize: true, other: 2 } }), "utf-8");
 		saveSettings({ images: { autoResize: false } }, file);
@@ -346,7 +347,7 @@ describe("M15 startup default model", () => {
 	it("global settings defaultModel is honored (subprocess-free check of the read chain)", async () => {
 		// The cli chain (INK_MODEL > global > trusted-project > builtin) is
 		// exercised end-to-end in the dist smoke; here: the pieces.
-		const dir = mkdtempSync(join(tmpdir(), "imp-dm-"));
+		const dir = mkTempDir("ink-dm-");
 		const file = join(dir, "settings.json");
 		writeFileSync(file, JSON.stringify({ defaultModel: "openai-codex/gpt-5.5" }), "utf-8");
 		expect(loadSettings(file).defaultModel).toBe("openai-codex/gpt-5.5");

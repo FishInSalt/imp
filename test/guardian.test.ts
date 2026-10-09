@@ -6,18 +6,18 @@
 // statuses, an audit-file reader, and the registered /guardian command
 // dispatched as the REPL would.
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionApi, ToolCallEvent } from "../src/extensions/types.js";
 import type { CommandContext, SlashCommand } from "../src/repl/commands.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 let fakeHome = "";
 
 beforeEach(async () => {
-	fakeHome = await mkdtemp(path.join(os.tmpdir(), "imp-guardian-"));
+	fakeHome = await mkTempDirAsync("ink-guardian-");
 	vi.stubEnv("HOME", fakeHome); // guardian computes config/log paths from homedir
 });
 

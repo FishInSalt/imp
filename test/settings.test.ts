@@ -1,13 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path, { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { effectiveSettings, loadSettings, saveSettings, settingsFilePath } from "../src/core/settings.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 describe("settings store (#thinking-levels persistence)", () => {
 	it("round-trips the two keys; missing/malformed files read as empty", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-settings-test-"));
+		const dir = await mkTempDirAsync("ink-settings-test-");
 		const file = path.join(dir, "settings.json");
 		expect(loadSettings(file)).toEqual({}); // missing
 		saveSettings({ defaultThinkingLevel: "high" }, file);
@@ -39,7 +38,7 @@ describe("settings store (#thinking-levels persistence)", () => {
 
 describe("M17 queue drain modes", () => {
 	it("steeringMode/followUpMode coerce the two-value enum; anything else reads as unset", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-m17-"));
+		const dir = mkTempDir("ink-m17-");
 		const file = join(dir, "settings.json");
 		writeFileSync(
 			file,
@@ -60,7 +59,7 @@ describe("M17 queue drain modes", () => {
 	});
 
 	it("saveSettings round-trips both keys", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-m17-"));
+		const dir = mkTempDir("ink-m17-");
 		const file = join(dir, "settings.json");
 		expect(saveSettings({ steeringMode: "one-at-a-time", followUpMode: "all" }, file)).toBe(true);
 		const loaded = loadSettings(file);
@@ -71,7 +70,7 @@ describe("M17 queue drain modes", () => {
 
 describe("#tree batch B settings", () => {
 	it("treeFilterMode coerces the five literals; invalid/missing reads as unset", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-treeb-"));
+		const dir = mkTempDir("ink-treeb-");
 		const file = join(dir, "settings.json");
 		for (const mode of ["default", "no-tools", "user-only", "labeled-only", "all"] as const) {
 			writeFileSync(file, JSON.stringify({ treeFilterMode: mode }), "utf-8");
@@ -82,7 +81,7 @@ describe("#tree batch B settings", () => {
 	});
 
 	it("branchSummary.skipPrompt coerces nested; unknown nested keys drop; deep merge composes", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-treeb-"));
+		const dir = mkTempDir("ink-treeb-");
 		const file = join(dir, "settings.json");
 		writeFileSync(file, JSON.stringify({ branchSummary: { skipPrompt: true, bogus: 1 } }), "utf-8");
 		const loaded = loadSettings(file);
@@ -96,7 +95,7 @@ describe("#tree batch B settings", () => {
 	});
 
 	it("project scope overrides global for both keys (the deep merge)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-treeb-"));
+		const dir = mkTempDir("ink-treeb-");
 		const globalFile = join(dir, "global.json");
 		const projectFile = join(dir, "proj", ".ink", "settings.json");
 		writeFileSync(globalFile, JSON.stringify({ treeFilterMode: "user-only" }), "utf-8");

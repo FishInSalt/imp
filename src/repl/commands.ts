@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { basename } from "node:path";
 import { estimateContextTokens } from "../core/compaction.js";
 import type { AssistantBlock } from "../core/messages.js";
+import { sessionsRoot as sessionsRootDir } from "../core/session/manager.js";
+import * as sessionsPrune from "../core/session/prune.js";
 import type { SessionStore } from "../core/session/store.js";
 import {
 	effectiveSettings,
@@ -103,6 +106,9 @@ export interface CommandContext {
 	secret?: (question: string) => Promise<string | null>;
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
+	/** Sessions root override for /sessions prune (tests inject a temp root;
+	 *  production uses ~/.ink/sessions). */
+	sessionsRootPath?: string;
 	/** #login-repl: credential store location — hermetic tests inject a temp
 	 *  path; production defaults to ~/.ink/auth.json. */
 	authStorePath?: string;
@@ -1390,9 +1396,47 @@ export const COMMANDS: readonly SlashCommand[] = [
 	},
 	{
 		name: "sessions",
-		summary: "list saved sessions for this directory",
+		usage: "/sessions [prune]",
+		summary: "list saved sessions for this directory (prune: sweep orphaned children)",
 		allowedDuringRun: false,
-		run: (_args, ctx) => {
+		run: async (args, ctx): Promise<CommandOutcome> => {
+			// §6 Track D: orphaned-child sweep (deletion — explicit user action only)
+			if (args.trim() === "prune") {
+				const { findOrphanChildren, pruneOrphanChildren } = sessionsPrune;
+				const root = ctx.sessionsRootPath ?? sessionsRootDir();
+				const orphans = findOrphanChildren(root);
+				if (orphans.length === 0) {
+					ctx.renderer.note("▪ no orphaned child sessions found");
+					return "handled";
+				}
+				const names = orphans.map((o) => basename(o.file));
+				// Deletion gets an explicit confirm; the picker (ctx.select) is the
+				// command surface's interactive mechanism. Non-interactive contexts
+				// (no select wired) refuse — pruning never happens unconfirmed.
+				if (ctx.select === undefined) {
+					ctx.renderer.error("ink: /sessions prune needs an interactive confirm — run it in the REPL");
+					return "handled";
+				}
+				const preview =
+					names.slice(0, 5).join(", ") + (names.length > 5 ? `, … +${names.length - 5} more` : "");
+				const pick = await ctx.select({
+					title: `delete ${orphans.length} orphaned child session(s)?`,
+					items: [
+						{ label: "delete", description: preview },
+						{ label: "cancel", description: "keep everything" },
+					],
+				});
+				if (pick !== 0) {
+					ctx.renderer.note("▪ prune cancelled");
+					return "handled";
+				}
+				const result = pruneOrphanChildren(root);
+				ctx.renderer.note(
+					`▪ pruned ${result.removed.length} orphaned child session(s)` +
+						(result.exempt.length > 0 ? `, kept ${result.exempt.length} (live lease)` : ""),
+				);
+				return "handled";
+			}
 			const sessions = ctx.runner.listSessions();
 			if (sessions.length === 0) {
 				ctx.renderer.note("▪ no saved sessions for this directory yet");

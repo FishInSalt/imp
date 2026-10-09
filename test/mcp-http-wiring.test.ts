@@ -1,9 +1,7 @@
 // M19 wiring: runRepl renders an http server's status and /exit delivers the
 // DELETE (manager.close → client.close → transport.close). Mirrors
 // test/mcp-wiring.test.ts but with the http fixture — no child process.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { McpManager } from "../src/mcp/manager.js";
 import { Renderer } from "../src/render.js";
@@ -11,10 +9,11 @@ import { runRepl } from "../src/repl/repl.js";
 import { createRunner } from "../src/runner.js";
 import { assistant, makeConsole, scriptedProvider, waitUntil } from "./helpers/fakes.js";
 import { startFakeMcpHttpServer } from "./helpers/mcp-fake-http-server.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 describe("runRepl wiring over http (M19)", () => {
 	it("/mcp renders the http server and /exit sends DELETE", async () => {
-		const baseDir = mkdtempSync(path.join(tmpdir(), "imp-mcp-http-wire-"));
+		const baseDir = mkTempDir("ink-mcp-http-wire-");
 		const fake = await startFakeMcpHttpServer();
 		try {
 			const notes: string[] = [];

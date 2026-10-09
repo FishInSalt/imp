@@ -18,7 +18,7 @@ function stdioServer(server: McpServerConfig | undefined): McpStdioServerConfig 
 
 let dir: string;
 beforeAll(() => {
-	dir = mkdtempSync(join(tmpdir(), "imp-mcp-cfg-"));
+	dir = mkdtempSync(join(tmpdir(), "ink-mcp-cfg-"));
 });
 afterAll(() => {
 	rmSync(dir, { recursive: true, force: true });
@@ -53,18 +53,18 @@ describe("mcpConfigPaths", () => {
 
 describe("expandEnvPlaceholders", () => {
 	it("expands all three placeholder forms", () => {
-		process.env.IMP_MCP_TEST_VAR = "yes";
+		process.env.INK_MCP_TEST_VAR = "yes";
 		try {
-			expect(expandEnvPlaceholders("${" + "IMP_MCP_TEST_VAR}")).toBe("yes");
-			expect(expandEnvPlaceholders("$env:" + "IMP_MCP_TEST_VAR")).toBe("yes");
-			expect(expandEnvPlaceholders("{env:" + "IMP_MCP_TEST_VAR}")).toBe("yes");
-			expect(expandEnvPlaceholders("pre-${" + "IMP_MCP_TEST_VAR}-post")).toBe("pre-yes-post");
+			expect(expandEnvPlaceholders("${" + "INK_MCP_TEST_VAR}")).toBe("yes");
+			expect(expandEnvPlaceholders("$env:" + "INK_MCP_TEST_VAR")).toBe("yes");
+			expect(expandEnvPlaceholders("{env:" + "INK_MCP_TEST_VAR}")).toBe("yes");
+			expect(expandEnvPlaceholders("pre-${" + "INK_MCP_TEST_VAR}-post")).toBe("pre-yes-post");
 		} finally {
-			delete process.env.IMP_MCP_TEST_VAR;
+			delete process.env.INK_MCP_TEST_VAR;
 		}
 	});
 	it("expands undefined variables to the empty string", () => {
-		expect(expandEnvPlaceholders("x${" + "IMP_MCP_TEST_UNDEF}y")).toBe("xy");
+		expect(expandEnvPlaceholders("x${" + "INK_MCP_TEST_UNDEF}y")).toBe("xy");
 	});
 });
 
@@ -84,7 +84,7 @@ describe("discoverMcpConfig", () => {
 		const home = join(dir, "h1");
 		const globalDir = join(home, ".config", "mcp");
 		mkdirSync(globalDir, { recursive: true });
-		process.env.IMP_MCP_TEST_VAR = "secret";
+		process.env.INK_MCP_TEST_VAR = "secret";
 		try {
 			writeFileSync(
 				join(globalDir, "mcp.json"),
@@ -93,7 +93,7 @@ describe("discoverMcpConfig", () => {
 						srv: {
 							command: "npx",
 							args: ["-y", "pkg"],
-							env: { KEY: "${" + "IMP_MCP_TEST_VAR}", OTHER: "$env:" + "IMP_MCP_TEST_VAR" },
+							env: { KEY: "${" + "INK_MCP_TEST_VAR}", OTHER: "$env:" + "INK_MCP_TEST_VAR" },
 						},
 					},
 				}),
@@ -103,7 +103,7 @@ describe("discoverMcpConfig", () => {
 			expect(result.servers).toHaveLength(1);
 			expect(stdioServer(result.servers[0]).env).toEqual({ KEY: "secret", OTHER: "secret" });
 		} finally {
-			delete process.env.IMP_MCP_TEST_VAR;
+			delete process.env.INK_MCP_TEST_VAR;
 		}
 	});
 
@@ -209,11 +209,11 @@ describe("discoverMcpConfig http shape (M19 D2)", () => {
 
 	it("parses a url server (streamableHttp alias) with env-expanded url + headers", () => {
 		const cwd = join(dir, "http-a");
-		process.env.IMP_MCP_HTTP_TOKEN = "tok-123";
+		process.env.INK_MCP_HTTP_TOKEN = "tok-123";
 		try {
 			// biome noTemplateCurlyInString: build the placeholder by concatenation
 			// (the same trick the stdio env-expansion case uses above)
-			const placeholder = "${" + "IMP_MCP_HTTP_TOKEN}";
+			const placeholder = "${" + "INK_MCP_HTTP_TOKEN}";
 			writeMcp(cwd, {
 				remote: {
 					type: "streamableHttp",
@@ -231,7 +231,7 @@ describe("discoverMcpConfig http shape (M19 D2)", () => {
 				expect(server.disabled).toBe(false);
 			}
 		} finally {
-			delete process.env.IMP_MCP_HTTP_TOKEN;
+			delete process.env.INK_MCP_HTTP_TOKEN;
 		}
 	});
 

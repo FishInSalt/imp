@@ -1,11 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { Renderer } from "../src/render.js";
 import { runRepl } from "../src/repl/repl.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 /** Contrast case: a NORMAL run (thinking/streaming) aborts cleanly — the
@@ -13,7 +12,7 @@ import { FakeTerminal, settle } from "./login-dialog.helpers.js";
  *  second Esc is the FIRST idle interrupt (a note, not an exit). */
 describe("esc semantics: clean-abort case", () => {
 	it("esc1 aborts to idle; esc2 (idle) is a no-op; Ctrl+C x2 quits gracefully", async () => {
-		const baseDir = await mkdtemp(path.join(tmpdir(), "imp-repro-esc2-"));
+		const baseDir = await mkTempDirAsync("ink-repro-esc2-");
 		const terminal = new FakeTerminal();
 		const transcript = new TranscriptSink();
 		const renderer = new Renderer({

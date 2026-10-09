@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Example extensions are JavaScript modules without declarations.
 import { resolveApiKey } from "../examples/extensions/web-search/_lib/config.mjs";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 let dir: string;
 let configPath: string;
@@ -13,7 +13,7 @@ function config(content: string | Buffer) {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "imp-web-search-config-"));
+	dir = mkTempDir("ink-web-search-config-");
 	configPath = join(dir, "config.json");
 	vi.stubEnv("TAVILY_API_KEY", "");
 	vi.stubEnv("INK_WEB_SEARCH_CONFIG", configPath);
@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe("web search configuration", () => {
 	it("returns null for missing files and ignores the legacy variable", () => {
-		vi.stubEnv("IMP_TAVILY_KEY", "unused-test-value");
+		vi.stubEnv("INK_TAVILY_KEY", "unused-test-value");
 		expect(resolveApiKey()).toBeNull();
 	});
 

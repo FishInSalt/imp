@@ -1,11 +1,11 @@
 import { execSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { detectBinary } from "../src/core/tools/bin-detect.js";
 import { createFindTool } from "../src/core/tools/find.js";
 import { createGrepTool } from "../src/core/tools/grep.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const signal = new AbortController().signal;
 
@@ -21,8 +21,8 @@ if (process.env.CI_REQUIRE_SEARCH_TOOLS === "1") {
 
 let dir: string;
 
-beforeAll(async () => {
-	dir = await mkdtemp(path.join(tmpdir(), "imp-search-"));
+beforeEach(async () => {
+	dir = await mkTempDirAsync("ink-search-");
 	// A tiny "project": git repo with an ignored file.
 	execSync("git init -q", { cwd: dir });
 	await writeFile(path.join(dir, ".gitignore"), "ignored.txt\n");

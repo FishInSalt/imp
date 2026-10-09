@@ -1,13 +1,12 @@
 import { existsSync, appendFileSync as fsAppend, readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";
 import { BRANCH_MARK, SessionStore, SUMMARY_MARK } from "../src/core/session/store.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 function mkpath(): Promise<string> {
-	return mkdtemp(path.join(tmpdir(), "imp-session-"));
+	return mkTempDirAsync("ink-session-");
 }
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
@@ -524,7 +523,7 @@ describe("SessionStore", () => {
 
 describe("thinkingLevelChange entries", () => {
 	it("round-trips through the JSONL file; malformed entries are rejected; buildContext skips them", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-store-"));
+		const dir = await mkTempDirAsync("ink-store-");
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), process.cwd());
 		store.appendMessage({ role: "user", content: "hi" });
 		store.appendThinkingLevelChange("medium");

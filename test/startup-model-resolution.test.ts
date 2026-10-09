@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VERSION } from "../src/format.js";
@@ -12,6 +11,7 @@ import {
 	startRejectingProvider,
 } from "./helpers/cli-fixture.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 /**
  * #startup-model-resolution (design docs/design/startup-model-resolution-design.md):
@@ -40,7 +40,6 @@ describe("#startup-model-resolution", () => {
 		fixtures.push(fixture);
 		return fixture;
 	}
-	let seq = 0;
 	beforeEach(async () => {
 		provider = await startRejectingProvider();
 		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
@@ -48,10 +47,7 @@ describe("#startup-model-resolution", () => {
 			saved[key] = process.env[key];
 			delete process.env[key];
 		}
-		process.env.INK_AUTH_PATH = path.join(
-			tmpdir(),
-			`imp-smr-auth-${process.pid}-${Date.now()}-${seq++}.json`,
-		);
+		process.env.INK_AUTH_PATH = tempFilePath("ink-smr-auth-");
 	});
 	afterEach(async () => {
 		await provider.close();
@@ -181,7 +177,7 @@ describe("#startup-model-resolution", () => {
 		expect(noModelText(false, true)).toBe(NO_MODEL_SHORT);
 		expect(noModelText(true, true)).toBe(NO_MODEL_SELECTED_SHORT);
 		// zero families → hasConfiguredProviders false; two → true
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer } = makeRenderer();
 		const mk = () =>
 			createRunner({
@@ -346,7 +342,7 @@ describe("#startup-model-resolution", () => {
 	// ---- D4: login-time selection ----
 
 	it("D4: /login auto-switches when no usable model exists", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -380,7 +376,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D4 negative: a usable model is never auto-replaced", async () => {
 		process.env.ZAI_API_KEY = "env-key";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -414,7 +410,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D5: explicit /model hints once; suppressed for the resolvable switchHint", async () => {
 		process.env.ZAI_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -449,7 +445,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D5: no hint when the pick IS what D2 would resolve anyway", async () => {
 		process.env.ZAI_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -480,7 +476,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D5 suppression: INK_MODEL pin and gated-off project settings silence the hint", async () => {
 		process.env.ZAI_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),
@@ -562,7 +558,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D3: an explicit -m model survives an interactive /resume fallback (impl-review F3)", async () => {
 		process.env.DEEPSEEK_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const cwd = path.join(root, "proj");
 		await mkdir(cwd, { recursive: true });
 		const baseDir = path.join(root, "sessions");
@@ -588,7 +584,7 @@ describe("#startup-model-resolution", () => {
 	});
 
 	it("usage identity: a resolved-style reference stamps provider/modelId (impl-review F4b)", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const cwd = path.join(root, "proj");
 		await mkdir(cwd, { recursive: true });
 		const baseDir = path.join(root, "sessions");
@@ -619,7 +615,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D3: resuming a stale session resolves to the unique family; row untouched", async () => {
 		process.env.DEEPSEEK_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const cwd = path.join(root, "proj");
 		await mkdir(cwd, { recursive: true });
 		const baseDir = path.join(root, "sessions");
@@ -663,7 +659,7 @@ describe("#startup-model-resolution", () => {
 
 	it("D3 negative: a usable resumed model and explicit -m are untouched", async () => {
 		process.env.ZAI_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const cwd = path.join(root, "proj");
 		await mkdir(cwd, { recursive: true });
 		const baseDir = path.join(root, "sessions");
@@ -812,7 +808,7 @@ describe("#startup-model-resolution", () => {
 	it("D6 surfaces: multi-family state shows /model on legacy /model text and /status", async () => {
 		process.env.ZAI_API_KEY = "k";
 		process.env.DEEPSEEK_API_KEY = "k";
-		const root = await mkdtemp(path.join(tmpdir(), "imp-smr-"));
+		const root = await mkTempDirAsync("ink-smr-");
 		const { renderer, output } = makeRenderer();
 		const runner = await createRunner({
 			cwd: path.join(root, "proj"),

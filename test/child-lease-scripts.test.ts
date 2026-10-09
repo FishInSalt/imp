@@ -5,15 +5,14 @@
  * (design §7.3).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { hostname } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { runLeaseProcess } from "./helpers/lease-process.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 function runRole(dir: string, role: string): Promise<number> {
-	return runLeaseProcess("test/helpers/lease-script-worker.test.ts", { IMP_LEASE_SCRIPT: `${dir}|${role}` });
+	return runLeaseProcess("test/helpers/lease-script-worker.test.ts", { INK_LEASE_SCRIPT: `${dir}|${role}` });
 }
 
 interface RoleResult {
@@ -65,14 +64,14 @@ function seedAgedDeadCandidate(dir: string): string {
 }
 
 async function freshDir(prefix: string): Promise<string> {
-	const dir = await mkdtemp(path.join(tmpdir(), prefix));
+	const dir = await mkTempDirAsync(prefix);
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
 
 describe("lease — deterministic multiprocess interleavings (T30b)", () => {
 	it("(i) A pauses before scanning; B and a later D are refused; A proceeds — exactly one holder", async () => {
-		const dir = await freshDir("imp-lease-s1-");
+		const dir = await freshDir("ink-lease-s1-");
 		const a = runRole(dir, "a1");
 		await waitForMarker(dir, "a-created"); // A's candidate must exist before B runs
 		const b = await runRole(dir, "b1");
@@ -98,7 +97,7 @@ describe("lease — deterministic multiprocess interleavings (T30b)", () => {
 	}, 60_000);
 
 	it("(ii) a stale candidate is cleaned by B; a later A sees B's live claim and refuses", async () => {
-		const dir = await freshDir("imp-lease-s2-");
+		const dir = await freshDir("ink-lease-s2-");
 		const stale = seedAgedDeadCandidate(dir);
 		const b = runRole(dir, "b2");
 		await waitForMarker(dir, "b-done"); // B cleaned the stale candidate and HOLDS
@@ -112,7 +111,7 @@ describe("lease — deterministic multiprocess interleavings (T30b)", () => {
 	}, 60_000);
 
 	it("(iii) B and C create simultaneously: never two holders", async () => {
-		const dir = await freshDir("imp-lease-s3-");
+		const dir = await freshDir("ink-lease-s3-");
 		seedAgedDeadCandidate(dir);
 		const b = runRole(dir, "b3");
 		const c = runRole(dir, "c3");
@@ -129,7 +128,7 @@ describe("lease — deterministic multiprocess interleavings (T30b)", () => {
 
 describe("lease — atomic candidate publication (T30c)", () => {
 	it("(iv) a stalled publisher's aged staging cannot produce an invisible holder", async () => {
-		const dir = await freshDir("imp-lease-s4-");
+		const dir = await freshDir("ink-lease-s4-");
 		const a = runRole(dir, "a4");
 		await waitForMarker(dir, "a4-staged"); // A paused: staging complete, nothing published
 		const leaseDir = path.join(dir, "child.jsonl.lease");

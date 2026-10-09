@@ -1,10 +1,9 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSession } from "../src/core/session/manager.js";
 import { copyToClipboard } from "../src/repl/clipboard-write.js";
 import { user } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 describe("clipboard-write (M16 /copy backing)", () => {
 	it("falls back to OSC 52 when no platform command runs (headless linux env)", async () => {
@@ -47,7 +46,7 @@ describe("clipboard-write (M16 /copy backing)", () => {
 
 describe("session_info entries (M16 /name)", () => {
 	it("set → shows → append overwrites; empty name clears", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const base = await mkTempDirAsync("ink-name-");
 		const store = createSession(path.join(base, "proj"), base);
 		store.appendMessage(user("hello"));
 		expect(store.getSessionName()).toBeUndefined();
@@ -62,7 +61,7 @@ describe("session_info entries (M16 /name)", () => {
 	});
 
 	it("branch-local (M16 review P2-4): /fork leaves the name behind; /tree back returns it", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const base = await mkTempDirAsync("ink-name-");
 		const store = createSession(path.join(base, "proj"), base);
 		store.appendMessage(user("first"));
 		store.appendMessage(user("second"));
@@ -84,7 +83,7 @@ describe("session_info entries (M16 /name)", () => {
 	});
 
 	it("forward compat (M16 review P2-5): unknown FIELDS ride along; the name still reads", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const base = await mkTempDirAsync("ink-name-");
 		const dir = path.join(base, "proj-sessions");
 		const { mkdirSync, writeFileSync } = await import("node:fs");
 		mkdirSync(dir, { recursive: true });
@@ -115,7 +114,7 @@ describe("session_info entries (M16 /name)", () => {
 	});
 
 	it("round-trips through the file: reopen finds the name", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-name-"));
+		const base = await mkTempDirAsync("ink-name-");
 		const store = createSession(path.join(base, "proj"), base);
 		store.appendMessage(user("hello"));
 		store.appendSessionName("persisted");

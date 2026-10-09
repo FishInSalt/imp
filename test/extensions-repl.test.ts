@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
 import type { Tool } from "../src/core/tools/types.js";
 import {
@@ -29,6 +28,7 @@ import {
 	waitUntil,
 	writeExtensionFiles,
 } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const reply = (text: string): AssistantMessage => assistant([{ type: "text", text }]);
 
@@ -69,7 +69,16 @@ interface StartArgs {
  * process.exit. Fixtures are real .mjs files loaded by real dynamic import.
  */
 async function startRepl(args: StartArgs): Promise<ReplEnv> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-extrepl-"));
+	const baseDir = await mkTempDirAsync("ink-extrepl-");
+	// Worktree children default to raw tmpdir(); pin them inside the per-test
+	// base so their dirs die with the test (fixture-hygiene §A1). Restored
+	// when the test ends.
+	const prevWtDir = process.env.INK_WORKTREE_DIR;
+	process.env.INK_WORKTREE_DIR = path.join(baseDir, "wts");
+	onTestFinished(() => {
+		if (prevWtDir === undefined) delete process.env.INK_WORKTREE_DIR;
+		else process.env.INK_WORKTREE_DIR = prevWtDir;
+	});
 	const cwd = path.join(baseDir, "proj");
 	const home = path.join(baseDir, "home"); // hermetic global extension dir
 	await mkdir(cwd, { recursive: true });
@@ -355,7 +364,7 @@ export default function (api) {
 	});
 
 	it("-ne end to end: discovery dirs are skipped, an explicit -e path still loads", async () => {
-		const explicitDir = await mkdtemp(path.join(tmpdir(), "imp-ext-cli-"));
+		const explicitDir = await mkTempDirAsync("ink-ext-cli-");
 		const explicit = path.join(explicitDir, "explicit.mjs");
 		await writeFile(
 			explicit,
@@ -959,7 +968,7 @@ export default function (api) {
 	});
 
 	it("ui.confirm over the fake tty: y approves and the tool runs; n declines with the gate's reason", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
+		const fakeHome = await mkTempDirAsync("ink-confhome-");
 		vi.stubEnv("HOME", fakeHome); // keep extension discovery hermetic (never the real ~/.ink)
 		const env = await startRepl({
 			confirm: true,
@@ -997,9 +1006,9 @@ export default function (api) {
 	});
 
 	it("ui.confirm over the fake tty: an outside-cwd write approved by y runs; EOF/empty answers decline", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-confhome-"));
+		const fakeHome = await mkTempDirAsync("ink-confhome-");
 		vi.stubEnv("HOME", fakeHome);
-		const outsideDir = await mkdtemp(path.join(tmpdir(), "imp-confout-"));
+		const outsideDir = await mkTempDirAsync("ink-confout-");
 		const env = await startRepl({
 			confirm: true,
 			scripts: [
@@ -1034,7 +1043,7 @@ export default function (api) {
 
 describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => {
 	it("EOF (Ctrl+D) at a pending ask declines it and exits cleanly — no ERR_USE_AFTER_CLOSE, no lost turn", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-eofhome-"));
+		const fakeHome = await mkTempDirAsync("ink-eofhome-");
 		vi.stubEnv("HOME", fakeHome);
 		// The P1: settleAsk prompted the NEXT question on an interface whose
 		// close event was already firing — uncaught exception, ask never
@@ -1056,7 +1065,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 	});
 
 	it("FIFO: two gated calls in ONE turn queue two asks; y settles the first, n the second — no crossed answers", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-fifo-"));
+		const fakeHome = await mkTempDirAsync("ink-fifo-");
 		vi.stubEnv("HOME", fakeHome);
 		const env = await startRepl({
 			confirm: true,
@@ -1096,7 +1105,7 @@ describe("confirm queue edge cases (M7 review: EOF crash, FIFO, Ctrl+C)", () => 
 	});
 
 	it("terminal Ctrl+C at a pending ask declines THAT question; the run continues (single settle)", async () => {
-		const fakeHome = await mkdtemp(path.join(tmpdir(), "imp-ctr-"));
+		const fakeHome = await mkTempDirAsync("ink-ctr-");
 		vi.stubEnv("HOME", fakeHome);
 		const env = await startRepl({
 			confirm: true,

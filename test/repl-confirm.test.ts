@@ -1,5 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import { ReplInput } from "../src/repl/input.js";
 import type { LineInput, SelectOptions } from "../src/repl/line-input.js";
 import { TtyConfirm } from "../src/repl/repl.js";
 import { makeRenderer } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 beforeEach(() => {
 	vi.stubEnv("INK_LOG", "0");
@@ -74,7 +74,7 @@ describe("TtyConfirm: three-option confirm + session allowlist (M10)", () => {
 
 	it("#confirm-prompt (Phase 3 D9): the loader's api closure passes facts.name as the confirm source", async () => {
 		const seen: Array<{ message: string; source?: string }> = [];
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-d9-"));
+		const dir = await mkTempDirAsync("ink-d9-");
 		await writeFile(
 			path.join(dir, "asker.mjs"),
 			`export default async function (api) {\n\tawait api.confirm("really?");\n}\n`,

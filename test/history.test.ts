@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { appendInputHistory, historyFilePath, loadInputHistory } from "../src/repl/history.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function tmpFile(): Promise<string> {
-	const dir = await mkdtemp(path.join(tmpdir(), "imp-history-"));
+	const dir = await mkTempDirAsync("ink-history-");
 	return path.join(dir, "history.jsonl");
 }
 
@@ -28,7 +28,7 @@ describe("input history persistence (M11 #4)", () => {
 	});
 
 	it("missing file loads empty; a missing directory is created on append", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-history-nested-"));
+		const dir = await mkTempDirAsync("ink-history-nested-");
 		const file = path.join(dir, "sub", "history.jsonl");
 		expect(loadInputHistory(file)).toEqual([]);
 		appendInputHistory(file, "made it");

@@ -1,15 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-	appendFileSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	realpathSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +13,7 @@ import {
 import { createSession } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
 import { loadExtensions } from "../src/extensions/loader.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
 const bytes = (text: string): string => createHash("sha256").update(Buffer.from(text)).digest("hex");
@@ -159,26 +150,20 @@ describe("child launch record — parse", () => {
 		if (parsed.ok) expect(parsed.launch.version).toBe(CHILD_LAUNCH_VERSION);
 	});
 
-	it("accepts a legacy impVersion-only record, normalizes it, and never mutates the input", () => {
-		const input = legacyOnly();
-		const parsed = parseChildLaunch(input);
-		expect(parsed.ok).toBe(true);
-		if (parsed.ok) {
-			expect(parsed.launch.inkVersion).toBe("9.9.9");
-			expect(Object.hasOwn(parsed.launch, "impVersion")).toBe(false);
-		}
-		expect(Object.hasOwn(input, "inkVersion")).toBe(false);
-		expect(input.impVersion).toBe("9.9.9");
+	// Track C (owner decision 2026-10-09): the legacy read arm is gone — any
+	// record still carrying impVersion is rejected as invalid, exactly like
+	// any other schema violation. The imp-era records and their sessions
+	// were deleted; inkVersion is the sole accepted form.
+	it("rejects a legacy impVersion-only record (read arm removed)", () => {
+		const parsed = parseChildLaunch(legacyOnly());
+		expect(parsed.ok).toBe(false);
+		if (!parsed.ok) expect(parsed.reason).toBe("invalid");
 	});
 
-	it("accepts both names when equal (normalized to inkVersion)", () => {
-		const both = { ...(good() as object), impVersion: "9.9.9" };
+	it("rejects both-names records even when equal (blacklist, not ignore)", () => {
+		const both = { ...(good() as object), impVersion: (good() as { inkVersion: string }).inkVersion };
 		const parsed = parseChildLaunch(both);
-		expect(parsed.ok).toBe(true);
-		if (parsed.ok) {
-			expect(parsed.launch.inkVersion).toBe("9.9.9");
-			expect(Object.hasOwn(parsed.launch, "impVersion")).toBe(false);
-		}
+		expect(parsed.ok).toBe(false);
 	});
 
 	it("rejects unknown versions and every structural violation", () => {
@@ -248,7 +233,7 @@ describe("child launch record — parse", () => {
 // --- lookup fixtures -------------------------------------------------------
 
 function makeParent(base: string): SessionStore {
-	const cwd = mkdtempSync(path.join(tmpdir(), "imp-cl-cwd-"));
+	const cwd = mkTempDir("ink-cl-cwd-");
 	const parent = createSession(cwd, base);
 	parent.appendMessage({ role: "user", content: "parent message" });
 	return parent;
@@ -279,7 +264,7 @@ function writeRaw(filePath: string, lines: string[]): void {
 
 describe("child launch — managed lookup", () => {
 	it("finds the child by HEADER id even when the file name says nothing", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -297,7 +282,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("SA-08/A-1: refuses a launch record whose model triple does not derive consistently", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -314,7 +299,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("does not resolve a child of another parent (foreign-parent copy refused)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -328,7 +313,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses duplicate ids (hand-copied files) as ambiguous", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({ ...buildInput(), parentSessionId: parent.header.id, childId: "dup" });
 		writeChild(parent, "dup", launch, "a.jsonl");
@@ -339,7 +324,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("returns not-found (with diagnostics) when no readable candidate matches", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		writeRaw(childPathFor(parent, "junk.jsonl"), ["this is not json"]);
 		const missing = findChildByLaunch(parent, "never-existed");
@@ -351,7 +336,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses whitespace-only and torn first lines as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		writeRaw(childPathFor(parent, "blank.jsonl"), ["   "]);
 		writeFileSync(childPathFor(parent, "torn.jsonl"), '{"type":"session","version":1,"id":"to', "utf8");
@@ -363,7 +348,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("tolerates a torn appended line like the store does (final line dropped)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -378,7 +363,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("handles an absent children directory as not-found", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const missing = findChildByLaunch(parent, "nope");
 		expect(missing.ok).toBe(false);
@@ -386,7 +371,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("the launch block survives both first-write paths (seedModel and setModel)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launchFor = (childId: string) =>
 			buildChildLaunch({ ...buildInput(), parentSessionId: parent.header.id, childId });
@@ -429,9 +414,9 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("a symlinked children directory beside the parent file still resolves its children", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
-		const realDir = await mkdtemp(path.join(tmpdir(), "imp-cl-real-"));
+		const realDir = await mkTempDirAsync("ink-cl-real-");
 		symlinkSync(realDir, path.join(path.dirname(parent.filePath), "children"));
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -455,7 +440,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("treats a legacy child (no launch block) as missing-launch — readable, not resumable", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		writeChild(parent, "legacy", undefined, "legacy.jsonl");
 		const found = findChildByLaunch(parent, "legacy");
@@ -464,7 +449,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a tampered launch block as invalid-launch", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({
 			...buildInput(),
@@ -478,7 +463,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a broken parent chain inside the child file as malformed, without throwing", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "broken.jsonl");
 		const header = {
@@ -508,7 +493,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a launch block whose childId does not match the file's header id", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		// Header id "file-child"; the record claims another child's id — the
 		// old behavior would borrow that other child's settled record.
@@ -528,7 +513,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a launch block whose parentSessionId does not match the file's header parent", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({ ...buildInput(), parentSessionId: "foreign-parent", childId: "mine" });
 		writeChild(parent, "mine", launch, "mine.jsonl");
@@ -538,7 +523,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a string retainedTail (spreadable garbage) as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "bad-tail-string.jsonl");
 		const header = {
@@ -573,7 +558,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a null entry inside retainedTail as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "bad-tail-null.jsonl");
 		const header = {
@@ -606,7 +591,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a user message without content as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "no-content.jsonl");
 		const header = {
@@ -631,7 +616,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a cyclic parentId chain without hanging, as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "cycle.jsonl");
 		const header = {
@@ -657,7 +642,7 @@ describe("child launch — managed lookup", () => {
 	});
 
 	it("refuses a structurally unusable compaction entry (missing retainedTail) as malformed", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const filePath = childPathFor(parent, "bad-compaction.jsonl");
 		const header = {
@@ -693,7 +678,7 @@ describe("child launch — managed lookup", () => {
 
 describe("child launch — enumeration (listChildLaunches)", () => {
 	it("classifies every candidate: ok, symlink, malformed, unknown-version", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		const launch = buildChildLaunch({ ...buildInput(), parentSessionId: parent.header.id, childId: "good" });
 		writeChild(parent, "good", launch, "good.jsonl");
@@ -726,7 +711,7 @@ describe("child launch — enumeration (listChildLaunches)", () => {
 	});
 
 	it("returns an empty list when there is no children directory", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-cl-"));
+		const base = await mkTempDirAsync("ink-cl-");
 		const parent = makeParent(base);
 		expect(listChildLaunches(parent)).toEqual([]);
 	});
@@ -734,7 +719,7 @@ describe("child launch — enumeration (listChildLaunches)", () => {
 
 describe("child launch — extension module identity", () => {
 	it("exposes realpath + entry-file sha256 per loaded extension", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-cl-ext-"));
+		const dir = await mkTempDirAsync("ink-cl-ext-");
 		const modulePath = path.join(dir, "marker.mjs");
 		const source = "export default () => {};\n";
 		writeFileSync(modulePath, source, "utf8");
@@ -747,7 +732,7 @@ describe("child launch — extension module identity", () => {
 	});
 
 	it("a changed transitive import does not change module identity (documented limit)", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-cl-ext-"));
+		const dir = await mkTempDirAsync("ink-cl-ext-");
 		writeFileSync(path.join(dir, "dep.mjs"), "export const v = 1;\n", "utf8");
 		const modulePath = path.join(dir, "main.mjs");
 		writeFileSync(modulePath, 'import { v } from "./dep.mjs";\nexport default () => { void v; };\n', "utf8");
@@ -762,7 +747,7 @@ describe("child launch — extension module identity", () => {
 	});
 
 	it("exposes registered context-section identities in load order", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-cl-ext-"));
+		const dir = await mkTempDirAsync("ink-cl-ext-");
 		const modulePath = path.join(dir, "ctx.mjs");
 		writeFileSync(
 			modulePath,

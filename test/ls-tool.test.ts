@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLsTool } from "../src/core/tools/ls.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 async function makeDir(entries: Record<string, string>): Promise<string> {
-	const dir = await mkdtemp(path.join(tmpdir(), "imp-ls-"));
+	const dir = await mkTempDirAsync("ink-ls-");
 	for (const [name, content] of Object.entries(entries)) {
 		if (name.endsWith("/")) await mkdir(path.join(dir, name));
 		else await writeFile(path.join(dir, name), content, "utf-8");
@@ -58,7 +58,7 @@ describe("ls tool (M16)", () => {
 	});
 
 	it("byte cap: long names cross 50KB mid-list with the notice", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ls-"));
+		const dir = await mkTempDirAsync("ink-ls-");
 		// 300 entries × ~200-char names (under the 255 filename limit)
 		// ≈ 60KB total — crosses the 50KB cap mid-way, under the 500 cap
 		for (let i = 0; i < 300; i++) {
@@ -100,7 +100,7 @@ describe("ls tool (M16)", () => {
 	});
 
 	it("at the entry clamp the notice teaches narrowing, not the same limit (M16 review P2-7)", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ls-"));
+		const dir = await mkTempDirAsync("ink-ls-");
 		// 5001 empty files: one past the clamp ceiling, cheap on tmpfs
 		const names = Array.from({ length: 5001 }, (_, i) => `f${String(i).padStart(4, "0")}.txt`);
 		await Promise.all(names.map((name) => writeFile(path.join(dir, name), "", "utf-8")));

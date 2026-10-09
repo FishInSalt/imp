@@ -40,7 +40,7 @@ describe("codex-auth (device-code OAuth)", () => {
 	let exchangeCount = 0;
 
 	beforeAll(async () => {
-		authFile = path.join(tmpdir(), `imp-auth-test-${process.pid}.json`);
+		authFile = path.join(tmpdir(), `ink-auth-test-${process.pid}.json`);
 		if (existsSync(authFile)) unlinkSync(authFile); // stale from a previous run
 		server = createServer((req, res) => {
 			const chunks: Buffer[] = [];

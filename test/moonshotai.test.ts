@@ -1,7 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type AgentMessage, type AssistantBlock, emptyUsage } from "../src/core/messages.js";
@@ -23,6 +21,7 @@ import { clampThinkingLevel, supportedThinkingLevels, thinkingMetaFor } from "..
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
 import { buildModelList, loginTargetFor } from "../src/repl/commands.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 async function collect(events: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
 	const out: LLMEvent[] = [];
@@ -121,7 +120,7 @@ afterEach(() => {
  *  pattern — there is no direct overlay API by design). */
 function overlayCatalog(family: string, models: Record<string, object>): void {
 	if (process.env.INK_CATALOG_PATH === undefined) {
-		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `imp-ms-catalog-${Date.now()}.json`);
+		process.env.INK_CATALOG_PATH = tempFilePath("ink-ms-catalog-");
 		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(
@@ -202,7 +201,7 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 	});
 
 	it("2. key resolution: stored > env, per-family isolation, one env configures both; no-key names MOONSHOT_API_KEY only", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ms-"));
+		const dir = await mkTempDirAsync("ink-ms-");
 		const authPath = path.join(dir, "auth.json");
 		setEnv("INK_AUTH_PATH", authPath);
 		setEnv("MOONSHOT_API_KEY", "sk-env-moonshot");
@@ -571,7 +570,7 @@ describe("moonshotai provider (#moonshotai-provider)", () => {
 
 	it("9. session store accepts both families (whitelist + persistence)", async () => {
 		const { SessionStore } = await import("../src/core/session/store.js");
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ms-sess-"));
+		const dir = await mkTempDirAsync("ink-ms-sess-");
 		const store = SessionStore.create(path.join(dir, "s.json"), dir);
 		store.setModel({ provider: "moonshotai-cn", modelId: "kimi-k3" });
 		expect(store.getModel()).toEqual({ provider: "moonshotai-cn", modelId: "kimi-k3" });

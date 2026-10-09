@@ -441,6 +441,18 @@ retained").
    the parser/normalization and its tests), and README/CHANGELOG prose naming
    the legacy field as history.
 
+   **Amendment (2026-10-09, owner-approved — test-fixture-hygiene batch):**
+   three survivor classes above are now RETIRED by later change:
+   - *cosmetic test fixture names* — all 240+ `imp-` tmpdir fixture prefixes
+     renamed to `ink-` (the owner ruled new artifacts must not carry `imp`);
+   - *`IMP_LEASE_*` test IPC markers* — renamed to `INK_LEASE_*` in lockstep
+     with the settings-setup env whitelist;
+   - *the legacy `impVersion` read arm* — REMOVED: `inkVersion` is now the
+   sole accepted form and any record carrying `impVersion` is rejected as
+   invalid (the 12 imp-era records and their 3 finished parent sessions
+     were deleted; see test-fixture-hygiene-design §4/§7.8).
+   The authoritative survivor list today is scripts/imp-gate.mjs.
+
 ### 11.6 Risks and residuals
 
 - Pre-change readers produce a schema-invalid refusal message instead of

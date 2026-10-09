@@ -1,5 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import type { Tool } from "../src/core/tools/types.js";
 import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /** A tool that settles when the gate opens OR its signal aborts — the loop
  *  awaits execute() unconditionally, so abort/timeout tests need a tool that
@@ -844,7 +844,7 @@ describe("SA-04 accounting (red evidence on baseline)", () => {
 
 describe("#output-truncation D3b (child request budget)", () => {
 	it("the child request carries the catalog limit for its canonical reference", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-child-budget-"));
+		const dir = mkTempDir("ink-child-budget-");
 		const saved = process.env.INK_CATALOG_PATH;
 		process.env.INK_CATALOG_PATH = join(dir, "catalog.json");
 		writeFileSync(

@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,12 +12,13 @@ import {
 	setTrust,
 	trustRequiringResources,
 } from "../src/core/trust.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 let home: string;
 let store: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "imp-trust-home-"));
+	home = mkTempDir("ink-trust-home-");
 	store = defaultTrustStorePath(home);
 });
 
@@ -48,7 +48,7 @@ describe("trust store round-trip", () => {
 	});
 
 	it("records are canonicalized through realpath — symlinked lookups hit the record", () => {
-		const real = mkdtempSync(join(tmpdir(), "imp-trust-real-"));
+		const real = mkTempDir("ink-trust-real-");
 		const link = join(home, "link");
 		symlinkSync(real, link);
 		setTrust(store, link, true);
@@ -58,7 +58,7 @@ describe("trust store round-trip", () => {
 	});
 
 	it("removeTrust converges symlink aliases onto the canonical record (M8 review tierScope)", () => {
-		const real = mkdtempSync(join(tmpdir(), "imp-trust-real2-"));
+		const real = mkTempDir("ink-trust-real2-");
 		const link = join(home, "alias-link");
 		symlinkSync(real, link);
 		setTrust(store, link, true); // recorded via the alias → canonical key
@@ -114,15 +114,15 @@ describe("nearest-ancestor inheritance (monorepo ergonomics)", () => {
 
 describe("trustRequiringResources", () => {
 	it("a commands-only repo gates too — .ink/commands is model-directed content (M11 #6 review P1)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-cmds-"));
-		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home4-"));
+		const dir = mkTempDir("ink-trust-cmds-");
+		const elsewhere = mkTempDir("ink-trust-home4-");
 		mkdirSync(join(dir, ".ink", "commands"), { recursive: true });
 		writeFileSync(join(dir, ".ink", "commands", "review.md"), "inject me\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([".ink/commands"]);
 	});
 
 	it("#trust-home-fix: a directory UNDER $HOME gates normally — only $HOME itself is exempt (pi parity)", () => {
-		const home = mkdtempSync(join(tmpdir(), "imp-trust-home6-"));
+		const home = mkTempDir("ink-trust-home6-");
 		const proj = join(home, "code", "proj"); // under home, like every macOS path
 		mkdirSync(join(proj, ".ink", "agents"), { recursive: true });
 		// the fix's regression pin: this used to return [] (blanket home exemption)
@@ -133,8 +133,8 @@ describe("trustRequiringResources", () => {
 	});
 
 	it("only .ink extensions and agents count; AGENTS.md never does", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-proj-"));
-		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home-"));
+		const dir = mkTempDir("ink-trust-proj-");
+		const elsewhere = mkTempDir("ink-trust-home-");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 		writeFileSync(join(dir, "AGENTS.md"), "# untrusted but prompt-level — not gated\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
@@ -145,33 +145,33 @@ describe("trustRequiringResources", () => {
 	});
 
 	it("a plain FILE named .ink/extensions gates nothing (directories only)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-file-"));
-		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-home2-"));
+		const dir = mkTempDir("ink-trust-file-");
+		const elsewhere = mkTempDir("ink-trust-home2-");
 		mkdirSync(join(dir, ".ink"), { recursive: true });
 		writeFileSync(join(dir, ".ink", "extensions"), "not a directory\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 	});
 
 	it("#mcp-trust: project-tier mcp config files gate (both names, files only)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-mcp-"));
-		const elsewhere = mkdtempSync(join(tmpdir(), "imp-trust-mcp-home-"));
+		const dir = mkTempDir("ink-trust-mcp-");
+		const elsewhere = mkTempDir("ink-trust-mcp-home-");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([]);
 		writeFileSync(join(dir, ".mcp.json"), "{}\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([".mcp.json"]);
 		writeFileSync(join(dir, "mcp.json"), "{}\n");
 		expect(trustRequiringResources(dir, elsewhere)).toEqual([".mcp.json", "mcp.json"]);
 		// a directory shadowing the name must not gate (SYSTEM.md precedent)
-		const shadow = mkdtempSync(join(tmpdir(), "imp-trust-mcp-shadow-"));
+		const shadow = mkTempDir("ink-trust-mcp-shadow-");
 		mkdirSync(join(shadow, ".mcp.json"));
 		expect(trustRequiringResources(shadow, elsewhere)).toEqual([]);
 	});
 
 	it("cwd AT the home dir gates nothing — the user's own installation (M8 review; #trust-home-fix narrowed the tree exemption)", () => {
-		const home = mkdtempSync(join(tmpdir(), "imp-trust-home3-"));
+		const home = mkTempDir("ink-trust-home3-");
 		mkdirSync(join(home, ".ink", "extensions"), { recursive: true });
 		expect(trustRequiringResources(home, home)).toEqual([]); // cd ~ && ink
 		// a genuinely foreign cwd still gates
-		const foreign = mkdtempSync(join(tmpdir(), "imp-trust-foreign-"));
+		const foreign = mkTempDir("ink-trust-foreign-");
 		mkdirSync(join(foreign, ".ink", "extensions"), { recursive: true });
 		expect(trustRequiringResources(foreign, home)).toEqual([".ink/extensions"]);
 	});
@@ -225,7 +225,7 @@ describe("askTrustOnce (the interactive one-time ask)", () => {
 
 describe("trustRequiringResources #system-md", () => {
 	it("SYSTEM.md and APPEND_SYSTEM.md files gate like settings.json", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-sysmd-"));
+		const dir = mkTempDir("ink-trust-sysmd-");
 		mkdirSync(join(dir, ".ink"), { recursive: true });
 		writeFileSync(join(dir, ".ink", "SYSTEM.md"), "persona");
 		writeFileSync(join(dir, ".ink", "APPEND_SYSTEM.md"), "extra");
@@ -235,7 +235,7 @@ describe("trustRequiringResources #system-md", () => {
 	});
 
 	it("a directory shadowing the name does not trigger the ask (isFile)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "imp-trust-shadow-"));
+		const dir = mkTempDir("ink-trust-shadow-");
 		mkdirSync(join(dir, ".ink", "SYSTEM.md"), { recursive: true });
 		expect(trustRequiringResources(dir, home)).toEqual([]);
 	});

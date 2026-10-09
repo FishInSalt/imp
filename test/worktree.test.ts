@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,10 +11,11 @@ import {
 	resolveRepoState,
 	worktreeChangeStat,
 } from "../src/core/worktree.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 /** A throwaway git repo with one commit — the hermetic base for every test. */
 async function makeRepo(): Promise<string> {
-	const root = await mkdtemp(path.join(tmpdir(), "imp-wt-repo-"));
+	const root = await mkTempDirAsync("ink-wt-repo-");
 	git(root, ["init", "-q", "-b", "main"]);
 	git(root, ["config", "user.email", "test@imp.dev"]);
 	git(root, ["config", "user.name", "imp test"]);
@@ -31,8 +30,7 @@ function git(cwd: string, args: string[]): void {
 	if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
 }
 
-const baseDir = () =>
-	path.join(tmpdir(), `imp-wt-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+const baseDir = () => mkTempDirAsync("ink-wt-base-");
 
 describe("worktree isolation (M6b)", () => {
 	it("resolveRepoState: root, head, and a subdirectory cwd maps relatively", async () => {
@@ -45,14 +43,14 @@ describe("worktree isolation (M6b)", () => {
 	});
 
 	it("resolveRepoState: non-git cwd → teaching error naming the retry", async () => {
-		const nowhere = await mkdtemp(path.join(tmpdir(), "imp-wt-nogit-"));
+		const nowhere = await mkTempDirAsync("ink-wt-nogit-");
 		await expect(resolveRepoState(nowhere)).rejects.toThrow(
 			/requires a git repository.*without the worktree/s,
 		);
 	});
 
 	it("resolveRepoState: a repo with no commits yet → teaching error", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "imp-wt-empty-"));
+		const root = await mkTempDirAsync("ink-wt-empty-");
 		git(root, ["init", "-q", "-b", "main"]);
 		await expect(resolveRepoState(root)).rejects.toThrow(/no commits yet/);
 	});
@@ -60,7 +58,7 @@ describe("worktree isolation (M6b)", () => {
 	it("create → dirty file → work-present; removeWorktree cleans branch and list", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "t1", baseDir());
+		const wt = await createChildWorktree(state, "t1", await baseDir());
 		expect(existsSync(path.join(wt.path, "seed.txt"))).toBe(true);
 
 		expect(await assessWorktreeRemoval(wt, state)).toEqual({ verdict: "clean" });
@@ -80,7 +78,7 @@ describe("worktree isolation (M6b)", () => {
 	it("committed child work counts as changes too", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "t2", baseDir());
+		const wt = await createChildWorktree(state, "t2", await baseDir());
 		writeFileSync(path.join(wt.path, "committed.txt"), "clean tree, new commit\n", "utf8");
 		git(wt.path, ["add", "."]);
 		git(wt.path, ["config", "user.email", "child@imp.dev"]);
@@ -95,7 +93,7 @@ describe("worktree isolation (M6b)", () => {
 		const root = await makeRepo();
 		mkdirSync(path.join(root, "node_modules"), { recursive: true });
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "t3", baseDir());
+		const wt = await createChildWorktree(state, "t3", await baseDir());
 		expect(wt.nodeModulesLinked).toBe(true);
 		expect(existsSync(path.join(wt.path, "node_modules"))).toBe(true);
 		await removeChildWorktree(wt, state);
@@ -104,7 +102,7 @@ describe("worktree isolation (M6b)", () => {
 	it("notice and trailer teach the merge path", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "t4", baseDir());
+		const wt = await createChildWorktree(state, "t4", await baseDir());
 		const notice = buildWorktreeNotice(wt, root, root);
 		expect(notice).toContain(wt.path);
 		expect(notice).toContain("translate them");
@@ -126,7 +124,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		const root = await makeRepo();
 		mkdirSync(path.join(root, "node_modules"), { recursive: true });
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u1", baseDir());
+		const wt = await createChildWorktree(state, "u1", await baseDir());
 		expect(wt.nodeModulesLinked).toBe(true);
 		expect(await assessWorktreeRemoval(wt, state)).toEqual({ verdict: "clean" });
 		expect(await removeChildWorktree(wt, state)).toEqual([]);
@@ -138,16 +136,16 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U2: dirty, staged, and untracked files → work-present", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		let wt = await createChildWorktree(state, "u2a", baseDir());
+		let wt = await createChildWorktree(state, "u2a", await baseDir());
 		writeFileSync(path.join(wt.path, "untracked.txt"), "x\n", "utf8");
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 		await removeChildWorktree(wt, state);
-		wt = await createChildWorktree(state, "u2b", baseDir());
+		wt = await createChildWorktree(state, "u2b", await baseDir());
 		writeFileSync(path.join(wt.path, "staged.txt"), "x\n", "utf8");
 		git(wt.path, ["add", "staged.txt"]);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 		await removeChildWorktree(wt, state);
-		wt = await createChildWorktree(state, "u2c", baseDir());
+		wt = await createChildWorktree(state, "u2c", await baseDir());
 		writeFileSync(path.join(wt.path, "seed.txt"), "modified\n", "utf8");
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 		await removeChildWorktree(wt, state);
@@ -156,16 +154,16 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U3: normal, empty, and change-then-revert commits → work-present", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		let wt = await createChildWorktree(state, "u3a", baseDir());
+		let wt = await createChildWorktree(state, "u3a", await baseDir());
 		writeFileSync(path.join(wt.path, "work.txt"), "work\n", "utf8");
 		commitAll(wt.path, "work");
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 		await removeChildWorktree(wt, state);
-		wt = await createChildWorktree(state, "u3b", baseDir());
+		wt = await createChildWorktree(state, "u3b", await baseDir());
 		git(wt.path, ["commit", "-q", "--allow-empty", "-m", "empty"]);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 		await removeChildWorktree(wt, state);
-		wt = await createChildWorktree(state, "u3c", baseDir());
+		wt = await createChildWorktree(state, "u3c", await baseDir());
 		writeFileSync(path.join(wt.path, "seed.txt"), "changed\n", "utf8");
 		commitAll(wt.path, "change");
 		writeFileSync(path.join(wt.path, "seed.txt"), "committed\n", "utf8");
@@ -177,7 +175,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U4: corrupt worktree admin (.git file removed) → unknown, nothing destructive", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u4", baseDir());
+		const wt = await createChildWorktree(state, "u4", await baseDir());
 		rmSync(path.join(wt.path, ".git"));
 		const assessment = await assessWorktreeRemoval(wt, state);
 		expect(assessment.verdict).toBe("unknown");
@@ -189,7 +187,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U5: moved worktree (ownership mismatch) → unknown", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u5", baseDir());
+		const wt = await createChildWorktree(state, "u5", await baseDir());
 		renameSync(wt.path, `${wt.path}-moved`);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("unknown");
 	});
@@ -197,7 +195,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U6: branch ref deleted → unknown", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u6", baseDir());
+		const wt = await createChildWorktree(state, "u6", await baseDir());
 		git(root, ["update-ref", "-d", `refs/heads/${wt.branch}`]);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("unknown");
 		spawnSync("git", ["branch", "--list", wt.branch], { cwd: root, encoding: "utf8" });
@@ -208,24 +206,24 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		const state = await resolveRepoState(root);
 		const realGit = spawnSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
 		expect(realGit).not.toBe("");
-		const shimDir = mkdtempSync(path.join(tmpdir(), "imp-git-shim-"));
+		const shimDir = mkTempDir("ink-git-shim-");
 		const shim = path.join(shimDir, "git");
 		writeFileSync(
 			shim,
-			`#!/bin/sh\nif [ "$1" = "$IMP_FAIL_GIT" ]; then exit 128; fi\nexec "${realGit}" "$@"\n`,
+			`#!/bin/sh\nif [ "$1" = "$INK_FAIL_GIT" ]; then exit 128; fi\nexec "${realGit}" "$@"\n`,
 			{ mode: 0o755 },
 		);
-		const wt = await createChildWorktree(state, "u7", baseDir());
+		const wt = await createChildWorktree(state, "u7", await baseDir());
 		const previousPath = process.env.PATH;
 		process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
 		try {
 			for (const verb of ["status", "diff"]) {
-				process.env.IMP_FAIL_GIT = verb;
+				process.env.INK_FAIL_GIT = verb;
 				expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("unknown");
 			}
 		} finally {
 			process.env.PATH = previousPath;
-			delete process.env.IMP_FAIL_GIT;
+			delete process.env.INK_FAIL_GIT;
 		}
 		const branches = spawnSync("git", ["branch", "--list", wt.branch], { cwd: root, encoding: "utf8" });
 		expect(branches.stdout).toContain(wt.branch);
@@ -235,7 +233,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		const root = await makeRepo();
 		mkdirSync(path.join(root, "node_modules"), { recursive: true });
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u8", baseDir());
+		const wt = await createChildWorktree(state, "u8", await baseDir());
 		expect(await assessWorktreeRemoval(wt, state)).toEqual({ verdict: "clean" });
 		rmSync(path.join(wt.path, "node_modules"));
 		mkdirSync(path.join(wt.path, "node_modules"));
@@ -250,7 +248,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U9: commit + reset --hard <baseline> → work-present (reflog evidence)", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u9", baseDir());
+		const wt = await createChildWorktree(state, "u9", await baseDir());
 		git(wt.path, ["commit", "-q", "--allow-empty", "-m", "gone"]);
 		git(wt.path, ["reset", "-q", "--hard", state.head]);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
@@ -259,7 +257,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U10: assume-unchanged modified tracked file → unknown", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u10", baseDir());
+		const wt = await createChildWorktree(state, "u10", await baseDir());
 		writeFileSync(path.join(wt.path, "seed.txt"), "sneaky\n", "utf8");
 		git(wt.path, ["update-index", "--assume-unchanged", "seed.txt"]);
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("unknown");
@@ -268,7 +266,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U11: branch ref deleted and recreated at the baseline → unknown (creation snapshot suffix)", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u11", baseDir());
+		const wt = await createChildWorktree(state, "u11", await baseDir());
 		git(wt.path, ["commit", "-q", "--allow-empty", "-m", "gone"]);
 		git(root, ["update-ref", "-d", `refs/heads/${wt.branch}`]);
 		git(root, ["update-ref", `refs/heads/${wt.branch}`, state.head]);
@@ -278,7 +276,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U12: commit + branch rename round-trip + reset → work-present (entries survive)", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u12", baseDir());
+		const wt = await createChildWorktree(state, "u12", await baseDir());
 		git(wt.path, ["commit", "-q", "--allow-empty", "-m", "gone"]);
 		git(root, ["branch", "-m", wt.branch, `${wt.branch}-tmp`]);
 		git(root, ["branch", "-m", `${wt.branch}-tmp`, wt.branch]);
@@ -289,7 +287,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 	it("U13: commit + reset + reflog cleared → unknown, never clean", async () => {
 		const root = await makeRepo();
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u13", baseDir());
+		const wt = await createChildWorktree(state, "u13", await baseDir());
 		git(wt.path, ["commit", "-q", "--allow-empty", "-m", "gone"]);
 		git(wt.path, ["reset", "-q", "--hard", state.head]);
 		git(root, ["reflog", "expire", "--expire=all", "--all"]);
@@ -303,7 +301,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		const root = await makeRepo();
 		git(root, ["config", "status.showUntrackedFiles", "no"]);
 		const state = await resolveRepoState(root);
-		const wt = await createChildWorktree(state, "u14", baseDir());
+		const wt = await createChildWorktree(state, "u14", await baseDir());
 		writeFileSync(path.join(wt.path, "valuable.txt"), "not throwaway\n", "utf8");
 		expect((await assessWorktreeRemoval(wt, state)).verdict).toBe("work-present");
 	});
@@ -315,7 +313,7 @@ describe("assessWorktreeRemoval (SA-01)", () => {
 		git(root, ["commit", "-qm", "ignore node_modules"]);
 		const state = await resolveRepoState(root);
 		// No root node_modules → no synthetic link is created.
-		const wt = await createChildWorktree(state, "u15", baseDir());
+		const wt = await createChildWorktree(state, "u15", await baseDir());
 		expect(wt.nodeModulesLinked).toBe(false);
 		mkdirSync(path.join(wt.path, "node_modules"), { recursive: true });
 		writeFileSync(path.join(wt.path, "node_modules", "user-work.txt"), "mine\n", "utf8");

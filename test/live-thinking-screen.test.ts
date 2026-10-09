@@ -1,5 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { LLMProvider } from "../src/provider/types.js";
@@ -10,6 +8,7 @@ import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
 import { assistant, gate } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 /** Focused physical-screen interpreter, not a write log or a full VT emulator.
  * Models cursor addressing, erasure, bottom-edge scrolling and deferred wrap.
@@ -271,7 +270,7 @@ it("the screen interpreter overwrites, erases, wraps, scrolls and rejects unsupp
 });
 
 it("Ctrl+T repaints a long physical screen during live thinking, including hidden append and resize", async () => {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-thinking-screen-"));
+	const baseDir = await mkTempDirAsync("ink-thinking-screen-");
 	const thinkingGate = gate();
 	const endGate = gate();
 	let calls = 0;

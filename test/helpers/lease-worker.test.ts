@@ -3,7 +3,7 @@
  *
  * Driven by test/child-lease-multiprocess.test.ts, which spawns this file as
  * `node node_modules/vitest/vitest.mjs run test/helpers/lease-worker.test.ts` with the env
- * `IMP_LEASE_WORKER=<dir>|<rounds>|<tag>`. Each worker acquires the same
+ * `INK_LEASE_WORKER=<dir>|<rounds>|<tag>`. Each worker acquires the same
  * child lease in a loop and appends `S tag round` / `E tag round` markers
  * around the critical section; the parent asserts no interleaving ever
  * occurs. Without the env (a normal suite run) this file is a no-op.
@@ -13,7 +13,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireChildLease } from "../../src/core/child-lease.js";
 
-const workerEnv = process.env.IMP_LEASE_WORKER;
+const workerEnv = process.env.INK_LEASE_WORKER;
 
 async function waitForMarker(dir: string, name: string, timeoutMs = 30_000): Promise<boolean> {
 	const started = Date.now();
@@ -29,7 +29,7 @@ describe("lease multiprocess worker", () => {
 		if (workerEnv === undefined) return; // placeholder in the normal suite
 		const [dir, roundsRaw, tag] = workerEnv.split("|");
 		if (dir === undefined || roundsRaw === undefined || tag === undefined) {
-			throw new Error("IMP_LEASE_WORKER must be <dir>|<rounds>|<tag>");
+			throw new Error("INK_LEASE_WORKER must be <dir>|<rounds>|<tag>");
 		}
 		const childFile = `${dir}/child.jsonl`;
 		const logFile = `${dir}/log`;

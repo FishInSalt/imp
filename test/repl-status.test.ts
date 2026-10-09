@@ -1,6 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AssistantMessage, emptyUsage, type Usage } from "../src/core/messages.js";
@@ -14,6 +11,7 @@ import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner, type Runner } from "../src/runner.js";
 import { StdinBuffer, type Terminal } from "../src/tui.js";
 import { type ScriptStep, scriptedProvider, ticks, waitUntil } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 // ── fakes (the repl-tui.test.ts harness, repeated for this suite) ─────────
 
@@ -139,7 +137,7 @@ interface StatusEnv {
 /** runRepl on the TUI shell — the machine's footer/title pushes land on the
  *  FakeTerminal's write log. */
 async function startTuiRepl(scripts: ScriptStep[], model = "test-model"): Promise<StatusEnv> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-status-"));
+	const baseDir = await mkTempDirAsync("ink-status-");
 	const provider: LLMProvider = scriptedProvider(scripts);
 	const terminal = new FakeTerminal();
 	const transcript = new TranscriptSink();

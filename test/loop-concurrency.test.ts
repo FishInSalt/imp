@@ -1,6 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -16,6 +15,7 @@ import type { Tool } from "../src/core/tools/types.js";
 import { ExtensionRegistry } from "../src/extensions/registry.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import { assistant, type Gate, gate, scriptedProvider, waitUntil } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /** Signal-observing gated tool — the loop awaits execute() unconditionally, so
  *  concurrency/abort tests need tools that honor the signal (as bash does). */
@@ -1048,7 +1048,7 @@ describe("#abort-grace: bounded wait for signal-ignoring tools", () => {
 
 describe("#readonly-parallel: real read-only tools in the window", () => {
 	it("roster: read/grep/find/ls carry concurrencySafe (design §4.1)", () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "ink-roster-"));
+		const dir = mkTempDir("ink-roster-");
 		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
 		const probe: [string, Tool][] = [
 			["read", createReadTool({ cwd: dir })],
@@ -1060,7 +1060,7 @@ describe("#readonly-parallel: real read-only tools in the window", () => {
 	});
 
 	it("real tools overlap: a FIFO-gated read and a plain read run concurrently (design §4.2/§4.8)", async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "ink-parallel-"));
+		const dir = mkTempDir("ink-parallel-");
 		// fifo-gated read: readFile blocks on a FIFO until the test writes —
 		// deterministic concurrency observation, no wall-clock sampling.
 		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
@@ -1108,7 +1108,7 @@ describe("#readonly-parallel: real read-only tools in the window", () => {
 	});
 
 	it("abort mid-read-batch: claimed reads settle with REAL results (pool-queued stragglers may ride the grace window — the designed bounded exit); queued ones synthesize (design §4.3)", async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "ink-abort-"));
+		const dir = mkTempDir("ink-abort-");
 		// 5 gated reads (FIFOs held open by spawned holders) + 2 plain files:
 		// the five claimed slots stay pending, c6/c7 remain queued.
 		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
@@ -1183,7 +1183,7 @@ describe("#readonly-parallel: real read-only tools in the window", () => {
 
 describe("#readonly-parallel: child-session parity (design §3 checkpoint)", () => {
 	it("the child loop runs safe calls concurrently — the roster flag travels with the tool pool", async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "ink-child-"));
+		const dir = mkTempDir("ink-child-");
 		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
 		const fifo = path.join(dir, "gate.fifo");
 		execFileSync("mkfifo", [fifo]);

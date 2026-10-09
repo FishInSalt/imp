@@ -14,8 +14,6 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -31,6 +29,7 @@ import type { Tool, ToolExecuteResult } from "../src/core/tools/types.js";
 import { createWriteTool } from "../src/core/tools/write.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, type ScriptStep, scriptedProvider, user } from "./helpers/fakes.js";
+import { mkTempDir, mkTempDirAsync } from "./helpers/mktemp.js";
 
 const SYSTEM = "PARENT SYSTEM\n- Date: 2026-09-29";
 
@@ -108,6 +107,9 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 	const sink: LLMRequest[] = [];
 	const provider = scriptedProvider(args.scripts ?? [], sink, args.providerName ?? "anthropic");
 	const system = args.system ?? SYSTEM;
+	// Worktree children get a per-harness base inside the test's temp root
+	// (fixture-hygiene §A1) instead of the raw-tmpdir default.
+	const worktreeBaseDir = mkTempDir("ink-cr-wt-base-");
 	const task = createTaskTool({
 		getProvider: args.getProvider ?? (() => provider),
 		getModel: () => "parent-wire",
@@ -118,6 +120,7 @@ function harness(args: HarnessArgs): { task: Tool; sink: LLMRequest[] } {
 		getSession: args.getSessionOverride ?? (() => args.session),
 		childSessions: args.childSessions ?? true,
 		sessionBaseDir: args.baseDir,
+		worktreeBaseDir,
 		agents: args.agents ?? [],
 		cwd: args.cwd,
 		...(args.getToolsForChild === undefined ? {} : { getToolsForChild: args.getToolsForChild }),
@@ -228,8 +231,8 @@ async function gitRepoWithSeed(base: string, sub?: string): Promise<string> {
 }
 
 async function fixture(): Promise<{ base: string; cwd: string; parent: SessionStore }> {
-	const base = await mkdtemp(path.join(tmpdir(), "imp-resume-"));
-	const cwd = await mkdtemp(path.join(tmpdir(), "imp-resume-cwd-"));
+	const base = await mkTempDirAsync("ink-resume-");
+	const cwd = await mkTempDirAsync("ink-resume-cwd-");
 	const parent = createSession(cwd, base);
 	return { base, cwd, parent };
 }
@@ -372,7 +375,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2a: a complete entry without a trailing newline is TERMINATED (kept), not lost", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn-"));
+		const base = await mkTempDirAsync("ink-torn-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store");
 		store.appendMessage(user("first"));
@@ -390,7 +393,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2b: an unparseable fragment is TRUNCATED at the last newline", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn2-"));
+		const base = await mkTempDirAsync("ink-torn2-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-2");
 		store.appendMessage(user("first"));
@@ -406,7 +409,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2c: a torn tail that parses as JSON but is not a valid entry is TRUNCATED", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn3-"));
+		const base = await mkTempDirAsync("ink-torn3-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-3");
 		store.appendMessage(user("first"));
@@ -426,7 +429,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2e: repair is byte-accurate — CJK/emoji history keeps a byte-identical prefix", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn5-"));
+		const base = await mkTempDirAsync("ink-torn5-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-5");
 		const text = "用户任务：请检查配置 🔧 路径 /tmp/多字节/文件.txt";
@@ -448,7 +451,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2f: an invalid final line WITH a trailing newline is truncated (open dropped it; append must not bury it)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn6-"));
+		const base = await mkTempDirAsync("ink-torn6-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-6");
 		store.appendMessage(user("first"));
@@ -464,7 +467,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2g: a session_model line missing its payload is truncated, not terminated", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn7-"));
+		const base = await mkTempDirAsync("ink-torn7-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-7");
 		store.appendMessage(user("first"));
@@ -480,7 +483,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2h: a position marker with a bad leafId is KEPT (open ignores it; repair must not truncate)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn8-"));
+		const base = await mkTempDirAsync("ink-torn8-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-8");
 		store.appendMessage(user("first"));
@@ -496,7 +499,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("R2d: a header-only file without a trailing newline is TERMINATED (never zeroed)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-torn4-"));
+		const base = await mkTempDirAsync("ink-torn4-");
 		const filePath = path.join(base, "torn.jsonl");
 		const store = SessionStore.create(filePath, base, "torn-store-4");
 		store.appendMessage(user("first"));
@@ -752,13 +755,13 @@ describe("SA-07 resume", () => {
 			scripts: [assistant([{ type: "text", text: "done" }])],
 		});
 		const childId = childIdOf(result);
-		const elsewhere = await mkdtemp(path.join(tmpdir(), "imp-elsewhere-"));
+		const elsewhere = await mkTempDirAsync("ink-elsewhere-");
 		const moved = harness({ session: parent, baseDir: base, cwd: elsewhere, scripts: [] });
 		const drift = await moved.task.execute({ resume: childId, prompt: "x" }, signal());
 		expect(drift.isError).toBe(true);
 		expect(drift.output).toContain("cwd-drift");
 
-		const gone = await mkdtemp(path.join(tmpdir(), "imp-gone-"));
+		const gone = await mkTempDirAsync("ink-gone-");
 		const goneParent = createSession(gone, base);
 		const { result: goneResult } = await dispatchAndPersist({
 			session: goneParent,
@@ -1263,7 +1266,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("T26b: a kept worktree child resumes in place — never auto-removed, prior disposition named", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-resume-"));
+		const base = await mkTempDirAsync("ink-wt-resume-");
 		const repo = path.join(base, "repo");
 		mkdirSync(repo, { recursive: true });
 		const { spawnSync } = await import("node:child_process");
@@ -1316,7 +1319,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-08/F4-a: a provider swap during the spawn window does not reroute the attempt", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-prov-swap-"));
+		const base = await mkTempDirAsync("ink-prov-swap-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const sinkA: LLMRequest[] = [];
@@ -1358,7 +1361,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-09: a thinking-level change inside the spawn window does not drift the attempt", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-think-pin-"));
+		const base = await mkTempDirAsync("ink-think-pin-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		let level: "low" | "high" = "low";
@@ -1384,8 +1387,8 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-09: resume re-resolves from the CURRENT file (a level added between launches wins)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-think-resume-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-think-resume-cwd-"));
+		const base = await mkTempDirAsync("ink-think-resume-");
+		const cwd = await mkTempDirAsync("ink-think-resume-cwd-");
 		const parent = createSession(cwd, base);
 		const scout = (thinking?: "high"): AgentDefinition => ({
 			name: "scout",
@@ -1427,8 +1430,8 @@ describe("SA-07 resume", () => {
 	});
 
 	it("SA-09: resume re-resolves from the CURRENT parent level when the file has none", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-think-resume2-"));
-		const cwd = await mkdtemp(path.join(tmpdir(), "imp-think-resume2-cwd-"));
+		const base = await mkTempDirAsync("ink-think-resume2-");
+		const cwd = await mkTempDirAsync("ink-think-resume2-cwd-");
 		const parent = createSession(cwd, base);
 		const scout = {
 			name: "scout",
@@ -1467,7 +1470,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("SA-08/F2-a: a worktree child's cwd must sit inside the verified worktree (tampered cwd refused)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-cwd-"));
+		const base = await mkTempDirAsync("ink-wt-cwd-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const { task, sink } = harness({
@@ -1510,7 +1513,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-08/F2-b: a cwd symlink inside the worktree that resolves outside is refused", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-link-"));
+		const base = await mkTempDirAsync("ink-wt-link-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const { task, sink } = harness({
@@ -1556,7 +1559,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-08/F2-c: a legitimate subdirectory-parent worktree child still resumes (no over-refusal)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-sub-"));
+		const base = await mkTempDirAsync("ink-wt-sub-");
 		const repo = await gitRepoWithSeed(base, "pkg");
 		const sub = path.join(repo, "pkg");
 		const parent = createSession(sub, base);
@@ -1593,7 +1596,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-08/F2-d: a plain file as the worktree child's cwd is refused (zero provider calls)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-file-"));
+		const base = await mkTempDirAsync("ink-wt-file-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const { task, sink } = harness({
@@ -1635,7 +1638,7 @@ describe("SA-07 resume", () => {
 	}, 30_000);
 
 	it("SA-08/F2-e: a symlink inside the worktree whose final object is a file is refused", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkfile-"));
+		const base = await mkTempDirAsync("ink-wt-linkfile-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const { task, sink } = harness({
@@ -1712,7 +1715,7 @@ describe("SA-07 resume", () => {
 	});
 
 	it("SA-08/F2-g: a symlink inside the worktree to a directory inside still resumes (no over-refusal)", async () => {
-		const base = await mkdtemp(path.join(tmpdir(), "imp-wt-linkdir-"));
+		const base = await mkTempDirAsync("ink-wt-linkdir-");
 		const repo = await gitRepoWithSeed(base);
 		const parent = createSession(repo, base);
 		const { task } = harness({

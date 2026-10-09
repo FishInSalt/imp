@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSession, listSessions, resolveSession } from "../src/core/session/manager.js";
 import { SessionStore } from "../src/core/session/store.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -20,7 +19,7 @@ const a = { provider: "anthropic", modelId: "glm-qualified" };
 const b = { provider: "zai", modelId: "glm-5.3" };
 const c = { provider: "openai-codex", modelId: "gpt-test" };
 function fresh() {
-	const base = mkdtempSync(path.join(tmpdir(), "imp-model-store-"));
+	const base = mkTempDir("ink-model-store-");
 	return { base, store: createSession("/project", base) };
 }
 const records = (store: SessionStore) =>

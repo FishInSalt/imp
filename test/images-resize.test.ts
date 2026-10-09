@@ -2,11 +2,10 @@
  * M13 batch 2 — the processor: resize ladder, EXIF, conversion, read
  * rewiring, @file attachments, clipboard matrix, settings.
  */
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { processFileArguments } from "../src/core/file-processor.js";
 import { __exifInternals, getExifOrientation } from "../src/core/image/exif-orientation.js";
 import { convertImageBytesToPng } from "../src/core/image/image-convert.js";
@@ -101,7 +100,11 @@ function makeBmp(width: number, height: number): Buffer {
 	return Buffer.concat([header, dib, pixelData]);
 }
 
-const DIR = await mkdtemp(path.join(tmpdir(), "imp-img2-"));
+// Module-scope fixture root (created outside test context — plain mkdtemp;
+// lifecycle via the afterAll below, backstopped by the §A2 sweep).
+import { tmpdir as _tmpdir } from "node:os";
+
+const DIR = await mkdtemp(path.join(_tmpdir(), "ink-img2-"));
 async function fixture(name: string, bytes: Buffer): Promise<string> {
 	const file = path.join(DIR, name);
 	await writeFile(file, bytes);
@@ -286,8 +289,14 @@ describe("M13-2 read tool (processor wired)", () => {
 // settings
 // ---------------------------------------------------------------------------
 
-const SETTINGS_DIR = await mkdtemp(path.join(tmpdir(), "imp-img2set-"));
+const SETTINGS_DIR = await mkdtemp(path.join(_tmpdir(), "ink-img2set-"));
 const SETTINGS_FILE = path.join(SETTINGS_DIR, "settings.json");
+afterAll(async () => {
+	await Promise.all([
+		rm(DIR, { recursive: true, force: true }),
+		rm(SETTINGS_DIR, { recursive: true, force: true }),
+	]);
+});
 
 describe("M13-2 settings images", () => {
 	const file = SETTINGS_FILE;

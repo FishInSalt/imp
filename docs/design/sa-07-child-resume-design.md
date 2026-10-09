@@ -1,5 +1,10 @@
 # SA-07 — Synchronous continuation of settled children (design)
 
+> Update (2026-10-09, test-fixture-hygiene Track C): the legacy
+> `impVersion` read arm referenced below has been REMOVED;
+> `inkVersion` is the sole accepted key. See
+> [test-fixture-hygiene-design](test-fixture-hygiene-design.md) §4.
+
 > Identifier note (2026-10-06): the launch-record version field and the
 > lease machine-id file now use Ink names (`inkVersion`, `.ink-machine-id`;
 > see [ink-rename-design](ink-rename-design.md) §11, Amendment A1). The

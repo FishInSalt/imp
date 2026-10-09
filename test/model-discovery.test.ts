@@ -1,6 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +10,7 @@ import {
 	setDiscoveryClockForTest,
 } from "../src/provider/discover.js";
 import { buildModelList, type ModelListDeps } from "../src/repl/commands.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /**
  * #model-discovery: the /model picker list is what the CONFIGURED endpoints
@@ -216,7 +216,7 @@ describe("discoverModels + familyConfigured", () => {
 
 	it("codex: pi.dev catalog (bare-array shape) via INK_CATALOG_BASE_URL; gated on login", async () => {
 		// credential present (pinned path) + local catalog server
-		const dir = mkdtempSync(path.join(tmpdir(), "imp-disc-"));
+		const dir = mkTempDir("ink-disc-");
 		const credFile = path.join(dir, "auth.json");
 		writeFileSync(
 			credFile,
@@ -278,7 +278,7 @@ describe("discoverModels + familyConfigured", () => {
 
 describe("familyConfigured via INK_AUTH_PATH", () => {
 	it("a stored credential makes the codex family available", () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "imp-disc-"));
+		const dir = mkTempDir("ink-disc-");
 		const file = path.join(dir, "auth.json");
 		writeFileSync(
 			file,

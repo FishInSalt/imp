@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { contentText } from "../src/core/messages.js";
@@ -7,13 +6,13 @@ import { createEditTool } from "../src/core/tools/edit.js";
 import { applyEdits, countOccurrences, diffLines } from "../src/core/tools/edit-diff.js";
 import { withFileLock } from "../src/core/tools/file-lock.js";
 import { createWriteTool } from "../src/core/tools/write.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const signal = new AbortController().signal;
 
-let tmpRoot: string;
+// per-test root: each tmp() call gets a fresh dir removed when that test ends
 async function tmp(): Promise<string> {
-	tmpRoot ??= await mkdtemp(path.join(tmpdir(), "imp-edit-"));
-	return tmpRoot;
+	return mkTempDirAsync("ink-edit-");
 }
 
 describe("applyEdits (pure)", () => {

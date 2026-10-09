@@ -1,11 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAnthropicProvider } from "../src/provider/anthropic.js";
 import { clearApiKey, saveApiKey } from "../src/provider/auth-store.js";
 import type { LLMEvent } from "../src/provider/types.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 /**
  * Regression M1 (review of m3-repl): aborting mid-SSE-read made undici reject
@@ -61,7 +60,7 @@ describe("anthropic key resolution (#login-repl review P2)", () => {
 	}
 
 	it("stored key beats AUTH_TOKEN and forces x-api-key; the env pair keeps its original order", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-ant-"));
+		const dir = await mkTempDirAsync("ink-ant-");
 		const prevPath = process.env.INK_AUTH_PATH;
 		const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
 		const prevKey = process.env.ANTHROPIC_API_KEY;

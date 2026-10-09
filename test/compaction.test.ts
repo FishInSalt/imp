@@ -1,5 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,6 +18,7 @@ import { priceUsageTotals, usageTotalsTracker } from "../src/core/usage-totals.j
 import { costFor } from "../src/provider/models.js";
 import type { LLMProvider, LLMRequest } from "../src/provider/types.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content });
 const assistantText = (text: string, inputTokens = 100): AgentMessage => ({
@@ -190,7 +189,7 @@ describe("compactSession", () => {
 	}
 
 	it("summarizes older messages, appends a compaction entry, context shrinks", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir = await mkTempDirAsync("ink-compact-");
 		const session = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
 		// turn 1+2 (old), turn 3 (recent); tiny messages, so keepRecentTokens is small too
 		session.appendMessage(user("old question one"));
@@ -230,7 +229,7 @@ describe("compactSession", () => {
 	});
 
 	it("sends only the pre-cut messages to the summarizer", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir = await mkTempDirAsync("ink-compact-");
 		const session = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
 		session.appendMessage(user("summarize me"));
 		session.appendMessage(assistantText("ok"));
@@ -265,7 +264,7 @@ describe("compactSession", () => {
 	});
 
 	it("returns null when there is nothing old enough to summarize", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir = await mkTempDirAsync("ink-compact-");
 		const session = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
 		session.appendMessage(user("only message"));
 		session.appendMessage(assistantText("reply"));
@@ -279,7 +278,7 @@ describe("compactSession", () => {
 		expect(session.getEntries().length).toBe(2); // untouched
 	});
 	it("SA-05: the compaction entry carries usage + producing model; a missing report sets usageMissing", async () => {
-		const dir = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir = await mkTempDirAsync("ink-compact-");
 		const session = SessionStore.create(path.join(dir, "s.jsonl"), "/p");
 		session.appendMessage(user("old question one"));
 		session.appendMessage(assistantText("old answer one"));
@@ -310,7 +309,7 @@ describe("compactSession", () => {
 
 		// missing-report variant: the numbers stay (initialization zeros), the
 		// flag rides the entry — never a fake "complete zero" report.
-		const dir2 = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir2 = await mkTempDirAsync("ink-compact-");
 		const session2 = SessionStore.create(path.join(dir2, "s.jsonl"), "/p");
 		session2.appendMessage(user("old question one"));
 		session2.appendMessage(assistantText("old answer one"));
@@ -350,7 +349,7 @@ describe("compactSession", () => {
 	});
 
 	it("SA-05 §11.7: a compaction without a declared reference writes the wire id only and prices as unknown", async () => {
-		const dir3 = await mkdtemp(path.join(tmpdir(), "imp-compact-"));
+		const dir3 = await mkTempDirAsync("ink-compact-");
 		const session3 = SessionStore.create(path.join(dir3, "s.jsonl"), "/p");
 		session3.appendMessage(user("old question one"));
 		session3.appendMessage(assistantText("old answer one"));
@@ -877,7 +876,7 @@ describe("estimateContextTokens minAnchorIndex (F1)", () => {
 
 describe("SessionStore.buildContext compactionBoundary (F1)", () => {
 	it("uncompacted session: boundary 0", async () => {
-		const dir = await mkdtemp(`${tmpdir()}/imp-f1-`);
+		const dir = await mkTempDirAsync("ink-f1-");
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "cwd");
 		store.appendMessage({ role: "user", content: "q" });
 		const ctx = store.buildContext();
@@ -886,7 +885,7 @@ describe("SessionStore.buildContext compactionBoundary (F1)", () => {
 	});
 
 	it("compacted session: boundary = 1 + retainedTail.length; messages after the boundary still count", async () => {
-		const dir = await mkdtemp(`${tmpdir()}/imp-f1-`);
+		const dir = await mkTempDirAsync("ink-f1-");
 		const store = SessionStore.create(path.join(dir, "s.jsonl"), "cwd");
 		const tail: AgentMessage[] = [
 			{ role: "user", content: "kept q" },

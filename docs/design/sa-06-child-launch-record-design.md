@@ -4,6 +4,11 @@
 > legacy `impVersion` key remains readable; see
 > [ink-rename-design](ink-rename-design.md) §11, Amendment A1). The
 > historical text below keeps the original field name.
+>
+> Update (2026-10-09, test-fixture-hygiene Track C): the legacy read arm
+> has since been REMOVED — `inkVersion` is the sole accepted key and any
+> record carrying `impVersion` now parses as invalid. See
+> [test-fixture-hygiene-design](test-fixture-hygiene-design.md) §4.
 
 Task list item: SA-06 ("Persist and validate resumable child launch state") —
 `design/subagent-delegation-task-list.md` §SA-06. Branch:

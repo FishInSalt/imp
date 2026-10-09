@@ -1,4 +1,6 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { LLMRequest } from "../src/provider/types.js";
@@ -8,6 +10,8 @@ import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
+
+let visualNoticeShown = false;
 
 /** Focused physical-screen interpreter, not a write log or a full VT emulator.
  * Models cursor addressing, erasure, bottom-edge scrolling and deferred wrap.
@@ -393,7 +397,13 @@ const fixtures = [
 it.each(fixtures)(
 	"physical REPL frames: $name",
 	async ({ name, args, labels }) => {
-		const baseDir = await mkdtemp(path.join("/tmp", `imp-builtin-visual-${name}-`));
+		// §A3: snapshots live under tmpdir() with a ~24h TTL (§A2 sweep) so
+		// post-run human inspection has a bounded window, not a permanent leak.
+		const baseDir = await mkdtemp(path.join(tmpdir(), `ink-builtin-visual-${name}-`));
+		if (!visualNoticeShown) {
+			visualNoticeShown = true;
+			console.log("snapshots auto-removed after ~24h — copy out anything you want to keep");
+		}
 		console.log(`VISUAL_ARTIFACT ${name} ${baseDir}`);
 		await writeFile(path.join(baseDir, "file.txt"), "needle first\nsecond line\n");
 		for (const bin of ["rg", "fd"])

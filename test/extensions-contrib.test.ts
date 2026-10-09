@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../src/core/messages.js";
@@ -23,6 +22,7 @@ import {
 	waitUntil,
 	writeExtensionFiles,
 } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 // Full-path harness for the real contributed extensions (the case-9 pattern:
 // real example files, real dynamic import, real cli wiring, scripted turns).
@@ -70,7 +70,7 @@ interface StartArgs {
 }
 
 async function startRepl(args: StartArgs): Promise<Env> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-contrib-"));
+	const baseDir = await mkTempDirAsync("ink-contrib-");
 	const cwd = path.join(baseDir, "proj");
 	const home = path.join(baseDir, "home");
 	await mkdir(cwd, { recursive: true });

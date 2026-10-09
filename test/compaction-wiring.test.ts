@@ -1,15 +1,15 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompactionSettings } from "../src/core/compaction.js";
 import type { LLMRequest } from "../src/provider/types.js";
 import { assistant, makeRenderer, scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 let base: string;
 beforeEach(async () => {
-	base = mkdtempSync(join(tmpdir(), "imp-compaction-wiring-"));
+	base = mkTempDir("ink-compaction-wiring-");
 	vi.stubEnv("INK_LOG", "0");
 	vi.stubEnv("INK_CONTEXT_WINDOW", undefined);
 	vi.stubEnv("INK_KEEP_RECENT", "1");

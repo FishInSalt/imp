@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStore } from "../src/core/session/store.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -17,7 +16,7 @@ afterEach(() => {
 });
 
 async function fresh(): Promise<SessionStore> {
-	const dir = await mkdtemp(path.join(tmpdir(), "imp-lazy-session-"));
+	const dir = await mkTempDirAsync("ink-lazy-session-");
 	return SessionStore.create(path.join(dir, "session.jsonl"), dir);
 }
 

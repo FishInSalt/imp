@@ -1,11 +1,4 @@
-// #login-dialog: the exclusive login dialog — TUI-level tests
-// (docs/design/login-dialog-design.md §3, items 1-16). The oauth tests budget
-// ≥5000ms: codex-auth's poll floor is 1000ms (Math.max(intervalSeconds,1)),
-// even with the fake server's interval: 0.
-
-import { mkdtemp } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadApiKey } from "../src/provider/auth-store.js";
@@ -17,6 +10,12 @@ import { TuiShell } from "../src/repl/shell.js";
 import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { scriptedProvider } from "./helpers/fakes.js";
+import { mkTempDirAsync } from "./helpers/mktemp.js";
+// #login-dialog: the exclusive login dialog — TUI-level tests
+// (docs/design/login-dialog-design.md §3, items 1-16). The oauth tests budget
+// ≥5000ms: codex-auth's poll floor is 1000ms (Math.max(intervalSeconds,1)),
+// even with the fake server's interval: 0.
+
 import { FakeTerminal, settle } from "./login-dialog.helpers.js";
 
 const OAUTH_BUDGET = 6000; // 1s poll floor ×2 polls + render + CI slack
@@ -32,7 +31,7 @@ interface Env {
 }
 
 async function startDialogRepl(commands?: Parameters<typeof runRepl>[0]["commands"]): Promise<Env> {
-	const baseDir = await mkdtemp(path.join(tmpdir(), "imp-login-dlg-"));
+	const baseDir = await mkTempDirAsync("ink-login-dlg-");
 	const authPath = path.join(baseDir, "auth.json");
 	process.env.INK_AUTH_PATH = authPath;
 	for (const key of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY"]) {

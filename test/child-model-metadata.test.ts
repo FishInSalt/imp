@@ -1,9 +1,9 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { childModelMetadata } from "../src/core/subagent.js";
 import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 /** SA-02 D4 / acceptance item 6: compaction settings AND the summarizer
  *  output cap must come from the SAME canonical child reference — a bare
@@ -13,7 +13,7 @@ import { loadCatalogCache, resetCatalogForTest } from "../src/provider/catalog.j
 let base: string;
 let savedCatalogPath: string | undefined;
 beforeEach(() => {
-	base = mkdtempSync(join(tmpdir(), "imp-child-model-meta-"));
+	base = mkTempDir("ink-child-model-meta-");
 	savedCatalogPath = process.env.INK_CATALOG_PATH;
 	process.env.INK_CATALOG_PATH = join(base, "catalog.json");
 	writeFileSync(

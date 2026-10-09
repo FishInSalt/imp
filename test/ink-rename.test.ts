@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAgentDefinitions } from "../src/core/agents/registry.js";
@@ -38,6 +37,7 @@ import type { LLMRequest } from "../src/provider/types.js";
 import { historyFilePath } from "../src/repl/history.js";
 import { resolveShell } from "../src/tui.js";
 import { assistant, scriptedProvider, user } from "./helpers/fakes.js";
+import { mkTempDir } from "./helpers/mktemp.js";
 
 // Keep the real filesystem, but observe trust's gate-before-read contract.
 vi.mock("node:fs", async (importOriginal) => {
@@ -59,7 +59,7 @@ function resource(base: string, stateRoot: ".ink" | ".imp", relative: string): s
 }
 
 beforeEach(() => {
-	root = fs.mkdtempSync(path.join(tmpdir(), "ink-rename-"));
+	root = mkTempDir("ink-rename-");
 	home = path.join(root, "home");
 	cwd = path.join(root, "project");
 	fs.mkdirSync(home);
@@ -346,7 +346,7 @@ function rewriteLaunchKey(file: string, from: string, to: string): void {
 }
 
 describe("child v1 version compatibility", () => {
-	it("inspects an old 0.1.0 child, but refuses before lease, torn-tail repair, mutation or provider calls", async () => {
+	it("inspects an old imp-era child and rejects it as invalid (read arm removed, Track C)", async () => {
 		const oldBase = resource(home, ".imp", "sessions");
 		const parent = createSession(cwd, oldBase);
 		const launch = childTask(parent, "0.1.0", [assistant([{ type: "text", text: "Old child answer" }])]);
@@ -356,8 +356,8 @@ describe("child v1 version compatibility", () => {
 		persistTask(parent, first);
 		const transcript = first.taskRecord?.transcript;
 		if (transcript?.present !== true) throw new Error("Expected historical child transcript");
-		// Rewrite the stored key to the legacy name: the builder no longer
-		// writes `impVersion`, and this fixture must exercise the read arm.
+		// Rewrite the stored key to the legacy name: the builder never wrote
+		// `impVersion`; this fixture forges the imp-era record shape.
 		rewriteLaunchKey(transcript.path, "inkVersion", "impVersion");
 		const legacyBytes = fs.readFileSync(transcript.path, "utf8");
 		expect(legacyBytes).toContain('"impVersion":"0.1.0"');
@@ -373,7 +373,9 @@ describe("child v1 version compatibility", () => {
 		expect(storedLaunch.version).toBe(1);
 		expect(storedLaunch.impVersion).toBe("0.1.0");
 		expect(storedLaunch).not.toHaveProperty("inkVersion");
-		expect(parseChildLaunch(historical.header.launch).ok).toBe(true);
+		// Track C: the impVersion key is an explicit blacklist — parse now
+		// rejects instead of accepting-and-normalizing.
+		expect(parseChildLaunch(historical.header.launch).ok).toBe(false);
 		expect(historical.tornFinalLine).toBe(true);
 		const before = fs.readFileSync(childPath);
 		const sourceBefore = fs.readFileSync(transcript.path);
@@ -388,9 +390,9 @@ describe("child v1 version compatibility", () => {
 			new AbortController().signal,
 		);
 		expect(result.isError).toBe(true);
-		expect(result.output).toContain("version-drift");
-		expect(result.output).toContain("0.1.0");
-		expect(result.output).toContain(VERSION);
+		// Track C: parse rejection surfaces as an unresolvable/invalid child
+		// (not version-drift — the record never parses now).
+		expect(result.output).toMatch(/invalid|unrecognized|cannot resume|not found/);
 		expect(result.output).not.toContain("system-drift");
 		expect(result.taskRecord?.launched).toBe(false);
 		expect(beforeLease).not.toHaveBeenCalled();

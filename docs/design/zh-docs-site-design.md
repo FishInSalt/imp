@@ -1,8 +1,9 @@
 # Chinese docs site: full zh-CN mirror — design
 
-Status: draft. Design review round 1 (fresh-context, adversarial) returned
-"not ready"; all findings are folded below. Round 2 confirmation is under
-way — implementation must not start until round 2 closes with a ready verdict.
+Status: draft. Design review rounds 1 and 2 (fresh-context, adversarial)
+returned "not ready"; all findings are folded below. Round 3 confirmation
+is under way — implementation must not start until round 3 closes with a
+ready verdict.
 
 ## Goal
 
@@ -30,7 +31,7 @@ page-for-page, with a language switcher on every page.
   SAME dir — for en, source dirs and output dirs coincide (`""`/`docs`);
   for zh they will not.
 - `README.md:9` carries `**English** | [简体中文](README.zh-CN.md)`;
-  `README.zh-CN.md:11` carries `[English](README.md) | **简体中文**`;
+  `README.zh-CN.md:9` carries `[English](README.md) | **简体中文**`;
   `README.zh-CN.md:103` links the site root.
 - The only anchors in the published set: `docs/settings.md:11` and
   `docs/extensions.md:15` both link `index.md#project-trust` (targets
@@ -62,8 +63,15 @@ page-for-page, with a language switcher on every page.
      (including info strings, order-sensitive).
   2. Link targets are copied unchanged (paths and `#anchors`); only anchor
      text is translated. The builder re-slugs anchors for zh (see Links).
-  3. Heading level sequence is identical to the English source.
+  3. The heading level sequence is identical to the English source, and
+     headings keep the English source's order (positional anchor mapping
+     relies on it; a same-level section swap is caught only by translation
+     review).
   4. The glossary below is binding.
+- One-time compliance fix: `README.zh-CN.md`'s two bash blocks (dev /
+  contributing section) currently translate the comments; implementation
+  restores the English originals so rule 1 holds for all eleven pairs with
+  no fence exemption.
 - Glossary, anchored on `README.zh-CN.md` usage; the README wins on
   conflict. Keep in English: Ink, npm, CLI, TUI, MCP, agent, token, JSON,
   and all command names, flags, and paths. Translate exactly:
@@ -97,16 +105,23 @@ page-for-page, with a language switcher on every page.
 - Anchor re-slugging: when a link carries `#anchor` into a file that has a
   zh counterpart, map the en heading slug to the zh heading id BY POSITION:
   find the anchor's index in `headingSlugs(en target)`, emit
-  `headingSlugs(zh target)[index]`. Heading-sequence parity (CI) makes the
-  alignment well-defined. If the anchor is not found among the en target's
-  slugs, keep it unchanged (same as today's en behavior). Anchors are
-  emitted as raw UTF-8 (no percent-encoding).
+  `headingSlugs(zh target)[index]`. Parity (CI) guarantees the same level
+  sequence and the rules require the same order; a same-level section swap
+  remains a translation-review risk. If the anchor is not found among the
+  en target's slugs, keep it unchanged (same as today's en behavior).
+  Anchors are emitted as raw UTF-8 (no percent-encoding).
 - Concrete cases pinned by the build test: zh settings.html →
   `index.html#<id of the translated "Project trust" heading>`; built zh
   home English switch → `../index.html`; built en home 简体中文 switch →
   `zh/index.html`.
+- Bare same-file anchors (`#section`): also re-slugged, against the file's
+  own en/zh heading pair, before emission (zero exist today; check 4 covers
+  them).
 - Future note: if an en doc ever introduces a `../<root file>` link, the
   zh resolution base must be adjusted; check-docs flags the missing target.
+  The zh map's `README.md → index.html` means a future zh file copying an
+  en `../README.md` link would land on the English home; revisit that
+  mapping then (the zh home may be preferred).
 
 ### Page template — per-language strings (single source in the builder)
 
@@ -153,22 +168,28 @@ page-for-page, with a language switcher on every page.
 2. Link checks run over zh files and `README.zh-CN.md`, resolving in the
    files' actual locations.
 3. Structural parity per language pair (all eleven: README pair + ten
-   docs): equal heading level sequences; fenced blocks pairwise byte-equal
-   including info strings; link-target path multiset equal. The two
-   language-switch lines are the single documented exemption from target
-   equality — they are validated instead by the build test (exact hrefs).
-4. Anchors: every anchor link's anchor exists among `headingSlugs` of its
-   resolved target (for zh, the zh file); heading parity guarantees the
-   built zh href resolves. The build test pins one concrete case.
+   docs; fences with no exemption once the README fix lands): equal heading
+   level sequences; fenced blocks pairwise byte-equal including info
+   strings; link-target path multiset equal. The two language-switch lines
+   are the single documented exemption from target equality — they are
+   validated instead by the build test (exact hrefs).
+4. Anchors: for every anchor link, the anchor must be found among
+   `headingSlugs` of the EN counterpart of its resolved target (zh files
+   carry copied en anchors — a mappability check); the emitted zh id is the
+   same-index entry of the zh counterpart's `headingSlugs`, whose existence
+   the parity checks guarantee. Bare `#anchor` links check against the
+   file's own en counterpart. The build test pins one concrete case.
 
 ### Build-level test (new; round-1 fix)
 
 `test/docs-site.test.ts` runs the builder into a temporary out dir
-(builder gains an out-dir override; default stays `_site/`) and asserts:
-no doubled `/zh/zh/` paths; zh home English switch `../index.html`; en
-home 简体中文 switch `zh/index.html`; the zh settings→index anchor
-resolves via `headingSlugs`; `lang` attributes; hreflang pairs; sitemap
-contains the 11 zh URLs; switcher hrefs on a sample doc pair. Runs in
+(builder gains an out-dir override; default stays `_site/`) and asserts
+exact hrefs per sample page: zh home English switch `../index.html`; en
+home 简体中文 switch `zh/index.html`; switcher hrefs on a sample doc pair
+(both directions). It also resolves every emitted href on those sample
+pages against the built tree (target exists; no repeated `/zh/` segment),
+checks the zh settings→index anchor via `headingSlugs`, `lang`
+attributes, hreflang pairs, and the sitemap's 11 zh URLs. Runs in
 vitest / CI.
 
 ### npm package
@@ -198,9 +219,12 @@ Add `"README.zh-CN.md"` to `paths` (`docs/**` already covers
   the design review closes; independent code review before merge; `--no-ff`
   merge; Pages redeploy verified; CHANGELOG Unreleased entry.
 - Translation in batches of 3–4 files by fresh-context subagents given the
-  glossary, the rules, and the anchor/map notes; every batch passes the
-  parity checks and the full test suite; live spot-checks (switchers both
-  ways, anchors, sitemap).
+  glossary, the rules, and the anchor/map notes. Intermediate batches may
+  leave mirror-completeness/sitemap checks and the suite red (strict
+  completeness only holds once every file exists); per-file parity checks
+  run as each file lands, and the full suite plus all checks must be green
+  on the final commit before review. Live spot-checks (switchers both ways,
+  anchors, sitemap) follow deploy.
 
 ## Review history
 
@@ -214,7 +238,12 @@ Add `"README.zh-CN.md"` to `paths` (`docs/**` already covers
   (level sequences, info strings, multisets, README pair); (F10) strict
   mirror kept, cost accepted; (F11) no other pins; package-metadata pins
   recorded.
-- Round 2: confirmation under way.
+- Round 2 (same reviewer, confirmation): verdict "not ready — changes
+  required", 8 text-level findings: README-pair fence compliance (day-one
+  failure), check-4 wording vs rule 2, heading-order rule, a vacuous
+  doubled-path assertion, bare-anchor coverage, the README.zh-CN line
+  number, batch-red rollout wording, and the README.md-map future note.
+  All folded; round 3 confirmation under way.
 
 ## Resolved open questions
 

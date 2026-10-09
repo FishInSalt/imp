@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "README.zh-CN.md"
       - "docs/**"
       - "scripts/build-docs-site.mjs"
       - "package.json"

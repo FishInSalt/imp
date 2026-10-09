@@ -48,8 +48,8 @@ npm exec -- ink-agent@latest --help
 从源码检出运行：
 
 ```bash
-npm install   # 安装依赖并构建（prepare 脚本）
-npm start     # 启动交互式 REPL
+npm install   # installs dependencies and builds (prepare script)
+npm start     # launches the interactive REPL
 ```
 
 更新源码检出时，不要复制凭据、迁移状态或发布；正常安装请用上面的 npm 包。
@@ -100,7 +100,7 @@ alt 系列快捷键的终端说明：iTerm2、Ghostty、Kitty 和较新的 VS Co
 ## 文档
 
 完整文档在 [docs/index.md](docs/index.md)——主题地图从这里开始。
-同一套文档也发布为站点：[fishinsalt.github.io/ink](https://fishinsalt.github.io/ink/)：
+同一套文档也发布为站点：[fishinsalt.github.io/ink/zh](https://fishinsalt.github.io/ink/zh/)：
 
 - [CLI 参考](docs/cli.md)——安装、打印模式、管道、全部命令行参数与环境变量
 - [提供商与模型](docs/providers.md)——登录、模型家族、`/model`、pi.dev
@@ -112,7 +112,7 @@ alt 系列快捷键的终端说明：iTerm2、Ghostty、Kitty 和较新的 VS Co
 - [扩展](docs/extensions.md)——工具、命令、事件门控、配色、内置示例
 - [技能](docs/skills.md)——SKILL.md 包、发现层级
 - [MCP](docs/mcp.md)——stdio 与 Streamable HTTP 服务器、配置发现
-- [子代理](docs/subagents.md)——`task` 工具、具名代理、worktree 隔离
+- [子代理](docs/subagents.md)——`task` 工具、具名 agent、worktree 隔离
 - [图片](docs/images.md)——视觉模型、粘贴、缩放阶梯
 
 npm 包会随包发布这些文档；agent 会把自己的问题路由到文档里。内置的
@@ -136,9 +136,9 @@ npm 包会随包发布这些文档；agent 会把自己的问题路由到文档�
 
 ```bash
 npm run build          # tsc
-npm run dev            # tsx src/cli.ts（不构建）
-npm run typecheck      # tsc --noEmit（两份配置）
-npm run lint           # biome + 脚本语法检查
+npm run dev            # tsx src/cli.ts (no build)
+npm run typecheck      # tsc --noEmit (both configs)
+npm run lint           # biome + script syntax checks
 npm test               # vitest run
 ```
 

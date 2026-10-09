@@ -20,7 +20,7 @@ import { thinkingMetaFor } from "../src/provider/thinking.js";
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
 import { buildModelList, loginTargetFor } from "../src/repl/commands.js";
-import { mkTempDirAsync } from "./helpers/mktemp.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 async function collect(events: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
 	const out: LLMEvent[] = [];
@@ -96,7 +96,7 @@ afterEach(() => {
 function overlayCatalog(models: Record<string, object>): void {
 	if (process.env.INK_CATALOG_PATH === undefined) {
 		// lazily point at a temp file (path recorded in envBackup for restore)
-		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `ink-ds-catalog-${Date.now()}.json`);
+		process.env.INK_CATALOG_PATH = tempFilePath("ink-ds-catalog-");
 		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(

@@ -23,7 +23,7 @@ import { clampThinkingLevel, supportedThinkingLevels, thinkingMetaFor } from "..
 import type { LLMEvent, LLMRequest } from "../src/provider/types.js";
 import { modelSupportsVision } from "../src/provider/vision.js";
 import { buildModelList, loginTargetFor } from "../src/repl/commands.js";
-import { mkTempDirAsync } from "./helpers/mktemp.js";
+import { mkTempDirAsync, tempFilePath } from "./helpers/mktemp.js";
 
 async function collect(events: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
 	const out: LLMEvent[] = [];
@@ -122,7 +122,7 @@ afterEach(() => {
  *  pattern — there is no direct overlay API by design). */
 function overlayCatalog(family: string, models: Record<string, object>): void {
 	if (process.env.INK_CATALOG_PATH === undefined) {
-		process.env.INK_CATALOG_PATH = path.join(tmpdir(), `ink-ms-catalog-${Date.now()}.json`);
+		process.env.INK_CATALOG_PATH = tempFilePath("ink-ms-catalog-");
 		envBackup.push(["INK_CATALOG_PATH", undefined]);
 	}
 	writeFileSync(

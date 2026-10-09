@@ -47,10 +47,29 @@ describe("orphan child pruning (#test-fixture-hygiene §6 Track D)", () => {
 		const root = mkTempDir("ink-prune-");
 		const dir = join(root, "Users-w-proj");
 		writeFileLine(join(dir, "children", "2026-orphan.jsonl"), sessionHeader("c1", "gone"));
-		writeFileLine(join(dir, "children", "2026-orphan.jsonl.lease"), JSON.stringify({ pid: 999999999 }));
-		// fresh mtime → within STALE_GRACE_MS → exempt even with dead pid
+		// REAL lease shape: a DIRECTORY with a candidate file (child-lease.ts)
+		const leaseDir = join(dir, "children", "2026-orphan.jsonl.lease");
+		mkdirSync(leaseDir, { recursive: true });
+		writeFileLine(join(leaseDir, "lease-999999999-abcd12-attempt1"), JSON.stringify({ pid: 999999999 }));
+		// fresh candidate mtime → within STALE_GRACE_MS → exempt even with dead pid
 		const result = pruneOrphanChildren(root);
 		expect(result.exempt).toEqual(["2026-orphan.jsonl"]);
+	});
+
+	it("exempts an orphan whose stale candidate carries a LIVE pid (this process)", () => {
+		const root = mkTempDir("ink-prune-");
+		const dir = join(root, "Users-w-proj");
+		const child = join(dir, "children", "2026-orphan-livepid.jsonl");
+		writeFileLine(child, sessionHeader("c3", "gone"));
+		const leaseDir = `${child}.lease`;
+		mkdirSync(leaseDir, { recursive: true });
+		const candidate = join(leaseDir, "lease-self-abcd12-attempt1");
+		writeFileLine(candidate, JSON.stringify({ pid: process.pid }));
+		const old = Date.now() / 1000 - 3600;
+		const { utimesSync } = require("node:fs") as typeof import("node:fs");
+		utimesSync(candidate, old, old);
+		const result = pruneOrphanChildren(root);
+		expect(result.exempt).toEqual(["2026-orphan-livepid.jsonl"]);
 	});
 
 	it("prune removes an orphan with a stale, dead-pid lease", () => {
@@ -58,13 +77,14 @@ describe("orphan child pruning (#test-fixture-hygiene §6 Track D)", () => {
 		const dir = join(root, "Users-w-proj");
 		const child = join(dir, "children", "2026-orphan2.jsonl");
 		writeFileLine(child, sessionHeader("c2", "gone"));
-		const lease = `${child}.lease`;
-		writeFileLine(lease, JSON.stringify({ pid: 999999999 }));
-		// age the lease beyond the grace window
+		const leaseDir = `${child}.lease`;
+		mkdirSync(leaseDir, { recursive: true });
+		const candidate = join(leaseDir, "lease-999999999-abcd12-attempt2");
+		writeFileLine(candidate, JSON.stringify({ pid: 999999999 }));
+		// age the candidate beyond the grace window (heartbeat utimesSyncs the file)
 		const old = Date.now() / 1000 - 3600;
-		expect(old).toBeGreaterThan(0);
 		const { utimesSync } = require("node:fs") as typeof import("node:fs");
-		utimesSync(lease, old, old);
+		utimesSync(candidate, old, old);
 		const result = pruneOrphanChildren(root);
 		expect(result.removed).toEqual(["2026-orphan2.jsonl"]);
 	});

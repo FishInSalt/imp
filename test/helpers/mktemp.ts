@@ -32,7 +32,6 @@ export async function mkTempDirAsync(prefix: string): Promise<string> {
 /** Top-level FILE flavor: registers a temp file path (not created) for
  *  removal when the test ends — for fixtures that point env vars at a
  *  not-yet-written file (auth.json style). */
-const tempFiles: string[] = [];
 export function tempFilePath(prefix: string): string {
 	if (!prefix.startsWith("ink-")) {
 		throw new Error(`fixture prefix must start with "ink-" — got ${JSON.stringify(prefix)}`);
@@ -41,7 +40,6 @@ export function tempFilePath(prefix: string): string {
 		tmpdir(),
 		`${prefix}${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 	);
-	tempFiles.push(file);
 	onTestFinished(() => {
 		rmSync(file, { force: true });
 	});

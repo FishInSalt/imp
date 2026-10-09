@@ -1,20 +1,22 @@
 /** Test-fixture tmpdir prefix inventory — GENERATED, do not hand-edit.
- * (test-fixture-hygiene-design §1.2/§A2; round-2 MAJOR-1 quote-class harvest)
+ * (test-fixture-hygiene-design §1.2/§A2; regenerated after code-review M-3)
  *
- * Source: every string literal adjacent to tmpdir()/mkdtemp/worktreeBaseDir/
- * freshDir call sites in test/ (double, single, AND backtick quoting), harvested
- * 2026-10-09, then converted to the post-rename ink- namespace. The §A2 stale-root
- * sweep deletes tmpdir() entries matching one of these prefixes AND mtime>24h.
- * Regenerate after adding fixtures: harvest imp-/ink- literals near tmp/mkdtemp
- * call sites and diff against this list.
+ * Harvest method (quote-class + INDIRECT parameters): every string literal
+ * and template-literal prefix in test/ matching /^(imp|ink)-[a-z0-9-]+$/,
+ * then a manual audit excluding non-fixture inputs (imp-agent package
+ * samples, imp-worktree-historical / imp-worktree-task-* legacy payloads).
+ * Indirect parameterized call sites (local setup(prefix) helpers in
+ * child-lease.test.ts etc.) are covered because the harvest is
+ * context-free — it collects literals, not call shapes.
  *
- * Harvest totals: 240 imp- prefixes (pre-rename), 12 ink- prefixes,
- * 252 post-rename entries below.
+ * The §A2 stale-root sweep deletes tmpdir() entries matching one of these
+ * prefixes AND mtime>24h. Regenerate after adding fixtures by re-running
+ * the harvest and diffing.
  */
-
 export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-abort-",
 	"ink-ac-",
+	"ink-agent",
 	"ink-agents-",
 	"ink-agents-home-",
 	"ink-ant-",
@@ -49,6 +51,7 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-cl-run-cwd-",
 	"ink-cl-run-ext-",
 	"ink-cli-fixture-",
+	"ink-clipboard-",
 	"ink-clv-",
 	"ink-clv-cwd-",
 	"ink-clv-elsewhere-",
@@ -60,6 +63,7 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-confout-",
 	"ink-contrib-",
 	"ink-cost-",
+	"ink-cr-wt-base-",
 	"ink-ctr-",
 	"ink-ctx-",
 	"ink-d9-",
@@ -77,10 +81,12 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-extrepl-",
 	"ink-extstatus-",
 	"ink-extstatus-legacy-",
+	"ink-f1-",
 	"ink-f3b-",
 	"ink-f6b-",
 	"ink-fifo-",
 	"ink-fresh-",
+	"ink-fresh-auth-",
 	"ink-fresh-tui-",
 	"ink-gate-",
 	"ink-git-shim-",
@@ -96,11 +102,33 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-imgsess-",
 	"ink-integrity-",
 	"ink-lazy-session-",
+	"ink-lease-",
+	"ink-lease-inv-",
+	"ink-lease-inv2-",
+	"ink-lease-legacy1-",
+	"ink-lease-legacy2-",
+	"ink-lease-legacy3-",
+	"ink-lease-legacy4-",
 	"ink-lease-mp-",
 	"ink-lease-s1-",
 	"ink-lease-s2-",
 	"ink-lease-s3-",
 	"ink-lease-s4-",
+	"ink-lease-stage-",
+	"ink-lease-verify-",
+	"ink-lease-verify2-",
+	"ink-lease-verify3-",
+	"ink-lease19a-",
+	"ink-lease19b-",
+	"ink-lease19c-",
+	"ink-lease19d-",
+	"ink-lease20a-",
+	"ink-lease20b-",
+	"ink-lease21a-",
+	"ink-lease21b-",
+	"ink-lease25-",
+	"ink-lease26-",
+	"ink-lease28-",
 	"ink-login-",
 	"ink-login-dlg-",
 	"ink-loginb-",
@@ -115,6 +143,11 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-mdcmd-",
 	"ink-merge-",
 	"ink-merge-proj-",
+	"ink-mid-",
+	"ink-mid-empty-",
+	"ink-mid-legacy-",
+	"ink-mid-race-",
+	"ink-mid-stable-",
 	"ink-model-store-",
 	"ink-ms-",
 	"ink-ms-catalog-",
@@ -125,6 +158,7 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-parallel-",
 	"ink-pricing-e2e-",
 	"ink-prov-swap-",
+	"ink-prune-",
 	"ink-read-huge-",
 	"ink-rec-",
 	"ink-rec-cmp-",
@@ -188,6 +222,8 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-skills-",
 	"ink-skills-run-",
 	"ink-smr-",
+	"ink-smr-auth-",
+	"ink-sp-files-",
 	"ink-status-",
 	"ink-store-",
 	"ink-sys-",
@@ -240,6 +276,9 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-web-discovery-",
 	"ink-web-search-config-",
 	"ink-web-search-tools-",
+	"ink-worktree-",
+	"ink-worktree-rename-fixture",
+	"ink-wt-",
 	"ink-wt-abort-",
 	"ink-wt-abort-base-",
 	"ink-wt-b1-",
@@ -259,6 +298,7 @@ export const FIXTURE_PREFIXES: readonly string[] = [
 	"ink-wt-nogit-",
 	"ink-wt-nopool-",
 	"ink-wt-par-",
+	"ink-wt-par-base-",
 	"ink-wt-repo-",
 	"ink-wt-resume-",
 	"ink-wt-stat-",

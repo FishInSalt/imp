@@ -20,7 +20,9 @@ ink --no-session        # ephemeral run; nothing persisted
 In the REPL: `/sessions` lists, `/resume <id>` switches (history replays on
 screen), `/new` starts a fresh session (the old one stays on disk), `/name
 <name>` names the session for the picker, `/status` shows session, model,
-context, and trust at a glance. The exit line always shows how to resume:
+context, and trust at a glance. `/sessions prune` sweeps orphaned child
+sessions (subagent transcripts whose parent file no longer exists) after an
+interactive confirm. The exit line always shows how to resume:
 `ink -r <id>`.
 
 ## The tree

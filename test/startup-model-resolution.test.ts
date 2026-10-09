@@ -41,7 +41,6 @@ describe("#startup-model-resolution", () => {
 		fixtures.push(fixture);
 		return fixture;
 	}
-	const seq = 0;
 	beforeEach(async () => {
 		provider = await startRejectingProvider();
 		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;

@@ -855,9 +855,7 @@ describe("worktree isolation (M6b)", () => {
 				childCwds.push(cwd);
 				return [createWriteTool({ cwd })];
 			},
-			worktreeBaseDir: await mkTempDirAsync(
-				"ink-wt-e2e-base-${Date.now()}-${Math.random().toString(36).slice(2, 6)}",
-			),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-e2e-base-`),
 			...overrides,
 		});
 		return { task, sink, root, childCwds, rgit };
@@ -1090,7 +1088,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [],
-			worktreeBaseDir: await mkTempDirAsync("ink-wt-b1-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-b1-base-`),
 			agents: [
 				{
 					name: "builder",
@@ -1112,7 +1110,12 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 	});
 
 	it("B2: a parent inside a linked worktree branches from the PARENT's HEAD — empty child worktree still cleans up", async () => {
-		const root = await mkTempDirAsync("ink-wt-b2-");
+		// base holds BOTH the repo and its linked parent worktree, so the
+		// sibling `parent-wt-*` dir dies with the test (fixture-hygiene; the
+		// pre-fix version leaked it at TMPDIR top level).
+		const base = await mkTempDirAsync("ink-wt-b2-");
+		const root = path.join(base, "repo");
+		mkdirSync(root, { recursive: true });
 		await seedRepo(root);
 		const g = gitAt(root);
 		g(["checkout", "-qb", "feature-x"]);
@@ -1122,7 +1125,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 		// move the MAIN root back to main FIRST, then link a parent worktree on
 		// feature-x — now the two HEADs genuinely differ
 		g(["checkout", "-q", "main"]);
-		const parentCwd = path.join(root, "..", `parent-wt-${Date.now()}`);
+		const parentCwd = path.join(base, `parent-wt-${Date.now()}`);
 		g(["worktree", "add", "-q", parentCwd, "feature-x"]);
 
 		const sink: LLMRequest[] = [];
@@ -1138,7 +1141,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 				childCwds.push(cwd);
 				return [];
 			},
-			worktreeBaseDir: await mkTempDirAsync("ink-wt-b2-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-b2-base-`),
 		});
 		const result = await task.execute({ prompt: "look", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("looked only");
@@ -1179,7 +1182,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 				childCwds.push(cwd);
 				return [createWriteTool({ cwd }), commitTool(cwd)];
 			},
-			worktreeBaseDir: await mkTempDirAsync("ink-wt-stat-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-stat-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "build and commit", worktree: true },
@@ -1224,7 +1227,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [abortAware],
-			worktreeBaseDir: await mkTempDirAsync("ink-wt-abort-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-abort-base-`),
 		});
 		const running = task.execute({ prompt: "go", worktree: true }, controller.signal);
 		await new Promise((r) => setTimeout(r, 60)); // let the child reach the tool
@@ -1287,7 +1290,7 @@ describe("worktree review fixes (B1/B2 + coverage)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: () => [],
-			worktreeBaseDir: await mkTempDirAsync("ink-wt-nm-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-wt-nm-base-`),
 		});
 		const result = await task.execute({ prompt: "idle", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("idle");
@@ -1525,7 +1528,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i1-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i1-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "commit nothing", worktree: true },
@@ -1563,7 +1566,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i2-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i2-base-`),
 		});
 		const result = await task.execute({ prompt: "break it", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree kept for safety");
@@ -1587,7 +1590,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
 				return [createWriteTool({ cwd })];
 			},
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i3-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i3-base-`),
 		});
 		const result = await task.execute({ prompt: "look only", worktree: true }, new AbortController().signal);
 		expect(result.output).toContain("worktree cleanup failed");
@@ -1611,7 +1614,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 				if (r.status !== 0) throw new Error(`worktree lock: ${r.stderr}`);
 				return [];
 			},
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i4-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i4-base-`),
 			agents: [
 				{
 					name: "builder",
@@ -1651,7 +1654,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 			getSession: () => null,
 			cwd: root,
 			getToolsForCwd: (cwd) => [createWriteTool({ cwd }), holdingTool(gate())],
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i6-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i6-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "write then hold", worktree: true, timeoutMs: 1000 },
@@ -1701,7 +1704,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i7-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i7-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "write then hang", worktree: true, timeoutMs: 1000 },
@@ -1744,7 +1747,7 @@ describe("SA-01: conservative worktree cleanup (integration)", () => {
 					},
 				},
 			],
-			worktreeBaseDir: await mkTempDirAsync("ink-sa01-i8-base-${Date.now()}"),
+			worktreeBaseDir: await mkTempDirAsync(`ink-sa01-i8-base-`),
 		});
 		const result = await task.execute(
 			{ prompt: "install deps", worktree: true },
@@ -1910,7 +1913,7 @@ describe("task model binding (SA-02)", () => {
 			agents: scoutWith("glm-5.3"),
 			overrides: {
 				cwd: root,
-				worktreeBaseDir: await mkTempDirAsync("ink-sa02-wt-base-${Date.now()}"),
+				worktreeBaseDir: await mkTempDirAsync(`ink-sa02-wt-base-`),
 			},
 		});
 		const wtResult = await wt.task.execute(

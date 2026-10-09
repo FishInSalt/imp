@@ -42,7 +42,6 @@ describe("#fresh-install-hint availability seam", () => {
 	// Monotonic counter (round-2 review, same class as F6): two tests inside
 	// the same millisecond would otherwise share one INK_AUTH_PATH — a key
 	// stored by an earlier test leaks into the next one's probe.
-	const authSeq = 0;
 	beforeEach(() => {
 		saved.INK_AUTH_PATH = process.env.INK_AUTH_PATH;
 		for (const key of CREDENTIAL_ENV) {

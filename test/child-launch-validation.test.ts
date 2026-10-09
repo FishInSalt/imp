@@ -384,10 +384,14 @@ interface WorktreeWorld extends World {
 async function makeWorktreeWorld(): Promise<WorktreeWorld> {
 	const base = await mkTempDirAsync("ink-clv-");
 	const cwd = mkTempDir("ink-clv-cwd-");
-	const repo = mkTempDir("ink-clv-repo-");
+	// repo sits INSIDE the cleaned base so the sibling imp-wt-* legacy-name
+	// worktree (a §5 survivor test input) dies with the test instead of
+	// leaking at TMPDIR top (code-review M-7).
+	const repo = path.join(base, "repo");
+	mkdirSync(repo, { recursive: true });
 	seedRepo(repo);
 	const baseline = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
-	const wtPath = path.join(repo, "..", `imp-wt-${path.basename(repo)}`);
+	const wtPath = path.join(base, `imp-wt-${path.basename(repo)}`);
 	const branch = "imp/task-matrix";
 	const add = git(repo, ["worktree", "add", "--quiet", wtPath, "-b", branch, baseline]);
 	if (add.status !== 0) throw new Error(`worktree add failed: ${add.stderr}`);

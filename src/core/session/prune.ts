@@ -59,19 +59,36 @@ function pidAlive(pid: number): boolean {
 	}
 }
 
-/** Lease payload shape: see child-lease.ts acquireChildLease (JSON with pid). */
+/** Lease layout (child-lease.ts): `<child>.jsonl.lease/` is a DIRECTORY
+ *  holding candidate FILES (`lease-<pid>-<nonce8>-<attemptId>`), each a
+ *  JSON payload { pid, host, machineId, nonce, attemptId, startedAt }.
+ *  The heartbeat utimesSyncs the candidate FILE, not the directory — so
+ *  freshness must be read from the entries. A lease holds a live child iff
+ *  ANY candidate is fresh (mtime within STALE_GRACE_MS) or carries a
+ *  live pid (kill(pid,0)); this mirrors child-lease.ts's own rule
+ *  (code-review M-1: the first draft readFileSync'd the directory and
+ *  silently never exempted). */
 function leaseHoldsLiveChild(leasePath: string, now: number): boolean {
-	if (!existsSync(leasePath)) return false;
+	let entries: string[];
 	try {
 		const stat = statSync(leasePath);
-		if (now - stat.mtimeMs <= STALE_GRACE_MS) return true;
-		const payload = JSON.parse(readFileSync(leasePath, "utf8")) as { pid?: unknown };
-		if (typeof payload.pid === "number" && pidAlive(payload.pid)) return true;
-		return false;
+		if (!stat.isDirectory()) return false; // legacy/foreign shape: not holding
+		entries = readdirSync(leasePath);
 	} catch {
-		// Unreadable lease: treat as not holding (best-effort prune)
-		return false;
+		return false; // missing/unreadable: not holding
 	}
+	for (const entry of entries) {
+		if (entry.startsWith(".staging-")) continue;
+		const candidate = join(leasePath, entry);
+		try {
+			if (now - statSync(candidate).mtimeMs <= STALE_GRACE_MS) return true;
+			const payload = JSON.parse(readFileSync(candidate, "utf8")) as { pid?: unknown };
+			if (typeof payload.pid === "number" && pidAlive(payload.pid)) return true;
+		} catch {
+			// unreadable candidate: try the next one
+		}
+	}
+	return false;
 }
 
 /** Enumerate orphaned children across all per-cwd session dirs.

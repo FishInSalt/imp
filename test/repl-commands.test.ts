@@ -4,6 +4,9 @@ import { mkdtemp, utimes } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+const { join } = path;
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPrompt } from "../src/core/commands-md.js";
 import type { AgentMessage, UserMessage } from "../src/core/messages.js";
@@ -293,7 +296,7 @@ describe("slash commands", () => {
 				"  /new               start a fresh session (the old one stays on disk)",
 				"  /fork              branch the conversation before an earlier message (the old branch stays)",
 				"  /tree              navigate the session tree — jump to any point, optionally summarizing the left branch",
-				"  /sessions          list saved sessions for this directory",
+				"  /sessions [prune]  list saved sessions for this directory (prune: sweep orphaned children)",
 				"  /resume <id>       switch to a saved session (history replays on screen)",
 				"  /model [id]        show the current model, or switch (applies next turn)",
 				"  /login [provider]  sign in to a provider (stored credential beats the env var)",
@@ -1370,6 +1373,60 @@ describe("/sessions + /resume", () => {
 		const env = await makeEnv({ noSession: true });
 		await dispatchCommand("/sessions", env.ctx);
 		expect(env.output()).toContain("no saved sessions for this directory yet");
+	});
+
+	it("/sessions prune with no orphans → teaching note", async () => {
+		const env = await makeEnv({ noSession: true });
+		env.ctx.sessionsRootPath = env.baseDir;
+		await dispatchCommand("/sessions prune", env.ctx);
+		expect(env.output()).toContain("no orphaned child sessions found");
+	});
+
+	it("/sessions prune: confirm-deletes an orphan; picker cancel keeps it", async () => {
+		const env = await makeEnv({ noSession: true });
+		const root = await mkTempDirAsync("ink-prune-cmd-");
+		const dir = join(root, "Users-w-proj");
+		mkdirSync(dir, { recursive: true });
+		// parent file with a DIFFERENT id → the child is an orphan
+		writeFileSync(
+			join(dir, "2026-p.jsonl"),
+			`${JSON.stringify({ type: "session", id: "someone-else", timestamp: "2026-10-09T00:00:00.000Z", cwd: "/w" })}\n`,
+		);
+		const childrenDir = join(dir, "children");
+		mkdirSync(childrenDir, { recursive: true });
+		const childPath = join(childrenDir, "2026-c.jsonl");
+		writeFileSync(
+			childPath,
+			`${JSON.stringify({ type: "session", id: "c1", timestamp: "2026-10-09T00:00:00.000Z", cwd: "/w", launch: { version: 1, parentSessionId: "gone", inkVersion: "9.9.9" } })}\n`,
+		);
+		env.ctx.sessionsRootPath = root;
+		// picker: cancel (index 1) → kept
+		env.ctx.select = async () => 1;
+		await dispatchCommand("/sessions prune", env.ctx);
+		expect(env.output()).toContain("prune cancelled");
+		expect(existsSync(childPath)).toBe(true);
+		// picker: delete (index 0) → gone
+		env.ctx.select = async () => 0;
+		await dispatchCommand("/sessions prune", env.ctx);
+		expect(env.output()).toContain("pruned 1 orphaned child session(s)");
+		expect(existsSync(childPath)).toBe(false);
+	});
+
+	it("/sessions prune without an interactive select refuses", async () => {
+		const env = await makeEnv({ noSession: true });
+		env.ctx.sessionsRootPath = env.baseDir;
+		// seed one orphan so the no-select branch (not the empty branch) runs
+		const root = await mkTempDirAsync("ink-prune-cmd-");
+		const childrenDir = join(root, "Users-w-proj", "children");
+		mkdirSync(childrenDir, { recursive: true });
+		writeFileSync(
+			join(childrenDir, "2026-c.jsonl"),
+			`${JSON.stringify({ type: "session", id: "c1", timestamp: "2026-10-09T00:00:00.000Z", cwd: "/w", launch: { version: 1, parentSessionId: "gone", inkVersion: "9.9.9" } })}\n`,
+		);
+		env.ctx.sessionsRootPath = root;
+		delete env.ctx.select;
+		await dispatchCommand("/sessions prune", env.ctx);
+		expect(env.output()).toContain("needs an interactive confirm");
 	});
 
 	it("/sessions lists ids, titles, counts; marks the current session ▸", async () => {

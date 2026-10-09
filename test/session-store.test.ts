@@ -1,6 +1,4 @@
 import { existsSync, appendFileSync as fsAppend, readFileSync } from "node:fs";
-import {} from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../src/core/messages.js";

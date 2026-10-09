@@ -1,7 +1,5 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 
-let visualNoticeShown = false;
-
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -12,6 +10,8 @@ import { TranscriptSink } from "../src/repl/transcript.js";
 import { createRunner } from "../src/runner.js";
 import { StdinBuffer, type Terminal, visibleWidth } from "../src/tui.js";
 import { assistant, scriptedProvider } from "./helpers/fakes.js";
+
+let visualNoticeShown = false;
 
 /** Focused physical-screen interpreter, not a write log or a full VT emulator.
  * Models cursor addressing, erasure, bottom-edge scrolling and deferred wrap.

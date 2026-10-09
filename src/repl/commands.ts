@@ -106,6 +106,9 @@ export interface CommandContext {
 	secret?: (question: string) => Promise<string | null>;
 	/** M8 trust store location — hermetic tests inject a temp path. */
 	trustStorePath?: string;
+	/** Sessions root override for /sessions prune (tests inject a temp root;
+	 *  production uses ~/.ink/sessions). */
+	sessionsRootPath?: string;
 	/** #login-repl: credential store location — hermetic tests inject a temp
 	 *  path; production defaults to ~/.ink/auth.json. */
 	authStorePath?: string;
@@ -1393,13 +1396,14 @@ export const COMMANDS: readonly SlashCommand[] = [
 	},
 	{
 		name: "sessions",
-		summary: "list saved sessions for this directory",
+		usage: "/sessions [prune]",
+		summary: "list saved sessions for this directory (prune: sweep orphaned children)",
 		allowedDuringRun: false,
-		run: async (_args, ctx): Promise<CommandOutcome> => {
+		run: async (args, ctx): Promise<CommandOutcome> => {
 			// §6 Track D: orphaned-child sweep (deletion — explicit user action only)
-			if (_args.trim() === "prune") {
+			if (args.trim() === "prune") {
 				const { findOrphanChildren, pruneOrphanChildren } = sessionsPrune;
-				const root = sessionsRootDir();
+				const root = ctx.sessionsRootPath ?? sessionsRootDir();
 				const orphans = findOrphanChildren(root);
 				if (orphans.length === 0) {
 					ctx.renderer.note("▪ no orphaned child sessions found");
